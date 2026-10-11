@@ -40,7 +40,7 @@
     "synthetic_placeholder": {"type": "boolean", "description": "True when an input is a stand-in (e.g. synthetic IR) that must be replaced before shipping."}
   },
   "allOf": [
-    {"if": {"properties": {"kind": {"const": "source"}}}, "then": {"required": ["author", "source_url", "download_url", "licence_url", "sha256", "status"]}},
+    {"if": {"properties": {"kind": {"const": "source"}}}, "then": {"required": ["author", "source_url", "download_url", "licence_url", "status"]}},
     {"if": {"properties": {"kind": {"const": "derived"}}}, "then": {"required": ["inputs", "transformations", "tool", "path", "sha256"]}}
   ],
   "additionalProperties": false

@@ -112,6 +112,8 @@ def main() -> int:
             rid = rec.get("id", "?")
             where = f"{where} [{rid}]"
             errors += [f"{where}: {e}" for e in check_schema(rec, schema)]
+            if "path" in rec and "sha256" not in rec:
+                errors.append(f"{where}: a record with a local path needs its sha256")
             if rid in records:
                 errors.append(f"{where}: duplicate id")
             records[rid] = rec | {"_where": where}
