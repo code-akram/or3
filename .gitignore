@@ -34,3 +34,6 @@ __pycache__/
 # Secrets (Freesound OAuth tokens, API keys)
 .env
 .env.*
+
+# Claude Code agent worktrees
+/.claude/worktrees/
