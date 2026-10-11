@@ -428,6 +428,12 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 3. Exact provenance manifest format.
 4. Whether Kimodo's licence text and the PARC raw-mocap provenance hold up.
 5. Approval of the repo layout proposed in §6 (at the `m0` gate).
+6. **Licensing of motion derived through SMPL/SMPL-X.**
+   - The SMPL-X model licence allows "non-commercial … artistic projects".
+   - It forbids making derivatives of the Model & Software available to third parties without Max Planck's written permission.
+   - It is silent on motion estimated with the model.
+   - Our CC BY 4.0 asset licence allows commercial reuse downstream, which conflicts with that.
+   - Resolve before any Wick-derived motion ships. Either email smpl@max-planck-innovation.de to confirm that retargeted rotations on our own skeleton are not a derivative, or ship GVHMR-derived motion under a non-commercial licence as a documented exception.
 
 ## 18. Phase 0 — spikes
 
