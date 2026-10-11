@@ -34,7 +34,7 @@ if [[ -z "$client_secret" ]]; then read -rsp 'Freesound client secret / API key:
 if [[ "${1:-}" == '--refresh' ]]; then
   refresh_token="$(env_get FREESOUND_REFRESH_TOKEN)"
   [[ -n "$refresh_token" ]] || { echo 'no FREESOUND_REFRESH_TOKEN in .env; authorise first' >&2; exit 1; }
-  grant=(--data-urlencode grant_type=refresh_token --data-urlencode "refresh_token=$refresh_token")
+  grant_type=refresh_token grant_key=refresh_token grant_value="$refresh_token"
 else
   state="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
   echo
@@ -42,12 +42,15 @@ else
   echo "  https://freesound.org/apiv2/oauth2/authorize/?client_id=$client_id&response_type=code&state=$state"
   echo
   read -rp 'Authorisation code: ' code
-  grant=(--data-urlencode grant_type=authorization_code --data-urlencode "code=$code")
+  grant_type=authorization_code grant_key=code grant_value="$code"
 fi
 
+# Secrets reach curl through /dev/fd pipes (printf is a builtin), never as
+# arguments, so they never show up in /proc/<pid>/cmdline.
 response="$(curl -sS -X POST \
-  --data-urlencode "client_id=$client_id" --data-urlencode "client_secret=$client_secret" \
-  "${grant[@]}" "$token_url")"
+  --data-urlencode "client_id=$client_id" --data-urlencode "client_secret@"<(printf %s "$client_secret") \
+  --data-urlencode "grant_type=$grant_type" --data-urlencode "$grant_key@"<(printf %s "$grant_value") \
+  "$token_url")"
 
 parsed="$(python3 -I -c '
 import json, sys, time
