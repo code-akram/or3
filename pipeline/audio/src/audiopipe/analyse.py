@@ -201,7 +201,7 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     rows = []
     for rid, rec in prov.load().items():
-        if rec["kind"] != "source" or (a.only and a.only not in rid):
+        if rec["kind"] != "source" or rec["domain"] != "audio" or "path" not in rec or (a.only and a.only not in rid):
             continue
         path = DATA_ROOT / rec["path"]
         slug = slug_of(rid)

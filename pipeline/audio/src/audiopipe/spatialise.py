@@ -5,7 +5,7 @@
 
 IR: data/build/audio/ir/alley-01.wav (Steam Audio bake from the PLATEAU chunk, spike 6).
 If it is missing, a clearly labelled synthetic placeholder is generated at
-data/build/audio/ir/PLACEHOLDER-synthetic-alley.wav and every output is marked
+data/build/audio/spatialise/PLACEHOLDER-synthetic-alley.wav and every output is marked
 `synthetic_placeholder` in provenance (the audit's --release mode then fails).
 
 Two IR kinds are handled:
@@ -31,7 +31,7 @@ from . import loudness as Lz
 from .common import BUILD, REAL_IR, ffmpeg, file_sha256, log
 
 SR = 48000
-IR_DIR = BUILD / "ir"
+IR_DIR = BUILD / "spatialise"   # our working files; data/build/audio/ir/ belongs to spike 6
 PLACEHOLDER = IR_DIR / "PLACEHOLDER-synthetic-alley.wav"
 POOLS = ["dress-concrete"]
 DRR_DB = 4.0

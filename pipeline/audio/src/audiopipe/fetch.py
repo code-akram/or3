@@ -94,7 +94,7 @@ def fetch_freesound(entry: dict, dry: bool, today: str) -> None:
     if dry:
         return
     if already_have(rid):
-        log(f"  have it (sha256 matches manifest)")
+        log("  have it (sha256 matches manifest)")
         return
     d = RAW / "freesound" / str(sid)
     d.mkdir(parents=True, exist_ok=True)

@@ -20,17 +20,17 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import subprocess
 import tempfile
 from pathlib import Path
 
 import numpy as np
+import scipy
 import soundfile as sf
 
 from . import clean, loop
 from . import loudness as Lz
 from . import provenance as prov
-from .common import BUILD, DATA_ROOT, REAL_IR, ffmpeg, ffmpeg_version, file_sha256, log, repo_root
+from .common import BUILD, REAL_IR, ffmpeg, ffmpeg_version, file_sha256, log
 
 SR = 48000
 WEB = BUILD / "web"
@@ -46,7 +46,8 @@ BUS_GAINS_DB = {"ambience": -6.0, "foley": 6.0}
 def opus(src: Path, dst: Path, kbps: int) -> dict:
     dst.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg("-i", str(src), "-c:a", "libopus", "-b:a", f"{kbps}k", "-vbr", "on", "-compression_level", "10",
-           "-application", "audio", "-frame_duration", "20", "-map_metadata", "-1", str(dst))
+           "-application", "audio", "-frame_duration", "20", "-map_metadata", "-1",
+           "-fflags", "+bitexact", "-flags:a", "+bitexact", str(dst))  # bitexact: fixed Ogg serial, reproducible
     with tempfile.TemporaryDirectory() as td:
         dec = Path(td) / "d.wav"
         ffmpeg("-i", str(dst), "-c:a", "pcm_f32le", str(dec))
@@ -68,9 +69,8 @@ def write_flac(path: Path, y: np.ndarray) -> None:
 
 
 def tool_info() -> dict:
-    sha = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_root(), capture_output=True, text=True).stdout.strip()
-    return {"ffmpeg": ffmpeg_version(), "libopus": "ffmpeg libopus", "numpy": np.__version__,
-            "pipeline": "pipeline/audio (audiopipe 0.1.0)", "git": sha}
+    return {"ffmpeg": ffmpeg_version(), "libopus": "1.6.1 (via ffmpeg)", "numpy": np.__version__,
+            "pipeline": "pipeline/audio (audiopipe 0.1.0)", "scipy": scipy.__version__, "soundfile": sf.__version__}
 
 
 def attribution_for(ids: list[str], recs: dict) -> str:
@@ -107,7 +107,7 @@ def ir_records(recs: dict) -> tuple[str | None, bool]:
     """Provenance for the spike-6 IR (and the PLATEAU data behind it)."""
     meta = json.loads((BUILD / "masters" / "foley" / "dress-concrete" / "alley.json").read_text())["ir"]
     if meta["synthetic_placeholder"]:
-        src = BUILD / "ir" / "PLACEHOLDER-synthetic-alley.wav"
+        src = BUILD / "spatialise" / "PLACEHOLDER-synthetic-alley.wav"
         rid = "audio:ir/PLACEHOLDER-synthetic-alley.wav"
         recs[rid] = derived(rid, src, [], ["synthetic placeholder IR (audiopipe.spatialise.make_placeholder, seed 11)"],
                             {"generator": "numpy"}, recs, "SYNTHETIC PLACEHOLDER alley IR", placeholder=True)
