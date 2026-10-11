@@ -1,0 +1,33 @@
+# Local-only material that must never be committed (see NOTES.md §14):
+# film footage/frames/audio, SMPL/SMPL-X models, LaFAN1, AMASS, Mixamo,
+# commercial sound libraries, model weights.
+/private/
+
+# Large downloaded source data (fetched by scripts, not committed)
+/data/raw/
+
+# Media that should only ever come from /private/
+*.mp4
+*.mkv
+*.webm
+*.mov
+
+# Model files
+*.pkl
+*.ckpt
+*.safetensors
+*.pth
+*.onnx
+
+# Tooling
+node_modules/
+target/
+dist/
+.venv/
+__pycache__/
+*.blend1
+.DS_Store
+
+# Secrets (Freesound OAuth tokens, API keys)
+.env
+.env.*
