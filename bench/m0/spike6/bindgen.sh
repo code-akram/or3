@@ -23,3 +23,5 @@ export LIBCLANG_PATH
   --raw-line '// Regenerate: see bench/m0/spike6/bindgen.sh' \
   --raw-line '#![allow(non_camel_case_types, non_snake_case, non_upper_case_globals, dead_code, clippy::all)]' \
   -o "$REPO/tools/acoustic-bake/src/phonon_sys.rs" -- -I"$SDK/include"
+# match the committed formatting
+cargo fmt -p acoustic-bake --manifest-path "$REPO/Cargo.toml"
