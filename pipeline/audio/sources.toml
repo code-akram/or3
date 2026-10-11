@@ -1,0 +1,84 @@
+# Source selection for the spike-7 audio batch (NOTES.md §12, §18 item 7).
+# Each entry is fetched by `audiopipe.fetch`, which re-checks the licence against
+# provenance/licences.json at fetch time and writes one record per file to
+# provenance/audio.jsonl. `role` says what the pipeline uses the file for.
+#
+# Candidate search (reproducible):
+#   uv run python -I -m audiopipe.search '' --geo 35.6938,139.7034,4 --filter 'duration:[60 TO 1200]' --sort downloads_desc
+#   uv run python -I -m audiopipe.search 'dress shoes footsteps concrete'
+#   IA: collection:radio-aporee-maps AND (tokyo OR shinjuku OR shibuya ...) via advancedsearch.php
+
+# --- Tokyo / Shinjuku ambience (Freesound, geotag + tag filtered) -------------
+[[freesound]]
+id = 679335
+role = "ambience"
+why = "takecha, Shinjuku 22:07, geotag 35.6906,139.7073 (east side, near Kabukicho). CC0, 48k WAV. Night street bed."
+
+[[freesound]]
+id = 679333
+role = "ambience"
+why = "takecha, Shinjuku 00:55, same geotag. Quiet late street, karaoke leakage, sirens."
+
+[[freesound]]
+id = 679334
+role = "ambience"
+why = "takecha, Shinjuku 19:06, same geotag. Evening street with passing conversation."
+
+[[freesound]]
+id = 380726
+role = "ambience"
+why = "sergeeo, 'Shinjuku - August 2016', geotag 35.6916,139.6976, Zoom H6, CC-BY 3.0. Walking street ambience."
+
+[[freesound]]
+id = 364865
+role = "ambience"
+why = "RutgerMuller Japan pack, Tokyo street evening/night, 96k/24 Zoom H2n MS, CC0. Cars, construction."
+
+[[freesound]]
+id = 677641
+role = "ambience"
+why = "moky-sound, 'In front of Shinjuku Station', CC0, 96k/24 but recorded on an iPhone: a test case for the upsampling detector."
+
+# --- Footsteps (dress shoes on concrete) -------------------------------------
+[[freesound]]
+id = 205748
+role = "footsteps"
+why = "Yuval, leather shoes slow walk on concrete, contact mics on shoes, CC0 (named in NOTES §12)."
+
+[[freesound]]
+id = 560478
+role = "footsteps"
+why = "jeroberts92, 'Concrete dress Shoes', MKH-50, CC0, 48k/24."
+
+[[freesound]]
+id = 742969
+role = "footsteps"
+why = "Artninja, male leather-sole shoes slow walking on hard ground, CC-BY 4.0, 44.1k/32f."
+
+# --- Rain on metal ------------------------------------------------------------
+[[freesound]]
+id = 569313
+role = "rain"
+why = "stecman, rain on tin roof, CC0, 96k FLAC (named in NOTES §12). Fetched for analysis; not used in the two spike outputs."
+
+# --- Internet Archive / radio aporee -----------------------------------------
+[[archive]]
+identifier = "aporee_70134_81690"
+file = "20251014GareShinjukuLigneJRJSDPA4060binauralDeityPR2.wav"
+role = "ambience"
+licence_note = "Public Domain Mark 1.0 chosen by the uploader on radio aporee for their own 2025 recording; treated as a dedication pending user confirmation. Credit the recordist anyway. Analysis-only in spike 7 (not an input of any output)."
+why = "Shinjuku JR platform, 2025, binaural DPA 4060, WAV original. Public Domain Mark 1.0 (needs a note)."
+
+[[archive]]
+identifier = "aporee_17483_20360"
+file = "alley.mp3"
+role = "ambience"
+licence_note = "Public Domain Mark 1.0 chosen by the uploader on radio aporee for their own 2013 recording; treated as a dedication pending user confirmation. Analysis-only in spike 7."
+why = "Ginza/Yurakucho bustling alley at night, 2013. PDM 1.0. Original is MP3: tests the lossy-source gate."
+
+[[archive]]
+identifier = "aporee_20539_23862"
+file = "nov820131600shibuya.mp3"
+role = "ambience"
+licence_note = "CC BY-SA 3.0: anything derived from it must stay CC BY-SA 3.0 and be kept separate from CC-BY-4.0 assets. Analysis-only in spike 7."
+why = "Shibuya Dogenzaka street crossings, afternoon, 2013. CC BY-SA 3.0 (accepted only with a note). Original is MP3."

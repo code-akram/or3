@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "provenance/record.schema.json",
+  "title": "Provenance record",
+  "description": "One line of a provenance/*.jsonl manifest. 'source' records describe a third-party file exactly as fetched (re-fetchable from download_url). 'derived' records describe a file our pipeline produced, pointing at the ids of its inputs. audit.py enforces this schema (a stdlib subset) plus licences.json.",
+  "type": "object",
+  "required": ["id", "kind", "domain", "licence", "retrieved_or_built"],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[a-z]+:[A-Za-z0-9_./:-]+$", "description": "Stable id: freesound:<id>, archive:<identifier>/<file>, audio:<category>/<name>, ..."},
+    "kind": {"enum": ["source", "derived"]},
+    "domain": {"enum": ["audio", "motion", "mesh", "texture", "data", "font", "other"]},
+    "title": {"type": "string"},
+    "licence": {"type": "string", "description": "SPDX id or LicenseRef-*; must be in licences.json allow or note."},
+    "licence_url": {"type": "string"},
+    "licence_note": {"type": "string", "description": "Required when licences.json lists the licence under 'note'."},
+    "author": {"type": "string"},
+    "attribution": {"type": "string", "description": "Exact CREDITS.md line. Required when the licence needs attribution."},
+    "source_url": {"type": "string", "description": "Human-readable page for the item."},
+    "download_url": {"type": "string", "description": "URL the file was fetched from (no credentials)."},
+    "retrieved_or_built": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}", "description": "ISO date of download (source) or build (derived)."},
+    "original_format": {
+      "type": "object",
+      "properties": {
+        "container": {"type": "string"},
+        "codec": {"type": "string"},
+        "sample_rate": {"type": "integer"},
+        "bit_depth": {"type": ["integer", "string"]},
+        "channels": {"type": "integer"},
+        "duration_s": {"type": "number"}
+      }
+    },
+    "path": {"type": "string", "description": "Path relative to the data root (data/), e.g. raw/audio/freesound/205748/x.wav or build/audio/..."},
+    "bytes": {"type": "integer"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "status": {"enum": ["accepted", "rejected", "pending"], "description": "Quality gate outcome. Rejected sources may not be inputs of derived records."},
+    "status_reason": {"type": "string"},
+    "inputs": {"type": "array", "items": {"type": "string"}, "description": "derived only: ids of input records."},
+    "transformations": {"type": "array", "items": {"type": "string"}, "description": "Ordered human-readable steps (filters with parameters)."},
+    "tool": {"type": "object", "description": "derived only: tool names and versions, script path, parameters, seed."},
+    "synthetic_placeholder": {"type": "boolean", "description": "True when an input is a stand-in (e.g. synthetic IR) that must be replaced before shipping."}
+  },
+  "allOf": [
+    {"if": {"properties": {"kind": {"const": "source"}}}, "then": {"required": ["author", "source_url", "download_url", "licence_url", "status"]}},
+    {"if": {"properties": {"kind": {"const": "derived"}}}, "then": {"required": ["inputs", "transformations", "tool", "path", "sha256"]}}
+  ],
+  "additionalProperties": false
+}
