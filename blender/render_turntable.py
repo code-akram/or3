@@ -43,6 +43,8 @@ def parse_args():
     ap.add_argument("--samples", type=int, default=128)
     ap.add_argument("--denoise", type=int, default=1)
     ap.add_argument("--adaptive", type=int, default=1)
+    ap.add_argument("--oidn-quality", choices=["HIGH", "BALANCED", "FAST"], default="HIGH")
+    ap.add_argument("--oidn-prefilter", choices=["ACCURATE", "FAST", "NONE"], default="ACCURATE")
     ap.add_argument("--views", default=",".join(VIEWS))
     ap.add_argument("--warm-repeat", type=int, default=1,
                     help="render the first view again at the end (warm cache timing)")
@@ -164,6 +166,8 @@ def configure_engine():
         c.use_adaptive_sampling = bool(ARGS.adaptive)
         c.use_denoising = bool(ARGS.denoise)
         c.denoiser = "OPENIMAGEDENOISE"
+        c.denoising_quality = ARGS.oidn_quality
+        c.denoising_prefilter = ARGS.oidn_prefilter
         if hasattr(c, "denoising_use_gpu"):
             c.denoising_use_gpu = False
         c.max_bounces = 8
@@ -205,6 +209,7 @@ def main():
                         "version": gpu.platform.version_get()}
     out = {"engine": ARGS.engine, "res": ARGS.res, "samples": ARGS.samples,
            "denoise": bool(ARGS.denoise), "adaptive": bool(ARGS.adaptive),
+           "oidn": [ARGS.oidn_quality, ARGS.oidn_prefilter] if ARGS.engine == "CYCLES" else None,
            "threads": scene.render.threads, "blender": bpy.app.version_string,
            "gpu": gpu_info, "glb_import_s": round(import_s, 3), "frames": frames,
            "env": {k: os.environ.get(k) for k in
