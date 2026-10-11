@@ -1,0 +1,51 @@
+# Provenance: upstream sources (proposal from Phase 0 spike 1; format open, NOTES.md §17 q3).
+#
+# One [[source]] per upstream archive or tool whose data reaches a shipped asset.
+# Shipped assets reference sources by `id` in [[asset]] entries (see the
+# example at the bottom), so the CI audit can check: every shipped file has an
+# entry, every entry's sources exist, every licence is on the allow-list
+# (NOTES.md §14), and the sha256 of each re-fetched archive still matches.
+
+[[source]]
+id = "mpfb2-2.0.18"
+kind = "tool+data"
+url = "https://extensions.blender.org/add-ons/mpfb/"
+repo = "https://github.com/makehumancommunity/mpfb2"
+version = "2.0.18 (build 20261010)"
+author = "MakeHuman Community (Joel Palmius, maintainer)"
+licence_code = "GPL-3.0-or-later"          # code only runs offline; never shipped
+licence_data = "CC0-1.0"                    # base mesh, targets, rigs, weights: LICENSE.md §C
+licence_evidence = "https://github.com/makehumancommunity/mpfb2/blob/master/LICENSE.md"
+audit = "provenance/audit_makehuman.py: 1538 files, 0 flagged (2026-10-12)"
+notes = "game_engine rig JSON and target .gz files carry no per-file header; covered by LICENSE.md §C."
+
+[[source]]
+id = "mh-system-assets-cc0"
+kind = "asset-pack"
+url = "https://files2.makehumancommunity.org/asset_packs/makehuman_system_assets/makehuman_system_assets_cc0.zip"
+page = "https://static.makehumancommunity.org/assets/assetpacks/makehuman_system_assets.html"
+sha256 = "b542127a8e25547c7c29c19f2d1d2adb9a664c80396ecd694095dbc8028a0107"
+author = "makehuman_system (Data Collection AB, Joel Palmius, Jonas Hauquier)"
+licence = "CC0-1.0"
+audit = "421 files, 0 flagged; 209 with the 2020 CC0-release header, 6 .mhw without header (pack JSON: CC0)"
+fetched_by = "blender/fetch_mpfb_assets.sh"
+
+[[source]]
+id = "mh-suits01-cc0"
+kind = "asset-pack"
+url = "https://files2.makehumancommunity.org/asset_packs/suits01/suits01_cc0.zip"
+page = "https://static.makehumancommunity.org/assets/assetpacks/suits01.html"
+sha256 = "2b1d8676f3863b188e9eea98c1d8f234543d54c440e791d92b819f8ee1861f19"
+author = "Margaret Toigo (MargaretToigo; files say 'author MRT')"
+licence = "CC0-1.0"
+audit = "57 files, 0 flagged; 16 with '# license CC0', 8 .mhmat without header (pack JSON: CC0)"
+fetched_by = "blender/fetch_mpfb_assets.sh"
+
+# Example shipped-asset entry (not shipped yet; spike output lives in data/build/):
+# [[asset]]
+# path = "assets/character/character.glb"     # or a release-artifact URL
+# licence = "CC-BY-4.0"                        # our modifications; inputs are CC0
+# sources = ["mpfb2-2.0.18", "mh-system-assets-cc0", "mh-suits01-cc0"]
+# transform = "blender/build_character.py (macro gender 1.0 ...), baked targets, alpha fix, glTF export 4 influences"
+# tool = "Blender 5.2.2 LTS"
+# seed = ""                                   # for generated content
