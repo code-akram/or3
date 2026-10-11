@@ -22,6 +22,12 @@ mod pose;
 
 pub use pose::{BONES, INSTANCES};
 
+/// Re-exports for the native reference benchmark (`examples/tick_bench.rs`).
+pub mod bench_support {
+    pub use crate::physics::{ARENA_SEED, Arena};
+    pub use crate::pose::{Rig, Root};
+}
+
 /// Floats per pose slot: one column-major 4x4 matrix per bone per instance.
 pub const SLOT_FLOATS: usize = INSTANCES * BONES * 16;
 /// Fixed simulation rate.

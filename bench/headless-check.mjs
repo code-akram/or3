@@ -55,7 +55,9 @@ try {
   page.on('console', (m) => consoleLines.push(`${m.type()}: ${m.text()}`));
   page.on('pageerror', (e) => consoleLines.push(`pageerror: ${e.message}`));
 
-  const resp = await page.goto(`http://127.0.0.1:${port}/?label=headless-linux&window=2&memEvery=6${extraQuery ? '&' + extraQuery : ''}`, { waitUntil: 'load' });
+  const query = new URLSearchParams({ label: 'headless-linux', window: '2', memEvery: '6' });
+  for (const [k, v] of new URLSearchParams(extraQuery)) query.set(k, v);
+  const resp = await page.goto(`http://127.0.0.1:${port}/?${query}`, { waitUntil: 'load' });
   const h = resp.headers();
   result.checks.coop = h['cross-origin-opener-policy'];
   result.checks.coep = h['cross-origin-embedder-policy'];

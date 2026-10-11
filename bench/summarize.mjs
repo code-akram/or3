@@ -30,10 +30,13 @@ const paths = argv.filter((a, i) => !a.startsWith('--') && !flagsWithValue.has(a
 if (paths.length === 0) paths.push(join(here, 'm0', 'telemetry'));
 
 const NOMINAL_MS = 1000 / 60;
+/** Bins per simulation histogram (core/src/lib.rs HIST_BINS); the last is overflow. */
+const SIM_BINS = 256;
 
 class Merged {
-  constructor(binMs) {
+  constructor(binMs, nBins = Infinity) {
     this.binMs = binMs;
+    this.nBins = nBins;
     this.bins = new Map();
     this.count = 0;
     this.max = 0;
@@ -41,16 +44,21 @@ class Merged {
   add(h) {
     if (!h) return;
     if (Math.abs(h.binMs - this.binMs) > 1e-9) throw new Error(`bin width mismatch ${h.binMs} vs ${this.binMs}`);
+    if (h.bins) this.nBins = h.bins;
     for (const [i, c] of h.sparse) {
       this.bins.set(i, (this.bins.get(i) ?? 0) + c);
       this.count += c;
     }
     this.max = Math.max(this.max, h.max ?? 0);
   }
-  addSparse(sparse) {
+  /** Simulation histograms carry no exact max; use the upper edge of the highest bin. */
+  addSparse(sparse, nBins) {
+    this.nBins = nBins;
     for (const [i, c] of sparse) {
       this.bins.set(i, (this.bins.get(i) ?? 0) + c);
       this.count += c;
+      this.max = Math.max(this.max, (i + 1) * this.binMs);
+      if (i >= nBins - 1) this.overflow = true;
     }
   }
   q(p) {
@@ -59,7 +67,8 @@ class Merged {
     let acc = 0;
     for (const i of [...this.bins.keys()].sort((a, b) => a - b)) {
       acc += this.bins.get(i);
-      if (acc >= target) return +((i + 1) * this.binMs).toFixed(3);
+      // The last bin is an overflow bin: report its lower edge as a ">=" bound.
+      if (acc >= target) return i >= this.nBins - 1 ? `>=${+(i * this.binMs).toFixed(3)}` : +((i + 1) * this.binMs).toFixed(3);
     }
     return null;
   }
@@ -70,7 +79,8 @@ class Merged {
     return n / this.count;
   }
   stats() {
-    return { n: this.count, p50: this.q(0.5), p95: this.q(0.95), p99: this.q(0.99), max: this.count ? +this.max.toFixed(2) : null };
+    const max = this.count ? +this.max.toFixed(2) : null;
+    return { n: this.count, p50: this.q(0.5), p95: this.q(0.95), p99: this.q(0.99), max: this.overflow ? `>=${+((this.nBins - 1) * this.binMs).toFixed(3)}` : max };
   }
 }
 
@@ -99,10 +109,10 @@ function summariseSlice(windows, from, to = Infinity) {
     raf.add(w.raf);
     cpu.add(w.cpu);
     if (gpu && w.gpu) gpu.add(w.gpu);
-    tick.addSparse(w.sim.tickUs.sparse);
-    phys.addSparse(w.sim.physUs.sparse);
-    pose.addSparse(w.sim.poseUs.sparse);
-    interval.addSparse(w.sim.intervalUs.sparse);
+    tick.addSparse(w.sim.tickUs.sparse, SIM_BINS);
+    phys.addSparse(w.sim.physUs.sparse, SIM_BINS);
+    pose.addSparse(w.sim.poseUs.sparse, SIM_BINS);
+    interval.addSparse(w.sim.intervalUs.sparse, SIM_BINS);
     frames += w.frames;
     ticks += w.sim.ticks;
     resyncs += w.sim.resyncs;

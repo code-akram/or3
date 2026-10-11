@@ -7,6 +7,8 @@
 #   * wasm-bindgen CLI matching the crate version exactly (0.2.129).
 #   * binaryen wasm-opt (optional; skipped with WASM_OPT=none).
 #
+# Size experiments: CARGO_PROFILE_WASM_OPT_LEVEL=z WASM_OPT_LEVEL=-Oz core/build-web.sh
+#
 # Output: web/src/core-wasm/ (gitignored): game_core.js, game_core_bg.wasm, .d.ts files.
 set -euo pipefail
 
@@ -34,7 +36,7 @@ rm -rf "$out"
 
 wasm="$out/game_core_bg.wasm"
 if [[ "$wasm_opt" != "none" && -x "$wasm_opt" ]]; then
-  "$wasm_opt" -O3 \
+  "$wasm_opt" ${WASM_OPT_LEVEL:--O3} \
     --enable-threads --enable-simd --enable-bulk-memory --enable-mutable-globals \
     --enable-sign-ext --enable-nontrapping-float-to-int --enable-reference-types --enable-multivalue \
     "$wasm" -o "$wasm.opt"

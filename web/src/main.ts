@@ -224,9 +224,9 @@ async function main(): Promise<void> {
   });
 
   // --- telemetry state ---------------------------------------------------------------------
-  const rafHist = new Hist(0.1, 1000);
-  const cpuHist = new Hist(0.05, 1000);
-  const gpuHist = new Hist(0.05, 1000);
+  const rafHist = new Hist(0.1, 2000); // 0..200 ms
+  const cpuHist = new Hist(0.05, 2000); // 0..100 ms
+  const gpuHist = new Hist(0.05, 2000); // 0..100 ms
   const graph = new Graph(graphCanvas);
   const t0 = performance.now();
   let lastRaf = 0;

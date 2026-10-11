@@ -38,6 +38,7 @@ export class Hist {
   summary(): HistSummary {
     return {
       binMs: this.binMs,
+      bins: this.n,
       count: this.count,
       mean: this.count ? this.sum / this.count : 0,
       max: this.max,
@@ -58,6 +59,8 @@ export class Hist {
 
 export interface HistSummary {
   binMs: number;
+  /** Number of bins; the last one is the overflow bin. */
+  bins: number;
   count: number;
   mean: number;
   max: number;
