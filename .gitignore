@@ -6,6 +6,9 @@
 # Large downloaded source data (fetched by scripts, not committed)
 /data/raw/
 
+# Pipeline build outputs (rebuildable; large ones ship as release artifacts)
+/data/build/
+
 # Media that should only ever come from /private/
 *.mp4
 *.mkv
