@@ -1,0 +1,15 @@
+{
+  "name": "game-bench",
+  "private": true,
+  "version": "0.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "serve": "node server.mjs",
+    "summarize": "node summarize.mjs",
+    "check": "node headless-check.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.64.0"
+  }
+}

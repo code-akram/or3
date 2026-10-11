@@ -1,0 +1,18 @@
+[workspace]
+resolver = "3"
+members = ["core"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Release profile for the browser core. Built by `scripts/build-core.sh`.
+[profile.wasm]
+inherits = "release"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = "debuginfo"

@@ -1,0 +1,10 @@
+# Cloudflare Pages headers. WASM threads need SharedArrayBuffer, which needs cross-origin isolation.
+# Keep in sync with web/vite.config.ts and bench/server.mjs.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+  X-Content-Type-Options: nosniff
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
