@@ -1,0 +1,2 @@
+# Raw telemetry sessions (JSONL) are local data; summaries go in the spike reports.
+*.jsonl
