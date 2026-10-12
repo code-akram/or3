@@ -1,0 +1,13 @@
+{
+  "$comment": "Face variant B, heavier: wide square jaw, deeper and lower brow, thick neck, broad nose. look-spec §6; parameters only (§2.4).",
+  "head": {
+    "targets": {"head-age-incr": 0.2, "chin-prominent-incr": 0.4, "lr-cheek-volume-decr": 0.2,
+                "neck-scale-horiz-incr": 0.3, "nose-scale-horiz-incr": 0.3, "nose-flaring-incr": 0.2,
+                "lr-eye-scale-decr": 0.3, "eyebrows-trans-down": 0.3},
+    "edits": {"brow_depth": 1.0, "brow_angle": 0.5, "brow_flatten": 0.8, "socket_depth": 0.7,
+              "lid_hood": 0.4, "nose_bridge_width": 0.6, "dorsum_crease": 0.5, "cheek_plane_break": 0.6,
+              "submalar_hollow": 0.3, "jaw_width": 0.6, "jaw_angle": 0.6, "chin_width": 0.8,
+              "chin_projection": 0.4, "lip_thickness": 0.3},
+    "planes": {"forehead": 0.5, "jaw_side": 1.0, "chin_front": 0.9}
+  }
+}

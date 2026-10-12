@@ -16,10 +16,16 @@ DEFAULTS = {
         "suit": None,    # suits01/unpacked
     },
     "body": {
+        # height 0.607: stature 1.85 m (look-spec §1.2); was 0.6 in spike 1.
         "macros": {"gender": 1.0, "age": 0.55, "muscle": 0.6, "weight": 0.5,
-                   "height": 0.6, "proportions": 0.6},
+                   "height": 0.607, "proportions": 0.6},
         "race": {"caucasian": 0.6, "asian": 0.3, "african": 0.1},
         "skin": "young_caucasian_male.mhmat",
+        # MPFB detail targets {target file stem: weight} (body.load_targets).
+        # Tuned to look-spec §1.2: bideltoid 0.545 -> 0.561 m, hip breadth
+        # 0.386 -> 0.373 m, shoulder:hip 1.41 -> 1.50 (bench/m1/head.md).
+        "targets": {"measure-shoulder-dist-incr": 0.12, "torso-vshape-incr": 0.15,
+                    "hip-scale-horiz-decr": 0.18},
     },
     "head": {
         # (asset subdir, mhclo file, MPFB asset type)
@@ -29,7 +35,12 @@ DEFAULTS = {
                   ["teeth", "teeth_base.mhclo", "Teeth"],
                   ["tongue", "tongue01.mhclo", "Tongue"]],
         "cutouts": ["eyebrow", "eyelashes"],
-        "edits": {},  # parametric head edits (head.edit_base); empty = stock head
+        # MPFB face targets {target file stem: weight}, loaded before the edits.
+        "targets": {},
+        # Parametric controls in [-1, 1] (head_shape.CONTROLS; look-spec §2.3).
+        "edits": {},
+        # Planarisation blend 0..1 per plane group (head_shape.PLANES).
+        "planes": {},
     },
     "hair": {
         # MPFB card hair (spike-1 placeholder); null = generated hair only.
@@ -100,8 +111,9 @@ DEFAULTS = {
     },
     "budgets": {
         # Decimate a staged mesh whose name contains the key down to max tris.
-        # MPFB ships no teeth under 7.1k tris (all six shapes are 7,120).
-        "decimate": {"teeth": 900},
+        # MPFB ships no teeth under 7.1k tris (all six shapes are 7,120);
+        # look-spec §5.1 budget is <= 500.
+        "decimate": {"teeth": 480},
     },
     "export": {
         "max_influences": 4,

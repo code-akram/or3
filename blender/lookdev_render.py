@@ -6,8 +6,13 @@ Imports the GLB (we render what ships), then per view:
     in proportions shows up as a change in the picture;
   * a silhouette mask: orthographic camera along the same axis, character
     only, 1 px = a fixed metric size, so IoU between runs is meaningful.
-Then writes metrics.json: triangles per part, bones, weights per vertex,
-landmark ratios, and mask IoU against a target set and the previous run.
+Then the 40 px read test (look-spec §2.2): a key-light-only ¾ render of the
+head, box-downsampled until the head is 40 px tall, scoring the eye-socket
+band against the cheek (and the beard against the skin, once a beard exists).
+Writes render_metrics.json: triangles per part, bones, weights per vertex,
+joint-based landmarks of the shipped GLB, read test, and mask IoU against a
+target set and the previous run. The spec landmarks (nude body) come from the
+build (character.stats.json) and are merged by bench/m1/lookdev_report.py.
 
     blender -b -t 4 --factory-startup --python blender/lookdev_render.py -- \
         --glb RUN/character.glb --out-dir RUN [--mode loop|signoff] \
@@ -35,11 +40,23 @@ VIEWS = {
     "profile": (90.0, "body"),
     "closeup": (25.0, "head"),
 }
+# Mask-only face views: body + eyes only (hair, clothes and face cards
+# hidden), so IoU sees head edits that the hair hides in "closeup".
+FACE_MASK_VIEWS = {
+    "face_front": (0.0, "head"),
+    "face_profile": (90.0, "head"),
+}
+FACE_PARTS = ("body", "low-poly")
 # Fixed framing for body views (metres, character feet at z = 0, facing -Y).
 BODY_TARGET_Z = 0.98
 BODY_FRAME_H = 2.15
 HEAD_FRAME_H = 0.42
 MASK_RES = 512
+# 40 px read test: render the head READ_PX tall, then box-average by READ_K.
+READ_HEAD_PX = 40
+READ_K = 8
+READ_RES = 384
+READ_AZ = -40.0  # the key-light side (the key is front-right of the character)
 
 
 def parse_args():
@@ -142,7 +159,7 @@ def view_target(framing, floor_z, head):
 
 
 def make_cameras(view, floor_z, head):
-    az, framing = VIEWS[view]
+    az, framing = VIEWS.get(view) or FACE_MASK_VIEWS[view]
     target, frame_h = view_target(framing, floor_z, head)
     a = math.radians(az)
     # Azimuth 0 = in front of the character (-Y); positive shows its left side.
@@ -338,6 +355,156 @@ def weights_per_vertex(meshes, bone_names):
     return worst
 
 
+# ---------------------------------------------------------------- read test
+
+def _srgb_to_linear(c):
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+
+def _luminance_img(path):
+    img = bpy.data.images.load(path, check_existing=False)
+    w, h = img.size
+    px = np.empty(w * h * 4, dtype=np.float32)
+    img.pixels.foreach_get(px)
+    bpy.data.images.remove(img)
+    rgb = _srgb_to_linear(px.reshape(h, w, 4)[..., :3].astype(np.float64))
+    return rgb @ np.array([0.2126, 0.7152, 0.0722]), w, h  # row 0 = bottom
+
+
+def _box_px(cam, corners, w, h):
+    """Pixel bbox (x0, x1, y0, y1; y from the bottom) of projected 3D corners."""
+    from bpy_extras.object_utils import world_to_camera_view
+    scene = bpy.context.scene
+    pts = [world_to_camera_view(scene, cam, Vector(c)) for c in corners]
+    xs = [p.x * w for p in pts]
+    ys = [p.y * h for p in pts]
+    return min(xs), max(xs), min(ys), max(ys)
+
+
+def _mean_in(lum, box):
+    x0, x1, y0, y1 = box
+    h, w = lum.shape
+    xs = np.arange(w) + 0.5
+    ys = np.arange(h) + 0.5
+    mx = (xs >= x0) & (xs <= x1)
+    my = (ys >= y0) & (ys <= y1)
+    if not mx.any():
+        mx[min(w - 1, max(0, int((x0 + x1) / 2)))] = True
+    if not my.any():
+        my[min(h - 1, max(0, int((y0 + y1) / 2)))] = True
+    return float(lum[np.ix_(my, mx)].mean()), int(mx.sum() * my.sum())
+
+
+def read_test(out, meshes, lights, head_mid, spec):
+    """look-spec §2.2: eye band >= 15 % darker than the cheek, beard >= 25 %
+    different from the skin, at a 40 px tall head under the key light only."""
+    eyes = next((o for o in meshes if "low-poly" in o.name), None)
+    if eyes is None or not spec.get("menton_z"):
+        return {"skipped": "no eye mesh or no spec landmarks (menton)"}
+    body = next(o for o in meshes if part_name(o) == "body")
+    bco = np.array([(body.matrix_world @ v.co)[:] for v in body.data.vertices])
+    eco = np.array([(eyes.matrix_world @ v.co)[:] for v in eyes.data.vertices])
+    side = -1.0 if READ_AZ < 0 else 1.0  # the eye nearest the camera
+    eye = eco[eco[:, 0] * side > 0]
+    ec = eye.mean(0)
+    cornea_y = float(eye[:, 1].min())
+    crown = float(bco[:, 2].max())
+    head_h = crown - spec["menton_z"]
+
+    scene = bpy.context.scene
+    a = math.radians(READ_AZ)
+    axis = Vector((math.sin(a), -math.cos(a), 0.0))
+    cd = bpy.data.cameras.new("read40")
+    cd.lens = 85.0
+    frame_h = head_h * READ_RES / (READ_HEAD_PX * READ_K)
+    dist = (frame_h * 0.5) / math.tan(math.atan(cd.sensor_width * 0.5 / cd.lens))
+    cam = bpy.data.objects.new("read40", cd)
+    scene.collection.objects.link(cam)
+    target = Vector((0.0, float(ec[1]), (crown + spec["menton_z"]) * 0.5))
+    cam.location = target + axis * dist
+    look_at(cam, target)
+
+    saved = [(l, l.hide_render) for l in lights]
+    for l in lights:
+        l.hide_render = l.name != "key"
+    r = scene.render
+    r.engine = "BLENDER_EEVEE"
+    scene.eevee.taa_render_samples = 16
+    r.resolution_x = r.resolution_y = READ_RES
+    r.film_transparent = False
+    r.image_settings.color_mode = "RGB"
+    scene.camera = cam
+    full = os.path.join(out, "read40_full.png")
+    secs = render(full)
+    for l, hid in saved:
+        l.hide_render = hid
+
+    lum, w, h = _luminance_img(full)
+    k = READ_K
+    small = lum[:h - h % k, :w - w % k].reshape(h // k, k, w // k, k).mean(axis=(1, 3))
+    sw, sh = w // k, h // k
+    x = float(ec[0])
+    eye_band = [(x - 0.014, cornea_y, ec[2] - 0.006), (x + 0.014, cornea_y, ec[2] + 0.012)]
+    cheek = [(x - 0.004 * side, cornea_y + 0.006, ec[2] - 0.042),
+             (x + 0.016 * side, cornea_y + 0.006, ec[2] - 0.024)]
+
+    def corners(pair):
+        (x0, y0, z0), (x1, y1, z1) = pair
+        return [(xx, yy, zz) for xx in (x0, x1) for yy in (y0, y1) for zz in (z0, z1)]
+
+    def box(pair):
+        x0, x1, y0, y1 = _box_px(cam, corners(pair), w, h)
+        return x0 / k, x1 / k, y0 / k, y1 / k
+
+    head_px = _box_px(cam, [(0, ec[1], crown), (0, ec[1], spec["menton_z"])], w, h)
+    boxes = {"eye_band": box(eye_band), "cheek": box(cheek)}
+    le, ne = _mean_in(small, boxes["eye_band"])
+    lc, nc = _mean_in(small, boxes["cheek"])
+    res = {
+        "camera_az_deg": READ_AZ, "lights": "key only", "render_s": secs,
+        "head_px": round((head_px[3] - head_px[2]) / k, 1), "image_px": [sw, sh],
+        "eye_band_lum": round(le, 5), "eye_band_px": ne,
+        "cheek_lum": round(lc, 5), "cheek_px": nc,
+        "eye_band_darker": round(1.0 - le / lc, 4) if lc > 0 else None,
+    }
+    res["eye_band_ok"] = res["eye_band_darker"] is not None and res["eye_band_darker"] >= 0.15
+    beard = next((o for o in meshes if "beard" in o.name.lower()), None)
+    if beard is None:
+        res["beard"] = "skipped: no beard mesh"
+    else:
+        chin = [(-0.012, cornea_y + 0.02, spec["menton_z"] + 0.012),
+                (0.012, cornea_y + 0.02, spec["menton_z"] + 0.030)]
+        boxes["beard"] = box(chin)
+        lb, nb = _mean_in(small, boxes["beard"])
+        res.update({"beard_lum": round(lb, 5), "beard_px": nb,
+                    "beard_contrast": round(abs(lb - lc) / lc, 4) if lc > 0 else None})
+        res["beard_ok"] = res["beard_contrast"] is not None and res["beard_contrast"] >= 0.25
+    res["boxes_px"] = {n: [round(c, 1) for c in b] for n, b in boxes.items()}
+    # 40 px image for eyeballing (nearest-upscaled x4) with the sample boxes
+    # outlined (eye band red, cheek cyan, beard yellow); drop the full render.
+    up = np.repeat(np.repeat(small, 4, 0), 4, 1)
+    g = np.clip(np.where(up <= 0.0031308, up * 12.92, 1.055 * up ** (1 / 2.4) - 0.055), 0, 1)
+    rgba = np.dstack([g, g, g, np.ones_like(g)]).astype(np.float32)
+    colours = {"eye_band": (1, 0, 0), "cheek": (0, 1, 1), "beard": (1, 1, 0)}
+    for n, (x0, x1, y0, y1) in boxes.items():
+        X0, X1 = int(round(x0 * 4)), int(round(x1 * 4))
+        Y0, Y1 = int(round(y0 * 4)), int(round(y1 * 4))
+        X0, X1 = max(0, min(X0, up.shape[1] - 1)), max(0, min(X1, up.shape[1] - 1))
+        Y0, Y1 = max(0, min(Y0, up.shape[0] - 1)), max(0, min(Y1, up.shape[0] - 1))
+        for yy in (Y0, Y1):
+            rgba[yy, X0:X1 + 1, :3] = colours[n]
+        for xx in (X0, X1):
+            rgba[Y0:Y1 + 1, xx, :3] = colours[n]
+    im = bpy.data.images.new("read40", up.shape[1], up.shape[0], alpha=False)
+    im.pixels.foreach_set(rgba.ravel())
+    im.filepath_raw = os.path.join(out, "read40.png")
+    im.file_format = "PNG"
+    im.save()
+    bpy.data.images.remove(im)
+    os.remove(full)
+    return res
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -356,11 +523,12 @@ def main():
             "tris": {"total": sum(parts.values()), "parts": dict(sorted(parts.items()))},
             "bones": len(arm.data.bones),
             "max_weights_per_vertex": weights_per_vertex(meshes, bone_names),
-            "landmarks": lm,
+            "landmarks_glb": lm,
         }
     floor, lights = build_studio(floor_z)
     views = [v for v in ARGS.views.split(",") if v]
-    cams = {v: make_cameras(v, floor_z, head) for v in views}
+    face_views = list(FACE_MASK_VIEWS)
+    cams = {v: make_cameras(v, floor_z, head) for v in views + face_views}
     scene = bpy.context.scene
 
     frames = []
@@ -380,13 +548,32 @@ def main():
         frames.append({"view": v, "pass": "mask", "seconds": render(tmp)})
         masks[v] = alpha_to_mask(tmp, os.path.join(out, f"{v}_mask.png"))
         sil[v] = mask_extent(masks[v], cams[v][1].data.ortho_scale / MASK_RES)
+    hidden = [(o, o.hide_render) for o in meshes if part_name(o) not in FACE_PARTS]
+    for o, _ in hidden:
+        o.hide_render = True
+    for v in face_views:
+        scene.camera = cams[v][1]
+        tmp = os.path.join(out, f"{v}_alpha.png")
+        frames.append({"view": v, "pass": "mask", "seconds": render(tmp)})
+        masks[v] = alpha_to_mask(tmp, os.path.join(out, f"{v}_mask.png"))
+        sil[v] = mask_extent(masks[v], cams[v][1].data.ortho_scale / MASK_RES)
+    for o, hid in hidden:
+        o.hide_render = hid
     floor.hide_render = False
 
     def score(d):
         if not d:
             return None
-        return {v: iou(masks[v], load_mask(os.path.join(d, f"{v}_mask.png"))) for v in views}
+        return {v: iou(masks[v], load_mask(os.path.join(d, f"{v}_mask.png")))
+                for v in views + face_views}
 
+    spec = {}
+    stats_path = os.path.join(os.path.dirname(os.path.abspath(ARGS.glb)), "character.stats.json")
+    if os.path.exists(stats_path):
+        with open(stats_path) as f:
+            spec = json.load(f).get("spec_landmarks") or {}
+    with timed("read40"):
+        metrics["read40"] = read_test(out, meshes, lights, head, spec)
     metrics["silhouette"] = sil
     metrics["iou_target"] = score(ARGS.target)
     metrics["iou_prev"] = score(ARGS.prev)
@@ -404,7 +591,7 @@ def main():
     metrics["blender"] = bpy.app.version_string
     with open(os.path.join(out, "render_metrics.json"), "w") as f:
         json.dump(metrics, f, indent=2)
-    print(json.dumps({k: metrics[k] for k in ("tris", "landmarks", "iou_prev")}, indent=2))
+    print(json.dumps({k: metrics[k] for k in ("tris", "landmarks_glb", "read40", "iou_prev")}, indent=2))
 
 
 main()

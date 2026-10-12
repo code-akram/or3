@@ -1,0 +1,13 @@
+{
+  "$comment": "Face variant A, lean and angular: high cheek break, hollow cheeks, narrow end of the jaw range. look-spec §6; parameters only (§2.4).",
+  "head": {
+    "targets": {"head-fat-decr": 0.6, "lr-cheek-volume-decr": 0.5, "lr-cheek-bones-incr": 0.5,
+                "chin-height-incr": 0.1, "lr-eye-scale-decr": 0.3, "nose-point-width-decr": 0.3,
+                "nose-hump-incr": 0.2},
+    "edits": {"brow_depth": 0.9, "brow_angle": 0.6, "brow_flatten": 0.7, "socket_depth": 0.5,
+              "lid_hood": 0.5, "dorsum_crease": 0.8, "cheek_height": 0.7, "cheek_plane_break": 1.0,
+              "submalar_hollow": 0.9, "jaw_width": 0.3, "jaw_angle": 0.5, "chin_width": 0.2,
+              "chin_projection": 0.4, "forehead_slope": 0.4},
+    "planes": {"forehead": 0.6, "jaw_side": 0.8, "chin_front": 0.7}
+  }
+}

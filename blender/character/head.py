@@ -1,19 +1,26 @@
 """Head: parametric face edits and face parts (eyes, brows, lashes, teeth, tongue).
 
 edit_base runs on the base mesh before any proxy is fitted, so fitted assets
-follow the edited head. post runs on the staged export meshes.
+follow the edited head: first the MPFB face targets (head.targets), then the
+parametric controls and planarisation pass (head.edits, head.planes; see
+head_shape.py and bench/m1/look-spec.md §2.3). add_parts fits the face parts
+and then measures the spec landmarks on the still-nude human
+(head_measure.py). post runs on the staged export meshes.
 """
+
+from . import body, head_measure, head_shape
 
 
 def edit_base(b):
-    if b.cfg["head"]["edits"]:
-        raise NotImplementedError("head edits: owned by the m1 head track")
+    body.load_targets(b, b.cfg["head"].get("targets"))
+    head_shape.apply(b)
 
 
 def add_parts(b):
     for subdir, fname, atype in b.cfg["head"]["parts"]:
         b.mpfb.add_mhclo(b.basemesh, subdir, fname, atype)
     b.cutouts += b.cfg["head"]["cutouts"]
+    head_measure.measure_live(b)
 
 
 def post(b):
