@@ -1,0 +1,374 @@
+"""Hero poses for the MPFB game_engine rig (UE-mannequin bone names).
+
+Every operation works in armature (character) space, so the poses do not
+depend on the bones' rolls: the character faces -Y, +X is its LEFT side, +Z is
+up, metres, feet on z = 0. Poses are written for the left side and mirrored
+with `s` (+1 left, -1 right).
+
+Tools (class Poser):
+  rot(bone, axis, deg)         rotate a bone (and its children) about an
+                               armature-space axis through its posed head
+  aim(bone, direction)         swing a bone to point along a direction
+  ik2(upper, lower, target, pole, hinge)
+                               analytic two-bone IK: the end of `lower`
+                               reaches `target`, the joint bends toward `pole`,
+                               and the upper bone is twisted so the joint stays
+                               a pure hinge (no twist inside the elbow/knee)
+  reach(side, wrist, pole) arm IK to a wrist position, elbow toward pole
+  plant(side, ...)             leg IK to a foot placed on the floor (yaw,
+                               heel lift), sole and toes kept flat
+  hand(side, fingers, thumb)   orient the hand (finger direction + thumb-side
+                               direction), choosing the forearm roll that keeps
+                               the wrist untwisted
+  curl(side, ...)              relaxed finger curl toward the palm
+
+POSES maps a name to a function(Poser). The log lists what each pose did and
+any bone it could not find; nothing here edits the mesh or the weights.
+"""
+
+import math
+
+import bpy
+from mathutils import Matrix, Quaternion, Vector
+
+X, Y, Z = Vector((1, 0, 0)), Vector((0, 1, 0)), Vector((0, 0, 1))
+FINGERS = ("index", "middle", "ring", "pinky")
+
+
+def _q(axis, deg):
+    return Quaternion(Vector(axis).normalized(), math.radians(deg))
+
+
+def _sfx(s):
+    return "_l" if s > 0 else "_r"
+
+
+class Poser:
+    def __init__(self, arm):
+        self.arm = arm
+        self.pb = arm.pose.bones
+        self.log = []
+        for p in self.pb:
+            p.rotation_mode = "QUATERNION"
+            p.rotation_quaternion = (1, 0, 0, 0)
+            p.location = (0, 0, 0)
+            p.scale = (1, 1, 1)
+        self.update()
+        self.rest = {p.name: p.matrix.copy() for p in self.pb}
+
+    # ---------------------------------------------------------------- basics
+    def update(self):
+        bpy.context.view_layer.update()
+
+    def has(self, b):
+        if b in self.pb:
+            return True
+        self.log.append(f"missing bone {b}")
+        return False
+
+    def head(self, b):
+        return self.pb[b].head.copy()
+
+    def tail(self, b):
+        return self.pb[b].tail.copy()
+
+    def dir(self, b):
+        return (self.tail(b) - self.head(b)).normalized()
+
+    def rotq(self, b):
+        return self.pb[b].matrix.to_quaternion()
+
+    def rotate(self, b, q, pivot=None):
+        """Apply the armature-space rotation q to bone b about pivot (its head)."""
+        if not self.has(b):
+            return
+        p = self.pb[b]
+        m = p.matrix.copy()
+        h = m.translation.copy() if pivot is None else Vector(pivot)
+        p.matrix = Matrix.Translation(h) @ q.to_matrix().to_4x4() @ Matrix.Translation(-h) @ m
+        self.update()
+
+    def rot(self, b, axis, deg):
+        self.rotate(b, _q(axis, deg))
+
+    def aim(self, b, d):
+        self.rotate(b, self.dir(b).rotation_difference(Vector(d).normalized()))
+
+    def twist(self, b, deg):
+        self.rotate(b, _q(self.dir(b), deg))
+
+    def move(self, b, delta):
+        if not self.has(b):
+            return
+        p = self.pb[b]
+        p.matrix = Matrix.Translation(Vector(delta)) @ p.matrix
+        self.update()
+
+    def set_rot(self, b, q_target):
+        """Give bone b the armature-space orientation q_target (pivot: head)."""
+        self.rotate(b, q_target @ self.rotq(b).inverted())
+
+    # ---------------------------------------------------------------- IK
+    def _hinge_now(self, upper, hinge_rest):
+        """Armature-space hinge axis of the joint at the end of `upper`, given
+        its rest-pose armature-space direction (carried by the upper bone)."""
+        q_rest = self.rest[upper].to_quaternion()
+        return (self.rotq(upper) @ q_rest.inverted()) @ Vector(hinge_rest)
+
+    def ik2(self, upper, lower, target, pole, hinge_rest):
+        """Two-bone IK: the tail of `lower` reaches
+        target; the joint bends toward `pole`. hinge_rest: the joint's hinge
+        axis in the rest pose (armature space), oriented so that bending the
+        joint is a positive rotation of `lower` about it."""
+        if not (self.has(upper) and self.has(lower)):
+            return
+        H = self.head(upper)
+        L1 = (self.tail(upper) - H).length
+        L2 = (self.tail(lower) - self.head(lower)).length
+        T = Vector(target)
+        d = T - H
+        dist = min(d.length, (L1 + L2) * 0.9995)
+        dn = d.normalized()
+        a = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist)
+        h = math.sqrt(max(L1 * L1 - a * a, 0.0))
+        p = Vector(pole) - dn * Vector(pole).dot(dn)
+        p = p.normalized() if p.length > 1e-6 else Vector((0, 0, 1))
+        K = H + dn * a + p * h
+        self.aim(upper, K - H)
+        # Twist the upper bone so its hinge is normal to the (H, K, T) plane.
+        n = (K - H).cross(T - K)
+        if n.length > 1e-6:
+            n.normalize()
+            hz = self._hinge_now(upper, hinge_rest)
+            ax = self.dir(upper)
+            hz_p = (hz - ax * hz.dot(ax)).normalized()
+            ang = math.atan2(ax.dot(hz_p.cross(n)), hz_p.dot(n))
+            self.rotate(upper, Quaternion(ax, ang))
+        self.aim(lower, H + dn * dist - self.head(lower))
+
+    # ---------------------------------------------------------------- legs
+    def plant(self, s, ball_xy, yaw=0.0, heel=0.0, pole=None, pelvis_drop=0.0):
+        """Place the foot of side s so the ball joint sits at ball_xy on the
+        floor (rest height), toes pointing yaw deg outward from straight ahead,
+        heel lifted by `heel` deg (pivot on the ball; negative = toes up, a
+        heel strike). The knee bends toward `pole` (default: forward)."""
+        x = _sfx(s)
+        thigh, calf, foot, ball = "thigh" + x, "calf" + x, "foot" + x, "ball" + x
+        if not all(self.has(b) for b in (thigh, calf, foot, ball)):
+            return
+        rq_foot = self.rest[foot].to_quaternion()
+        rq_ball = self.rest[ball].to_quaternion()
+        a_rest = self.rest[foot].translation.copy()
+        b_rest = self.rest[ball].translation.copy()
+        q_yaw = _q(Z, s * yaw)
+        q_f = q_yaw @ _q(X, heel)
+        ball_t = Vector((ball_xy[0], ball_xy[1], b_rest.z))
+        if heel < 0:
+            # heel strike: the foot pivots about the heel, toes up; place the
+            # heel where the flat foot's heel would be
+            heel_pt = Vector((a_rest.x, a_rest.y + 0.06, 0.0))
+            heel_t = ball_t + q_yaw @ (heel_pt - b_rest)
+            ankle_t = heel_t + q_f @ (a_rest - heel_pt)
+        else:
+            ankle_t = ball_t + q_f @ (a_rest - b_rest)
+        pole = Vector(pole) if pole is not None else (q_yaw @ Vector((0, -1, 0)))
+        self.ik2(thigh, calf, ankle_t, pole, X)
+        self.set_rot(foot, q_f @ rq_foot)
+        if heel > 0:
+            self.set_rot(ball, q_yaw @ rq_ball)  # toes stay flat on the floor
+        else:
+            self.set_rot(ball, q_f @ rq_ball)
+
+    # ---------------------------------------------------------------- arms
+    def _hand_frame(self, s):
+        """(finger direction, thumb-side direction) of the hand, armature space."""
+        x = _sfx(s)
+        h = self.head("hand" + x)
+        f = (self.head("middle_01" + x) - h).normalized()
+        t = self.head("index_01" + x) - self.head("pinky_01" + x)
+        t = (t - f * t.dot(f)).normalized()
+        return f, t
+
+    def _palm(self, s):
+        """Palm normal (pointing out of the palm), armature space."""
+        f, t = self._hand_frame(s)
+        n = f.cross(t)
+        # The thumb sits on the palm side of the knuckle line.
+        x = _sfx(s)
+        th = self.tail("thumb_02" + x) - self.head("index_01" + x)
+        return n if n.dot(th) > 0 else -n
+
+    def reach(self, s, wrist, pole, clavicle=0.0, clav_fwd=0.0):
+        """Arm IK: wrist (hand head) to `wrist`, elbow toward `pole`.
+        clavicle: deg the shoulder drops (+) or shrugs (-); clav_fwd: deg the
+        shoulder rolls forward."""
+        x = _sfx(s)
+        if clavicle:
+            self.rot("clavicle" + x, Y, s * clavicle)
+        if clav_fwd:
+            self.rot("clavicle" + x, Z, -s * clav_fwd)
+        ua, la = "upperarm" + x, "lowerarm" + x
+        # Elbow hinge from the rest pose (the A-pose elbow is bent ~44 deg).
+        hu = (self.rest[la].translation - self.rest[ua].translation).normalized()
+        hl = (self.rest["hand" + x].translation - self.rest[la].translation).normalized()
+        hinge = hu.cross(hl).normalized()
+        self.ik2(ua, la, wrist, pole, hinge)
+
+    def hand(self, s, fingers, thumb, wrist_share=0.35):
+        """Orient the hand so its fingers point along `fingers` and its thumb
+        side along `thumb` (both armature space, given for the left hand and
+        mirrored in x for the right). The forearm takes the roll
+        (pronation/supination) except `wrist_share` of it, so the wrist does
+        not candy-wrap."""
+        x = _sfx(s)
+        la, hd = "lowerarm" + x, "hand" + x
+        fd = Vector((s * fingers[0], fingers[1], fingers[2])).normalized()
+        td = Vector((s * thumb[0], thumb[1], thumb[2]))
+        td = (td - fd * td.dot(fd)).normalized()
+
+        def target_q():
+            f, t = self._hand_frame(s)
+            b0 = Matrix((f, t, f.cross(t))).transposed()
+            b1 = Matrix((fd, td, fd.cross(td))).transposed()
+            return (b1 @ b0.inverted()).to_quaternion()
+
+        # Roll the forearm about its own axis by the twist part of the needed
+        # hand rotation (swing-twist about the forearm axis).
+        q = target_q()
+        ax = self.dir(la)
+        v = Vector((q.x, q.y, q.z))
+        proj = ax * v.dot(ax)
+        tw = Quaternion((q.w, proj.x, proj.y, proj.z))
+        if tw.magnitude > 1e-6:
+            tw.normalize()
+            ang = tw.angle if tw.axis.dot(ax) >= 0 else -tw.angle
+            if ang > math.pi:
+                ang -= 2 * math.pi
+            self.rotate(la, Quaternion(ax, ang * (1.0 - wrist_share)))
+        self.rotate(hd, target_q())
+
+    def curl(self, s, base=(12, 18, 24, 30), seg=(1.0, 1.3, 0.8), spread=3.0,
+             thumb=(10, 12, 8)):
+        """Relaxed finger curl: finger k bends base[k] deg at the knuckle,
+        scaled by seg along its three joints; pinky curls most. spread fans
+        the fingers apart a little (deg). thumb: flexion of its three joints."""
+        x = _sfx(s)
+        palm = self._palm(s)
+        for k, fname in enumerate(FINGERS):
+            for j in range(3):
+                b = f"{fname}_0{j + 1}{x}"
+                if not self.has(b):
+                    continue
+                d = self.dir(b)
+                axis = d.cross(palm).normalized()
+                self.rot(b, axis, base[k] * seg[j])
+                if j == 0 and spread:
+                    self.rot(b, palm, s * spread * (k - 1.5) * (1 if fname != "index" else 1))
+        for j, deg in enumerate(thumb):
+            b = f"thumb_0{j + 1}{x}"
+            if not self.has(b):
+                continue
+            d = self.dir(b)
+            axis = d.cross(palm).normalized()
+            self.rot(b, axis, deg)
+
+    def look(self, yaw=0.0, pitch=0.0, tilt=0.0, neck_share=0.4):
+        """Turn the head yaw deg to the character's left (+), nod pitch deg
+        down (+), tilt deg toward its left shoulder (+); the neck takes
+        neck_share of each."""
+        for b, share in (("neck_01", neck_share), ("head", 1.0 - neck_share)):
+            if yaw:
+                self.rot(b, Z, yaw * share)
+            if pitch:
+                self.rot(b, X, -pitch * share)
+            if tilt:
+                self.rot(b, Y, tilt * share)
+
+
+# ------------------------------------------------------------------- poses
+# Rest (A-pose) facts for this rig (data/build/lookdev/*/character.blend):
+# shoulder joint (0.203, -0.013, 1.482), arm 0.27 + 0.25 m, hip joint
+# (0.114, 0.006, 0.99), ball joint (0.196, -0.137, 0.009), ankle z 0.075.
+
+def pose_rest(p):
+    p.log.append("rest: the build's A-pose")
+
+
+def pose_stand(p):
+    """Relaxed hero stand: weight on the right leg, left knee eased, pelvis
+    tilted (left hip down), shoulders counter-tilted and settled, arms down at
+    the sides with a soft elbow, hands relaxed, head turned a little to its
+    left."""
+    p.move("pelvis", (-0.025, 0.0, -0.012))
+    p.rot("pelvis", Y, 3.5)       # left hip drops (free leg)
+    p.rot("pelvis", Z, -4.0)      # left hip a little forward
+    p.rot("spine_01", Y, -1.5)
+    p.rot("spine_02", Y, -1.5)
+    p.rot("spine_03", Y, -1.0)    # shoulders counter-tilt
+    p.rot("spine_03", Z, 3.0)     # chest turns back toward the camera
+    p.rot("spine_02", X, -2.0)    # slight chest lift
+    p.plant(-1, (-0.13, -0.135), yaw=8)                 # weight leg, under the body
+    p.plant(+1, (0.215, -0.20), yaw=16, pole=(0.25, -1, 0))  # free leg forward, out
+    for s in (+1, -1):
+        sh = p.head("upperarm" + _sfx(s))
+        wrist = Vector((sh.x + s * 0.045, sh.y - 0.035, sh.z - 0.505))
+        p.reach(s, wrist, pole=(s * 0.25, 1.0, -0.1), clavicle=4.0)
+        p.hand(s, fingers=(-0.10, -0.12, -1.0), thumb=(0.0, -1.0, 0.0))
+        p.curl(s, base=(14, 20, 26, 32), thumb=(6, 10, 10))
+    p.look(yaw=12.0, pitch=4.0, tilt=-2.0)
+
+
+def pose_walk(p):
+    """Mid-stride, left foot forward at heel contact, right foot pushing off;
+    pelvis turned with the forward leg, chest counter-rotated, arms swinging
+    opposite the legs, head forward."""
+    p.move("pelvis", (0.0, -0.03, -0.03))
+    p.rot("pelvis", Z, -7.0)
+    p.rot("pelvis", Y, -2.0)
+    p.rot("spine_01", Z, 3.0)
+    p.rot("spine_02", Z, 4.0)
+    p.rot("spine_03", Z, 4.0)
+    p.rot("spine_01", X, 3.0)     # slight forward lean
+    p.plant(+1, (0.11, -0.47), yaw=6, heel=-12, pole=(0.1, -1, 0))
+    p.plant(-1, (-0.10, 0.20), yaw=6, heel=28, pole=(-0.1, -1, 0))
+    # arms: right forward, left back
+    for s, fwd in ((+1, 0.16), (-1, -0.18)):
+        sh = p.head("upperarm" + _sfx(s))
+        wrist = Vector((sh.x + s * 0.03, sh.y - fwd, sh.z - 0.49 + abs(fwd) * 0.1))
+        p.reach(s, wrist, pole=(s * 0.2, 1.0, -0.2), clavicle=3.0)
+        p.hand(s, fingers=(-0.05, -0.15 - fwd * 0.6, -1.0), thumb=(0.0, -1.0, 0.0))
+        p.curl(s, base=(16, 22, 28, 34), thumb=(6, 10, 10))
+    p.look(yaw=-6.0, pitch=2.0)
+
+
+def pose_ready(p):
+    """Low-ready: staggered feet (right foot back), knees bent, torso leaning
+    in, both arms forward and down as if holding a pistol at the low ready
+    (empty hands, the right hand closed in a grip, the left cupping it)."""
+    p.move("pelvis", (0.02, 0.04, -0.07))
+    p.rot("pelvis", Z, 12.0)       # right side back (bladed stance)
+    p.rot("spine_01", X, 8.0)
+    p.rot("spine_02", X, 6.0)
+    p.rot("spine_03", Z, -8.0)     # shoulders square up to the front
+    p.plant(+1, (0.15, -0.30), yaw=10, pole=(0.2, -1, 0))
+    p.plant(-1, (-0.20, 0.16), yaw=30, heel=8, pole=(-0.3, -1, 0))
+    grip = Vector((-0.02, -0.46, 1.06))
+    p.reach(-1, grip + Vector((-0.02, 0.0, 0.0)), pole=(-0.5, 0.4, -1.0), clavicle=-2.0, clav_fwd=6)
+    p.reach(+1, grip + Vector((0.065, 0.02, -0.01)), pole=(0.6, 0.4, -1.0), clavicle=-2.0, clav_fwd=8)
+    # right hand: fingers forward-down, closed; left hand: wraps under
+    p.hand(-1, fingers=(-0.15, -1.0, -0.55), thumb=(0.15, -0.1, 1.0))
+    p.curl(-1, base=(55, 60, 65, 70), seg=(1.0, 1.25, 0.7), spread=0.0, thumb=(5, 20, 20))
+    p.hand(+1, fingers=(-0.6, -1.0, -0.4), thumb=(0.0, -0.3, 1.0))
+    p.curl(+1, base=(40, 45, 50, 55), seg=(1.0, 1.2, 0.7), spread=0.0, thumb=(5, 15, 15))
+    p.look(yaw=-6.0, pitch=-4.0)
+
+
+POSES = {"rest": pose_rest, "stand": pose_stand, "walk": pose_walk, "ready": pose_ready}
+
+
+def apply(arm, name):
+    """Pose the armature; returns the log (missing bones, notes)."""
+    p = Poser(arm)
+    POSES[name](p)
+    p.log.append(f"pose {name}: ok")
+    return p.log
