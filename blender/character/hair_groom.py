@@ -46,7 +46,7 @@ ESSENTIALS = os.path.join(bpy.utils.system_resource("DATAFILES"), "assets", "nod
 
 DEFAULTS = {
     "enabled": True,
-    "cards": "clumps",         # game cards: "groom" (baked from this groom) or "clumps"
+    "cards": "groom",          # game cards: "groom" (baked from this groom) or "clumps"
     "seed": 21,
     "guides": 520,
     "strands": 40000,          # main strands (vellus and front falls extra)
@@ -55,6 +55,8 @@ DEFAULTS = {
     "gap_m": 0.0012,           # strand clearance over the skin
     "layer_jitter_m": 0.004,   # guide stand-off jitter (layers stack)
     "knn": 4,                  # guides blended per strand
+    # Overrides of the hair_clumps march parameters for the groom guides.
+    "march": {"cling": 0.05, "ear_margin_m": 0.006},
     "part_jitter_m": 0.002,    # the part line wanders this much (soft part)
     "part_push": 0.25,         # comb push away from the part (hair_clumps uses clumps.part_push)
     "part_width_m": 0.02,
@@ -62,12 +64,12 @@ DEFAULTS = {
     # Hairline: temples recede (two bays), the density ramps over the feather.
     "hairline": {"recess_m": 0.009, "recess_az_deg": 44, "recess_sigma_deg": 13,
                  "recess_above_ear_m": 0.025,
-                 "feather_m": 0.011, "feather_min": 0.05, "ramp_pow": 1.4,
+                 "feather_m": 0.010, "feather_min": 0.08, "ramp_pow": 1.2,
                  "nape_feather_m": 0.006},
     # Volume lift (stand-off from the skull along the strand, Strand.lift):
     # front roots lift off the forehead, the crown lies flat, the occiput full.
-    "lift": {"front_m": 0.010, "front_band_m": 0.035, "crown_m": 0.003, "side_m": 0.003,
-             "back_m": 0.008, "rise_m": 0.05, "hold_m": 0.05, "fall_m": 0.10, "keep": 0.5,
+    "lift": {"front_m": 0.010, "front_band_m": 0.035, "crown_m": 0.003, "side_m": 0.014,
+             "back_m": 0.016, "rise_m": 0.05, "hold_m": 0.05, "fall_m": 0.10, "keep": 0.5,
              "jitter": 0.3},
     # Clumping ramps in along the strand: `scalp` x the factor while it lies
     # on the skull (combed hair lies smooth), full `ramp_m` past the hang point.
@@ -77,7 +79,7 @@ DEFAULTS = {
     "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18], "jitter": 0.4},
     "noise": {"distance_m": 0.0015, "scale": 40.0, "shape": 0.3},
     "frizz": {"distance_m": 0.0005, "shape": 0.6},
-    "flyaways": {"share": 0.04, "distance_m": 0.015, "scale": 12.0, "shape": 0.4},
+    "flyaways": {"share": 0.04, "distance_m": 0.010, "scale": 20.0, "shape": 0.4},
     "trim": {"random": 0.05},
     "vellus": {"count": 1400, "length_m": [0.003, 0.006], "band_m": [-0.002, 0.006],
                "radius_m": 0.000018, "lift": 0.35, "melanin": 0.7},
@@ -89,11 +91,11 @@ DEFAULTS = {
          "tip_above_lips_m": 0.03, "tip_jitter_m": 0.02, "hug": 0.15, "clear_m": 0.005,
          "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 180,
          "factor": 0.85},
-        {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 30,
-         "comb_side": 0.6, "comb_fwd": 0.2, "comb_down": 0.7, "fall_after_m": 0.03,
-         "tip_above_lips_m": 0.075, "tip_jitter_m": 0.0, "hug": 0.4, "clear_m": 0.002,
-         "flare_after_m": 1.0, "flare": 0.0, "max_len_m": 0.13, "strands": 50,
-         "factor": 0.8}],
+        {"side": 1, "count": 1, "az0_deg": 18, "az_step_deg": 0.0, "el_deg": 30,
+         "comb_side": 0.7, "comb_fwd": 0.25, "comb_down": 0.6, "fall_after_m": 0.04,
+         "tip_above_lips_m": 0.08, "tip_jitter_m": 0.0, "hug": 0.1, "clear_m": 0.004,
+         "flare_after_m": 0.06, "flare": 0.08, "max_len_m": 0.13, "strands": 110,
+         "factor": 0.7}],
     "shader": {"model": "HUANG", "melanin": 0.95, "redness": 0.3,
                "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
                "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.03, "light_melanin": 0.85},
@@ -618,6 +620,7 @@ def build(b, frame, ccfg, gcfg_in):
     gi = fps(P, gcfg["guides"])
     groots, gnrms = P[gi], Nn[gi]
     gside = np.array([surf.part_side(p, n) for p, n in zip(groots, gnrms)])
+    ccfg = dict(ccfg, **gcfg["march"])
     G, GH, ghang = march_guides(b, frame, ccfg, gcfg, surf, prng, groots, gnrms, m)
 
     # Strands.
