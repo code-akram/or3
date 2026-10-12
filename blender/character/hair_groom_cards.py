@@ -49,12 +49,15 @@ CARDS = {
               "flow_jitter_deg": 15.0, "value_sigma": 0.22, "light_share": 0.03,
               "ao": 0.55, "seed": 5},
     "segment_m": 0.022, "min_segments": 4, "max_segments": 14,
-    "min_halfwidth_m": 0.0015, "width_pct": 85, "width_pad_m": 0.0008,
+    "min_halfwidth_m": 0.0015, "width_pct": 92, "width_pad_m": 0.0018,
     "tip_width": 0.45, "curve": 0.3, "root_w": [0.25, 0.8], "root_w_m": [0.005, 0.025],
-    "under": {"split": 2, "inset_m": 0.003, "width": 0.9, "max_halfwidth_m": 0.014},
+    "under": {"split": 2, "inset_m": 0.003, "width": 1.1, "max_halfwidth_m": 0.02},
     "flyaways": {"count": 40, "start": 0.35, "halfwidth_m": 0.0012},
-    "layer_shade": {"under": 0.55, "mid": 0.78, "top": 1.0, "front": 0.9, "fly": 0.85},
+    "layer_shade": {"under": 0.7, "mid": 0.82, "top": 1.0, "front": 0.9, "fly": 0.85},
     "root_dark": 0.35, "root_v": 0.3, "lock_sigma": 0.15,
+    # Cards rooted within `near_m` of the (recessed) hairline: little root
+    # darkening, a sparse cell, a slower widening (no dark wedge on the skin).
+    "hairline": {"near_m": [0.006, 0.022], "root_dark": 0.08, "widen": 0.35, "cells": [0, 1]},
     "material": {"roughness": 0.55, "specular": 0.25, "normal_strength": 0.8,
                  "color": "#1d1915"},
     "proxy": {"voxel_m": 0.004, "radius_m": 0.008, "every": 4},
@@ -507,6 +510,12 @@ def build(b, frame, ccfg, g):
         normals = [Vector(q) for q in Nn]
         nrow = len(path) - 1
         d_root = g["surf"].d_eff(P[1])
+        hl = cfg["hairline"]
+        near = 1 - smoothstep(hl["near_m"][0], hl["near_m"][1], d_root)
+        widen = 0.12 + (hl["widen"] - 0.12) * near
+        rdark = cfg["root_dark"] + (hl["root_dark"] - cfg["root_dark"]) * near
+        if near > 0.5 and layer in ("mid", "top"):
+            cell = int(rng.choice(hl["cells"]))
         rw0, rw1 = cfg["root_w"]
         root_w = rw0 + (rw1 - rw0) * smoothstep(cfg["root_w_m"][0], cfg["root_w_m"][1], d_root)
         tip_w = cfg["tip_width"]
@@ -515,7 +524,7 @@ def build(b, frame, ccfg, g):
             i = min(int(round(t * nrow)), nrow)
             w0 = 0.15 + 0.85 * smoothstep(0.0, 0.6 / nrow, t)
             taper = 1 - (1 - tip_w) * t ** 1.3
-            return hw[i] * (root_w + (1 - root_w) * smoothstep(0.0, 0.12, t)) * w0 * taper
+            return hw[i] * (root_w + (1 - root_w) * smoothstep(0.0, widen, t)) * w0 * taper
 
         hang_pt = path[int(np.argmax(hs > 0))] if (hs > 0).any() else path[-1]
         sector = hair_springs.sector_id(frame, hang_pt, 1 if p.get("kind") == "front" else 0)
@@ -523,7 +532,7 @@ def build(b, frame, ccfg, g):
         base = shade[layer] * lockv
 
         def on_vert(v, t, hs=hs, nrow=nrow, sector=sector, base=base):
-            r = 1 - cfg["root_dark"] * (1 - smoothstep(0.0, cfg["root_v"], t))
+            r = 1 - rdark * (1 - smoothstep(0.0, cfg["root_v"], t))
             x = min(max(base * r, 0.15), 1.0)
             v[col] = (x, x, x, 1.0)
             v[hang_l] = float(hs[min(int(round(t * nrow)), nrow)])
@@ -553,7 +562,10 @@ def build(b, frame, ccfg, g):
     fc = cfg["flyaways"]
     s0 = int(m * fc["start"])
     # Not round the ear (a loose strip across the ear reads as a stray card).
-    ok = (fly > 0) & ((E[:, s0, 1] > frame.ears_max.y) | (E[:, s0, 2] > frame.ears_max.z + 0.02))
+    Ez = E[:, s0:]
+    by_ear = ((Ez[..., 1] < frame.ears_max.y + 0.01) & (Ez[..., 2] > frame.ears_min.z - 0.01)
+              & (Ez[..., 2] < frame.ears_max.z + 0.02)).any(1)
+    ok = (fly > 0) & ~by_ear
     fidx = np.argsort(-(fly * ok))[:fc["count"]]
     for j in fidx:
         if not ok[j]:

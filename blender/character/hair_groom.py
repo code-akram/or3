@@ -56,7 +56,7 @@ DEFAULTS = {
     "layer_jitter_m": 0.004,   # guide stand-off jitter (layers stack)
     "knn": 4,                  # guides blended per strand
     # Overrides of the hair_clumps march parameters for the groom guides.
-    "march": {"cling": 0.05, "ear_margin_m": 0.006},
+    "march": {"cling": 0.0, "ear_margin_m": 0.008},
     "part_jitter_m": 0.002,    # the part line wanders this much (soft part)
     "part_push": 0.25,         # comb push away from the part (hair_clumps uses clumps.part_push)
     "part_width_m": 0.02,
@@ -68,13 +68,13 @@ DEFAULTS = {
                  "nape_feather_m": 0.006},
     # Volume lift (stand-off from the skull along the strand, Strand.lift):
     # front roots lift off the forehead, the crown lies flat, the occiput full.
-    "lift": {"front_m": 0.010, "front_band_m": 0.035, "crown_m": 0.003, "side_m": 0.014,
-             "back_m": 0.016, "rise_m": 0.05, "hold_m": 0.05, "fall_m": 0.10, "keep": 0.5,
+    "lift": {"front_m": 0.014, "front_band_m": 0.04, "crown_m": 0.008, "side_m": 0.036,
+             "back_m": 0.026, "rise_m": 0.05, "hold_m": 0.07, "fall_m": 0.14, "keep": 0.75,
              "jitter": 0.3},
     # Clumping ramps in along the strand: `scalp` x the factor while it lies
     # on the skull (combed hair lies smooth), full `ramp_m` past the hang point.
-    "clump": {"scalp": 0.2, "ramp_m": 0.06, "primary": 36, "primary_factor": 0.7, "primary_shape": 0.3,
-              "secondary": 420, "secondary_factor": 0.6, "secondary_shape": 0.0,
+    "clump": {"scalp": 0.2, "ramp_m": 0.06, "primary": 36, "primary_factor": 0.85, "primary_shape": 0.3,
+              "secondary": 360, "secondary_factor": 0.8, "secondary_shape": 0.0,
               "stray": 0.10, "tip_spread": 0.0},
     "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18], "jitter": 0.4},
     "noise": {"distance_m": 0.0015, "scale": 40.0, "shape": 0.3},
@@ -87,18 +87,19 @@ DEFAULTS = {
     # character's right. Each takes the `strands` nearest strands.
     "front_fall": [
         {"side": -1, "count": 3, "az0_deg": 30, "az_step_deg": 6.0, "el_deg": 24,
-         "comb_side": 0.2, "comb_fwd": 0.2, "comb_down": 0.9, "fall_after_m": 0.025,
-         "tip_above_lips_m": 0.03, "tip_jitter_m": 0.02, "hug": 0.15, "clear_m": 0.005,
-         "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 180,
-         "factor": 0.6, "wave_m": 0.004},
-        {"side": 1, "count": 1, "az0_deg": 22, "az_step_deg": 0.0, "el_deg": 32,
-         "comb_side": 0.5, "comb_fwd": 0.35, "comb_down": 0.5, "fall_after_m": 0.05,
-         "tip_above_lips_m": 0.075, "tip_jitter_m": 0.0, "hug": 0.2, "clear_m": 0.004,
-         "flare_after_m": 0.06, "flare": 0.08, "max_len_m": 0.10, "strands": 80,
-         "factor": 0.55, "wave_m": 0.003}],
+         "comb_side": 0.2, "comb_fwd": 0.3, "comb_down": 0.9, "fall_after_m": 0.025,
+         "tip_above_lips_m": 0.045, "tip_jitter_m": 0.015, "hug": 0.06, "clear_m": 0.005,
+         "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 360,
+         "factor": 0.75, "wave_m": 0.005},
+        {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 32,
+         "comb_side": 0.9, "comb_fwd": 0.5, "comb_down": 0.4, "fall_after_m": 0.04, "gravity": 0.55,
+         "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.08, "clear_m": 0.007,
+         "flare_after_m": 0.07, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
+         "factor": 0.75, "wave_m": 0.003}],
     "shader": {"model": "HUANG", "melanin": 0.95, "redness": 0.3,
                "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
-               "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.03, "light_melanin": 0.85},
+               "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.10, "light_melanin": 0.8,
+               "lock_melanin_jitter": 0.04},
     "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
 }
 
@@ -349,7 +350,7 @@ def front_fall_guides(frame, ccfg, gcfg, surf, rng, m):
             tip = frame.lips_max.z + ff["tip_above_lips_m"] + rng.uniform(-1, 1) * ff["tip_jitter_m"]
 
             def fall_gravity(p, s, ff=ff):
-                return smoothstep(0.0, ff["fall_after_m"], s) * 0.95
+                return smoothstep(0.0, ff["fall_after_m"], s) * ff.get("gravity", 0.95)
 
             s = hair_clumps.Strand(loc, nrm, comb, tip, ff["max_len_m"] * rng.uniform(0.9, 1.0),
                                    fall_gravity, gcfg["gap_m"] + ff["clear_m"] + 0.0015 * i, {},
@@ -705,6 +706,9 @@ def build(b, frame, ccfg, gcfg_in):
     melanin = np.full(n, sh["melanin"])
     light = rng.random(n) < sh["light_share"]
     melanin[light] = sh["light_melanin"]
+    # Value per lock (secondary clump): some locks catch more light.
+    lj = {int(q): rng.uniform(-1, 1) * sh.get("lock_melanin_jitter", 0.0) for q in np.unique(sub)}
+    melanin = np.clip(melanin - np.abs(np.array([lj[int(q)] for q in sub])), 0.0, 1.0)
 
     # Vellus: short fine hairs along the whole hairline.
     vc = gcfg["vellus"]
