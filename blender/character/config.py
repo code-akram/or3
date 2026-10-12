@@ -118,58 +118,79 @@ DEFAULTS = {
             "roughness": 0.8,
             "specular": 0.12,
         },
-        # Beard shell + jaw tufts (hair_beard.py).
+        # Short full beard as shell-textured hair (hair_beard.py + facial_hair.py).
         "beard": {
             "seed": 11,
             "sideburn_back_m": 0.004,  # behind the front of the ear
-            "sideburn_up_m": 0.0,      # cheek line start above ear centre
-            "moustache_m": 0.009,      # cheek line end above the upper lip
+            "sideburn_up_m": -0.004,   # cheek line start above ear centre
+            "moustache_m": 0.012,      # cheek line end above the upper lip (meets the moustache top)
             "jaw_drop_m": 0.055,       # neckline start below ear centre
             "cheek_dip_m": 0.02,       # cheek line sag under the cheekbone
             "throat_back_m": 0.05,     # neckline end behind the chin front
             "under_chin_m": 0.008,     # neckline end below the chin (clears the shirt collar)
-            "margin_m": 0.02,          # shell reaches this far past the lines (stubble feather band)
+            "moustache_height_m": 0.012,  # moustache top over the upper lip
+            "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare
+            "moustache_margin_m": 0.003,  # stubble band above the moustache (under the nose)
+            "margin_m": 0.009,         # patch reaches this far past the cheek line (stubble band)
+            "neck_margin_m": 0.009,    # ... past the neckline
+            "back_margin_m": 0.006,    # ... behind the sideburn (under the hair)
+            "fade_m": 0.008,           # full density this far inside the lines
+            "density_pow": 2.0,        # band density ~ x^k: sparse stubble at the outer edge
+            "stubble_short": 0.25,     # hair length factor at the outer edge of the band
             "line_wobble_m": 0.004,    # low-frequency irregularity of the beard lines
-            # Lip line: depth <= (distance from the lips - gap) x scale, so the
-            # moustache and lower-lip hair thin out toward the lips.
-            "lip_feather": {"gap_m": 0.003, "scale": 2.5},
-            "thickness": {"cheek_m": 0.003, "jaw_m": 0.0045,   # off the skin
-                          "chin_extra_m": 0.003, "chin_radius_m": 0.035,
-                          "fade_m": 0.012,                    # 0 at -margin -> full at +fade
-                          "floor_m": 0.0004},
             "edge_smooth_iters": 6,
-            "uv": {"u_span_m": 0.04, "v_span_m": 0.065, "radius_m": 0.09},
-            # Generated "edge" strand texture (hair_mesh.strand_image).
-            "texture": {"seed": 5, "size": [512, 512], "strands": 2600,
-                        "width_px": [1.5, 3.0], "wave_px": 2.0, "value_sigma": 0.35,
-                        "base_value": 0.55, "band_amp": 0.08,
-                        "len_px": [50, 120],  # 0.127 mm/px in v: hairs 6-15 mm
-                        "slant": 0.15,
-                        "edge_share": 0.55,   # share of hairs that start in the feather band
-                        "edge_v": 0.43,       # feather band: depth -margin .. +~0.8 cm
-                        "ramp_pow": 1.0,      # band hair density ~ depth^k: sparse stubble outside
-                        "stub": 0.3,          # outermost hairs are this x len_px (stubble)
-                        "solid_jitter_v": 0.05,  # uneven start of the solid part
-                        "color": "#17110d"},
-            # Tufts over the whole beard (hero budget: dense).
-            # Tufts are small alpha cards (hair_mesh.card), 4 tris each.
-            "tuft": {"count": 520, "min_depth_m": 0.004, "moustache_min_depth_m": 0.006,
-                     "lip_clear_m": 0.006,  # no tuft roots this close to a lip vertex
-                     "under_jaw_nz": 0.4,   # no tufts where the shell faces down more than this
-                     "cloth_clear_m": 0.003,  # no tuft point this close to the clothes
-                     "len_m": 0.008, "halfwidth_m": 0.0018,
-                     "lift": 0.22,          # how far tufts stand off the shell
-                     "sink_m": 0.003,       # root buried in the shell
-                     "chin_weight": 2.0,    # extra density near the chin
-                     "chin_len": 0.15},     # extra length near the chin
-            "texture_card": {"seed": 9, "size": [64, 128], "strands": 24,
-                             "width_px": [3.0, 5.0], "wave_px": 1.0, "value_sigma": 0.3,
-                             "base_value": 0.6, "band_amp": 0.05, "slant": 0.08,
-                             "edge_pow": 1.4, "edge_short": 0.4,
-                             "root_v": 0.35, "tip_v": [0.55, 1.0],
-                             "color": "#17110d"},
-            "roughness": 0.8,
-            "specular": 0.25,
+            "base_tris": 700,          # patch decimated to this before the shells stack
+            # Hair length (shell stack height) by area.
+            "length": {"cheek_m": 0.007, "jaw_m": 0.010, "chin_extra_m": 0.006,
+                       "chin_radius_m": 0.03, "moustache_m": 0.008, "neck_m": 0.008,
+                       "lip_near_m": 0.008, "lip_scale": 0.8},  # shorter toward the lips
+            # Comb direction components (world, before projecting onto the skin).
+            "comb": {"cheek_back": 0.3, "chin_forward": 0.3, "under_jaw_back": 0.6,
+                     "moustache_down": 0.9, "moustache_side": 0.7, "philtrum_x_m": 0.005,
+                     "smooth_iters": 2},
+            "uv": {"max_angle_deg": 115, "pad": 0.03},
+            "shells": {
+                "layers": 20, "atlas_cols": 4, "tile": [1024, 512],
+                "lean": 1.0,           # how far hairs bend over along the comb (0 = straight out)
+                # Hair field (facial_hair.atlas_image), in tile pixels (~0.33 mm).
+                "texture": {"spacing_px": 3.0, "density": 1.0, "radius_px": 1.5, "taper": 0.6,
+                            "short_thin": 0.4,      # a hair at zero length is this x thick
+                            "elongate": 1.7,        # dash length / width along the hair's bend
+                            "len_min": 0.35, "value_sigma": 0.45, "base_value": 0.85,
+                            "root_shade": 0.45,     # darker toward the root (self-shadow)
+                            "drift_px": 6.0, "comb_drift_px": 4.0,  # per-hair sideways bend
+                            "color": "#2a1d14"},
+                "roughness": 0.75, "specular": 0.2,
+            },
+        },
+        # Eyebrows as shells (brows.py), replacing the MPFB eyebrow proxy.
+        "brows": {
+            "seed": 13,
+            "proxy": "eyebrow",        # the fitted MPFB proxy used as the landmark, then dropped
+            "bins": 10,                # spine samples along each brow
+            "thickness_scale": 1.0, "thickness_add_m": 0.001,  # band half-height vs the proxy
+            "thickness_range_m": [0.0025, 0.0045],  # proxy half-height clamp before scale/add
+            "margin_m": 0.0025,        # feather past the band
+            "end_extend_m": 0.003,     # patch beyond the proxy's ends
+            "depth_tol_m": 0.015,      # skin within this y of the proxy (the face front only)
+            "core": 0.5,               # |dz|/hh below this is full density
+            "tail_start": 0.45, "tail_thin": 1.0,  # the tail thins to 1 - tail_thin
+            "head_boost": 0.2,         # denser inner third
+            "length_m": 0.005, "tail_shorter": 0.3,
+            "up_inner": 0.9, "down_tail": 0.25,    # comb: up near the nose, down at the tail
+            "edge_turn": 0.5,          # upper-edge hairs turn down, lower-edge up (x dz)
+            "smooth_iters": 2,
+            "base_tris": 160,
+            "shells": {
+                "layers": 10, "atlas_cols": 2, "tile": [512, 128],
+                "lean": 1.5,
+                "texture": {"spacing_px": 2.6, "density": 1.0, "radius_px": 1.1, "taper": 0.6,
+                            "short_thin": 0.6, "elongate": 2.2,
+                            "len_min": 0.5, "value_sigma": 0.5, "base_value": 0.9,
+                            "root_shade": 0.6, "drift_px": 4.0, "comb_drift_px": 8.0,
+                            "color": "#2a1d14"},
+                "roughness": 0.75, "specular": 0.2,
+            },
         },
     },
     "suit": {
