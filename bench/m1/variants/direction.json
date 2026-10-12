@@ -1,0 +1,62 @@
+{
+ "$comment": "Face variant C, long and hawkish (bolder pass): mid-50s age, long narrow oval head, large humped nose, deep hooded sockets with eye bags, hollow cheeks, deep nasolabial folds, thin lips, sloped forehead, thin neck. look-spec \u00a76; parameters only (\u00a72.4).",
+ "body": {
+  "macros": {
+   "age": 0.75
+  }
+ },
+ "head": {
+  "targets": {
+   "head-oval": 0.3,
+   "head-scale-horiz-decr": 0.35,
+   "head-fat-decr": 0.6,
+   "chin-height-incr": 0.08,
+   "nose-hump-incr": 1.0,
+   "nose-point-down": 0.25,
+   "nose-scale-vert-incr": 0.3,
+   "nose-trans-forward": 0.3,
+   "nose-scale-depth-incr": 0.4,
+   "nose-point-width-decr": 0.5,
+   "lr-cheek-volume-decr": 0.9,
+   "lr-cheek-bones-incr": 0.3,
+   "lr-eye-bag-incr": 0.5,
+   "lr-eye-eyefold-down": 0.4,
+   "forehead-temple-decr": 0.5,
+   "mouth-upperlip-volume-decr": 0.6,
+   "mouth-lowerlip-volume-decr": 0.5,
+   "mouth-laugh-lines-in": 0.6,
+   "neck-scale-horiz-decr": 0.35,
+   "chin-prognathism-decr": 0.2
+  },
+  "edits": {
+   "brow_depth": 0.9,
+   "brow_angle": 0.5,
+   "brow_flatten": 0.8,
+   "socket_depth": 1.0,
+   "lid_hood": 1.0,
+   "nose_length": 0.5,
+   "dorsum_crease": 0.8,
+   "cheek_height": 0.4,
+   "cheek_plane_break": 1.0,
+   "submalar_hollow": 1.0,
+   "jaw_width": 0.6,
+   "jaw_angle": 0.6,
+   "chin_projection": 0.2,
+   "lip_thickness": -0.5,
+   "forehead_slope": 0.9
+  },
+  "planes": {
+   "forehead": 0.6,
+   "jaw_side": 0.9,
+   "chin_front": 0.6
+  }
+ },
+ "hair": {
+  "clumps": {
+   "length": {
+    "f": 0.05,
+    "jitter_m": 0.015
+   }
+  }
+ }
+}

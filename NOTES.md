@@ -674,6 +674,11 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
   - No automated face-similarity check: the user answers the likeness question at each review.
   - No tie spring bones: the tie is tucked under the waistcoat.
   - **The city has no recorded human voices** (announcements, talking machines).
+- **m1 direction check (user)**: **face C + collar-length hair** is the direction (`bench/m1/variants/direction.json`).
+  - The user asked to invest heavily in fidelity, using Fable-model agents where they help.
+  - **Suit, hair, facial hair, posture and grooming** follow the John Wick character as closely as possible. These are costume and styling, and they are fair game.
+  - **The face stays original** (§3 locked decision, §14 rule 7). Matching the character's face would mean reproducing a real actor's likeness, which carries publicity-rights risk for a public repo, and the project's own rules forbid it. The face reads as the same archetype (weathered, hard, late 40s) without being anyone.
+  - The facial hair was rejected as implemented and is being redone.
 - **Character budget raised** (user): quality over triangles. Hero LOD0 up to ~120k (cap 150k), with the LOD chain for distance (§7 Budgets).
 - **m1 wave 1 merged**: the look-dev harness plus modular build (track A) and the look spec (track C). Wave 2 (suit, head plus proportions, hair plus beard) runs in parallel worktrees, leading to the direction checkpoint.
 - **Audio listening gate (spike 7), on the Air's speakers:**
