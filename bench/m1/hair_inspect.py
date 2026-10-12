@@ -46,6 +46,7 @@ RIG = opt("--rig", "studio")
 ENGINE = opt("--engine", "cycles" if SOURCE == "blend" else "eevee")
 SAMPLES = int(opt("--samples", "128" if ENGINE == "cycles" else "32"))
 TAG = opt("--tag", "")
+HIDE_MAT = opt("--hide-mat", "")  # debug: a material name made fully transparent
 # name: (azimuth deg from the character's front, elevation deg, frame height m, lens mm, anchor)
 ALL = {"front": (0, 0, 0.34, 85, "head"), "closeup": (25, 0, 0.34, 85, "head"),
        "side": (90, 0, 0.34, 85, "head"), "back34": (140, 0, 0.40, 85, "head"),
@@ -163,6 +164,12 @@ def main():
     arm = load()
     scene = bpy.context.scene
     a = anchors(arm)
+    if HIDE_MAT and HIDE_MAT in bpy.data.materials:
+        nt = bpy.data.materials[HIDE_MAT].node_tree
+        p = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+        for l in list(p.inputs["Alpha"].links):
+            nt.links.remove(l)
+        p.inputs["Alpha"].default_value = 0.0
     rig = ch = None
     if RIG in ("hero", "turntable"):
         from hero import rig
