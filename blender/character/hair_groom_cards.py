@@ -40,7 +40,6 @@ import math
 import bpy
 import numpy as np
 from mathutils import Vector
-from mathutils.kdtree import KDTree
 
 from . import hair_clumps, hair_mesh, hair_springs
 

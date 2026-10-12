@@ -32,8 +32,8 @@ on an edited head just works):
 
 import math
 import os
+import random
 
-import bmesh
 import bpy
 import numpy as np
 from mathutils import Vector
@@ -605,7 +605,6 @@ def build(b, frame, ccfg, gcfg_in):
     """Build the groom; returns a dict the card baker reads."""
     gcfg = merged(gcfg_in)
     rng = np.random.default_rng(gcfg["seed"])
-    import random
     prng = random.Random(gcfg["seed"])
     m = gcfg["points"]
     c = frame.center
