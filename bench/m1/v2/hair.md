@@ -1,6 +1,6 @@
 # m1 v2 Track B: scalp hair (strand groom + game cards baked from it)
 
-_2026-10-12. Brief: `bench/m1/v2/BRIEF.md`; art direction: `direction.md` §2 Track B. Builds on the frozen Track A head (main 8fa40c6); rebased on main ff03f62 (Track F deform). Revised after the orchestrator review of `hairB-final` (round 2, below)._
+_2026-10-12. Brief: `bench/m1/v2/BRIEF.md`; art direction: `direction.md` §2 Track B. Builds on the frozen Track A head (main 8fa40c6); rebased on main a5ea570 (Track F deform, Track D suit v2; a dev build on it, `20261012T220315Z-hairB-rebaseD`, gives the same hair numbers: 21,068 tris, temple break 35 / 36 mm, width 1.345, and the lengths sit over the new collar). Revised after the orchestrator review of `hairB-final` (round 2, below)._
 
 ## What it is
 
