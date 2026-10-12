@@ -20,8 +20,8 @@ from mathutils import Matrix, Quaternion, Vector
 
 from hero import rig
 
-HAIR_MATS = ("hair", "hair_cards", "hair_under")
-TIP = 0.3        # the outer 30 % of each strand (UV0.v root 0 -> tip 1) gets wet
+HAIR_MATS = ("hair", "hair_cards", "hair_under", "hair_groom")
+TIP = 0.3        # the outer 30 % of each strand (card UV0.v / strand intercept, root 0 -> tip 1) gets wet
 _EYES = {}       # eye object name -> original vertex coordinates
 
 
@@ -106,26 +106,33 @@ def beads(ch, per_side=35, radius=(0.00025, 0.00075), seed=11):
 
 
 # --------------------------------------------------------------- hair tips
-def _wet_nodes(m):
+def _wet_nodes(m, curves=False):
     """Insert (once) a tip mask that darkens the base colour and lowers the
     roughness toward the strand tips; amount = the "hero_wet" value node."""
     nt = m.node_tree
     if "hero_wet" in nt.nodes:
         return nt.nodes["hero_wet"]
     p = rig._principled(m)
-    if p is None:
-        return None
+    hair = None
+    if p is None:   # strands: Principled Hair BSDF (melanin)
+        hair = next((n for n in nt.nodes if n.bl_idname == "ShaderNodeBsdfHairPrincipled"), None)
+        if hair is None:
+            return None
     N, L = nt.nodes, nt.links
     amt = N.new("ShaderNodeValue")
     amt.name = amt.label = "hero_wet"
     amt.outputs[0].default_value = 0.0
-    uv = N.new("ShaderNodeUVMap")
-    sep = N.new("ShaderNodeSeparateXYZ")
-    L.new(uv.outputs["UV"], sep.inputs[0])
     rng = N.new("ShaderNodeMapRange")
     rng.inputs["From Min"].default_value = 1.0 - TIP
     rng.inputs["From Max"].default_value = 1.0
-    L.new(sep.outputs["Y"], rng.inputs["Value"])
+    if curves:      # strands: Hair Info intercept, root 0 -> tip 1
+        hi = N.new("ShaderNodeHairInfo")
+        L.new(hi.outputs["Intercept"], rng.inputs["Value"])
+    else:           # cards: UV0.v root 0 -> tip 1
+        uv = N.new("ShaderNodeUVMap")
+        sep = N.new("ShaderNodeSeparateXYZ")
+        L.new(uv.outputs["UV"], sep.inputs[0])
+        L.new(sep.outputs["Y"], rng.inputs["Value"])
     w = N.new("ShaderNodeMath")
     w.operation = "MULTIPLY"
     L.new(rng.outputs["Result"], w.inputs[0])
@@ -161,6 +168,9 @@ def _wet_nodes(m):
             L.new(f.outputs["Result"], mul.inputs[1])
             L.new(mul.outputs[0], sock)
 
+    if hair is not None:
+        scale(hair.inputs["Roughness"], 0.55)   # strands: the water film smooths the cuticle
+        return amt
     scale(p.inputs["Base Color"], 0.55)   # wet hair is darker ...
     scale(p.inputs["Roughness"], 0.45)    # ... and glossier
     return amt
@@ -174,7 +184,8 @@ def hair_tips(ch, amount=1.0):
             m = s.material
             if not m or m.name not in HAIR_MATS or m.name in done or not m.use_nodes:
                 continue
-            node = _wet_nodes(m) if amount > 0 else m.node_tree.nodes.get("hero_wet")
+            node = (_wet_nodes(m, curves=o.type == "CURVES") if amount > 0
+                    else m.node_tree.nodes.get("hero_wet"))
             if node is not None:
                 node.outputs[0].default_value = amount
                 done.append(m.name)
@@ -182,45 +193,51 @@ def hair_tips(ch, amount=1.0):
 
 
 # -------------------------------------------------------------------- gaze
-def _eye_obj(ch):
-    return next((o for o in ch.objs if o.type == "MESH" and "eyes" in o.name.lower()), None)
+def _eye_objs(ch):
+    """The eyeball mesh first, then the shells that turn with it (the hero
+    cornea); the tear meniscus and caruncle stay with the lids."""
+    eyes = [o for o in ch.objs if o.type == "MESH" and "eyes" in o.name.lower()]
+    shells = [o for o in ch.objs if o.type == "MESH" and "cornea" in o.name.lower()]
+    return eyes[:1] + shells
 
 
 def gaze(ch, target, off_deg=0.0, limit=28.0):
-    """Turn both eyeballs (one skinned mesh, both on the head bone) toward
+    """Turn both eyes (eyeball + cornea, skinned to the head bone) toward
     `target` (world), `off_deg` to the character's left of it. Rotates the
-    rest vertices of each eyeball about its centre; restore() undoes it. The
-    lids don't follow, so the turn is limited to `limit` degrees."""
-    eo = _eye_obj(ch)
-    if eo is None or eo.data.shape_keys:   # shape keys would override the edited coordinates
+    rest vertices of each eye about the eyeball's centre; restore() undoes
+    it. The lids don't follow, so the turn is limited to `limit` degrees."""
+    objs = [o for o in _eye_objs(ch) if not o.data.shape_keys   # keys would override the edit
+            and any(m.type == "ARMATURE" for m in o.modifiers)]
+    if not objs:
         return None
     restore(ch)
-    _EYES[eo.name] = [v.co.copy() for v in eo.data.vertices]
-    mw = eo.matrix_world
-    mwi = mw.inverted()
+    eo = objs[0]
     head = ch._deform("head")
     h3i = head.to_3x3().inverted()
+    mw0 = eo.matrix_world
     out = []
+    rots = {}
     for side in (1, -1):
-        idx = [i for i, v in enumerate(eo.data.vertices) if (mw @ v.co).x * side > 0]
-        c_rest = sum((mw @ eo.data.vertices[i].co for i in idx), Vector()) / len(idx)
-        c_pose = head @ c_rest
-        d = (Vector(target) - c_pose).normalized()
+        pts = [mw0 @ v.co for v in eo.data.vertices if (mw0 @ v.co).x * side > 0]
+        c_rest = sum(pts, Vector()) / len(pts)
+        d = (Vector(target) - head @ c_rest).normalized()
         if off_deg:
             d = Matrix.Rotation(math.radians(off_deg), 3, "Z") @ d
-        want = (h3i @ d).normalized()
-        fwd = Vector((0, -1, 0))
-        q = fwd.rotation_difference(want)
+        q = Vector((0, -1, 0)).rotation_difference((h3i @ d).normalized())
         ang = math.degrees(q.angle)
         if ang > limit:
             q = Quaternion(q.axis, math.radians(limit))
-        R = q.to_matrix()
-        for i in idx:
-            v = eo.data.vertices[i]
-            v.co = mwi @ (c_rest + R @ (mw @ v.co - c_rest))
+        rots[side] = (c_rest, q.to_matrix())
         out.append(round(min(ang, limit), 1))
-    eo.data.update()
-    return out
+    for o in objs:
+        _EYES[o.name] = [v.co.copy() for v in o.data.vertices]
+        mw, mwi = o.matrix_world, o.matrix_world.inverted()
+        for v in o.data.vertices:
+            p = mw @ v.co
+            c, R = rots[1 if p.x > 0 else -1]
+            v.co = mwi @ (c + R @ (p - c))
+        o.data.update()
+    return {"deg": out, "objects": [o.name for o in objs]}
 
 
 def restore(ch):
