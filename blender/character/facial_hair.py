@@ -104,6 +104,83 @@ def decimate_patch(obj, bm, fields, max_tris, skin_bvh):
     return bm, out
 
 
+def clean_patch(bm, fields, project, weld_m, min_area_m2, min_uv_area):
+    """Make the base patch safe to stack: weld coincident vertices, then drop
+    faces that are degenerate in 3D or in the tile projection. Either kind
+    gives the glTF exporter's mikktspace a zero tangent (validator error
+    ACCESSOR_VECTOR3_NON_UNIT), and both happen at the patch boundary on some
+    head shapes (decimation collapse plus the snap back onto the skin, or two
+    skin points at one projected (u, v) on the nose-wing crease). Fields are
+    re-keyed to the surviving vertices. Returns (welded, culled)."""
+    bm.verts.index_update()
+    by_idx = {k: {v.index: x for v, x in fld.items()} for k, fld in fields.items()}
+    n0 = len(bm.verts)
+    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=weld_m)
+    # survivors keep their old index until the next index_update
+    for k in fields:
+        fields[k] = {v: by_idx[k][v.index] for v in bm.verts}
+    welded = n0 - len(bm.verts)
+    puv = {v: project(v.co) for v in bm.verts}
+    bad = []
+    for f in bm.faces:
+        vs = f.verts
+        if len(vs) < 3 or f.calc_area() < min_area_m2:
+            bad.append(f)
+            continue
+        for k in range(1, len(vs) - 1):
+            (u0, v0), (u1, v1), (u2, v2) = puv[vs[0]], puv[vs[k]], puv[vs[k + 1]]
+            if abs((u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0)) < min_uv_area:
+                bad.append(f)
+                break
+    if bad:
+        bmesh.ops.delete(bm, geom=bad, context="FACES")
+    loose = [v for v in bm.verts if not v.link_faces]
+    if loose:
+        bmesh.ops.delete(bm, geom=loose, context="VERTS")
+    for k in fields:
+        fields[k] = {v: fields[k][v] for v in bm.verts}
+    bm.normal_update()
+    return welded, len(bad)
+
+
+def guard_tangents(obj, uv_name, nudge_m, passes):
+    """The glTF exporter computes mikktspace tangents from UV0; a loop whose
+    tangent comes back zero fails validation (ACCESSOR_VECTOR3_NON_UNIT).
+    That happens where a shell folds over a crease (the lip-edge hairs turn
+    down harder than their neighbours and a face ends up edge-on and
+    UV-mirrored). Run the same tangent pass here: nudge the vertices of any
+    zero-tangent loop off the fold (along the normal), re-check, and after
+    `passes` nudges delete the faces still failing (one shell face, invisible).
+    Returns (nudged, culled_faces)."""
+    me = obj.data
+    nudged = culled = 0
+    for p in range(passes + 1):
+        me.calc_tangents(uvmap=uv_name)
+        bad = [l for l in me.loops if l.tangent.length < 0.5]
+        me.free_tangents()
+        if not bad:
+            break
+        if p < passes:
+            for l in bad:
+                v = me.vertices[l.vertex_index]
+                v.co += v.normal * nudge_m * (p + 1)
+            nudged += len(bad)
+            continue
+        loop_poly = {}
+        for poly in me.polygons:
+            for li in range(poly.loop_start, poly.loop_start + poly.loop_total):
+                loop_poly[li] = poly.index
+        faces = set(loop_poly[l.index] for l in bad)
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bm.faces.ensure_lookup_table()
+        bmesh.ops.delete(bm, geom=[bm.faces[i] for i in faces], context="FACES")
+        bm.to_mesh(me)
+        bm.free()
+        culled = len(faces)
+    return nudged, culled
+
+
 # --------------------------------------------------------------------------
 # Atlas texture
 
@@ -234,6 +311,8 @@ def build_shells(b, obj, bm, fields, cfg, name, project, tile, rng, extra=None):
     0..1 across a tile. extra(bm, uv, uv2, dl) may add cards (material 1).
     Returns stats."""
     layers = cfg["layers"]
+    welded, culled = clean_patch(bm, fields, project, cfg.get("weld_m", 2e-5),
+                                 cfg.get("min_face_area_m2", 1e-10), cfg.get("min_uv_area", 1e-9))
     base_faces = list(bm.faces)
     base_verts = list(bm.verts)
     bm.normal_update()
@@ -298,5 +377,9 @@ def build_shells(b, obj, bm, fields, cfg, name, project, tile, rng, extra=None):
         card_tris, card_mat = extra(bm, uv, uv2, dl)
         mats.append(card_mat)
     hair_mesh.finish(b, obj, bm, mats)
+    nudged, culled_tan = guard_tangents(obj, obj.data.uv_layers[0].name, cfg.get("tangent_nudge_m", 2e-4),
+                                        cfg.get("tangent_passes", 2))
     return {"layers": layers, "shell_tris": shells_tris, "card_tris": card_tris,
-            "hairs": int(hairs), "atlas": [W, H]}
+            "hairs": int(hairs), "atlas": [W, H],
+            "welded_verts": welded, "culled_degenerate_faces": culled,
+            "tangent_nudged_loops": nudged, "tangent_culled_faces": culled_tan}
