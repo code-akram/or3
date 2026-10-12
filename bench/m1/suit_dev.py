@@ -89,6 +89,7 @@ s["config"] = cfg
 with open(os.path.join(A.out, "character.stats.json"), "w") as f:
     json.dump(s, f, indent=2, default=str)
 if A.save_blend:
+    b.step("suit_hero", suit.hero)   # as build_character: hero-only detail, after the GLB
     export.save_blend(b, os.path.join(A.out, "character.blend"))
 print(f"[suit_dev] build {time.perf_counter() - t0:.1f} s, total tris {s['total_tris']}")
 for name, m in sorted(s["meshes"].items()):

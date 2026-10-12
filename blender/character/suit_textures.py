@@ -35,7 +35,7 @@ from . import suit_leather
 # normal-map slope scale)
 WEAVE = {
     # periods are a little over 2 px at the atlas density, below that the twill aliases
-    "wool": {"period_m": 0.0019, "amp": 0.00006, "noise": 0.00003, "twill": True},
+    "wool": {"period_m": 0.0019, "amp": 0.000025, "noise": 0.00003, "twill": True},   # faint: the hero adds the real 0.6 mm twill (suit_hero)
     "shirt": {"period_m": 0.0012, "amp": 0.00003, "noise": 0.000015, "twill": False},
     "silk": {"period_m": 0.0014, "amp": 0.00006, "noise": 0.00001, "twill": True, "angle": 0.6},
     "leather": {"period_m": 0.0, "amp": 0.0, "noise": 0.00004, "twill": False},
@@ -569,6 +569,7 @@ def apply(o, parts, mats, marks, folds=None):
             mat = base.copy()
             mat.name = f"suit_{gname}"
         attach_normal_map(mat, img, strength=1.0)
+        mat["suit_atlas_side_m"] = side   # suit_hero: metric UVs for the hero-only detail
         surf = None
         if weave == "wool" and o.get("surface"):
             ai, oi, surf = surface_maps(H, layout, side, o["materials"]["wool"], o["surface"], gname)

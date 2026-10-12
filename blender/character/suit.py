@@ -25,7 +25,7 @@ from mathutils import Vector
 
 from . import budgets, config
 from . import suit_build as sb
-from . import suit_drape, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures, suit_trousers
+from . import suit_drape, suit_hero, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures, suit_trousers
 
 DEFAULTS = {
     "tailor": True,             # False: stock shell, as in spike 1
@@ -183,7 +183,7 @@ DEFAULTS = {
                     "coat_rough": 0.08, "cap_polish": 0.05, "crease_rough": 0.08, "crease_albedo": 1.35,
                     "paint_r": 2, "paint_amp": 0.14, "seed": 5},
     },
-    "buttons": {"segments": 8, "jacket_r_m": 0.011, "jacket_height_m": 0.004,
+    "buttons": {"segments": 16, "jacket_r_m": 0.011, "jacket_height_m": 0.004,   # rounded edge, rim, dish
                 "cuff_r_m": 0.0075, "vest_r_m": 0.0065, "vest_height_m": 0.003},
     "materials": {
         # suit_textures.material(): albedo (linear, grey or rgb), rough, sheen
@@ -221,6 +221,16 @@ PART = "suit_{}"  # set per build to "<human>.suit_<part>_export", the staged na
 
 def opts(b):
     return config.merge(DEFAULTS, b.cfg["suit"])
+
+
+def hero(b):
+    """Hero-only material detail (suit_hero.py), after the GLB export: the
+    saved .blend renders it in Cycles, the game asset never sees it."""
+    o = opts(b)
+    if not o.get("tailor", True):
+        return
+    H = config.merge(suit_hero.DEFAULTS, o.get("hero") or {})
+    b.notes["suit_hero"] = suit_hero.apply(b, H)
 
 
 def add(b):
@@ -447,13 +457,20 @@ def jacket_pins(jk, arm):
 
 
 def trouser_pins(arm):
-    """Trousers hang from the waistband and the top of the seat; the legs are free."""
+    """Trousers hang from the waistband and the top of the seat; the legs
+    follow the skinned shape softly (a free leg swung by the knee and hip
+    bend stretched against the shoe), the hem firmly (it rests on the shoe
+    and moves with the foot); the knee back and the break stay soft."""
     import numpy as np
     z_hip = (arm.matrix_world @ arm.data.bones["pelvis"].head_local).z
 
     def fn(co, tag):
         pin = _smooth((co[:, 2] - (z_hip - 0.10)) / 0.08)
-        return pin, np.zeros(len(co))
+        leg = 0.12
+        hem = 0.6 * _smooth((0.10 - co[:, 2]) / 0.05)
+        pin = np.maximum(pin, np.maximum(leg, hem))
+        stiff = np.full(len(co), 0.6)
+        return pin, np.zeros(len(co)), stiff
     return fn
 
 

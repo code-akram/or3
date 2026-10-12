@@ -308,29 +308,39 @@ def angle_at_x(cy, radii, x, front=True, ease=None):
 # --- objects ---------------------------------------------------------------------------------
 
 def disc(bm, dl, centre, normal, radius, height, weights, segs=8, uv_layer=None, uv_at=(0, 0),
-         uv_scale=1.0):
-    """A button: a ring on the host surface, a ring lifted by `height`, a flat
-    front cap (segs - 2 tris + 2 * segs side tris)."""
+         uv_scale=1.0, rim=True):
+    """A button: a ring on the host surface, a rounded edge onto a raised
+    rim, a dish and a flat centre (rim=False: one lifted ring and a flat
+    cap, the old low-poly disc)."""
     n = normal.normalized()
     t = n.orthogonal().normalized()
     u = n.cross(t)
-    back, front = [], []
-    for i in range(segs):
-        a = TAU * i / segs
-        off = (t * math.cos(a) + u * math.sin(a)) * radius
-        back.append(bm.verts.new(centre + off - n * 0.001))
-        front.append(bm.verts.new(centre + off * 0.85 + n * height))
-    for v in back + front:
-        for g, w in weights.items():
-            v[dl][g] = w
+    # profile (radius fraction, height fraction): the edge rounds over onto a
+    # raised rim, then dishes down to the sewing-hole field (rim=False: the
+    # old flat cap)
+    prof = [(1.0, -0.25), (0.97, 0.55), (0.86, 1.0), (0.66, 0.8), (0.42, 0.55)] if rim else \
+        [(1.0, -0.25), (0.85, 1.0)]
+    rings = []
+    for fr, fh in prof:
+        ring = []
+        for i in range(segs):
+            a = TAU * i / segs
+            off = (t * math.cos(a) + u * math.sin(a)) * radius * fr
+            ring.append(bm.verts.new(centre + off + n * (height * fh if fh > 0 else -0.001)))
+        rings.append(ring)
+    for ring in rings:
+        for v in ring:
+            for g, w in weights.items():
+                v[dl][g] = w
     faces = []
-    for i in range(segs):
-        j = (i + 1) % segs
-        f = bm.faces.new([back[i], back[j], front[j], front[i]])
-        f.smooth = True
-        faces.append(f)
-    cap = bm.faces.new(front)
-    cap.smooth = False
+    for ra, rb in zip(rings, rings[1:]):
+        for i in range(segs):
+            j = (i + 1) % segs
+            f = bm.faces.new([ra[i], ra[j], rb[j], rb[i]])
+            f.smooth = True
+            faces.append(f)
+    cap = bm.faces.new(rings[-1])
+    cap.smooth = not rim
     faces.append(cap)
     if uv_layer is not None:
         for f in faces:

@@ -523,7 +523,9 @@ def _measure(D, s, ob, rest, prev, cloth, skin, skin_n, body_col, lm):
     hp = h - low
     # light de-noise: the shortest wavelengths are sim noise, not folds
     hp = smooth_graph(hp, E, n, 2)
-    gain, region_px = region_mask(skin.astype(np.float64), skin_n.astype(np.float64), lm,
+    # regions are places on the garment: rest positions against the rest-pose
+    # landmarks (the posed knee and foot move several cm away from them)
+    gain, region_px = region_mask(np.asarray(rest, np.float64), skin_n.astype(np.float64), lm,
                                   D["regions"], D["base_gain"])
     c = D["clamp_m"]
     out = c * np.tanh(hp * gain / c)

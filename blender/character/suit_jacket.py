@@ -145,6 +145,7 @@ class Jacket:
     def build_rings(self):
         body = self.body
         torso = body.verts(sb.TORSO)
+        thighs = body.verts({"thigh_l", "thigh_r"})
         J = self.J
         sh = J["shoulder"]
         js = body.joint("upperarm_l")
@@ -197,6 +198,10 @@ class Jacket:
                 continue
             try:
                 vs = torso
+                if z < self.z_hip + 0.02:
+                    # the skirt clears the thighs too (the outer thigh is wider
+                    # than the hip slice below the seat; the trousers lie on it)
+                    vs = torso + thighs
                 if z > self.z_pit:
                     u = (z - self.z_pit) / max(self.z_sp - self.z_pit, 1e-6)
                     x_lim = lerp(self.x_pit_body, self.half_sh, u ** sh["scye_pow"]) + 0.005
@@ -976,22 +981,33 @@ class Jacket:
             s0 = ov + P["flap_x0_m"]
             z_t = self.z_b - P["flap_below_button_m"]
             g = G.grid("pocket")
-            cols = 6
-            for j, (dz, h) in enumerate(((0.0, 0.0005), (-P["flap_h_m"] * 0.6, 0.0025),
-                                         (-P["flap_h_m"], 0.0035), (-P["flap_h_m"] + 0.003, 0.0005))):
+            # columns: the side edges turn under (end columns at the cloth),
+            # full thickness 2.5 mm in; the bottom corners are rounded
+            w, rc, e_in = P["flap_w_m"], P.get("corner_r_m", 0.012), 0.0025
+            n_in = 10
+            ds = [0.0] + [e_in + (w - 2 * e_in) * i / n_in for i in range(n_in + 1)] + [w]
+            cols = len(ds) - 1
+            fh = P["flap_h_m"]
+            for j, (dz, h) in enumerate(((0.0, 0.0005), (-fh * 0.6, 0.0025),
+                                         (-fh, 0.0035), (-fh + 0.003, 0.0005))):
                 pts, uvs = [], []
-                for i in range(cols + 1):
-                    s = s0 + P["flap_w_m"] * i / cols
-                    p, n = self.block_point(z_t + dz, s, left)
-                    pts.append(p + n * h)
-                    uvs.append((s - s0, -dz + (0.004 if j == 3 else 0.0)))
+                for i, d in enumerate(ds):
+                    s = s0 + d
+                    dd = min(d, w - d)
+                    zz = dz
+                    if j >= 2 and dd < rc:   # the rounded corner lifts the bottom edge
+                        zz = dz + rc - math.sqrt(max(0.0, rc * rc - (rc - dd) ** 2))
+                    hh = h if 0 < i < cols else min(h, 0.0005)
+                    p, n = self.block_point(z_t + zz, s, left)
+                    pts.append(p + n * hh)
+                    uvs.append((d, -zz + (0.004 if j == 3 else 0.0)))
                 g.add_row(pts, uvs)
             g.fill(G.uv, G.tag, TAG["pocket"], flip=not left)
             for row in g.rows:
                 G.weight(row, sb.TORSO)
-            G.mark_row(TAG["pocket"], g, 2, "edge", inside_sign=-1.0)
-            G.mark_column(TAG["pocket"], g, 0, "edge", rows=range(0, 3), inside_sign=1.0)
-            G.mark_column(TAG["pocket"], g, cols, "edge", rows=range(0, 3), inside_sign=-1.0)
+            G.mark_row(TAG["pocket"], g, 2, "edge", cols=range(1, cols), inside_sign=-1.0)
+            G.mark_column(TAG["pocket"], g, 1, "edge", rows=range(0, 3), inside_sign=1.0)
+            G.mark_column(TAG["pocket"], g, cols - 1, "edge", rows=range(0, 3), inside_sign=-1.0)
         # breast welt, left chest, slanted up toward the shoulder
         W = P["welt"]
         g = G.grid("welt")
