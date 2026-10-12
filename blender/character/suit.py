@@ -24,7 +24,7 @@ from mathutils import Vector
 
 from . import budgets, config
 from . import suit_build as sb
-from . import suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures
+from . import suit_drape, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures
 
 DEFAULTS = {
     "tailor": True,             # False: stock shell, as in spike 1
@@ -116,15 +116,27 @@ DEFAULTS = {
     "buttons": {"segments": 8, "jacket_r_m": 0.011, "jacket_height_m": 0.004,
                 "cuff_r_m": 0.0075, "vest_r_m": 0.0065, "vest_height_m": 0.003},
     "materials": {
-        # linear albedo, roughness, sheen (glTF: Sheen Tint is the sheen colour,
-        # Sheen Weight is ignored, so the strength goes in the tint).
-        "wool": [0.028, 0.70, 0.08],
-        "shirt": [0.75, 0.55, 0.0],
-        "silk": [0.02, 0.62, 0.12],
-        "button": [0.015, 0.3, 0.0],
+        # suit_textures.material(): albedo (linear, grey or rgb), rough, sheen
+        # (strength; the glTF sheen colour is sheen x sheen_tint), sheen_rough,
+        # spec (Specular IOR Level: 0.5 = F0 0.04), coat, coat_rough, aniso, sss.
+        # Wool: blue-black (reads black, not brown, under the amber key), low
+        # specular so the broad lobe does not grey it, a cool fuzz lobe at
+        # grazing angles; roughness and albedo also vary per pixel (surface).
+        "wool": {"albedo": [0.020, 0.021, 0.025], "rough": 0.68, "sheen": 0.22, "sheen_rough": 0.4,
+                 "sheen_tint": [0.9, 0.9, 1.0], "spec": 0.15},
+        "shirt": {"albedo": 0.72, "rough": 0.5, "sheen": 0.2, "sheen_rough": 0.5, "spec": 0.4},
+        "silk": {"albedo": 0.015, "rough": 0.35, "sheen": 0.1, "sheen_rough": 0.3, "spec": 0.5,
+                 "aniso": 0.5},
+        "button": {"albedo": 0.012, "rough": 0.25, "spec": 0.5, "coat": 0.4, "coat_rough": 0.12},
         "leather": [0.012, 0.28, 0.0],   # polished black calf
         "sole": [0.02, 0.65, 0.0],
     },
+    # per-pixel wool surface (suit_textures.surface_maps): fibre noise in
+    # roughness and albedo, cavity and fold occlusion, Kuwahara r (painterly
+    # albedo, direction.md §4), roughness offsets per "<part>:<panel tag>"
+    "surface": {"seed": 5, "rough_noise": 0.06, "albedo_noise": 0.05, "cavity": 0.35,
+                "fold_ao": 0.55, "ao_in_albedo": 0.35, "kuwahara": 1,
+                "panel_rough": {"suit_jacket:2": -0.10, "suit_jacket:3": -0.05}},
     "textures": {"enabled": True, "wool_px": 2048, "shirt_px": 1024, "tie_px": 512,
                  "shoe_px": 1024, "seed": 3, "slope": 1.0},
     "budgets": {"jacket": 14000, "tie": 900, "waistcoat": 3000, "shirt": 2200,
@@ -205,7 +217,8 @@ def post(b):
     z_b = o["button_stance"] * stature
     m["button_stance_to_stature"] = r(z_b / stature)
 
-    mats = {k: suit_textures.material(f"suit_{k}", *v) for k, v in o["materials"].items()}
+    mats = {k: (suit_textures.material(f"suit_{k}", **v) if isinstance(v, dict)
+                else suit_textures.material(f"suit_{k}", *v)) for k, v in o["materials"].items()}
 
     neck = suit_neck.NeckFrame(body, supra, o["shirt"]["collar"])
     G = sb.Garment(PART.format("jacket"), arm, body)
@@ -230,6 +243,20 @@ def post(b):
     bpy.data.meshes.remove(src_me)
     b.suit_src = None
 
+    # cloth-sim fold detail (suit_drape): jacket and trousers on the full body
+    folds = {}
+    D = config.merge(suit_drape.DEFAULTS, o.get("drape") or {})
+    if D["enabled"] and o["textures"]["enabled"]:
+        body_ob = max((x for x in b.meshes() if "body" in x.vertex_groups),
+                      key=lambda x: len(x.data.vertices))
+        garments = {"jacket": (jacket, jacket_pins(jk, arm)),
+                    "trousers": (trousers, trouser_pins(arm))}
+        cols = [shoes] if shoes is not None else []
+        y_b = _front_y(jacket, jk.z_b)
+        extra = {"button": [(Vector((0.0, y_b, jk.z_b)), Vector((0, -1, 0)))]}
+        fobs, m["drape"] = suit_drape.run(b, D, garments, body_ob, cols, extra)
+        folds = {f.garment.name: f for f in fobs.values()}
+
     debug_tags = None
     if os.environ.get("SUIT_DEBUG_TAGS"):   # diagnosis: colour the jacket's panels
         a = jacket.data.attributes.get("panel")
@@ -244,7 +271,9 @@ def post(b):
                                                 "waistcoat": vest, "shirt": shirt, "tie": tie,
                                                 "buttons": buttons,
                                                 "shoes": shoes if o["shoes"]["build"] else None},
-                                            mats, marks)
+                                            mats, marks, folds)
+    for f in folds.values():
+        f.free()
     else:
         m.get("shoes", {}).pop("marks", None)
         suit_textures.strip_panel_attr([jacket, trousers, vest, shirt, tie, shoes])
@@ -278,6 +307,70 @@ def post(b):
 
 def r(x, n=4):
     return round(x, n)
+
+
+# --- drape pins (suit_drape) ----------------------------------------------------------------
+
+def _smooth(t):
+    import numpy as np
+    t = np.clip(t, 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def _front_y(ob, z):
+    hit = sb.bvh_of([ob]).ray_cast(Vector((0.0, -1.0, z)), Vector((0, 1, 0)), 2.0)
+    return hit[0].y if hit[0] is not None else -0.15
+
+
+def jacket_pins(jk, arm):
+    """Pin weights for the jacket drape: the tailored, canvassed zones follow
+    the skin (collar, lapels, pockets, the chest above the button, the back
+    above the shoulder blades, the sleeve head, the buttoned front); the
+    sleeves, the waist, the lower back and the skirt hang free. The cuff is
+    lightly pinned so it stays at the wrist while the elbow moves. Shrink: a
+    waist band at the fastened button (the X pull lines)."""
+    import numpy as np
+    T = suit_jacket.TAG
+    J = lambda n: np.array(arm.matrix_world @ arm.data.bones[n].head_local)   # noqa: E731
+
+    def fn(co, tag):
+        z, y = co[:, 2], co[:, 1]
+        front = _smooth((-y + 0.02) / 0.06)          # 1 on the front half
+        chest = _smooth((z - (jk.z_b + 0.07)) / 0.10)
+        # the back hangs from the shoulder blades: full pin above the pit, easing
+        # to 0.35 at the waist and 0 at the seat (no shelf where the pin ends)
+        back = np.clip(0.35 + 0.65 * _smooth((z - (jk.z_b + 0.02)) / (jk.z_pit - jk.z_b)), 0, 1) \
+            * _smooth((z - jk.z_hip) / 0.08)
+        pin = front * chest + (1 - front) * back
+        # the buttoned front edges: both panels overlap at the button
+        d_btn = np.hypot(co[:, 0], z - jk.z_b)
+        pin = np.maximum(pin, np.exp(-(d_btn / 0.03) ** 2) * front)
+        for t in (T["collar"], T["lapel"], T["pocket"], T["welt"]):
+            pin[tag == t] = 1.0
+        for s, t in (("l", T["sleeve_l"]), ("r", T["sleeve_r"])):
+            sel = tag == t
+            dS = np.linalg.norm(co - J(f"upperarm_{s}"), axis=1)
+            dW = np.linalg.norm(co - J(f"hand_{s}"), axis=1)
+            w = np.maximum(1.0 - _smooth((dS - 0.07) / 0.06), 0.5 * (1.0 - _smooth((dW - 0.05) / 0.04)))
+            pin[sel] = w[sel]
+        shrink = np.exp(-((z - jk.z_b) / 0.05) ** 2) * front * (tag == T["block"])
+        # bending stiffness: canvassed chest, lapels, collar stiff; back medium; sleeves soft
+        stiff = np.where(tag == T["block"], 0.4 + 0.6 * front * chest, 0.25)
+        for t in (T["collar"], T["lapel"], T["pocket"], T["welt"]):
+            stiff[tag == t] = 1.0
+        return pin, shrink, stiff
+    return fn
+
+
+def trouser_pins(arm):
+    """Trousers hang from the waistband and the top of the seat; the legs are free."""
+    import numpy as np
+    z_hip = (arm.matrix_world @ arm.data.bones["pelvis"].head_local).z
+
+    def fn(co, tag):
+        pin = _smooth((co[:, 2] - (z_hip - 0.10)) / 0.08)
+        return pin, np.zeros(len(co))
+    return fn
 
 
 # --- hidden-surface removal ----------------------------------------------------------------
