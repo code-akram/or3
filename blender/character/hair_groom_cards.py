@@ -53,6 +53,10 @@ CARDS = {
     "tip_width": 0.45, "curve": 0.3, "root_w": [0.25, 0.8], "root_w_m": [0.005, 0.025],
     "under": {"split": 2, "inset_m": 0.003, "width": 1.1, "max_halfwidth_m": 0.02, "start": 0.2},
     "flyaways": {"count": 40, "start": 0.35, "halfwidth_m": 0.0012},
+    # One lock card per front fall (all its strands) under its sub-clump
+    # cards, so a fall reads as a lock, not 2-3 thin strips.
+    "front_lock": {"width_pct": 95, "pad_m": 0.002, "inset_m": 0.0015, "cells": [6, 7]},
+    "ear_margin_m": 0.004, "ear_lateral_m": 0.012,   # cards whose path crosses an ear are dropped
     "layer_shade": {"under": 0.8, "mid": 0.82, "top": 1.0, "front": 0.9, "fly": 0.85},
     "root_dark": 0.35, "root_v": 0.3, "lock_sigma": 0.15,
     # Cards rooted within `near_m` of the (recessed) hairline: little root
@@ -553,6 +557,32 @@ def build(b, frame, ccfg, g):
         counts[layer] = counts.get(layer, 0) + 1
         tris[layer] = tris.get(layer, 0) + t
 
+    def through_ear(p, start=2):
+        C = p["C"][start:]
+        mg = cfg["ear_margin_m"]
+        for ec, er in frame.ears:
+            ec, er = np.array(ec), np.array(er)
+            # The ear's box (not its ellipsoid: a card clipping the helix
+            # corner slipped through), out to `ear_lateral_m` beside it,
+            # below its top (hair going over the top and behind is fine).
+            inside = ((np.abs(C[:, 0] - ec[0]) < er[0] + cfg["ear_lateral_m"])
+                      & (np.abs(C[:, 1] - ec[1]) < er[1] + mg)
+                      & (C[:, 2] > ec[2] - er[2] - mg) & (C[:, 2] < ec[2] + er[2] - mg))
+            if inside.any():
+                return True
+        return False
+
+    ear_dropped = 0
+    # Front locks: all of a fall's strands, a dense cell, set a little in.
+    fl = cfg["front_lock"]
+    for pc in np.unique(prim[(kind == 2)]):
+        members = np.where((prim == pc) & (kind == 2))[0]
+        if len(members) < 10:
+            continue
+        p = clump_profile(frame, E, members, cloth_gap, fl["width_pct"], fl["pad_m"], cfg["min_halfwidth_m"])
+        p["C"] = p["C"] - p["N"] * fl["inset_m"]
+        p.update(members=members, kind="front", layer="front", hang=H[members].mean(0))
+        count("front_lock", add_card(p, int(rng.choice(fl["cells"])), "front"))
     for p in unders:
         # Start under the mass, not at the hairline (a dense dark strip there).
         count("under", add_card(p, 8 + int(rng.integers(2)), "under",
@@ -560,6 +590,9 @@ def build(b, frame, ccfg, g):
     # Mid / top: a cell by density rank (sparse clumps sparse cells).
     ranks = np.argsort(np.argsort([len(p["members"]) for p in profs]))
     for p, r in zip(profs, ranks):
+        if p["kind"] != "front" and through_ear(p):
+            ear_dropped += 1
+            continue
         cell = int(np.clip(r / max(len(profs) - 1, 1) * 8 + rng.integers(-1, 2), 0, 7))
         count(p["layer"], add_card(p, cell, p["layer"]))
     # Flyaways along the groom's flyaway strands.
@@ -609,7 +642,7 @@ def build(b, frame, ccfg, g):
     total = sum(len(p.vertices) - 2 for p in me.polygons)
     tips = sorted(float(p["C"][-1][2]) for p in profs)
     b.notes["hair"] = {
-        "source": "groom", "cards": counts, "cap_texture_strands": cap_strands, "card_tris": tris, "cap_faces": cap_faces,
+        "source": "groom", "cards": counts, "ear_dropped": ear_dropped, "cap_texture_strands": cap_strands, "card_tris": tris, "cap_faces": cap_faces,
         "tris": total, "atlas": {"size": acfg["size"], "cells": len(cells)},
         "proxy_blob": blob_info,
         "tip_z_p10_p50_p90": [round(tips[int(q * (len(tips) - 1))], 4) for q in (0.1, 0.5, 0.9)],

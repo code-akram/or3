@@ -75,14 +75,14 @@ DEFAULTS = {
     # on the skull (combed hair lies smooth), full `ramp_m` past the hang point.
     "clump": {"scalp": 0.2, "ramp_m": 0.06, "primary": 36, "primary_factor": 0.85, "primary_shape": 0.3,
               "secondary": 360, "secondary_factor": 0.8, "secondary_shape": 0.0,
-              "stray": 0.10, "tip_spread": 0.0},
+              "stray": 0.10, "stray_nape": 0.25, "tip_spread": 0.0},
     "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18], "jitter": 0.4},
     "noise": {"distance_m": 0.0015, "scale": 40.0, "shape": 0.3},
     "frizz": {"distance_m": 0.0005, "shape": 0.6},
-    "flyaways": {"share": 0.04, "distance_m": 0.010, "scale": 20.0, "shape": 0.4},
+    "flyaways": {"share": 0.04, "distance_m": 0.010, "scale": 20.0, "shape": 0.4, "part_weight": 0.6},
     "trim": {"random": 0.05},
     "vellus": {"count": 1400, "length_m": [0.003, 0.006], "band_m": [-0.002, 0.006],
-               "radius_m": 0.000018, "lift": 0.35, "melanin": 0.7},
+               "radius_m": 0.000018, "lift": 0.35, "melanin": 0.9},
     # Front falls (hair_clumps.march with fall gravity). side -1 = the
     # character's right. Each takes the `strands` nearest strands.
     "front_fall": [
@@ -96,10 +96,10 @@ DEFAULTS = {
          "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.08, "clear_m": 0.007,
          "flare_after_m": 0.07, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
          "factor": 0.75, "wave_m": 0.003}],
-    "shader": {"model": "HUANG", "melanin": 0.95, "redness": 0.3,
+    "shader": {"model": "HUANG", "melanin": 0.985, "redness": 0.12,
                "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
-               "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.10, "light_melanin": 0.8,
-               "lock_melanin_jitter": 0.04},
+               "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.10, "light_melanin": 0.93,
+               "lock_melanin_jitter": 0.012, "tint": None},
     "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
 }
 
@@ -248,8 +248,15 @@ def lift_profile(surf, gcfg, p, nrm, rng):
     front = (1 - smoothstep(0.0, L["front_band_m"], d)) * smoothstep(c.y - 0.02, c.y - 0.06, p[1])
     top = smoothstep(0.5, 0.85, nrm[2])
     back = smoothstep(c.y, c.y + 0.05, p[1]) * (1 - top)
-    side = 1 - max(top, back)
-    amp = max(L["front_m"] * front, L["crown_m"] * top + L["side_m"] * side + L["back_m"] * back)
+    # Side lift only where the scalp faces sideways; forward-facing roots
+    # (the front hairline, above the temples) get the front lift. With
+    # side = 1 - max(top, back) the front hairline stood 36 mm off the
+    # forehead and read as a pale tuft against the top light.
+    rest = max(0.0, 1 - top - back)
+    side = rest * smoothstep(0.3, 0.7, abs(nrm[0]))
+    fwd = rest - side
+    amp = max(L["front_m"] * front, L["crown_m"] * top + L["side_m"] * side + L["back_m"] * back
+              + L["front_m"] * fwd)
     if nrm[2] > 0.5 and p[1] < c.y + 0.02:
         amp += surf.cfg["part_lift_m"] * math.exp(-abs(p[0] - surf.part_x) / 0.012)
     amp *= 1 - L["jitter"] * rng.random()
@@ -551,6 +558,10 @@ def hair_material(gcfg):
     mel.attribute_name = "melanin"
     nt.links.new(mel.outputs["Fac"], bsdf.inputs["Melanin"])
     bsdf.inputs["Melanin Redness"].default_value = sc["redness"]
+    if sc.get("tint") and "Tint" in bsdf.inputs:
+        h = sc["tint"].lstrip("#")
+        bsdf.inputs["Tint"].default_value = tuple(
+            (int(h[i:i + 2], 16) / 255) ** 2.2 for i in (0, 2, 4)) + (1.0,)
     bsdf.inputs["Random Color"].default_value = sc["random_color"]
     bsdf.inputs["Random Roughness"].default_value = sc["random_roughness"]
     bsdf.inputs["IOR"].default_value = sc["ior"]
@@ -646,7 +657,11 @@ def build(b, frame, ccfg, gcfg_in):
     # Clumps: strays; primary centres; secondary centres within a primary.
     cc = gcfg["clump"]
     n = len(S)
-    stray = (rng.random(n) < cc["stray"]) & (kind == 0)
+    # Strays (unclumped) fill between the locks; more of them low at the
+    # back, so the gaps between clumps over the spine don't show the collar.
+    nape_w = (np.clip((roots[:, 1] - c.y) / 0.04, 0, 1)
+              * np.clip((frame.ears_max.z + 0.02 - roots[:, 2]) / 0.05, 0, 1))
+    stray = (rng.random(n) < cc["stray"] + cc.get("stray_nape", 0.0) * nape_w) & (kind == 0)
     prim = np.arange(n)
     sub = np.arange(n)
     main = np.where((kind == 0) & ~stray)[0]
@@ -695,7 +710,7 @@ def build(b, frame, ccfg, gcfg_in):
     fw = gcfg["flyaways"]
     sil = np.abs(nrms[:, 0]) * 0.7 + np.clip(nrms[:, 1], 0, 1) * 0.5
     part_near = np.exp(-np.abs(roots[:, 0] - part_x) / 0.01) * (nrms[:, 2] > 0.5)
-    wfly = (0.2 + sil + 1.5 * part_near) * (kind == 0)
+    wfly = (0.2 + sil + fw.get("part_weight", 1.5) * part_near) * (kind == 0)
     nfly = int(fw["share"] * n)
     fly_idx = rng.choice(n, nfly, replace=False, p=wfly / wfly.sum())
     fly = np.zeros(n)
