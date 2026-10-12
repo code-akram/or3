@@ -1,13 +1,14 @@
 """Eyelashes: a strand groom (hero) and two baked strips per eye (game),
 replacing MPFB's eyelash proxy.
 
-The MPFB eyelash proxy is still fitted by head.add_parts, because it follows
-the lid edits exactly; here it is only a landmark. Each of its four islands
-(upper and lower lid per eye) gives a root line, the island's vertices
-nearest the eyeball centre per angular bin round the eye, snapped to the
-skin, and a base direction toward its farthest vertices. The proxy is then
-dropped from the export (the config switch is `hair.lashes`; null keeps the
-MPFB lashes).
+Roots: the lid margins are found on the final skin by casting rays along
++y across each eye (lid_margins): the highest and lowest rays that reach the
+eyeball before the skin bound the opening, and the skin hit just past them
+is the margin. The MPFB eyelash proxy (fitted by head.add_parts) only gives
+the base lash direction per lid; snapping its roots to the skin put the
+upper lashes behind the eyeball once the lids were reshaped. The proxy is
+then dropped from the export (the config switch is `hair.lashes`; null keeps
+the MPFB lashes).
 
 Groom: upper 150-180 lashes per eye, 8-10 mm, longest in the outer middle,
 curving up; lower 70-90, 5-6 mm, curving down (direction §2 C). Roots in two
@@ -98,6 +99,54 @@ def lid_lines(proxy, eyes, skin_bvh, bins):
     return out
 
 
+def eye_mesh(b):
+    ms = [o for o in b.meshes() if "eyes_hq" in o.name] or [o for o in b.meshes() if "low-poly" in o.name]
+    return ms[0] if ms else None
+
+
+def lid_margins(eye_obj, centres, skin_bvh, cfg):
+    """The lid margins seen from the front: per column of rays along +y
+    across each eye, the highest and lowest rays that reach the eyeball
+    before the skin bound the opening; the skin hit just past each is the
+    lid margin. Per (side, lid): roots (n, 3), inner corner first. Follows
+    any reshaping of the lids, unlike the fitted proxy."""
+    from .hair_frame import world_bvh
+    ebvh = world_bvh([eye_obj])
+    step = cfg["margin_step_m"]
+    out = {}
+    for side, c in centres.items():
+        y0 = c[1] - 0.06
+        cols = {"upper": [], "lower": []}
+        xs = np.arange(-0.02, 0.02, step)
+        zs = np.arange(-0.012, 0.012, step * 0.5)
+        for dx in xs:
+            vis = []
+            for dz in zs:
+                o = Vector((c[0] + dx, y0, c[2] + dz))
+                he = ebvh.ray_cast(o, Vector((0, 1, 0)), 0.1)
+                hs = skin_bvh.ray_cast(o, Vector((0, 1, 0)), 0.1)
+                vis.append(he[0] is not None and (hs[0] is None or he[3] < hs[3]))
+            vis = np.array(vis)
+            if not vis.any():
+                continue
+            iz = np.flatnonzero(vis)
+            if (iz[-1] - iz[0]) * step * 0.5 < cfg["margin_min_open_m"]:
+                continue
+            for lid, k in (("upper", min(iz[-1] + 1, len(zs) - 1)), ("lower", max(iz[0] - 1, 0))):
+                o = Vector((c[0] + dx, y0, c[2] + zs[k]))
+                hs = skin_bvh.ray_cast(o, Vector((0, 1, 0)), 0.1)
+                if hs[0] is not None:
+                    # a little into the margin, behind its front edge
+                    cols[lid].append(np.array(hs[0][:]) + np.array([0, cfg["margin_in_m"], 0]))
+        for lid, pts in cols.items():
+            if len(pts) < 3:
+                continue
+            pts = np.array(pts)
+            pts = pts[np.argsort(pts[:, 0] * side)]  # inner (nose side) first
+            out[(side, lid)] = pts
+    return out
+
+
 def resample_line(pts, n):
     seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
     s = np.concatenate([[0], np.cumsum(seg)])
@@ -113,6 +162,11 @@ def build(b, frame, cfg):
     beard_groom.refit_for(b, frame)
     eyes = eye_centres(b)
     lines = lid_lines(proxy, eyes, frame.skin_bvh, cfg["bins"])
+    eo = eye_mesh(b)
+    margins = lid_margins(eo, eyes, frame.skin_bvh, cfg) if eo is not None and cfg.get("margin_step_m") else {}
+    for key, roots in margins.items():
+        if key in lines:
+            lines[key] = (roots,) + tuple(lines[key][1:])
     hero = cfg["hero"]
     mat = beard_groom.hair_material("lashes_hero", hero["material"])
     body = frame.body

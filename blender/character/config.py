@@ -211,6 +211,7 @@ DEFAULTS = {
             "moustache_height_m": 0.012,  # moustache top over the upper lip
             "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare
             "lips_w": 0.5,             # body vertices over this `lips` weight are vermilion: no roots
+            "fade_m": 0.010,           # skin_tex.beard_depth: the skin's stubble shadow ramp past the margin
             "lip_band_m": 0.004,       # top band of the upper lip in the shell patch (no roots): moustache overhang
             "mouth_depth_m": 0.008,    # skin this far behind the lip front, inside the corners, facing back: mouth
             # Patch reaches this far past each line (cheek, neck, back,
@@ -338,18 +339,19 @@ DEFAULTS = {
         # null keeps the MPFB lashes.
         "lashes": {
             "seed": 17, "proxy": "eyelashes", "drop_proxy": True, "bins": 14, "points": 7,
+            "margin_step_m": 0.0005, "margin_min_open_m": 0.0015, "margin_in_m": 0.0003,
             "upper": {"count": 165, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.0085, 0.006],
-                      "curl_deg": 85, "forward": 0.4, "splay_deg": 6, "fan_deg": 25,
+                      "curl_deg": 55, "forward": 0.8, "splay_deg": 6, "fan_deg": 25,
                       "row_jitter_m": 0.00025, "strip_cols": 8},
             "lower": {"count": 80, "length_m": [0.0018, 0.0032, 0.0045, 0.0042, 0.003],
                       "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
                       "row_jitter_m": 0.0002, "strip_cols": 6},
             "melanin": 0.99, "redness": 0.3, "clump": 0.55, "gap_m": 0.00015,
-            "hero": {"radius_m": [0.000025, 0.000035], "tip_radius": 0.25,
+            "hero": {"radius_m": [0.00004, 0.000055], "tip_radius": 0.25,
                      "material": {"roughness": 0.25, "radial_roughness": 0.3, "coat": 0.1,
                                   "root_dark": 0.0},
                      "clump": {"shape": 0.5, "tip_spread": 0.0001, "guide_distance_m": 0.0012}},
-            "atlas": [512, 512], "strip_radius_px": 1.6, "lash_line_px": 1.5,
+            "atlas": [512, 512], "strip_radius_px": 2.2, "lash_line_px": 1.5,
             "color": "#1a1410",
         },
     },

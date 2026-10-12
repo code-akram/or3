@@ -71,7 +71,15 @@ def landmarks(frame, cfg):
     return cheek, neck, side[0]
 
 
-def inside_dist(p, w, groups, cheek, neck, back_y, moustache_top, nose):
+def inside_dist(p, w, groups, cheek, neck, back_y, margins, moustache_top, nose):
+    """(signed depth into the beard, the margin band width at this point).
+    Kept for skin_tex.beard_depth (the skin's stubble shadow follows the
+    same lines); the groom uses inside_line."""
+    d, k = inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose)
+    return d, margins[k]
+
+
+def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose):
     """(signed depth into the beard, which line is nearest: 0 cheek, 1 neck,
     2 back, 3 moustache top). The lines are in profile, so in front of the
     mouth corners (the philtrum, the nose) the beard is capped at the
@@ -107,7 +115,7 @@ def region(b, frame, cfg, rng):
     dist, which = {}, {}
     for v in body.data.vertices:
         p = mw @ v.co
-        d, k = inside_dist(p, {e.group: e.weight for e in v.groups}, groups, cheek, neck,
+        d, k = inside_line(p, {e.group: e.weight for e in v.groups}, groups, cheek, neck,
                            back_y, moustache_top, nose)
         # the mouth interior (skin behind the lips, facing back or up) is out
         nrm = (mw.to_3x3() @ v.normal)
