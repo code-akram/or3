@@ -51,72 +51,115 @@ DEFAULTS = {
             "seed": 7,
             # Top layer (the visible hair): many curved alpha-tested cards.
             "card": True,             # False: flattened tubes like the under layer
-            "curve": 0.25,            # card centre lift, x half-width (rounded profile)
-            "clumps": 320,            # top-layer cards (roots spread over the scalp)
+            "curve": 0.35,            # card centre lift, x half-width (rounded profile)
+            "twist": 1.0,             # max card twist root -> tip (radians, per-card random)
+            "clumps": 360,            # top-layer cards (roots spread over the scalp)
             "length": {"f": 0.85,     # tip height: neck_01 joint (0) -> shoulder joints (1)
                        "jitter_m": 0.025},
             "max_len_m": 0.55,
-            "radius_m": 0.0095,       # clump / card half-width at full size
+            "radius_m": 0.008,        # clump / card half-width at full size
             "radius_jitter": 0.35,
-            "hang_widen": 0.35,       # extra half-width where a clump hangs free
+            "hang_widen": 0.15,       # extra half-width where a clump hangs free
             "taper_power": 1.3,       # half-width ~ 1 - t^k
             "aspect": 4.5,            # half-width / half-thickness at the root
             "aspect_tip": 1.8,        # x flatter at the tip (thin blade ends)
             "sides": 4,
             "lift_m": 0.003,          # sits this much over the under layer
             "tip_m": 0.0,             # tip height offset vs the variant's target
+            "shade_top": 1.0,         # vertex-colour value of the top layer (x lock jitter)
             # Under layer (the mass): fewer, wide, flat, solid clumps hugging the scalp.
-            "under": {"clumps": 36, "radius_m": 0.02, "aspect": 4.0, "aspect_tip": 1.5,
-                      "hang_widen": 0.6, "sides": 6, "lift_m": 0.0, "tip_m": -0.015},
+            "under": {"clumps": 36, "radius_m": 0.016, "aspect": 4.0, "aspect_tip": 1.5,
+                      "hang_widen": 0.15, "sides": 6, "lift_m": 0.0, "tip_m": -0.045,
+                      "shade": 0.7},
+            # Per-vertex colour "lock" (COLOR_0): per-lock lognormal value,
+            # depth (lifted cards lighter), dark roots.
+            "shade": {"lock_sigma": 0.22, "depth": 0.35, "root": 0.8, "root_v": 0.3},
             "gap_m": 0.0015,          # clearance over skin and clothes
-            "layer_jitter_m": 0.007,
+            "ear_margin_m": 0.003,    # clearance round the ear ellipsoids
+            "layer_jitter_m": 0.008,
+            # Lateral wave of hanging strands (direction amplitude, metres per cycle).
+            "wave": {"amp": 0.35, "period_m": 0.12},
             "part_x_m": 0.012,        # part, off-centre to the character's left
-            "part_push": 0.35,
+            "part_push": 0.5,
+            "part_width_m": 0.03,    # the push decays over this distance from the part
             "comb_drop": 0.15,
-            "side_drop": 0.3,         # extra drop for side roots (over the ear)
+            "side_drop": 0.15,        # extra drop for side roots (behind the ear)
             "gravity": 0.95,
             "step_m": 0.01,
             "turn": 0.6,
             "segment_m": 0.03,
             "min_segments": 5,
             "max_segments": 16,
-            "front_fall": {"side": -1, "count": 7, "az0_deg": 31, "az_step_deg": 2.5,
-                           "el_deg": 22, "comb_side": 0.5, "comb_fwd": 0.0, "comb_down": 0.9,
-                           "fall_after_m": 0.02, "tip_above_lips_m": 0.035,
-                           "radius_scale": 0.8, "aspect": 4.0,
-                           "max_len_m": 0.22},
-            # Cards rooted on the cap's front edge, for a soft hairline.
-            "hairline": {"count": 60, "behind_center_m": 0.0, "above_ear_m": -0.01,
-                         "width_scale": 0.8},
+            # Front falls: heavier strands at the temples that fall forward and
+            # frame the face, asymmetric (longer on the character's right).
+            "front_fall": [
+                {"side": -1, "count": 4, "az0_deg": 28, "az_step_deg": 3.5,
+                 "el_deg": 22, "comb_side": 0.15, "comb_fwd": 0.0, "comb_down": 0.9,
+                 "fall_after_m": 0.02, "tip_above_lips_m": 0.035, "hug": 0.3,
+                 "radius_scale": 0.7, "aspect": 4.0, "max_len_m": 0.22, "segment_m": 0.015,
+                 "curve": 0.5, "shade": 0.85},
+                {"side": 1, "count": 0, "az0_deg": 34, "az_step_deg": 4.0,
+                 "el_deg": 20, "comb_side": 0.25, "comb_fwd": 0.0, "comb_down": 0.9,
+                 "fall_after_m": 0.02, "tip_above_lips_m": 0.08, "hug": 0.0,
+                 "radius_scale": 0.45, "aspect": 4.0, "max_len_m": 0.15, "segment_m": 0.015,
+                 "curve": 0.4, "shade": 0.8}],
+            # Cards rooted `ring` rings inside the cap's front edge, behind the
+            # feather band, for a soft hairline.
+            "hairline": {"count": 64, "ring": 1, "root_w": 0.2, "behind_center_m": 0.0,
+                         "above_ear_m": -0.01, "width_scale": 0.8},
             # Loose strands leaving top clumps part-way down (silhouette breakup).
-            "flyaways": {"count": 80, "start": [0.08, 0.7], "length_m": 0.16,
-                         "drift_m": 0.025, "wave_m": 0.006, "radius_m": 0.003},
+            "flyaways": {"count": 70, "start": [0.08, 0.7], "length_m": 0.16,
+                         "drift_m": 0.015, "wave_m": 0.008, "radius_m": 0.003,
+                         "max_up": 0.6,  # skip starts whose normal points up (crown)
+                         "shade": 0.85},
             "region": {"temple_front_m": 0.045, "temple_above_ear_m": 0.0,
                        "nape_above_neck_m": 0.04},
+            # Scalp cap: UV v = depth from the hairline (0 .. v_span_m), u =
+            # arc length round the head / u_span_m; carries the feather texture.
             "cap": {"offset_m": 0.0025, "edge_taper": [0.2, 0.5, 0.8], "edge_smooth_iters": 6,
-                    "v": 0.3,                        # texture v inside (opaque core)
-                    "edge_v": [0.7, 0.66, 0.62]},     # outer rings: slightly ragged hairline
-            "u_span_m": 0.05,         # strand texture width in metres around a clump
-            # Generated "tip" strand textures (hair_mesh.strand_image): the
-            # under layer and cap use an opaque core; the top layer, front
-            # strands and flyaways only the strands (alpha-tested).
+                    "radius_m": 0.09, "u_span_m": 0.06, "v_span_m": 0.03,
+                    "shade": 0.75},
+            "u_span_m": 0.05,         # strand texture width in metres around an under tube
+            # Spring chains (hair_springs.py): sector -> bone count, 12 total.
+            "springs": {"chains": {"back_l": 2, "back_r": 2, "side_l": 3, "side_r": 3,
+                                   "front_l": 2, "front_r": 2},
+                        "hang_below_ear_m": 0.01,  # strands hang once below ear level + this
+                        "front_hang_m": 0.02,      # front falls hang from this far past the root
+                        "min_verts": 20, "min_len_m": 0.04},
+            # Generated strand textures (hair_mesh.strand_image).
+            # Cap + under tubes ("edge" kind): v = depth from the hairline.
+            # Fine short hairs (0.12-0.26 mm wide, 5-13 mm long) whose density
+            # ramps up over the feather band (edge_v x v_span_m ~ 1.3 cm),
+            # then an opaque core: the hairline is a gradual density falloff.
+            "texture_cap": {"seed": 3, "size": [512, 512], "strands": 1200,
+                            "width_px": [1.0, 2.0], "wave_px": 1.5, "value_sigma": 0.3,
+                            "base_value": 0.5, "band_amp": 0.15,
+                            "len_px": [150, 400], "slant": 0.06,
+                            "edge_share": 0.6, "edge_v": 0.3, "ramp_pow": 2.0, "stub": 0.35,
+                            "solid_jitter_v": 0.06,
+                            "color": "#1d1915"},
+            # Under tubes ("tip" kind): opaque core, strand tips past core_v.
             "texture": {"seed": 3, "size": [256, 512], "strands": 260,
                         "width_px": [1.2, 2.6], "wave_px": 1.5, "value_sigma": 0.3,
                         "base_value": 0.42, "band_amp": 0.15,  # darker: the mass is in shadow
                         "tip_v": [0.72, 0.99],  # where each strand ends (v = 1 is the tip)
                         "core_v": 0.62,         # opaque below this
                         "color": "#1d1915"},
-            # Card strands: ~0.14 mm/px across a 1.8 cm card, so 2.5-5 px is
-            # 0.35-0.7 mm (stylised locks that survive at game distance).
-            "texture_card": {"seed": 4, "size": [128, 512], "strands": 75,
-                             "width_px": [2.5, 5.0], "wave_px": 2.0, "value_sigma": 0.3,
-                             "base_value": 0.6, "band_amp": 0.1,
+            # Card atlas: `variants` lock patterns side by side (u range per
+            # card), each 1-3 sub-locks of strands with gaps between them.
+            # ~0.125 mm/px across a 1.6 cm card: 2-4 px is 0.25-0.5 mm.
+            "texture_card": {"seed": 4, "size": [512, 512], "strands": 13, "variants": 4,
+                             "locks": [1, 3], "lock_spread_px": 16, "variant_sigma": 0.15,
+                             "tip_sigma_v": 0.14, "tip_taper_v": 0.1,
+                             "width_px": [2.0, 3.5], "wave_px": 2.0, "value_sigma": 0.35,
+                             "base_value": 0.55, "band_amp": 0.1,
                              "edge_pow": 1.6,      # strand density falls off toward the edges
                              "edge_short": 0.5,    # and edge strands end sooner
-                             "root_v": 0.12, "tip_v": [0.6, 0.99],  # staggered starts
+                             "root_v": 0.12, "tip_v": [0.55, 0.99],  # staggered starts/ends
                              "color": "#1d1915"},
-            "roughness": 0.8,
-            "specular": 0.12,
+            "roughness": 0.62,
+            "specular": 0.15,
+            "anisotropy": 0.4,
         },
         # Short full beard as shell-textured hair (hair_beard.py + facial_hair.py).
         "beard": {

@@ -84,6 +84,35 @@ class HeadFrame:
                         if any(e.group == ears and e.weight > 0.05 for e in v.groups))
         self.bvh = world_bvh(colliders, {self.body.name: ear_verts})
         self.skin_bvh = world_bvh([self.body])
+        # Each ear as an ellipsoid (centre, radii) from its group's bounds, so
+        # guides are pushed round it (tucked behind, or over the top) without
+        # the thin ear faces' two-sided normals flinging them sideways.
+        ear_pts = group_verts(self.body, "ears", 0.5)
+        self.ears = []
+        for sign in (-1, 1):
+            pts = [p for p in ear_pts if (p.x - self.center.x) * sign > 0]
+            if pts:
+                lo, hi = bbox(pts)
+                self.ears.append(((lo + hi) / 2, (hi - lo) / 2))
+
+    def near_ear(self, p, dx=0.03, dz_below=0.03, dz_above=0.06):
+        """The ear (centre, radii) whose column p is in: within dx of the ear
+        in x, from dz_below under its bottom to dz_above over its top."""
+        for c, r in self.ears:
+            if abs(p.x - c.x) <= r.x + dx and c.z - r.z - dz_below <= p.z <= c.z + r.z + dz_above:
+                return c, r
+        return None
+
+    def ear_push(self, p, margin):
+        """p moved out of any ear ellipsoid grown by margin."""
+        for c, r in self.ears:
+            rr = r + Vector((margin, margin, margin))
+            q = Vector(((p.x - c.x) / rr.x, (p.y - c.y) / rr.y, (p.z - c.z) / rr.z))
+            d = q.length
+            if 1e-6 < d < 1.0:
+                q /= d
+                p = c + Vector((q.x * rr.x, q.y * rr.y, q.z * rr.z))
+        return p
 
     def signed(self, p):
         """(nearest surface point, outward normal, signed distance) to the colliders."""
@@ -98,4 +127,5 @@ class HeadFrame:
                 "ear_z": round(self.ear_z, 4), "chin_z": round(self.chin_z, 4),
                 "neck_z": round(self.neck_z, 4), "shoulder_z": round(self.shoulder_z, 4),
                 "lips_min": r(self.lips_min), "lips_max": r(self.lips_max),
-                "ears_min": r(self.ears_min), "ears_max": r(self.ears_max)}
+                "ears_min": r(self.ears_min), "ears_max": r(self.ears_max),
+                "ear_ellipsoids": [[r(c), r(rad)] for c, rad in self.ears]}
