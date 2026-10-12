@@ -1,22 +1,14 @@
-"""Geometry helpers for the suit track (blender/character/suit.py).
+"""Mesh helpers for the suit track: splitting the stock shell and tailoring the
+stock trousers (blender/character/suit.py). The built garments live in
+suit_build / suit_jacket / suit_inner.
 
 World space = object space for every staged mesh (identity transforms, Z up,
-front = -Y). Skin weights travel in each bmesh's deform layer; parts that were
-split from one object share its vertex-group order, other meshes are mapped by
-group name.
+front = -Y). Skin weights travel in each bmesh's deform layer.
 """
-
-import math
 
 import bmesh
 import bpy
-from mathutils.bvhtree import BVHTree
-from mathutils.kdtree import KDTree
 
-TORSO_BONES = {"pelvis", "spine_01", "spine_02", "spine_03", "clavicle_l", "clavicle_r"}
-
-
-# --- objects and bmesh ---------------------------------------------------------------------
 
 def to_bm(o):
     bm = bmesh.new()
@@ -31,21 +23,13 @@ def write_bm(bm, o):
     bm.free()
 
 
-def bvh(objs):
-    """One BVH over several meshes (rest pose, world space)."""
-    bm = bmesh.new()
-    for o in objs:
-        tmp = bmesh.new()
-        tmp.from_mesh(o.data)
-        tmp.transform(o.matrix_world)
-        me = bpy.data.meshes.new("_tmp_bvh")
-        tmp.to_mesh(me)
-        tmp.free()
-        bm.from_mesh(me)
-        bpy.data.meshes.remove(me)
-    tree = BVHTree.FromBMesh(bm)
-    bm.free()
-    return tree
+def dominant(v, dl, names, allowed):
+    best, bw = None, 0.0
+    for g, w in v[dl].items():
+        n = names[g]
+        if n in allowed and w > bw:
+            best, bw = n, w
+    return best
 
 
 def components(bm):
@@ -75,7 +59,7 @@ def new_part(src, keep, name):
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if v.index not in keep], context="VERTS")
     o = src.copy()
     o.data = bpy.data.meshes.new(name)
-    for g in src.vertex_groups:  # group names live on the mesh (Blender >= 3.0)
+    for g in src.vertex_groups:
         o.vertex_groups.new(name=g.name)
     for m in src.data.materials:
         o.data.materials.append(m)
@@ -86,41 +70,47 @@ def new_part(src, keep, name):
     return o
 
 
-def join_into(dst, src):
-    """Append src's geometry into dst (groups mapped by name), then delete src."""
-    names = [g.name for g in src.vertex_groups]
-    for n in names:
-        if n not in dst.vertex_groups:
-            dst.vertex_groups.new(name=n)
-    remap = {i: dst.vertex_groups[n].index for i, n in enumerate(names)}
-    bm = to_bm(dst)
-    dl = bm.verts.layers.deform.verify()
-    sb = to_bm(src)
-    sdl = sb.verts.layers.deform.verify()
-    vmap = {}
-    for v in sb.verts:
-        nv = bm.verts.new(v.co)
-        for g, w in v[sdl].items():
-            nv[dl][remap[g]] = w
-        vmap[v.index] = nv
-    for f in sb.faces:
-        nf = bm.faces.new([vmap[v.index] for v in f.verts])
-        nf.smooth = f.smooth
-    sb.free()
-    write_bm(bm, dst)
-    bpy.data.objects.remove(src, do_unlink=True)
+def drop(b, o):
+    if o in b.export_objs:
+        b.export_objs.remove(o)
+    bpy.data.objects.remove(o, do_unlink=True)
 
 
-def dominant(v, dl, names, allowed):
-    best, bw = None, 0.0
-    for g, w in v[dl].items():
-        n = names[g]
-        if n in allowed and w > bw:
-            best, bw = n, w
-    return best
+def split_shell(b, shell, part):
+    """The suits01 shell by loose part, classified by size and position:
+    jacket, trousers, shirt, tie blade, knot, two buttons."""
+    bm = to_bm(shell)
+    comps = components(bm)
+    info = []
+    for c in comps:
+        ps = [bm.verts[i].co for i in c]
+        xs, zs = [p.x for p in ps], [p.z for p in ps]
+        info.append({"keep": c, "n": len(c), "zmin": min(zs), "zmax": max(zs),
+                     "xspan": max(xs) - min(xs), "diag": (max(zs) - min(zs)) + max(xs) - min(xs)})
+    bm.free()
+    info.sort(key=lambda d: -d["n"])
+    roles = {"jacket": info[0]}
+    rest = info[1:]
+    roles["trousers"] = min(rest, key=lambda d: d["zmin"])
+    rest.remove(roles["trousers"])
+    btns = [d for d in rest if d["diag"] < 0.08]
+    rest = [d for d in rest if d not in btns]
+    roles["shirt"] = max(rest, key=lambda d: d["xspan"])
+    rest.remove(roles["shirt"])
+    roles["tie"], roles["knot"] = sorted(rest, key=lambda d: d["zmin"])
+    out = {}
+    for role, d in roles.items():
+        out[role] = new_part(shell, d["keep"], part.format(role))
+    out["buttons"] = [new_part(shell, d["keep"], part.format(f"oldbutton{i}"))
+                      for i, d in enumerate(btns)]
+    b.export_objs.remove(shell)
+    bpy.data.objects.remove(shell, do_unlink=True)
+    b.export_objs += [out[k] for k in ("jacket", "trousers", "shirt", "tie", "knot")]
+    b.export_objs += out["buttons"]
+    return out
 
 
-# --- deformation-free edits ----------------------------------------------------------------
+# --- trousers (stock shell) ----------------------------------------------------------------
 
 def stretch_below(verts, z_top, z_from, z_to, weight=None):
     """Remap z below z_top linearly so z_from lands on z_to (x, y unchanged).
@@ -131,64 +121,6 @@ def stretch_below(verts, z_top, z_from, z_to, weight=None):
             t = 1.0 if weight is None else weight(v)
             z = z_top - (z_top - v.co.z) * k
             v.co.z = v.co.z + (z - v.co.z) * t
-
-
-def panel_side(v, rings=3):
-    """+1 / -1: which front panel v belongs to, from the mean x of its
-    neighbourhood (the panels overlap across x = 0 near the front edge)."""
-    seen, frontier = {v}, [v]
-    for _ in range(rings):
-        nxt = []
-        for x in frontier:
-            for e in x.link_edges:
-                y = e.other_vert(x)
-                if y not in seen:
-                    seen.add(y)
-                    nxt.append(y)
-        frontier = nxt
-    mx = sum(x.co.x for x in seen) / len(seen)
-    return 1 if mx >= 0 else -1
-
-
-def open_front(bm, z_button, z_ref, strip, blend=0.05, y_front=-0.05):
-    """Open the jacket's V down to the fastening button: between z_button and
-    z_ref, each panel's strip from its front edge to (half-width + strip) is
-    compressed into [half-width, half-width + strip], where the half-width runs
-    linearly from 0 at the button to the edge's own position at z_ref."""
-    band = [v for v in bm.verts if v.co.y < y_front and z_button - 0.02 < v.co.z < z_ref + 0.02
-            and abs(v.co.x) < 0.2]
-    side = {v: panel_side(v) for v in band}
-
-    edges = {}  # (side, cm bucket) -> front-edge position, from the unmoved mesh
-    for v in band:
-        k = (side[v], round(v.co.z * 100))
-        edges[k] = min(edges.get(k, 9.0), side[v] * v.co.x)
-
-    def edge_at(s, z):
-        b = round(z * 100)
-        xs = [edges[(s, k)] for k in (b - 1, b, b + 1) if (s, k) in edges]
-        return min(xs) if xs else 0.0
-
-    moved = 0
-    for s in (1, -1):
-        x_ref = edge_at(s, z_ref)
-        for v in [v for v in band if side[v] == s]:
-            z = v.co.z
-            if not (z_button < z < z_ref):
-                continue
-            x0 = edge_at(s, z)
-            ht = x_ref * (z - z_button) / (z_ref - z_button)
-            if x0 >= ht:
-                continue
-            t = min(1.0, (z - z_button) / blend)  # ease in from the closed front
-            xt = x0 + (ht - x0) * t * t * (3 - 2 * t)
-            sx = s * v.co.x
-            hi = xt + strip
-            if sx >= hi:
-                continue
-            v.co.x = s * (xt + (sx - x0) * strip / max(hi - x0, 1e-6))
-            moved += 1
-    return moved
 
 
 def walk_up(start, z_stop, x_target, max_dx=0.02):
@@ -212,121 +144,108 @@ def walk_up(start, z_stop, x_target, max_dx=0.02):
     return edges
 
 
-def split_slit(bm, edges, outward, depth_top):
-    """Split a vertical edge chain into a vent: the two flaps get coincident
-    copies; the flap on the `outward` side (+1: larger |x|, 0: centre vent, the
-    +x flap) is lifted along its normal, tapering to 0 at depth_top."""
-    path_x = sum(e.verts[0].co.x for e in edges) / len(edges)
-    z_bot = min(min(e.verts[0].co.z, e.verts[1].co.z) for e in edges)
-    res = bmesh.ops.split_edges(bm, edges=edges)
-    bm.normal_update()
-    lifted = set()
-    for e in res["edges"]:
-        for v in e.verts:
-            if v in lifted or not v.link_faces:
-                continue
-            cx = sum(f.calc_center_median().x for f in v.link_faces) / len(v.link_faces)
-            side = cx - path_x
-            on_outer = (abs(cx) > abs(path_x)) if outward else (side > 0)
-            if not on_outer:
-                continue
-            t = max(0.0, 1.0 - (v.co.z - z_bot) / max(depth_top - z_bot, 1e-6))
-            v.co += v.normal * 0.004 * t
-            lifted.add(v)
-    return len(edges)
-
-
 def crease(bm, verts, side_sign, front, z_lo, z_hi, depth):
     """Trouser crease on one leg: from the hem vertex nearest the leg's front
     (front=True) or back centre, walk up and push the chain out by depth; the
-    chain's edges are marked sharp."""
+    chain's edges are marked sharp. Returns the chain's vertices in order."""
     leg = [v for v in verts if v.co.x * side_sign > 0.005 and v.co.z < z_lo + 0.03]
     if not leg:
-        return 0
+        return []
     start = (min if front else max)(leg, key=lambda v: v.co.y)
     edges = walk_up(start, z_hi, start.co.x, max_dx=0.03)
-    done = set()
+    chain, v = [start], start
     for e in edges:
         e.smooth = False
-        for v in e.verts:
-            if v not in done:
-                v.co.y += -depth if front else depth
-                done.add(v)
-    return len(edges)
+        v = e.other_vert(v)
+        chain.append(v)
+    for v in chain:
+        v.co.y += -depth if front else depth
+    return chain
 
 
-# --- garments built by script --------------------------------------------------------------
+def leg_uvs(bm, tag_layer, uv_layer):
+    """Cylindrical metric UVs per leg (u = arc around the leg's own axis, v = z);
+    the wrap sits at the inseam. Faces are tagged 1 (left) / 2 (right).
+    Returns per leg the circumference and the u of the outseam and inseam."""
+    import math
+    legs = {}
+    for sign, tag in ((1, 1), (-1, 2)):
+        vs = [v for v in bm.verts if v.co.x * sign > 0]
+        xs = [v.co.x for v in vs if v.co.z < 0.6]
+        ys = [v.co.y for v in vs if v.co.z < 0.6]
+        cx, cy = 0.5 * (min(xs) + max(xs)), 0.5 * (min(ys) + max(ys))
+        rad = sum(math.hypot(v.co.x - cx, v.co.y - cy) for v in vs if v.co.z < 0.6) / max(
+            1, sum(1 for v in vs if v.co.z < 0.6))
+        circ = 2 * math.pi * rad
+        legs[tag] = {"c": (cx, cy), "circ": circ, "sign": sign}
 
-def disc(bm, dl, centre, normal, radius, height, weights, segs=8):
-    """A button: a ring on the host surface, a ring lifted by `height`, a flat
-    front cap (segs - 2 tris + 2 * segs side tris)."""
-    n = normal.normalized()
-    t = n.orthogonal().normalized()
-    u = n.cross(t)
-    back, front = [], []
-    for i in range(segs):
-        a = 2 * math.pi * i / segs
-        off = (t * math.cos(a) + u * math.sin(a)) * radius
-        back.append(bm.verts.new(centre + off - n * 0.001))
-        front.append(bm.verts.new(centre + off * 0.85 + n * height))
-    for v in back + front:
-        for g, w in weights.items():
-            v[dl][g] = w
-    for i in range(segs):
-        j = (i + 1) % segs
-        f = bm.faces.new([back[i], back[j], front[j], front[i]])
+    def u_of(v, L):
+        cx, cy = L["c"]
+        a = math.atan2(v.co.y - cy, (v.co.x - cx) * L["sign"])  # 0 = outseam, +-pi = inseam
+        return (a + math.pi) / (2 * math.pi) * L["circ"]
+
+    for f in bm.faces:
+        cx = f.calc_center_median().x
+        tag = 1 if cx > 0 else 2
+        f[tag_layer] = tag
+        L = legs[tag]
+        us = [u_of(l.vert, L) for l in f.loops]
+        if max(us) - min(us) > 0.5 * L["circ"]:  # across the wrap
+            us = [u + L["circ"] if u < 0.5 * L["circ"] else u for u in us]
+        for l, u in zip(f.loops, us):
+            l[uv_layer].uv = (u, l.vert.co.z)
+    return {t: {"circ": L["circ"], "outseam_u": 0.5 * L["circ"], "u_of": (lambda v, L=L: u_of(v, L))}
+            for t, L in legs.items()}
+
+
+def tailor_trousers(tr, T):
+    """Quarter break, leg-opening taper, creases, on the stock trousers.
+    Returns (measurements, marks) with marks per panel tag for suit_textures."""
+    bm = to_bm(tr)
+    zmin = min(v.co.z for v in bm.verts)
+    out = {"hem_before_z": round(zmin, 4)}
+    for sign in (1, -1):
+        hem = [v for v in bm.verts if v.co.x * sign > 0 and v.co.z < zmin + 0.04]
+        y0, y1 = min(v.co.y for v in hem), max(v.co.y for v in hem)
+        leg = [v for v in bm.verts if v.co.x * sign > 0]
+        stretch_below(leg, T["break_from_z"], zmin, T["back_hem_m"],
+                      weight=lambda v: min(1.0, max(0.0, (v.co.y - y0) / (y1 - y0))))
+        # taper: scale the leg about its own centre, 1 at taper_from_z -> opening at the hem
+        lo = [v for v in leg if v.co.z < T["taper_from_z"]]
+        hem = [v for v in lo if v.co.z < zmin + 0.06]
+        cx = sum(v.co.x for v in hem) / len(hem)
+        cy = sum(v.co.y for v in hem) / len(hem)
+        half = max(abs(v.co.x - cx) for v in hem)
+        k_hem = min(1.0, T["opening_half_m"] / max(half, 1e-6))
+        for v in lo:
+            t = (T["taper_from_z"] - v.co.z) / (T["taper_from_z"] - zmin)
+            k = 1 + (k_hem - 1) * min(1.0, max(0.0, t))
+            v.co.x = cx + (v.co.x - cx) * k
+            v.co.y = cy + (v.co.y - cy) * k
+    out["back_hem_z"] = round(min(v.co.z for v in bm.verts), 4)
+    zlo = min(v.co.z for v in bm.verts)
+    tag_layer = bm.faces.layers.int.get("panel") or bm.faces.layers.int.new("panel")
+    uv_layer = bm.loops.layers.uv.verify()
+    legs = leg_uvs(bm, tag_layer, uv_layer)
+    marks = {}
+    out["crease_edges"] = {}
+    for sign, tag in ((1, 1), (-1, 2)):
+        L = legs[tag]
+        for front, zhi in ((True, 0.98), (False, 0.80)):
+            chain = crease(bm, list(bm.verts), sign, front, zlo, zhi, T["crease_depth_m"])
+            out["crease_edges"][f"{'L' if sign > 0 else 'R'}-{'front' if front else 'back'}"] = len(chain)
+            if len(chain) >= 2:
+                pts = [(L["u_of"](v), v.co.z) for v in chain]
+                marks.setdefault(tag, []).append(("crease", pts))
+        # outseam and inseam, hem edge, a jetted back pocket
+        z_top = max(v.co.z for v in bm.verts if v.co.x * sign > 0)
+        u_out = L["outseam_u"]
+        marks[tag].append(("seam", [(u_out, zlo + 0.01), (u_out, z_top - 0.02)]))
+        marks[tag].append(("seam", [(0.012, zlo + 0.01), (0.012, 0.62)]))
+        marks[tag].append(("edge", [(0.0, zlo + 0.003), (L["circ"], zlo + 0.003)], {"inside_sign": 1.0}))
+        u_back = u_out + 0.25 * L["circ"] * (1 if sign > 0 else -1)
+        marks[tag].append(("welt", [(u_back - 0.06, 0.96), (u_back + 0.06, 0.96)]))
+    for f in bm.faces:
         f.smooth = True
-    cap = bm.faces.new(front)
-    cap.smooth = False
-    bmesh.ops.triangulate(bm, faces=[cap])
-
-
-def ring_resample(points, n):
-    """n points evenly spaced by arc length along a closed polyline."""
-    segs = [(points[i], points[(i + 1) % len(points)]) for i in range(len(points))]
-    total = sum((b - a).length for a, b in segs)
-    out, acc, k = [], 0.0, 0
-    for i in range(n):
-        target = total * i / n
-        while acc + (segs[k][1] - segs[k][0]).length < target:
-            acc += (segs[k][1] - segs[k][0]).length
-            k += 1
-        a, b = segs[k]
-        L = (b - a).length
-        out.append(a.lerp(b, (target - acc) / L if L else 0.0))
-    return out
-
-
-def boundary_loops(bm, verts):
-    """Ordered boundary loops among `verts` (bmesh verts)."""
-    vs = set(verts)
-    edges = {e for v in vs for e in v.link_edges if e.is_boundary and all(x in vs for x in e.verts)}
-    loops = []
-    while edges:
-        e = edges.pop()
-        loop = [e.verts[0], e.verts[1]]
-        while True:
-            nxt = next((x for x in loop[-1].link_edges if x in edges), None)
-            if nxt is None:
-                break
-            edges.discard(nxt)
-            o = nxt.other_vert(loop[-1])
-            if o is loop[0]:
-                break
-            loop.append(o)
-        loops.append(loop)
-    return loops
-
-
-def nearest_weights(tree_kd, host_bm, host_dl, host_names, dst_index, co):
-    _, i, _ = tree_kd.find(co)
-    v = host_bm.verts[i]
-    return {dst_index[host_names[g]]: w for g, w in v[host_dl].items() if host_names[g] in dst_index}
-
-
-def kd_of(bm):
-    kd = KDTree(len(bm.verts))
-    for v in bm.verts:
-        kd.insert(v.co, v.index)
-    kd.balance()
-    return kd
+    write_bm(bm, tr)
+    return out, marks
