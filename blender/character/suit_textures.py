@@ -27,6 +27,8 @@ import bmesh
 import bpy
 import numpy as np
 
+from . import suit_leather
+
 # weave period in metres and amplitude (height units are metres before the
 # normal-map slope scale)
 WEAVE = {
@@ -544,6 +546,7 @@ def apply(o, parts, mats, marks, folds=None):
         for ob in objs:
             for tag, lst in marks.get(ob.name, {}).items():
                 flat[(ob.name, tag)] = lst
+        leather = suit_leather.Surfaces(H, layout, flat, side, o) if gname == "leather" else None
         draw_marks(H, layout, flat, side)
         fold_info = add_folds(H, objs, folds, layout, side)
         img = H.normal_image(f"suit_{gname}_normal", slope=T["slope"])
@@ -565,6 +568,8 @@ def apply(o, parts, mats, marks, folds=None):
             else:
                 for p in ob.data.polygons:
                     p.material_index = 0
+        if leather:   # shoes: albedo, roughness and clear-coat maps (suit_leather.py)
+            out["leather_maps"] = leather.wire(mat, objs[0].data.materials[1])
         strip_panel_attr(objs)
         out[gname] = {"px": px, "atlas_side_m": round(side, 4), "panels": len(layout),
                       "mm_per_px": round(1000 * side / px, 3), "marks": sum(len(v) for v in flat.values()),
