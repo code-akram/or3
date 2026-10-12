@@ -15,12 +15,20 @@ Two IR kinds are handled:
     set for a direct-to-reverberant ratio of DRR_DB.
 Mono takes are upmixed to stereo first; the stereo IR's two channels give the stereo image.
 Inputs are padded by the IR length so the tail is kept. IR length capped at 2 s (NOTES §12).
+
+IR snapshot: data/build/audio/ir/ belongs to spike 6 and is rewritten whenever its bake reruns
+(Steam Audio is stochastic, so every rebake has a new sha256; that is how the audit's
+--check-files broke on 2026-10-12). Every run therefore copies the IR it consumes to
+data/build/audio/spatialise/alley-01.consumed.wav; provenance, the footsteps and the round-2
+ambience reverb (audiopipe.bed) all point at that copy, so a later rebake cannot invalidate
+them. To adopt a new bake, rerun `run.sh build` (bed and spatialise refresh the snapshot).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -33,6 +41,7 @@ from .common import BUILD, REAL_IR, ffmpeg, file_sha256, log
 SR = 48000
 IR_DIR = BUILD / "spatialise"   # our working files; data/build/audio/ir/ belongs to spike 6
 PLACEHOLDER = IR_DIR / "PLACEHOLDER-synthetic-alley.wav"
+IR_SNAPSHOT = IR_DIR / "alley-01.consumed.wav"   # the copy of REAL_IR this build consumed
 POOLS = ["dress-concrete"]
 DRR_DB = 4.0
 TP_CEIL_DBTP = -1.5
@@ -123,10 +132,19 @@ def convolve(take: Path, ir: Path, out: Path, mode: str, ir_len_s: float) -> np.
     return y  # float; written by run() after the pool gain (avoids clipping a 24-bit intermediate)
 
 
+def snapshot_ir() -> Path | None:
+    """Copy spike 6's current IR to IR_SNAPSHOT (None if there is no real IR)."""
+    if not REAL_IR.exists():
+        return None
+    IR_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(REAL_IR, IR_SNAPSHOT)
+    return IR_SNAPSHOT
+
+
 def run(force_placeholder: bool = False) -> dict:
     IR_DIR.mkdir(parents=True, exist_ok=True)
     if REAL_IR.exists() and not force_placeholder:
-        src, placeholder = REAL_IR, False
+        src, placeholder = snapshot_ir(), False
     else:
         if not PLACEHOLDER.exists():
             make_placeholder(PLACEHOLDER)
@@ -135,6 +153,7 @@ def run(force_placeholder: bool = False) -> dict:
     prepared = IR_DIR / "prepared-for-footsteps.wav"
     info = prepare_ir(src, prepared)
     info |= {"source_ir": str(src.relative_to(BUILD.parent.parent)), "source_ir_sha256": file_sha256(src),
+             "snapshot_of": None if placeholder else str(REAL_IR.relative_to(BUILD.parent.parent)),
              "synthetic_placeholder": placeholder}
     log(f"IR: {info}")
     results = []

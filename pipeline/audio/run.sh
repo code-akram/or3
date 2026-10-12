@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Audio pipeline driver (NOTES.md §12). Run from anywhere.
 #
-#   pipeline/audio/run.sh all       fetch -> analyse -> clean -> loop -> footsteps -> spatialise -> master -> page -> audit
-#   pipeline/audio/run.sh spatial   rerun from the IR onwards (use this when data/build/audio/ir/alley-01.wav changes)
+#   pipeline/audio/run.sh all       fetch -> analyse -> clean -> bed -> footsteps -> spatialise -> master -> speaker -> page -> audit
+#   pipeline/audio/run.sh spatial   rerun from the spatial stage on (snapshots the current spike-6 IR; when the IR
+#                                   changes, prefer `build`: the bed's alley reverb uses the same snapshot)
 #   pipeline/audio/run.sh build     everything after fetch (no network)
 #
 # Data lives in the main checkout's data/ (raw/audio, build/audio); override with AUDIO_DATA_ROOT.
@@ -18,10 +19,10 @@ echo "loadavg before: $(cat /proc/loadavg)"
 start=$(date +%s)
 case "$stage" in
   all)     py fetch ;&
-  build)   py analyse; py clean; py loop
-           py footsteps
-           py footsteps --source freesound-205748 --name dress-concrete-contactmic --profile contact ;&
-  spatial) py spatialise; py master; py page ;;
+  build)   py analyse; py clean; py bed
+           py footsteps ;&
+  spatial) py spatialise; py master; py speaker; py page
+           py vad --built; py tagger --built ;;
   *) echo "usage: $0 all|build|spatial" >&2; exit 2 ;;
 esac
 python3 -I "$repo/provenance/audit.py" --data-root "$data" --check-files
