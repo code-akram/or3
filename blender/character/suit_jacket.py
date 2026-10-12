@@ -309,9 +309,46 @@ class Jacket:
             if i == 0 or i == N:  # the gorge points are the top row's ends
                 p = top["pts"][i].copy()
             pts.append(p)
-        # the collar seam rides over the trapezius where it rises above the neck circle
-        self.m["neckline_verts_lifted"] = sb.lift_onto_body(body.bvh(), pts[1:-1],
-                                                            J["shoulder"]["clear_m"], above=0.15)
+        # the gorge line: from each gorge point (on the chest, at the roll line)
+        # the seam runs back over gorge_cols columns to the neck circle, instead
+        # of jumping there in one column
+        k_n = J["shoulder"]["gorge_cols"]
+        for ends in ((0, k_n, 1), (N, N - k_n, -1)):
+            i0, i1, step = ends
+            P, Q = pts[i0], pts[i1]
+            for i in range(i0 + step, i1, step):
+                t = abs(i - i0) / k_n
+                pts[i] = P.lerp(Q, t)
+                pts[i].z = lerp(P.z, Q.z, t ** 0.8)
+        # in the neck frame (suit_neck): the seam sits neck_clear_m off the neck
+        # and outside the shirt collar, blending from the gorge points
+        nf = self.neck
+        sh = J["shoulder"]
+        tree = body.bvh()
+        lifted = 0
+        for it in range(3):
+            for i in range(1, N):
+                c = i / N
+                w = smoothstep(min(c, 1 - c) / sh["neck_blend_frac"])
+                a, z, r_old = nf.polar(pts[i])
+                if it == 0:   # up to just under the shirt band's base (the neck's root)
+                    z = lerp(z, max(z, nf.zb(a) - sh["seam_below_band_m"]), w)
+                r_req = max(nf.r_body_max(a, z - 0.004, z + 0.012) + sh["neck_clear_m"],
+                            nf.shirt_outer(a, z - 0.012, z + 0.006) + 0.004,
+                            # and outside the band's base (the stand rises from here)
+                            nf.shirt_outer(a, nf.zb(a) - 0.002, nf.zb(a) + 0.006) + sh.get("band_clear_m", 0.004))
+                if it == 0:
+                    r_new = lerp(r_old, r_req, w)
+                else:
+                    r_new = max(r_old, lerp(r_old, r_req, w))
+                pts[i] = nf.point(a, z, r_new)
+            # the collar seam rides over the trapezius where it rises above the neck
+            lifted += sb.lift_onto_body(tree, pts[1:-1], sh["clear_m"], above=0.15)
+        for _ in range(2):   # smooth the heights along the seam (the lift steps)
+            zs = [p.z for p in pts]
+            for i in range(2, N - 1):
+                pts[i].z = max(zs[i], 0.25 * zs[i - 1] + 0.5 * zs[i] + 0.25 * zs[i + 1])
+        self.m["neckline_verts_lifted"] = lifted
         self.neck_pts = pts
         self.neck_cy = cy
         return pts
@@ -393,7 +430,22 @@ class Jacket:
     def build_lapels(self):
         G, J = self.G, self.J["lapel"]
         N = self.N
-        rows_k = [k for k, r in enumerate(self.rings) if self.z_b - 1e-6 <= r["z"] <= self.z_g + 1e-6]
+        # the cap ring and the yoke rows have another cross-section (narrowed,
+        # draped): arc lengths along them do not match the rows below
+        rows_k = [k for k, r in enumerate(self.rings) if self.z_b - 1e-6 <= r["z"] <= self.z_g + 1e-6
+                  and not r.get("cap") and not r.get("yoke")]
+        # rows closer than min_row_m on the roll line (the yoke rows bunch under
+        # the gorge) would stack the lapel's top into shelves: skip them (the
+        # lapel's root edge then spans them; the fold bulge hides the seam)
+        kept = []
+        for k in rows_k:
+            z = self.block.rows[k][0].co.z
+            if kept and z - self.block.rows[kept[-1]][0].co.z < J["min_row_m"]:
+                if k == rows_k[-1]:
+                    kept[-1] = k
+                continue
+            kept.append(k)
+        rows_k = kept
         for left in (True, False):
             g = G.grid("lapel_l" if left else "lapel_r")
             col = 0 if left else N
@@ -407,7 +459,8 @@ class Jacket:
                 e = J["edge_m"]
                 # the top edge (gorge line) tilts up toward the lapel point over
                 # the last rows, so the point sits above the gorge without a wall
-                rise = J["tip_rise_m"] * smoothstep((u - (1 - J["rise_frac"])) / J["rise_frac"])
+                zr = self.block.rows[k][0].co.z
+                rise = J["tip_rise_m"] * smoothstep((zr - (self.z_g - J["rise_h_m"])) / J["rise_h_m"])
                 self.lapel_row(g, k, col, left, s_e, h, e, u, rise=rise, tip=(k == rows_k[-1]))
             g.fill(G.uv, G.tag, TAG["lapel"], flip=not left)
             for row in g.rows[1:]:
@@ -449,126 +502,13 @@ class Jacket:
     # --- collar ------------------------------------------------------------------------------
 
     def build_collar(self):
-        """Stand, fold and fall along the neckline. At each front end the seam
-        runs E more columns along the lapel's top edge (the gorge seam) to the
-        notch, where the fall edge turns up into the collar point: the notch
-        opens between that leading edge and the lapel's top edge."""
-        G, J = self.G, self.J["collar"]
-        N = self.N
-        top = self.block.rows[-1]
-        under = sb.bvh_of_bm(G.bm)
-        g = G.grid("collar")
-        cy = self.neck_cy
-        E = J["end_columns"]
-        seam_m = J["gorge_seam_m"]
-        up = Vector((0, 0, 1))
-
-        def lapel_top(left):
-            grid = self.lapel_l if left else self.lapel_r
-            return [v.co.copy() for v in grid.rows[-1]]   # root (gorge point) outward, lip last
-
-        # seam: lapel top edge (left, from the seam end in), neckline, lapel top edge (right)
-        seam = []  # (point, shared vert or None, e in [0, 1] along the gorge seam, left)
-        lt = {True: lapel_top(True), False: lapel_top(False)}
-        for k in range(E, 0, -1):  # column 0 of the neckline is the wearer's left end
-            seam.append((sb.point_at_arc(lt[True], seam_m * k / E), None, k / E, True))
-        for i in range(N + 1):
-            seam.append((top[i].co.copy(), top[i], 0.0, i < N // 2))
-        for k in range(1, E + 1):
-            seam.append((sb.point_at_arc(lt[False], seam_m * k / E), None, k / E, False))
-        M = len(seam)
-        # the collar point: from the gorge seam end, up at notch_deg to the lapel's
-        # top edge; the fall edge comes round from point_back_m behind it
-        cp, f0, nrm = {}, {}, {}
-        ang = math.radians(J["notch_deg"])
-        G.bm.normal_update()
-        for left in (True, False):
-            pts = lt[left]
-            e_pt = sb.point_at_arc(pts, seam_m)
-            # the collar end lies in the lapel's plane: its leading edge turns up
-            # from the gorge seam end by notch_deg within that plane
-            hit = under.find_nearest(e_pt, 0.05)
-            n = hit[1] if hit[0] is not None else Vector((e_pt.x, e_pt.y - cy, 0.0)).normalized()
-            nrm[left] = n
-            edge = pts[-2] - pts[0]
-            edge = (edge - n * edge.dot(n)).normalized()
-            upl = (up - n * up.dot(n)).normalized()
-            d = (edge * math.cos(ang) + upl * math.sin(ang)).normalized()
-            cp[left] = e_pt + d * J["point_m"] + n * 0.003
-            end = top[0].co if left else top[N].co
-            nxt = top[1].co if left else top[N - 1].co
-            f0[left] = cp[left] + (nxt - end).normalized() * J["point_back_m"]
-        rows = [[] for _ in range(6)]
-        uvs = [[] for _ in range(6)]
-        rested = 0
-        for i, (p0, shared, e, left) in enumerate(seam):
-            c = min(max((i - E) / N, 0.0), 1.0)  # 0..1 along the neckline
-            bk = math.sin(math.pi * c)
-            out = Vector((p0.x, p0.y - cy, 0.0)).normalized()
-            if e == 0:
-                w = smoothstep(max(0.0, 1 - min(c, 1 - c) / J["end_frac"]))
-                # the fold comes down to the lapel's roll height at the gorge point
-                stand = lerp(lerp(J["stand_front_m"], J["stand_back_m"], bk), J["stand_end_m"], w)
-                p1 = p0 + up * stand - out * J["lean_in_m"] * (1 - w)
-                p2 = p1 + up * 0.004 + out * 0.003
-                d_back = (-up * 0.85 + out * 0.5).normalized()
-                L_back = lerp(J["fall_front_m"], J["fall_back_m"], bk)
-                v_front = f0[left] - p2
-                d = (d_back * (1 - w) + v_front.normalized() * w).normalized()
-                L = lerp(L_back, v_front.length, w)
-                p3 = p2 + d * (L * 0.5)
-                p4 = p2 + d * L
-                if w < 0.5:
-                    # rest the fall on what is beneath it (the yoke, the back)
-                    for q in (p3, p4):
-                        hit = under.find_nearest(q, 0.08)
-                        if hit[0] is not None:
-                            h = (q - hit[0]).dot(hit[1])
-                            if h < 0.003:
-                                q += hit[1] * (0.003 - h)
-                                rested += 1
-            else:
-                # along the gorge seam the collar lies on the lapel: the fold fades
-                # out and the fall edge is the collar's end, running to the point
-                n = nrm[left]
-                upl = (up - n * up.dot(n)).normalized()
-                stand = J["stand_end_m"] * (1 - e)
-                p1 = p0 + upl * stand + n * 0.002
-                p2 = p1 + upl * 0.001 + n * 0.001
-                p4 = f0[left].lerp(cp[left], e)
-                p3 = p2.lerp(p4, 0.5) + n * 0.002
-                L = (p4 - p2).length
-            p5 = p4 + (p3 - p4).normalized() * 0.004 - out * 0.0025
-            u = (i / M) * self.J["uv_circ_m"] * 0.55
-            for j, (p, v) in enumerate(((p0, 0.0), (p1, stand), (p2, stand + 0.01),
-                                        (p3, stand + 0.01 + L * 0.5), (p4, stand + 0.01 + L),
-                                        (p5, stand + 0.014 + L))):
-                if j == 0:
-                    rows[j].append(shared if shared is not None else g.bm.verts.new(p + out * 0.001))
-                else:
-                    rows[j].append(g.bm.verts.new(p))
-                uvs[j].append((u, v))
-        # smooth the fall rows along the neck columns (resting introduces steps)
-        lo, hi = E + 2, M - E - 3
-        for j in (3, 4, 5):
-            co = [v.co.copy() for v in rows[j]]
-            for _ in range(2):
-                co = [co[i] if not (lo <= i <= hi) else (co[i - 1] + 2 * co[i] + co[i + 1]) / 4
-                      for i in range(len(co))]
-            for v, p in zip(rows[j], co):
-                v.co = p
-        for j in range(6):
-            g.add_shared_row(rows[j], uvs[j])
-        g.fill(G.uv, G.tag, TAG["collar"], flip=True)
-        for i in range(M):
-            src = rows[0][i]
-            if seam[i][1] is None:
-                G.weight([src], sb.TORSO)
-            for j in range(1, 6):
-                G.copy_weights(src, rows[j][i])
+        """Stand, fold and fall on the neckline, front ends blended into the
+        collar end over the lapel's top edge (suit_neck.build_jacket_collar:
+        built in the neck frame, outside the shirt collar by construction)."""
+        from . import suit_neck
+        g, m = suit_neck.build_jacket_collar(self, self.neck, self.J["collar"], TAG["collar"])
         self.collar = g
-        self.m["collar_rested_verts"] = rested
-        G.mark_row(TAG["collar"], g, 4, "edge", inside_sign=-1.0)
+        self.m.update(m)
 
     # --- vents -------------------------------------------------------------------------------
 
@@ -899,8 +839,9 @@ def body_bideltoid(body):
     return max(xs) - min(xs)
 
 
-def build(G, body, J, stature, z_button, supra):
+def build(G, body, J, stature, z_button, supra, neck):
     jk = Jacket(G, body, J, stature, z_button, supra)
+    jk.neck = neck
     jk.build_rings()
     jk.build_block()
     jk.build_lapels()
