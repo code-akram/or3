@@ -68,6 +68,7 @@ VIEWS = {
     "notch_r": ((-0.25, -1.0, 1.56), (-0.08, -0.13, 1.50), 0.13),   # the notch at the v3 gorge, wearer's right
     "notch_l": ((0.25, -1.0, 1.56), (0.08, -0.13, 1.50), 0.13),     # and left
     "cpoint_r": ((-0.2, -1.0, 1.62), (-0.11, -0.08, 1.55), 0.10),   # the right collar point and wing, front
+    "vest_top_r": ((-0.25, -1.0, 1.53), (-0.05, -0.13, 1.50), 0.05),  # the waistcoat's edge beside the right lapel
     "lapel_edge": ((-0.9, -0.6, 1.45), (-0.07, -0.11, 1.40), 0.14),   # lapel edge thickness, raking
     "closeup_h": ((-0.63, -1.36, 1.58), (0.0, 0.0, 1.50), 0.42),   # the harness close-up's azimuth (25°), collar framing
     "collar_back": ((0.25, 1.0, 1.75), (0.0, 0.0, 1.52), 0.3),
