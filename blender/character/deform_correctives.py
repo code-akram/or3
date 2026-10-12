@@ -327,7 +327,7 @@ DEFAULTS = {
     "cs_iters": {"body": 12, "garment": 8},
     "min_delta_m": 0.0002,
     "delta_sigma_m": 0.015,
-    "collide": {"cover_m": 0.07, "clear_m": 0.003, "smooth_iters": 2},
+    "collide": {"cover_m": 0.07, "clear_m": 0.006, "smooth_iters": 2},
 }
 
 

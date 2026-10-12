@@ -20,6 +20,8 @@ positions):
     ik        two-bone IK on upperarm/thigh: {"to": bone, "offset": [x,y,z],
               "pole": [x,y,z]}: the hand / foot goes to `to`'s posed head plus
               the offset (rotated with `to`), the elbow / knee toward pole.
+              Offset and pole are written for the LEFT side (+x = the
+              character's left = outward); _r bones mirror x.
               x is mirrored for _r.
     move      translate (pelvis): [x, y, z] metres, armature space
     side_l / side_r are written explicitly; `sym()` mirrors a left-side spec.
@@ -127,9 +129,9 @@ POSES = {
             "thigh_l": [["flex", 10]], "calf_l": [["flex", 16]], "foot_l": [["flex", 6]],
             "thigh_r": [["flex", 8]], "calf_r": [["flex", 14]], "foot_r": [["flex", 6]],
             "clavicle_l": [["flex", 8]], "clavicle_r": [["flex", 8]],
-            "upperarm_r": [["ik", {"to": "spine_03", "offset": [-0.01, -0.42, -0.12], "pole": [-0.5, 0.3, -1]}]],
+            "upperarm_r": [["ik", {"to": "spine_03", "offset": [0.03, -0.42, -0.12], "pole": [0.5, 0.3, -1]}]],
             "hand_r": [["flex", -10], ["twist", -60], ["abduct", 10]],
-            "upperarm_l": [["ik", {"to": "spine_03", "offset": [-0.01, -0.40, -0.13], "pole": [0.5, 0.3, -1]}]],
+            "upperarm_l": [["ik", {"to": "spine_03", "offset": [0.0, -0.40, -0.13], "pole": [0.5, 0.3, -1]}]],
             "hand_l": [["flex", 10], ["twist", -40]],
         },
         "ground": True,
@@ -193,7 +195,7 @@ POSES = {
             "foot_r": [["flex", 2]],
             "upperarm_r": [["abduct", -38], ["flex", 3], ["twist", 8]], "lowerarm_r": [["flex", -20]],
             "hand_r": [["flex", 6]],
-            "upperarm_l": [["ik", {"to": "pelvis", "offset": [0.025, -0.15, 0.16], "pole": [1.0, 0.6, -0.4]}]],
+            "upperarm_l": [["ik", {"to": "pelvis", "offset": [0.05, -0.21, 0.17], "pole": [1.0, 0.6, -0.4]}]],
             "hand_l": [["flex", 20], ["twist", 20], ["abduct", -10]],
         },
         "ground": True,
@@ -208,9 +210,9 @@ POSES = {
             "neck_01": [["flex", 2]], "head": [["flex", 4], ["turn", -4]],
             "thigh_l": [["flex", 12]], "calf_l": [["flex", 18]], "foot_l": [["flex", 6]],
             "thigh_r": [["flex", -4]], "calf_r": [["flex", 10]],
-            "upperarm_r": [["ik", {"to": "spine_03", "offset": [-0.02, -0.36, 0.12], "pole": [-0.15, 0.2, -1]}]],
+            "upperarm_r": [["ik", {"to": "spine_03", "offset": [0.03, -0.38, 0.12], "pole": [0.25, 0.2, -1]}]],
             "hand_r": [["flex", -20], ["twist", -70]],
-            "upperarm_l": [["ik", {"to": "spine_03", "offset": [-0.015, -0.34, 0.105], "pole": [0.15, 0.2, -1]}]],
+            "upperarm_l": [["ik", {"to": "spine_03", "offset": [0.0, -0.36, 0.105], "pole": [0.25, 0.2, -1]}]],
             "hand_l": [["flex", 10], ["twist", -50]],
         },
         "ground": True,

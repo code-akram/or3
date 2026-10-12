@@ -13,7 +13,8 @@ with the rules in character.rig.json, see deform_runtime.py):
     deltoid_helper_{l,r}     child of clavicle at the shoulder joint, 50 % of
                              the arm's swing (direction.md §2 Track F)
     hip_helper_{l,r}         child of pelvis at the hip joint, 50 % of the thigh swing
-    skirt_{front,side,back}_{l,r}  child of pelvis, pivot at the hip joint: the
+    skirt_{front,side,back}_{l,r}  child of pelvis, pivot on the skirt cloth near
+                             the waist (front, side, back of each hip): the
                              jacket skirt panels follow the thigh with per-sector
                              gains instead of being skinned to it (no riding up)
 
@@ -56,8 +57,12 @@ DEFAULTS = {
     # garments: name fragments -> Gaussian sigma (m) of the spatial weight smoothing
     "garments": {"suit_jacket": 0.025, "suit_shirt": 0.015, "suit_waistcoat": 0.015,
                  "suit_trousers": 0.02, "suit_tie": 0.01, "suit_buttons": 0.0},
-    "skirt": {"meshes": ["suit_jacket"], "top_above_hip_m": 0.01, "ramp_m": 0.10,
+    # skirt panels hinge near the waist on the cloth surface (a pivot at the
+    # hip joint swings the cloth above it backward into the belly); the
+    # pivots are found on the skirt mesh at these heights above the hip joint
+    "skirt": {"meshes": ["suit_jacket"], "top_above_hip_m": 0.12, "ramp_m": 0.14,
               "front_band_m": 0.02,
+              "pivot_up_m": {"front": 0.15, "side": 0.10, "back": 0.10}, "pivot_inset_m": 0.015,
               # per sector: gains for thigh flexion (+ forward, - back) and abduction
               "gains": {"front": {"flex+": 1.08, "flex-": 0.35, "abd+": 0.5, "abd-": 0.2},
                         "side": {"flex+": 0.45, "flex-": 0.45, "abd+": 0.85, "abd-": 0.2},
@@ -70,8 +75,8 @@ DEFAULTS = {
     # them (ray along the normal hits it within cover_m), ramped in over
     # margin_m from the visible edge; ends rest-pose z-fighting and the
     # small LBS poke-through between nearly coincident layers.
-    "tuck": {"cover_m": 0.05, "margin_m": 0.03, "pierce_m": 0.012, "skip_neck_m": [0.10, 0.14],
-             "depth_m": {"body": 0.006, "suit_shirt": 0.004, "suit_trousers": 0.003,
+    "tuck": {"cover_m": 0.05, "margin_m": 0.03, "pierce_m": 0.03, "pierce_blend_m": 0.02, "skip_neck_m": [0.10, 0.14],
+             "depth_m": {"body": 0.006, "suit_shirt": 0.004, "suit_trousers": 0.008,
                          "suit_waistcoat": 0.002, "suit_tie": 0.002},
              "outer": {"body": ["suit_shirt", "suit_waistcoat", "suit_jacket", "suit_trousers"],
                        "suit_shirt": ["suit_waistcoat", "suit_jacket", "suit_trousers"],
@@ -93,8 +98,43 @@ def _sides(arm):
     return [s for s in ("l", "r") if f"upperarm_{s}" in arm.data.bones]
 
 
-def add_bones(arm, skirt):
-    """Create the helper bones (edit mode). Returns {name: parent}."""
+def skirt_pivots(arm, meshes, s_cfg):
+    """{(side, sector): pivot} on the skirt mesh surface: front and back on
+    the thigh's x at the most forward/backward cloth, side at the widest."""
+    B = arm.data.bones
+    co = np.concatenate([np.array([v.co for v in o.data.vertices]) for o in meshes])
+    out = {}
+    for s in _sides(arm):
+        h = B[f"thigh_{s}"].head_local
+        sx = 1.0 if h.x > 0 else -1.0
+        for sector, up in s_cfg["pivot_up_m"].items():
+            z = h.z + up
+            for tol in (0.015, 0.03, 0.06):
+                m = (np.abs(co[:, 2] - z) < tol) & (co[:, 0] * sx > 0)
+                if sector != "side":
+                    m &= np.abs(co[:, 0] - h.x) < 0.05
+                if m.sum() >= 3:
+                    break
+            if m.sum() < 3:
+                out[(s, sector)] = Vector(h)
+                continue
+            c = co[m]
+            ins = s_cfg["pivot_inset_m"]
+            if sector == "front":
+                pv = (h.x, c[:, 1].min() + ins, z)
+            elif sector == "back":
+                pv = (h.x, c[:, 1].max() - ins, z)
+            else:
+                xm = c[:, 0][np.argmax(c[:, 0] * sx)]
+                pv = (xm - sx * ins, h.y, z)
+            out[(s, sector)] = Vector(pv)
+    return out
+
+
+def add_bones(arm, skirt, pivots=None):
+    """Create the helper bones (edit mode). Returns {name: parent}.
+    skirt: create the skirt bones; pivots: {(side, sector): head} for them
+    (default: the hip joint)."""
     prev = bpy.context.view_layer.objects.active
     bpy.context.view_layer.objects.active = arm
     hidden = arm.hide_get()
@@ -128,8 +168,9 @@ def add_bones(arm, skirt):
                                 ("back", (0.03, 0.12, -0.30))):
                 n = f"skirt_{sector}_{s}"
                 nb = eb.new(n)
-                nb.head = h
-                nb.tail = h + Vector((off[0] * sx, off[1], off[2]))
+                p0 = (pivots or {}).get((s, sector), h)
+                nb.head = p0
+                nb.tail = p0 + Vector((off[0] * sx, off[1], off[2]))
                 nb.parent = eb["pelvis"]
                 nb.use_deform = True
                 made[n] = "pelvis"
@@ -567,7 +608,21 @@ def tuck(b, cfg):
         if "neck_01" in B and c.get("skip_neck_m"):
             r = _dist_to_segment(co, np.array(B["neck_01"].head_local), np.array(B["neck_01"].tail_local))
             f = f * smoothstep(c["skip_neck_m"][0], c["skip_neck_m"][1], r)
-        co2 = co - nrm * (f * (depth + pierce))[:, None]
+        sink = f * (depth + pierce)
+        if (pierce > 0).any() and c.get("pierce_blend_m"):
+            # a deep rest pierce sinks a patch: feather it into the visible
+            # cloth around it so no ledge shows at the cover's edge
+            near = np.zeros(len(co), dtype=bool)
+            kdp = KDTree(int((pierce > 0).sum()))
+            for k, i in enumerate(np.nonzero(pierce > 0)[0]):
+                kdp.insert(co[i], k)
+            kdp.balance()
+            for i in range(len(co)):
+                near[i] = kdp.find(co[i])[2] < 3 * c["pierce_blend_m"]
+            ix = np.nonzero(near)[0]
+            sm = Neighbours(co[ix], c["pierce_blend_m"]).smooth(sink[ix], 2)
+            sink[ix] = np.maximum(sink[ix], sm)
+        co2 = co - nrm * sink[:, None]
         me.vertices.foreach_set("co", co2.ravel())
         me.update()
         out[o.name] = {"covered": int(cov.sum()), "tucked": int((f > 0.99).sum()), "depth_mm": depth * 1000,
@@ -578,7 +633,8 @@ def tuck(b, cfg):
 def run(b, cfg):
     arm = b.armature()
     skirt_meshes = [o for o in b.meshes() if any(k in o.name for k in cfg["skirt"]["meshes"])]
-    made = add_bones(arm, bool(skirt_meshes))
+    pivots = skirt_pivots(arm, skirt_meshes, cfg["skirt"]) if skirt_meshes else None
+    made = add_bones(arm, bool(skirt_meshes), pivots)
     names = bone_names(arm)
     out = {"bones_added": sorted(made), "bones_total": len(arm.data.bones), "meshes": {}}
     for o in b.meshes():
