@@ -28,6 +28,12 @@ from . import head_refine, skin_tex
 DEFAULTS = {
     "segments": 48, "rings": 36, "tex_px": 1024,
     "cornea_bulge_mm": 2.2, "cornea_deg": 34.0,
+    # Real-size iris and pupil (mm) on the fitted sphere: they override the
+    # *_deg values; the cornea edge sits cornea_margin_deg past the limbus.
+    # The MPFB eye sphere is ~15 mm in radius, so iris_deg 30 gave a 15 mm iris.
+    "iris_mm": 11.7, "pupil_mm": 4.0, "cornea_margin_deg": 1.5,
+    # Eyes converge on a point this far ahead of the eye midpoint (m); 0 = parallel.
+    "converge_m": 1.2,
     "pupil_deg": 9.0, "iris_deg": 30.0, "limbus_deg": 2.5,
     "iris": "#4a2e1a", "iris_inner": "#20120a", "iris_outer": "#2e1d10", "collarette": "#7a4e2a",
     "sclera": "#c3b6ae", "sclera_back": "#86675f", "vein": "#a2423a", "vein_amount": 0.5,
@@ -85,14 +91,17 @@ def fit_sphere(pts):
     return c, r
 
 
-def eyeball(bm, centre, radius, side, c, uv_layer, dl, head_gi):
-    """Append one eyeball to bm. side: 0 (character's left, +x) or 1."""
+def eyeball(bm, centre, radius, side, c, uv_layer, dl, head_gi, axis=None):
+    """Append one eyeball to bm. side: 0 (character's left, +x) or 1.
+    axis: gaze direction (unit, local space); default -Y."""
     segs, rings = c["segments"], c["rings"]
     bulge = c["cornea_bulge_mm"] * 0.001
     cdeg = math.radians(c["cornea_deg"])
-    axis = np.array([0.0, -1.0, 0.0])
-    ex = np.array([1.0, 0.0, 0.0])
+    axis = np.array([0.0, -1.0, 0.0]) if axis is None else np.asarray(axis, dtype=np.float64)
     ez = np.array([0.0, 0.0, 1.0])
+    ex = np.cross(ez, axis)
+    ex /= np.linalg.norm(ex)
+    ez = np.cross(axis, ex)
     grid = []
     for i in range(rings + 1):
         th = math.pi * i / rings
@@ -229,15 +238,31 @@ def build(b):
     head_gi = new.vertex_groups["head"].index
     fit = {}
     inv = np.array(new.matrix_world.inverted())
+    spheres = []
     for side, sel in ((0, co[:, 0] > 0), (1, co[:, 0] < 0)):
         pts = co[sel]
         # sphere from the back half (the MPFB eye has a corneal bulge)
         cen0 = pts.mean(0)
         backp = pts[pts[:, 1] > cen0[1]]
-        centre, radius = fit_sphere(backp if len(backp) > 12 else pts)
-        fit[("left", "right")[side]] = {"centre": [round(float(x), 4) for x in centre], "radius_mm": round(radius * 1000, 2)}
+        spheres.append(fit_sphere(backp if len(backp) > 12 else pts))
+    radius_m = float(np.mean([r for _, r in spheres]))
+    if cfg.get("iris_mm"):
+        cfg["iris_deg"] = math.degrees(math.asin(min(cfg["iris_mm"] * 0.0005 / radius_m, 0.95)))
+        cfg["cornea_deg"] = cfg["iris_deg"] + cfg["cornea_margin_deg"]
+    if cfg.get("pupil_mm"):
+        cfg["pupil_deg"] = math.degrees(math.asin(min(cfg["pupil_mm"] * 0.0005 / radius_m, 0.9)))
+    mid = (spheres[0][0] + spheres[1][0]) * 0.5
+    rot = np.array(new.matrix_world.to_3x3().inverted())
+    for side, (centre, radius) in enumerate(spheres):
+        axis = np.array([0.0, -1.0, 0.0])
+        if cfg.get("converge_m"):
+            target = mid + np.array([0.0, -float(cfg["converge_m"]), 0.0])
+            axis = (target - centre) / np.linalg.norm(target - centre)
+        fit[("left", "right")[side]] = {"centre": [round(float(x), 4) for x in centre], "radius_mm": round(radius * 1000, 2),
+                                         "axis": [round(float(x), 4) for x in axis]}
         local = (inv @ np.append(centre, 1.0))[:3]
-        eyeball(bm, local, radius, side, cfg, uvl, dl, head_gi)
+        la = rot @ axis
+        eyeball(bm, local, radius, side, cfg, uvl, dl, head_gi, axis=la / np.linalg.norm(la))
     bm.to_mesh(new.data)
     bm.free()
     new.data.update()
@@ -270,5 +295,7 @@ def build(b):
     # swap
     b.export_objs = [o for o in b.export_objs if o is not old] + [new]
     bpy.data.objects.remove(old, do_unlink=True)
-    b.notes["eyes"] = {"fit": fit, "tris": len(new.data.polygons) * 2, "tex_px": cfg["tex_px"]}
+    b.notes["eyes"] = {"fit": fit, "tris": len(new.data.polygons) * 2, "tex_px": cfg["tex_px"],
+                       "iris_deg": round(cfg["iris_deg"], 2), "pupil_deg": round(cfg["pupil_deg"], 2),
+                       "cornea_deg": round(cfg["cornea_deg"], 2)}
     return b.notes["eyes"]

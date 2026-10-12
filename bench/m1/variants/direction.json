@@ -1,15 +1,15 @@
 {
- "$comment": "Face variant C, long and weathered (bolder pass; nose tamed 2026-10-12 for the fidelity push: dorsal hump <= 2.5 mm, no drooping tip): mid-50s age, long narrow oval head, strong nose with a slight hump, deep hooded sockets with eye bags, hollow cheeks, nasolabial folds, thin lips, sloped forehead, thin neck. look-spec §6; parameters only (§2.4).",
+ "$comment": "Face variant C, long and weathered, as frozen for m1 v2 (track A, bench/m1/v2/head.md): about 45 (age macro 0.66), long narrow oval head, strong nose with a slight hump deviated to the right at the bridge, deep hooded sockets, moderate cheek hollows under a malar pad, nasolabial folds, a narrow firm mouth with corners down, seeded asymmetry (head.forms), planes as hints (blends 0.35-0.6). look-spec §6, direction.md §2-3; parameters only (§2.4).",
  "body": {
   "macros": {
-   "age": 0.75
+   "age": 0.66
   }
  },
  "head": {
   "targets": {
    "head-oval": 0.3,
    "head-scale-horiz-decr": 0.35,
-   "head-fat-decr": 0.6,
+   "head-fat-decr": 0.35,
    "chin-height-incr": 0.08,
    "nose-hump-incr": 0.45,
    "nose-point-down": 0.1,
@@ -17,16 +17,24 @@
    "nose-trans-forward": 0.15,
    "nose-scale-depth-incr": 0.3,
    "nose-point-width-decr": 0.5,
-   "lr-cheek-volume-decr": 0.9,
+   "lr-cheek-volume-decr": 0.5,
    "lr-cheek-bones-incr": 0.3,
    "lr-eye-bag-incr": 0.5,
    "lr-eye-eyefold-down": 0.4,
    "forehead-temple-decr": 0.5,
-   "mouth-upperlip-volume-decr": 0.6,
+   "mouth-upperlip-volume-decr": 1.0,
    "mouth-lowerlip-volume-decr": 0.5,
-   "mouth-laugh-lines-in": 0.4,
+   "mouth-laugh-lines-in": 0.25,
    "neck-scale-horiz-decr": 0.35,
-   "chin-prognathism-decr": 0.2
+   "chin-prognathism-decr": 0.2,
+   "mouth-scale-horiz-decr": 0.85,
+   "mouth-upperlip-height-decr": 0.8,
+   "mouth-cupidsbow-incr": 0.5,
+   "mouth-philtrum-volume-incr": 0.5,
+   "mouth-lowerlip-height-decr": 0.2,
+   "mouth-trans-up": 0.2,
+   "mouth-eversion": 0.5,
+   "mouth-compression": 0.25
   },
   "edits": {
    "brow_depth": 0.9,
@@ -38,7 +46,7 @@
    "dorsum_crease": 0.6,
    "cheek_height": 0.4,
    "cheek_plane_break": 0.35,
-   "submalar_hollow": 1.0,
+   "submalar_hollow": 0.55,
    "jaw_width": 0.6,
    "jaw_angle": 0.6,
    "chin_projection": 0.2,

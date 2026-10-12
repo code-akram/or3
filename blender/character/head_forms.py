@@ -121,8 +121,9 @@ def tissue(fr, t):
     out += t["malar_pad_mm"] * MM * gauss(u - 0.040, 0.013) * gauss(h + 0.030, 0.011) * front
     # tear trough: inner canthus down and out along the infraorbital rim,
     # shallow past the mid-pupil line
-    d, tt = polyline_dist(u, h, [(0.014, -0.012), (0.022, -0.020), (0.031, -0.024), (0.042, -0.022)])
-    out -= t["tear_trough_mm"] * MM * gauss(d, 0.0028) * (1 - 0.7 * smoothstep(0.4, 1.0, tt)) * front
+    d, tt = polyline_dist(u, h, [(0.018, -0.012), (0.024, -0.019), (0.031, -0.023), (0.042, -0.022)])
+    out -= t["tear_trough_mm"] * MM * gauss(d, 0.0028) * smoothstep(0.0, 0.2, tt) \
+        * (1 - 0.7 * smoothstep(0.4, 1.0, tt)) * front
     # lower-lid bag: just above the trough
     out += t["lid_bag_mm"] * MM * gauss(u - 0.028, 0.008) * gauss(h + 0.0145, 0.0035) * front
     # nasolabial fold: groove from the alar crease to beside the mouth corner,
