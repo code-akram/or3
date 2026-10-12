@@ -78,7 +78,7 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind):
             "haze": spec.get("haze", 0.0), **settings}
 
 
-def render_turntable(ch, quality, out_dir, views, poses_, passes):
+def render_turntable(ch, quality, out_dir, views, poses_, passes, recs=None, save=None):
     tdir = os.path.join(out_dir, "turntable")
     os.makedirs(tdir, exist_ok=True)
     clear_transient()   # drops the last shot's rain (its collection is transient)
@@ -86,7 +86,7 @@ def render_turntable(ch, quality, out_dir, views, poses_, passes):
               if any(c.name == "set_alley" for c in o.users_collection)]
     for o, _ in hidden:
         o.hide_render = True
-    recs = []
+    recs = [] if recs is None else recs
     for pose in poses_:
         ch.pose_log = poses.apply(ch.arm, pose)
         for view in views:
@@ -114,6 +114,8 @@ def render_turntable(ch, quality, out_dir, views, poses_, passes):
                 recs.append({"file": "turntable/" + tag + ".png", "pose": pose, "view": view, "pass": kind,
                              "seconds": secs, "samples": bpy.context.scene.cycles.samples, "pct": st["pct"]})
                 print(f"[stage] turntable {tag}: {secs} s", flush=True)
+                if save:
+                    save()
     for o, hid in hidden:
         o.hide_render = hid
     return recs
@@ -177,8 +179,11 @@ def main(argv):
         with open(os.path.join(out, "stage.json"), "w") as f:
             json.dump(rec, f, indent=1)
     if a.turntable:
-        rec["turntable"] = render_turntable(ch, a.quality, out, a.tt_views.split(","),
-                                            a.tt_poses.split(","), a.tt_passes.split(","))
+        def save():
+            with open(os.path.join(out, "stage.json"), "w") as f:
+                json.dump(rec, f, indent=1)
+        render_turntable(ch, a.quality, out, a.tt_views.split(","), a.tt_poses.split(","),
+                         a.tt_passes.split(","), recs=rec["turntable"], save=save)
     rec["total_s"] = round(time.perf_counter() - t0, 1)
     with open(os.path.join(out, "stage.json"), "w") as f:
         json.dump(rec, f, indent=1)

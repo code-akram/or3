@@ -45,7 +45,7 @@ if [[ "${1:-}" == "--regrade" ]]; then
   exit 0
 fi
 
-QUALITY=preview; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=()
+QUALITY=preview; STAGE_FAIL=; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=()
 while [[ $# -gt 2 ]]; do
   case "$1" in
     --preview) QUALITY=preview; shift ;;
@@ -72,8 +72,10 @@ echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS loa
 T0=$(date +%s)
 "${BL[@]}" -t "$THREADS" --python "$REPO/blender/hero/stage.py" -- --in "$IN" --out "$RUN" \
   --quality "$QUALITY" --shots "$SHOTS" --set "$SET" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
-  > "$RUN/stage.log" 2>&1 || { echo "stage failed: $RUN/stage.log" >&2; tail -20 "$RUN/stage.log" >&2; exit 1; }
+  > "$RUN/stage.log" 2>&1 || STAGE_FAIL=1
 grep -E '^\[stage\]' "$RUN/stage.log" || true
-grade_and_sheet "$RUN" "$PAINT"
+# grade and draw whatever was rendered, even after a failure or a kill
+[[ -f "$RUN/stage.json" ]] && grade_and_sheet "$RUN" "$PAINT"
+if [[ -n "${STAGE_FAIL:-}" ]]; then echo "stage failed: $RUN/stage.log" >&2; tail -20 "$RUN/stage.log" >&2; exit 1; fi
 ln -sfn "$(basename "$RUN")" "$ROOT/latest"
 echo "-> $RUN ($(( $(date +%s) - T0 )) s)"
