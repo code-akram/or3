@@ -2,7 +2,7 @@
 
 The suit is now **built on the body by script** (`blender/character/suit_build.py` primitives, `suit_jacket.py`, `suit_inner.py`, `suit_shoes.py`, `suit_textures.py`, driven by `suit.py`). Only the trousers still come from the CC0 suits01 shell (`suit_ops.tailor_trousers`). Every size is a parameter in `suit.DEFAULTS` and lands in `character.stats.json["suit"]`. Nothing is traced from film stills: the target below is written in words from costume-designer interviews and tailoring breakdowns, then built from body landmarks and the rig.
 
-Runs (main checkout, `data/build/lookdev/`): before `20261012T104705Z-suit2-baseline` (the m1 wave-2 suit on the direction config), after `…-suit2-final` (see the end of this file for the exact dir and the Cycles sign-off).
+Runs (main checkout, `data/build/lookdev/`): before `20261012T104705Z-suit2-baseline` (the m1 wave-2 suit on the direction config), after `20261012T121526Z-suit2-final` (loop) and `20261012T121551Z-suit2-final-signoff` (Cycles, same build), compare sheet `compare-20261012T104705Z-suit2-baseline--20261012T121526Z-suit2-final/`. The final run dir holds `suit_views/` and `pose_test/`.
 
 ## 1. Target look (John Wick character, Chapters 2–4), with sources
 
@@ -76,28 +76,37 @@ Degenerate faces (zero vector area: seam wraps and collapsed lapel rows) are rem
 
 | Part | Wave 2 | Now | Budget (suit.DEFAULTS) |
 |---|---|---|---|
-| Jacket | 9,000 | 11,376 | 14,000 |
+| Jacket | 9,000 | 10,980 | 14,000 |
 | Waistcoat | 1,516 | 2,999 | 3,000 |
-| Shirt | 1,448 | 1,436 | 2,200 |
+| Shirt | 1,448 | 1,426 | 2,200 |
 | Tie | 700 | 308 | 900 |
 | Trousers | 2,188 | 2,188 | 4,000 |
 | Buttons | 154 | 330 | – |
-| Shoes | 3,000 (stock) | 3,552 | 5,000 |
-| **Suit + shoes** | **18,006** | **22,189** | ~40k allowed |
+| Shoes | 3,000 (stock) | 3,536 | 5,000 |
+| **Suit + shoes** | **18,006** | **21,767** | ~40k allowed |
 
-Character total on the direction config: 61,909 → ~66.2k (hair 21.3k, beard 5.9k, body 15.2k). Build: `suit_post` ≈ 2.5 s of the 10 s Blender build (textures ~0.9 s).
+Character total on the direction config: 61,909 → **65,512** (hair 21.0k, beard 5.9k, body 15.2k; the hair count moves a little with the collar it collides with). Build: `suit_post` ≈ 2.5 s of the ~10 s Blender build (textures ~0.9 s); a harness iteration is ~22 s.
 
 ## 4. Poke-through test (look-spec §4.3 [auto])
 
 `bench/m1/suit_pose_test.py` imports the GLB, drives the rig through nine poses (rest, the spike-1 stress pose, twist both ways, arms up, reach, crouch, lean, kick), renders a flat **ID pass** (one emission value per mesh, no AA) from four cameras and counts pixels per mesh. Inner layers (waistcoat, shirt, tie) may only show where they show at rest, so the count over the rest count is the poke-through estimate. Output: `poke.json`, `pose_<pose>_<view>.png` (IDs), `beauty_<pose>_<view>.png`.
 
-Result on the final run (512², the figure ~330 px tall; numbers are pixels over rest, worst view):
+Result on the final run (`20261012T121526Z-suit2-final/pose_test/`, 512², the figure ~330 px tall; pixels over the rest count, worst of the four views):
 
-| Pose | shirt | tie | waistcoat | note |
+| Pose | shirt | tie | waistcoat | reading |
 |---|---|---|---|---|
-| see `pose_test/poke.json` in the final run dir | | | | filled in below |
+| stress (spike-1 pose) | 323 | 210 | 215 | the torso turns 35° toward the ¾ camera, so the V faces it: legitimate visibility, not poke-through (checked in `beauty_stress_three_quarter.png`) |
+| twist (spine +60°, neck −20°) | 475 | 477 | 271 | same: the profile camera now sees the front |
+| twist_back | −5 | 0 | 31 | clean |
+| arms_up (95°) | 110 | 17 | 0 | the shirt cuffs and placket show more as the sleeves pull; no white through the jacket body |
+| reach | −5 | 0 | 4 | clean |
+| crouch | 221 | 1 | 106 | the shirt front shows under the lapels as the spine bends forward (the jacket V opens); the waistcoat with it, no shirt through the waistcoat |
+| lean | 235 | 1 | 119 | as crouch |
+| kick | 2 | 1 | 6 | clean |
 
-The body figure in `poke.json` is indicative only (head and hands move between poses).
+**Verdict:** no inner layer breaks through an outer one at rest or in the eight poses; the counts above the noise are the V opening or the figure turning toward a camera. The waistcoat is 3 mm clear of the shirt and tie and inside the jacket by its own ease difference (jacket 16–24 mm vs vest 8 mm off the body), compared with 4 mm in wave 2; the two share the body's torso weights by nearest vertex, so they twist together. The test's rest-subtraction over-counts whenever the whole torso turns; a per-pixel neighbourhood test (inner-layer pixels not adjacent to any inner-layer pixel at rest, in the rotated frame) is the next step if a locomotion clip shows real breakthrough. The body figure in `poke.json` is indicative only (head and hands move between poses).
+
+Known deformation issues the test shows (not poke-through): the sleeve heads pinch at the shoulder when the arms go up 95° (no `deltoid_helper` yet), and the front skirt rides up the raised thigh in `stress` and `kick` (no `glute_helper`, no Dem Bones skirt bones).
 
 ## 5. Remaining weaknesses (honest)
 
