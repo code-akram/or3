@@ -245,10 +245,22 @@ def _around(subject, cam_loc, az, el, dist):
     return Vector(subject) + (d * math.cos(e) + Z * math.sin(e)) * dist
 
 
-def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0):
+def receivers(ch):
+    """Collection (outside the scene) holding the character, for light
+    linking: a flagged light only lights what is in it."""
+    col = bpy.data.collections.get("hero_receivers") or bpy.data.collections.new("hero_receivers")
+    for o in ch.objs:
+        if o.name not in col.objects:
+            col.objects.link(o)
+    return col
+
+
+def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=()):
     """Build the base hero rig around the camera's subject (the head for
     head shots, the chest otherwise). `lights` overrides entries of
-    HERO_LIGHTS; scale multiplies every power."""
+    HERO_LIGHTS; scale multiplies every power. `flag`: names of lights that
+    light only the character (Cycles light linking, the render version of a
+    flag on a stand), so a camera-relative key does not wash the set."""
     col = collection("hero_rig")
     spec = dict(HERO_LIGHTS)
     spec.update(lights or {})
@@ -275,6 +287,8 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0):
         if name == "eye":
             made[name].data.use_shadow = False
             made[name].data.diffuse_factor = 0.3  # mostly a catchlight
+        if name in flag:
+            made[name].light_linking.receiver_collection = receivers(ch)
     return made
 
 

@@ -34,7 +34,7 @@ GRADE = {
     "bloom_threshold": 1.0, "bloom_strength": 0.35, "bloom_size": 0.55,
     "halation_threshold": 2.0, "halation_strength": 0.12, "halation_tint": (1.0, 0.32, 0.12),
     "dispersion": 0.008,
-    "slope": (1.03, 1.0, 0.95), "offset": (-0.0004, 0.0003, 0.0009), "power": (1.0, 1.0, 1.0),
+    "slope": (1.04, 1.0, 0.94), "offset": (-0.0008, 0.0004, 0.0016), "power": (1.0, 1.0, 1.0),
     "black_lift": 0.0011,
     "vignette_ev": -0.3,
     "grain": 0.02,

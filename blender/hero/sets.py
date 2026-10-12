@@ -341,7 +341,7 @@ def alley(haze_density=0.0):
                           rough_add=0.08, puddles=0.35, normal=0.8)
     brick = pbr_material("set_brick", "red_brick_03", darken=0.55, rough_mul=0.8,
                          rough_add=0.1, wet_low=1.2)
-    conc = pbr_material("set_concrete", "concrete_wall_008", darken=0.45, rough_mul=0.8,
+    conc = pbr_material("set_concrete", "concrete_wall_008", darken=0.22, rough_mul=0.8,
                         rough_add=0.1, wet_low=1.5)
     V = Vector
     quad(col, "set_ground", [V((-8, -L / 2, 0)), V((8, -L / 2, 0)), V((8, L / 2, 0)), V((-8, L / 2, 0))],
@@ -373,7 +373,7 @@ def alley(haze_density=0.0):
     box(col, "set_door", (0.08, 1.0, 2.1), (WALL_R - 0.02, 1.4, 1.05), dark)
     lamp = emissive("set_bulkhead", (1.0, 0.55, 0.22), 12.0)
     box(col, "set_bulkhead", (0.12, 0.25, 0.12), (WALL_R - 0.08, 1.4, 2.4), lamp)
-    spill(col, "set_bulkhead_l", 2400, 45.0, (0.3, 0.3), (WALL_R - 0.25, 1.4, 2.3), (1.5, 1.4, 0.0))
+    spill(col, "set_bulkhead_l", 2400, 15.0, (0.3, 0.3), (WALL_R - 0.25, 1.4, 2.3), (1.5, 1.4, 0.0))
 
     # pipes, AC units, a dumpster, overhead cables
     metal = plain("set_metal", (0.06, 0.06, 0.065), 0.35, 1.0)
@@ -395,7 +395,7 @@ def alley(haze_density=0.0):
         tube(col, f"set_cable_{i}", pts, 0.008, cable)
 
     # street light at each end, through the haze
-    for name, y, temp, power in (("far", 21.0, 1900, 500.0), ("near", -21.0, 4500, 250.0)):
+    for name, y, temp, power in (("far", 21.0, 1900, 250.0), ("near", -21.0, 4500, 250.0)):
         ld = bpy.data.lights.new("set_street_" + name, "SPOT")
         ld.use_temperature = True
         ld.temperature = temp
@@ -412,7 +412,7 @@ def alley(haze_density=0.0):
              [V((-8, math.copysign(L / 2 - 0.01, y), 0)), V((8, math.copysign(L / 2 - 0.01, y), 0)),
               V((8, math.copysign(L / 2 - 0.01, y), 9)), V((-8, math.copysign(L / 2 - 0.01, y), 9))],
              4.0, glow)
-    rig.world((0.004, 0.005, 0.009), 1.0)
+    rig.world((0.005, 0.009, 0.016), 1.0)   # cool night-sky ambient for the shadows
     # one root for the whole set, so a shot can turn the alley to its camera
     root = bpy.data.objects.new("set_root", None)
     col.objects.link(root)

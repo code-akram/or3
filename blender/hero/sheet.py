@@ -28,19 +28,23 @@ def main(run):
     rows = []
     tmp = []
     shots = [s for s in st.get("shots", []) if os.path.exists(os.path.join(run, s["shot"] + ".png"))]
-    if shots:
-        files = [os.path.join(run, s["shot"] + ".png") for s in shots]
-        labels = [f"{s['shot']}  {s['seconds']:.0f} s  {s['samples']} spp" for s in shots]
-        p = os.path.join(run, ".sheet_shots.png")
-        montage(files, labels, p, f"{min(len(files), 5)}x", "640x640+4+4")
+    land = [s for s in shots if s["res"][0] >= s["res"][1]]
+    tall = [s for s in shots if s["res"][0] < s["res"][1]]
+    for group, geom, tag in ((land, "800x450+4+4", "land"), (tall, "506x900+4+4", "tall")):
+        if not group:
+            continue
+        files = [os.path.join(run, s["shot"] + ".png") for s in group]
+        labels = [f"{s['shot']}  {s['seconds']:.0f} s  {s['samples']} spp" for s in group]
+        p = os.path.join(run, f".sheet_{tag}.png")
+        montage(files, labels, p, f"{min(len(files), 4)}x", geom)
         rows.append(p)
-        paint = [os.path.join(run, s["shot"] + "_paint.png") for s in shots]
-        paint = [x for x in paint if os.path.exists(x)]
-        if paint:
-            p = os.path.join(run, ".sheet_paint.png")
-            montage(paint, [os.path.basename(x)[:-4] for x in paint], p, f"{min(len(paint), 5)}x",
-                    "384x384+4+4")
-            rows.append(p)
+    paint = [os.path.join(run, s["shot"] + "_paint.png") for s in land]
+    paint = [x for x in paint if os.path.exists(x)]
+    if paint:
+        p = os.path.join(run, ".sheet_paint.png")
+        montage(paint, [os.path.basename(x)[:-4] for x in paint], p, f"{min(len(paint), 5)}x",
+                "640x360+4+4")
+        rows.append(p)
     tt = st.get("turntable", [])
     for pose in dict.fromkeys(r["pose"] for r in tt):
         for kind in dict.fromkeys(r["pass"] for r in tt):

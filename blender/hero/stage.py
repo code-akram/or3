@@ -46,7 +46,8 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind):
     if set_kind == "alley":
         sets.turn(cam["az"] + spec.get("set_yaw", 15.0))
     lights = dict(spec.get("lights") or {})
-    rig.hero_rig(ch, cam, lights=lights)
+    rig.hero_rig(ch, cam, lights=lights,
+                 flag=spec.get("flag", ("key", "fill", "eye")) if set_kind == "alley" else ())
     if set_kind == "void":
         rig.world()
         rig.void_floor()
@@ -80,8 +81,9 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind):
 def render_turntable(ch, quality, out_dir, views, poses_, passes):
     tdir = os.path.join(out_dir, "turntable")
     os.makedirs(tdir, exist_ok=True)
+    clear_transient()   # drops the last shot's rain (its collection is transient)
     hidden = [(o, o.hide_render) for o in bpy.data.objects
-              if any(c.name.startswith("set_") for c in o.users_collection)]
+              if any(c.name == "set_alley" for c in o.users_collection)]
     for o, _ in hidden:
         o.hide_render = True
     recs = []
