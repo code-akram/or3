@@ -335,6 +335,8 @@ Target total ~11–12 ms, including 5–6 ms scene shading.
 ## 12. Audio — impeccable and authentic
 
 - **Real recordings are the base. Synthesis is only for variation and gap-filling.**
+- **The soundscape is human-free (story rule §2, listening gate 2026-10-12).** No voices, crowds, other people's footsteps, coughs, music played by people, bicycles or traffic. Allowed: the city carrying on by itself (wind, rain, water, AC units, vending machines, neon and transformer hum, crossing signals, crows, cicadas, other wildlife), plus or3's own sounds.
+  - Most open Tokyo street recordings are full of people, so ambience is built from human-free recordings (night, rain, machinery, nature), from voice-free sections of recordings, and from synthesis for hums and signals. Every bed must pass a voice-activity check before it ships.
 - **No score. Music is diegetic only**: bar speakers, vending jingles, crossing melodies. All of it is original or synthesised.
 - **Known gap (updated by spike 7)**: open Shinjuku recordings exist, but there are few of them.
   - Freesound takecha pack 37936 (CC0, 2023, Shinjuku east side).
@@ -651,6 +653,11 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - SMPL password rotation: done by the user.
 - **m2 frame-time criterion** (user, 2026-10-12): ≤ 1 % missed vsync plus work median ≤ 12 ms, measured ≥ 20 min after 5 min warm-up, late slice included (§15).
 - **m1 started** (2026-10-12).
+- **Audio listening gate (spike 7), on the Air's speakers:**
+  - Approved: dry steps, the alley IR (the 8.6 dB calibration stands), and clarity at low volume.
+  - Main footstep pool: Artninja.
+  - Rejected: the ambience loop. It has human crowds, which breaks the story (no humans on Earth), and its repetition is noticeable. Rebuild it human-free (§12).
+  - Wet steps: the splash isn't audible on laptop speakers. Retune for small speakers.
 - **M4 Air session (spike 4) passed**: 60 fps locked for 41 min, 0.00 % missed vsync, work p50 3.1 ms (GPU) against the 12 ms budget, no throttling, page memory 33 MiB. **`m0` tagged.** Details in spike-4.
 - **Audio playback target**: the Air's built-in speakers, not headphones. The listening gate runs on speakers. Spatialisation defaults to a stereo speaker mode, with HRTF as a headphone option (§12).
 
