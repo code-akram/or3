@@ -54,10 +54,13 @@ A third-person gun-fu RPG shooter in the browser. One character, inspired by Joh
 ### Build machine (offline pipeline)
 - AMD Ryzen 7 7700: 8 cores / 16 threads, Zen 4, AVX-512 including bf16/VNNI.
 - 62 GB RAM, ~1.6 TB free.
-- iGPU (Raphael, 2 CUs, 64 MB carve-out) is **useless for ML or rendering**. Treat the machine as **CPU-only**. ROCm on gfx1036 is not viable.
-- Arch Linux, headless (no display).
-- Available: Rust/cargo, Node 24, Python 3.14 (system), uv, ffmpeg, yt-dlp.
-- Available via pacman, **not yet installed**: Blender 5.2.x, Godot 4.7, openvino, onnxruntime-cpu.
+- iGPU (Raphael, 2 CUs, 64 MB carve-out) is **useless for ML and Cycles**. ROCm on gfx1036 is not viable.
+  - It **does run EEVEE headless** via Mesa radeonsi/EGL: ~1.1 s per 512² look-dev frame at 16 samples, ~7 s per 1024² frame at 64 samples.
+  - Otherwise treat the machine as CPU-only.
+- Arch Linux, headless (no display). `blender -b` creates its own surfaceless EGL context. No Vulkan ICD is installed.
+- Available: Rust/cargo (stable + a nightly for WASM threads), Node 24, Python 3.14 (system), uv, ffmpeg, yt-dlp.
+- Installed 2026-10-12: Blender 5.2.2 LTS, OpenVINO 2026.4 and onnxruntime-cpu 1.29 (native libraries only; Python bindings come from uv envs).
+- Headless Chromium is available through Playwright (`~/.cache/ms-playwright`), with WebGPU on SwiftShader. Use it for correctness checks only.
 - Research codebases need **Python 3.10 envs via uv**. Never use the system Python for them.
 
 ### Play client
@@ -94,7 +97,8 @@ A third-person gun-fu RPG shooter in the browser. One character, inspired by Joh
 | Gameplay and UI | TypeScript (strict) |
 | Navigation | Recast/Detour, baked offline (later) |
 | Audio | Web Audio API: sample pools, granular beds, zone convolution reverb, custom HRTF |
-| Build | Vite + cargo / wasm-bindgen |
+| Build | Vite 8 + TS 7. Cargo **nightly (pinned)** with `-Z build-std=std,panic_abort` and `+atomics,+bulk-memory,+simd128` plus shared-memory/TLS link args (spike 4). The wasm-bindgen CLI is pinned to the crate version, and `wasm-opt -O3` runs last. Keep O3: Oz is 28 % smaller but makes the sim 1.8× slower. Stable Rust silently builds a single-threaded module. |
+| Threading | The sim runs in a dedicated Web Worker at a fixed 60 Hz and hands poses to the renderer through a lock-free triple buffer in shared memory. The main thread never blocks. three r186 `InstancedMesh` caches `instanceMatrix.array`, so WASM-driven transforms use our own `InstancedInterleavedBuffer`. |
 | Headers | `COOP: same-origin` + `COEP: require-corp` (Chrome allows `credentialless` too). Self-host all assets. |
 
 ### Offline pipeline (this machine)
@@ -123,14 +127,19 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 ### Method: agent-driven look-dev loop
 **Image-to-3D is ruled out.** TRELLIS, Hunyuan3D, SAM 3D and TripoSG all have one or more of: CUDA-only, an EU/UK licence exclusion, poor topology, no style control. Instead:
 
-1. **Base body**: MPFB2 (MakeHuman for Blender). Core assets are CC0. 2.0.12+ supports Blender 5. Uses the `game_engine` rig. Headless operation is **unverified** and is spike #1.
+1. **Base body**: MPFB2 (MakeHuman for Blender). Core assets are CC0. Uses the `game_engine` rig.
+   - **Verified headless** (spike 1, MPFB 2.0.18 on Blender 5.2.2): a full build takes ~2 s and is single-threaded. Script: `blender/build_character.py`.
+   - Bake the macro shape keys (`TargetService.bake_targets`) before glTF export, or the Basis shape ships.
+   - Fix the GAMEENGINE alpha links (opaque vs MASK) before export.
 2. **Head**:
    - Sifu-style angular, planar, readable face, **original** (no likeness).
    - Built by scripted, low-dimensional parametric edits (control points or lattices) on the MPFB head.
    - Optional refs: FLAME 2023 Open (CC-BY-4.0), ICT-FaceKit Light (MIT) for later blendshapes.
 3. **Loop**:
    - Fixed views: front, ¾, profile, close-up.
-   - Render on Cycles CPU, or test EEVEE via llvmpipe (~6 s per small frame reported).
+   - **Loop renders**: EEVEE headless on the iGPU, 512², 16 samples, ~1.1 s per view.
+   - **Sign-off renders**: Cycles CPU, 1024², 128 spp + OIDN, ~13–18 s per view at 16 threads.
+   - Scripts: `blender/render_turntable.py`, `bench/m0/bench_spike2_render.sh`.
    - Agent critique, then **best-of-N small edits with revert**. BlenderGym (CVPR 2025) found verifier-heavy compute works best.
    - Measurable checks: silhouette IoU against reference, landmark ratios, poly budget.
 4. **Concept guidance** (optional): SD-Turbo / SDXS via OpenVINO on CPU (~1.5–3 s per image) for mood boards only.
@@ -154,6 +163,7 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 
 ### Budgets (initial, to calibrate)
 - LOD0: 40–60k tris (body ~15k, suit 15–20k, hair 8–12k, face/eyes ~5k). LOD1 50%, LOD2 20% (meshoptimizer).
+  - Spike-1 baseline: 50.2k tris (body 15.2k, suit 19.2k, hair 4.1k, **teeth 7.1k: swap them for a lighter shape**, shoes 3.3k), 53 bones, 4 weights per vertex.
 - 60–90 bones, 4 weights per vertex.
 - Textures 2048 (body, suit) and 1024 (hair), KTX2.
 
@@ -228,7 +238,21 @@ private/       (gitignored) footage, SMPL, weights, commercial material
   - Bridges.
   - Terrain (`dem`): CityGML only.
 - **Attributes**: `measuredHeight`, `storeysAboveGround`, `usage` (401 office, 402 commercial, 403 hotel, 411 house, 412 apartment, 413 shop-house, …). These drive facades and night lighting. LOD1 heights are medians, so they are imprecise.
-- **Tooling**: **`nusamai` / PLATEAU GIS Converter** (MIT, Rust) for parsing. Our own mesher if its glTF sink is too limited. CRS: EPSG:6697 (lat, lon, orthometric) → **EPSG:6677** (JGD2011 zone IX), re-origined locally.
+- **Tooling**:
+  - **`nusamai` / PLATEAU GIS Converter** 0.1.19 (MIT, Rust) for parsing and projection.
+  - **Our own chunk writer** (`tools/plateau-chunk`), because nusamai's glTF sink is not usable: array attributes including `usage` come out corrupt, the origin is lost, there are no surface semantics, and FY2025 `veg` fails.
+  - CRS: EPSG:6697 (lat, lon, orthometric) → **EPSG:6677** (JGD2011 zone IX), re-origined locally. Verified against GSI to 0 mm.
+- **Data facts (spike 5)**:
+  - FY2025 confirmed: 772,888,884 B.
+  - Files are per 3rd-level mesh (1 km). Kabukicho/Golden Gai = `53394536`. The starting district spans `53394525/26/35/36`, with a LOD2 share of 61/39/49/37 % (46 % overall).
+  - Sentinels −9999 (height), 9999 (storeys) and usage 461 mean unknown: about 8 % of buildings.
+- **Chunk contract (spike 5)**:
+  - 200 m squares on the EPSG:6677 grid, named by SW corner: `chunk_e<E>_n<N>_s200`.
+  - Origin at the chunk centre: x = E − E0, y = height, z = −(N − N0).
+  - Buildings are assigned whole by footprint centre. Roads are clipped per triangle.
+  - The per-building attribute table sits in mesh extras. The PLATEAU credit is in scene extras.
+  - First chunk: 190 LOD2 buildings, 23k tris, 342 KB after meshopt.
+- Arch's Blender 5.2.2 can't import meshopt GLBs, so inspect the uncompressed GLB.
 - **OSM**: only for alleys, steps and footways PLATEAU lacks. Keep it a separate ODbL layer with attribution.
 - **Facades**: pure art (grounded traversal means no climb rules).
   - Our own split-grammar generator driven by footprint, height, storeys and usage.
@@ -285,16 +309,32 @@ Target total ~11–12 ms, including 5–6 ms scene shading.
 
 - **Real recordings are the base. Synthesis is only for variation and gap-filling.**
 - **No score. Music is diegetic only**: bar speakers, vending jingles, crossing melodies. All of it is original or synthesised.
-- **Known gap**: no CC0/CC-BY **Shinjuku-specific** recordings exist (Kabukicho, Golden Gai, Omoide Yokocho). The good libraries are commercial and non-redistributable (Free To Use Sounds, Atlas Sound Library, Treviño Japan). **Authentic Shinjuku needs field recording.** See [Open questions](#17-open-questions).
+- **Known gap (updated by spike 7)**: open Shinjuku recordings exist, but there are few of them.
+  - Freesound takecha pack 37936 (CC0, 2023, Shinjuku east side).
+  - sergeeo 380726 (CC-BY 3.0, 2016).
+  - radio aporee aporee_70134_81690 (Public Domain Mark, 2025, JR platform).
+  - Nothing open covers **Kabukicho, Golden Gai or Omoide Yokocho** specifically. The good libraries are commercial and non-redistributable. Field recording remains the upgrade path. See [Open questions](#17-open-questions).
+- Several Tokyo street recordings carry steady 19–21 kHz ultrasonic tones, so ambience is low-passed at 17 kHz.
 - **Sources**:
   - **Freesound** CC0/CC-BY, audited per file. Examples: Yuval 205748 (CC0 dress shoes, dry concrete, 24/48), stecman 569313 (CC0 rain on metal, 96 kHz), RutgerMuller Japan pack (check each file).
-  - **radio aporee** / Internet Archive (often CC BY-SA, so case-by-case).
+  - **radio aporee** / Internet Archive. Tokyo items are **mostly MP3 originals**, and the licences are mostly BY-SA, NC-ND or PDM, so they are case by case. Lossless items are rare.
+  - **Quality floor (spike 7)**:
+    - No lossy originals.
+    - No ≥ 25 dB/kHz spectral wall below 20.5 kHz. This catches upsampled AAC inside WAV, e.g. iPhone recordings uploaded at 96 kHz.
+    - Effective bandwidth ≥ 18 kHz.
+    - Footstep SNR ≥ 30 dB.
   - Kenney (CC0).
 - **Not allowed in repo**: Sonniss, BBC RemArc, raw Pixabay, NC licences. Commercial libraries only as local-only `private/` material.
 - **Gaps to record**: dress shoes on wet ground, stairs, metal and tile; suit rustle; umbrella rain; Japanese ambience (crossings, cicadas, crows, vending machine hum, neon buzz).
 - **Crossing signals**: Tōryanse melody is public domain (sequence it ourselves). "Piyo-piyo / kakkō" chirps are synthesised. **Station departure melodies are copyrighted**, so compose originals.
 - **Acoustics**:
   - **Steam Audio** (Apache 2.0) bakes impulse responses offline from PLATEAU geometry per zone (alley, Golden Gai, underground mall, concourse, open street).
+    - **Verified (spike 6)**: Steam Audio 4.8.1 via Rust FFI (`tools/acoustic-bake`), 0.13 s per IR at 16 threads.
+    - Its reflection IR time base is the direct arrival.
+    - Raw reflection energy runs ~8.6 dB hot, so bakes are calibrated against a ground-plane-only run.
+    - Early reflections are 10 ms-binned noise, with no discrete flutter echoes. Add an image-source early part if needed.
+    - The first alley IR (Golden Gai west edge, 2.0 m wide): EDT 0.20 s, T20 0.34 s, DRR −8 dB.
+    - The SDK binaries are build-time only. Never commit or ship them.
   - In the browser: one shared `ConvolverNode` reverb bus with zone crossfade. IRs ≤ ~2 s, decoded at zone load, because Chrome sets convolver buffers on the main thread.
   - Fallback: pyroomacoustics.
 - **Occlusion**: raycast against simplified geometry → per-source lowpass + gain.
@@ -416,24 +456,36 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 | Neon-rain look over budget on the Air | 🔴 | Measure on the Air in Phase 0 / `m4`. Dynamic resolution, half-res passes, baked spill. |
 | No authentic Shinjuku audio under open licences | 🟠 | Programmatic pipeline (§12): real Tokyo CC0/CC-BY recordings + ffmpeg synthesis + PLATEAU-baked acoustics, with a user listening gate. Field recording as an optional upgrade. |
 | GVHMR CPU throughput / quality on film footage | 🟠 | Measure in Phase 0. Shot filtering, bf16/OpenVINO, 100STYLE/CMU carry core locomotion. |
-| MPFB2 headless untested | 🟠 | Spike #1. Fallback: Anny (Apache-2.0) or a direct base-mesh import. |
+| ~~MPFB2 headless untested~~ | ✅ | **Retired 2026-10-12**: verified in spike 1. |
+| WASM threads depend on nightly + build-std | 🟠 | Pin a dated nightly in `core/build-web.sh` and bump it deliberately. The stable fallback is single-threaded WASM with the sim on the main thread. |
+| WASM size: Rapier + parry ≈ 86 % of 506 KB (brotli) | 🟡 | Fine for now. Revisit if load time matters (lazy-load physics, or a slimmer collider set). |
+| YouTube blocks yt-dlp from this machine ("not a bot") | 🟠 | Cookies from the user's browser, or other official sources. Being worked on in the spike 3 follow-up. |
 | Suit deformation in extreme poses | 🟠 | Helper bones + Dem Bones baking + correctives |
-| PLATEAU LOD2 coverage, `nusamai` glTF sink thin | 🟡 | Procedural facades. Own mesher. |
+| PLATEAU LOD2 coverage, `nusamai` glTF sink thin | 🟡 | **Confirmed**: the sink's attributes are broken, and LOD2 is 46 % across the district. Mitigation in place: our own chunk writer, plus procedural facades for LOD1. |
 | Licence drift (PLATEAU wording, CMU, PARC provenance, SFU) | 🟡 | Provenance manifest + audit before use |
 
 ## 17. Open questions
 
 1. ~~Audio route~~ **Resolved 2026-10-11**: programmatic fetch + ffmpeg/Python synthesis by Claude (§12). Still open: whether field recordings (home foley, Shinjuku ambience) are added later as an optional upgrade.
 2. Story development (after world).
-3. Exact provenance manifest format.
+3. Provenance manifest format. **Draft adopted 2026-10-12, pending user approval**:
+   - One `provenance/<domain>.jsonl` per domain (`audio`, `mesh`, `data`), validated against `record.schema.json`.
+   - A licence policy in `licences.json` with allow, note and deny lists.
+   - A stdlib `audit.py` with `--check-files` and `--release` modes. It fails on duplicate ids, disallowed licences and rejected inputs.
+   - `audit_makehuman.py` checks MakeHuman file headers.
 4. Whether Kimodo's licence text and the PARC raw-mocap provenance hold up.
-5. Approval of the repo layout proposed in §6 (at the `m0` gate).
+5. Approval of the repo layout proposed in §6 (at the `m0` gate). The spikes built the layout as proposed, plus `core/build-web.sh`, `bench/server.mjs` and `pipeline/{audio,video-to-motion}/`.
 6. **Licensing of motion derived through SMPL/SMPL-X.**
    - The SMPL-X model licence allows "non-commercial … artistic projects".
    - It forbids making derivatives of the Model & Software available to third parties without Max Planck's written permission.
    - It is silent on motion estimated with the model.
    - Our CC BY 4.0 asset licence allows commercial reuse downstream, which conflicts with that.
    - Resolve before any Wick-derived motion ships. Either email smpl@max-planck-innovation.de to confirm that retargeted rotations on our own skeleton are not a derivative, or ship GVHMR-derived motion under a non-commercial licence as a documented exception.
+7. Whether **Public Domain Mark** items (e.g. radio aporee) are accepted with a note, or rejected. `licences.json` currently lists them under "note".
+8. **m2 frame-time definition** (proposed in spike 4):
+   - "p95 ≤ 16.6 ms" applies to the rAF interval.
+   - "median ≤ 12 ms" applies to max(CPU frame p50, GPU pass p50).
+   - Measure after 5 min warm-up, for at least 20 min.
 
 ## 18. Phase 0 — spikes
 
