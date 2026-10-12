@@ -15,6 +15,9 @@
 #     --tt-poses LIST    turntable poses (default rest,stand)
 #     --set alley|void   the alley (default) or the bare hero rig on black
 #     --paint F          painterly A/B strength (default 0.6; 0 = off)
+#     --crop LIST|close  also render a 100 % crop (half the frame each way) around the
+#                        eye / focus point of these shots ('close' = portrait,profile,hands,eye)
+#     --wb K             grade white point in K (default: grade.py GRADE wb_kelvin; 0 = off)
 #   bench/m1/hero.sh --regrade <run dir>     re-grade the EXRs and redraw the sheet
 #
 # Env: DATA (default <main checkout>/data), THREADS (default 16 for --final,
@@ -34,6 +37,7 @@ grade_and_sheet() {
   for e in "$run"/exr/*.exr; do [[ -e "$e" ]] && exrs+=(--exr "$e"); done
   if [[ ${#exrs[@]} -gt 0 ]]; then
     "${BL[@]}" --python "$REPO/blender/hero/grade.py" -- "${exrs[@]}" --out "$run" --paint "$paint" \
+      ${WB:+--wb "$WB"} \
       > "$run/grade.log" 2>&1 || { echo "grade failed: $run/grade.log" >&2; tail -20 "$run/grade.log" >&2; exit 1; }
   fi
   python3 -I "$REPO/blender/hero/sheet.py" "$run"
@@ -45,7 +49,7 @@ if [[ "${1:-}" == "--regrade" ]]; then
   exit 0
 fi
 
-QUALITY=preview; STAGE_FAIL=; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=()
+QUALITY=preview; STAGE_FAIL=; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=(); CROP=none
 while [[ $# -gt 2 ]]; do
   case "$1" in
     --preview) QUALITY=preview; shift ;;
@@ -57,6 +61,8 @@ while [[ $# -gt 2 ]]; do
     --tt-poses) TTP=(--tt-poses "$2"); shift 2 ;;
     --set)     SET="$2"; shift 2 ;;
     --paint)   PAINT="$2"; shift 2 ;;
+    --crop)    CROP="$2"; shift 2 ;;
+    --wb)      export WB="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -71,7 +77,7 @@ mkdir -p "$RUN"
 echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 T0=$(date +%s)
 "${BL[@]}" -t "$THREADS" --python "$REPO/blender/hero/stage.py" -- --in "$IN" --out "$RUN" \
-  --quality "$QUALITY" --shots "$SHOTS" --set "$SET" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
+  --quality "$QUALITY" --shots "$SHOTS" --set "$SET" --crop "$CROP" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
   > "$RUN/stage.log" 2>&1 || STAGE_FAIL=1
 grep -E '^\[stage\]' "$RUN/stage.log" || true
 # grade and draw whatever was rendered, even after a failure or a kill

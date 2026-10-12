@@ -98,7 +98,7 @@ TT_LIGHTS = {
 #        frame height m, f-stop or None)
 CAMERAS = {
     "portrait": (85, 30, 2, "eyes", 0.42, 2.0),      # shot 1: rain portrait
-    "eye":      (135, 8, 0, "eyes", 0.13, 2.8),      # shot 6: eye close-up
+    "eye":      (135, 8, 0, "eyes", 0.075, 16.0),    # shot 6: eye close-up, 0.4 m
     "bust":     (50, 35, 3, "chest", 0.80, 2.8),
     "full":     (50, 20, ("h", 1.1), "body", 2.25, 4.0),  # shot 2: under the sign
     "profile":  (100, 90, 0, "head", 0.55, 2.8),     # shot 3
@@ -107,6 +107,7 @@ CAMERAS = {
     "back":     (50, 150, 5, "chest", 1.05, 2.8),    # back 3/4: hair + suit back
 }
 TT_LENS, TT_FRAME = 50, 2.3
+EYE_FRONT = 0.012   # eyeball centre to the cornea front, m (focus point)
 QUALITY = {  # samples, adaptive threshold, resolution %
     "draft": (16, 0.1, 25),
     "preview": (64, 0.05, 50),
@@ -161,6 +162,9 @@ class Character:
             return self.bone_head(what) * 0.6 + self.bone_head("middle_01" + what[-2:]) * 0.4
         if what == "hands":
             return (self.bone_head("hand_l") + self.bone_head("hand_r")) * 0.5 + Vector((0, 0, -0.25))
+        if what == "cuff_feet":    # halfway between the left cuff and the floor under it
+            h = self.bone_head("hand_l")
+            return Vector((h.x * 0.6, h.y * 0.6 - 0.03, h.z * 0.5))
         if what == "feet":
             return Vector((0, -0.05, 0.25))
         raise ValueError(what)
@@ -472,8 +476,15 @@ def camera(ch, spec, dof=True, focus="near_eye"):
     bpy.context.scene.camera = cam
     focus_pt = target
     if aim in ("eyes", "head") and focus == "near_eye":
+        # the near eye's cornea, not the eyeball centre (12 mm behind it):
+        # at 135 mm the depth of field is a few mm
         el_, er_ = ch.eyes()
-        focus_pt = el_ if (el_ - loc).length < (er_ - loc).length else er_
+        c = el_ if (el_ - loc).length < (er_ - loc).length else er_
+        focus_pt = c + (loc - c).normalized() * EYE_FRONT
+    elif aim == "cuff_feet":
+        focus_pt = ch.bone_head("hand_l")           # the cuff, not the empty air below it
+    elif aim == "hands":
+        focus_pt = (ch.bone_head("hand_l") + ch.bone_head("hand_r")) * 0.5
     if dof and fstop:
         cd.dof.use_dof = True
         cd.dof.focus_distance = (focus_pt - loc).length

@@ -51,18 +51,28 @@ blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig
 
 | Shot | Lens / framing | Pose | Light (on top of the hero rig and the set) |
 |---|---|---|---|
-| portrait (§5 #1) | 85 mm, f/2 on the near eye, head and shoulders, ¾ (az 30), face on the right third | stand | base rig, rims 2.2 / 1.2, drizzle (700 streaks), haze 0.008 |
-| sign (#2), 1152x2048 poster | 50 mm f/4, full body, camera at 1.1 m | stand | magenta key 1.2 x 0.4 m above-right 1.3, teal across the street 0.5, sodium 2,000 K 0.3, heavy rain (2,200), puddles |
-| profile (#3) | 100 mm f/2.8, bust profile | stand, head straight, chin 3° down | amber key 0.3, teal rim 2.5 from beyond the face, magenta kicker 0.35 |
-| draw (#4) | 35 mm f/5.6, ¾ full body, camera at 1.2 m | ready (compressed high-ready, empty hands) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
-| hands (#5) | 100 mm f/4 on the left hand and cuff | stand | key 0.8 |
-| eye (#6) | 135 mm f/2.8, eyes and brow | stand | soft key 1.2 m, eye light 0.3 |
-| bust | 50 mm f/2.8, ¾ | stand | base rig + rims |
-| back | 50 mm f/2.8, back ¾ (az 150): hair and suit back | stand | base rig + rims |
+| portrait (§5 #1) | 85 mm, f/2 on the near cornea, head and shoulders, ¾ (az 30), face on the right third | stand (F `hero`), eyes to camera | base rig, rims 2.2 / 1.2, drizzle (700 streaks), haze 0.008, wet hair tips, 35 water beads per shoulder |
+| sign (#2), 1152x2048 poster | 50 mm f/4, full body, camera at 1.1 m | stand (F `hero`: left hand at the jacket button) | magenta key 1.2 x 0.4 m above-right 1.3, teal across the street 0.5, sodium 2,000 K 0.3, heavy rain (2,200), puddles |
+| profile (#3) | 100 mm f/2.8, bust profile | stand, head straight, chin 2–3° down | amber key 0.3, teal rim 2.5 from beyond the face, magenta kicker 0.35, wet tips, beads |
+| draw (#4) | 35 mm f/5.6, ¾ full body, camera at 1.2 m | ready (F `high_ready`, empty hands) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
+| hands (#5), 1152x2048 poster | 100 mm f/5.6 from 5.4 m, camera at 0.75 m: from the cuff to the floor, so the shoe and trouser break are in frame; focus on the cuff | cuff (F `hero` body, E's arms: the right hand pinches the left shirt cuff) | key 0.8 |
+| eye (#6) | 135 mm at 0.42 m, f/16 (about 9 mm depth of field, the same as f/5.6 at 0.73 m) on the near cornea, eyes and brow | stand, gaze 5° off camera | soft key 1.2 m, eye light 0.3 |
+| bust | 50 mm f/2.8, ¾ | stand, eyes to camera | base rig + rims, wet tips, beads |
+| back | 50 mm f/2.8, back ¾ (az 150): hair and suit back | stand | base rig + rims, wet tips, beads |
 | walk | 35 mm f/5.6, ¾ full body (az −35) | walk (mid-stride) | base rig + rims, rain |
 | turntable (#7) | 50 mm, 8 views at 45°, 1080x1620 | rest (A-pose) and stand | turntable rig; beauty + clay + normal |
 
-The shot list follows direction §5, with two substitutions: no "buttoning the jacket" or "adjusting the cuff" pose (I didn't attempt those hand-on-garment poses before Track F's correctives land), and the brief's bust, back and walk shots added.
+The shot list follows direction §5, plus the brief's bust, back and walk shots. Deviations:
+- **Under the sign** uses F's canonical `hero` pose, with the left hand at the jacket button (that is the "buttoning" read). Its weight is on the left leg, not §5's right.
+- **Eye close-up**: §5 gives 135 mm at 0.4 m but no f-stop. At 0.4 m, f/2.8 holds only about 1.6 mm in focus, so lids, lashes and skin go soft. f/16 holds about 9 mm, the same as f/5.6 from 0.73 m.
+- **Every head shot focuses on the near cornea**, the eyeball centre plus 12 mm toward the camera. Focusing on the centre (Track A's diagnosis) put the focal plane 12 mm behind the lashes.
+
+**Wet look (`wet.py`, render side, transient)**:
+- **Water beads**: 35 per shoulder (0.5–1.5 mm, flattened water drops, IOR 1.33, transmission) on the posed jacket surface, on top of the shoulder between the clavicle and the arm joint. They are added in the close-ups and are in the character mask and the flagged-light receivers.
+- **Wet hair tips**: on the outer 30 % of each strand (UV0.v root → tip), the base colour drops to ×0.55 and the roughness to ×0.45. One value node per hair material drives it, set to 1 in every rain shot.
+- **Eyes to camera**: the eyeballs (one skinned mesh on the head bone) turn toward the camera, or `gaze` degrees off it, by rotating each eyeball's rest vertices about its centre. The turn is capped at 28° because the lids don't follow. `stage.json` logs the angles, and the change is undone before the next shot.
+
+**100 % crops**: `hero.sh --crop close` (or a shot list) also renders each listed shot at 100 % resolution, cropped to half the frame each way around the near eye (head shots) or the cuff (hands): `<shot>_crop.png`, with no vignette or paint. Preview renders at 50 %, so this is the close-up evidence. A crop costs about as much as the preview shot itself.
 
 ### Set and render decisions
 
