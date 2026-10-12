@@ -20,15 +20,24 @@ CLI (renders a kept character.blend, or a GLB, under one or both rigs):
 
     blender -b -t 4 --factory-startup --python-exit-code 1 \\
         --python blender/hero/rig.py -- --in RUN/character.blend --out DIR \\
-        [--light hero|turntable|both] [--cam portrait,bust,tt0,...] \\
-        [--pose rest|stand|walk|ready] [--quality preview|final|draft] \\
+        [--light hero|turntable|both] [--cam "portrait;bust;tt0;az=30,el=5,..."] \\
+        [--pose rest|stand|walk|ready|...] [--quality preview|final|draft] \\
         [--passes beauty,clay,normal] [--haze] [--res WxH] [--samples N]
 
 Cameras: the presets in CAMERAS (lens mm, azimuth deg, elevation deg or
 camera height, aim point, frame height m), `tt<deg>` (turntable, 50 mm full
 body at that azimuth; tt = all 8 at 45 deg steps), or a custom spec
 `az=30,el=5,lens=85,aim=head,frame=0.45`. Azimuth 0 is in front of the
-character; positive shows its LEFT side.
+character; positive shows its LEFT side. Separate cameras with ';' (a comma
+list of presets also works, but a list containing a custom spec must use ';';
+a single custom spec is always one camera).
+
+Poses: `stand` / `ready` / `ready_low` are Track F's canonical `hero` /
+`high_ready` / `low_ready` (blender/character/deform_poses.py), every
+deform_poses name works too (`f:<name>` for one shadowed by an E pose), and
+E's solver versions are `stand_e` / `ready_e` / `ready_low_e` / `walk`. Every
+pose runs F's deformation runtime afterwards (helper bones + correctives from
+the armature's deform_rules or character.rig.json; poses.deform).
 
 Writes DIR/<light>_<cam>[_<pass>].png and DIR/rig.json (settings, per-frame
 render seconds, pose log). Import it from Python too:
@@ -148,6 +157,8 @@ class Character:
             return self.bone_head("spine_03") + Vector((0, -0.05, 0.08))
         if what == "body":
             return Vector((0, 0, 0.98))
+        if what in ("hand_l", "hand_r"):
+            return self.bone_head(what) * 0.6 + self.bone_head("middle_01" + what[-2:]) * 0.4
         if what == "hands":
             return (self.bone_head("hand_l") + self.bone_head("hand_r")) * 0.5 + Vector((0, 0, -0.25))
         if what == "feet":
@@ -164,6 +175,20 @@ def _character_from_scene():
     for o in bpy.context.scene.objects:
         if o.type == "MESH" and o not in objs:
             o.hide_render = True
+    # hero_only geometry that nothing drives (no parent, no armature or
+    # surface-deform modifier) would stay put when the rig is posed: pin it
+    # to the head bone, keeping its world transform.
+    head = arm.data.bones.get("head")
+    for o in objs:
+        if o.parent is None and head is not None and not any(
+                m.type in ("ARMATURE", "SURFACE_DEFORM", "NODES") for m in o.modifiers):
+            mw = o.matrix_world.copy()
+            o.parent = arm
+            o.parent_type = "BONE"
+            o.parent_bone = "head"
+            bpy.context.view_layer.update()
+            o.matrix_world = mw
+            print(f"[rig] pinned hero_only {o.name} to the head bone", flush=True)
     return Character(arm, objs)
 
 
@@ -243,16 +268,31 @@ def _around(subject, cam_loc, az, el, dist):
     return Vector(subject) + (d * math.cos(e) + Z * math.sin(e)) * dist
 
 
-def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0):
+def receivers(ch):
+    """Collection (outside the scene) holding the character, for light
+    linking: a flagged light only lights what is in it."""
+    col = bpy.data.collections.get("hero_receivers") or bpy.data.collections.new("hero_receivers")
+    for o in ch.objs:
+        if o.name not in col.objects:
+            col.objects.link(o)
+    return col
+
+
+def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=()):
     """Build the base hero rig around the camera's subject (the head for
     head shots, the chest otherwise). `lights` overrides entries of
-    HERO_LIGHTS; scale multiplies every power."""
+    HERO_LIGHTS; scale multiplies every power. `flag`: names of lights that
+    light only the character (Cycles light linking, the render version of a
+    flag on a stand), so a camera-relative key does not wash the set."""
     col = collection("hero_rig")
     spec = dict(HERO_LIGHTS)
     spec.update(lights or {})
     subject = subject if subject is not None else cam["subject"]
     made = {}
-    for name, (colour, ratio, size, az, el, dist) in spec.items():
+    for name, val in spec.items():
+        if val is None:
+            continue
+        colour, ratio, size, az, el, dist = val
         if ratio <= 0:
             continue
         if dist is None:  # eye light: just above the lens, aimed at the eyes
@@ -270,6 +310,8 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0):
         if name == "eye":
             made[name].data.use_shadow = False
             made[name].data.diffuse_factor = 0.3  # mostly a catchlight
+        if name in flag:
+            made[name].light_linking.receiver_collection = receivers(ch)
     return made
 
 
@@ -484,6 +526,7 @@ def cycles(quality="preview", res=(1920, 1080), samples=None, threads=0):
     sc.view_settings.view_transform = "AgX"
     sc.view_settings.look = "None"
     sc.display_settings.display_device = "sRGB"
+    r.image_settings.media_type = "IMAGE"
     r.image_settings.file_format = "PNG"
     r.image_settings.color_mode = "RGB"
     r.image_settings.color_depth = "8"
@@ -493,6 +536,7 @@ def cycles(quality="preview", res=(1920, 1080), samples=None, threads=0):
 def render(path, fmt="PNG"):
     sc = bpy.context.scene
     r = sc.render
+    r.image_settings.media_type = "IMAGE"
     if fmt == "EXR":
         r.image_settings.file_format = "OPEN_EXR"
         r.image_settings.color_mode = "RGBA"
@@ -645,8 +689,9 @@ def parse_args(argv):
     ap.add_argument("--in", dest="inp", required=True, help="character.blend or .glb")
     ap.add_argument("--out", required=True)
     ap.add_argument("--light", choices=["hero", "turntable", "both"], default="both")
-    ap.add_argument("--cam", default="", help="comma list; default portrait,bust (hero), tt (turntable)")
-    ap.add_argument("--pose", choices=sorted(poses.POSES), default="rest")
+    ap.add_argument("--cam", default="", help="cameras separated by ';' (or a comma list of presets); "
+                    "default portrait;bust (hero), tt (turntable)")
+    ap.add_argument("--pose", choices=poses.names(), default="rest")
     ap.add_argument("--quality", choices=sorted(QUALITY), default="preview")
     ap.add_argument("--samples", type=int, default=0)
     ap.add_argument("--res", default="", help="WxH (default 1920x1080; turntable 1080x1620)")
@@ -661,7 +706,10 @@ def parse_args(argv):
 def _cams(arg, light):
     if arg:
         out = []
-        for c in arg.split(";") if ";" in arg else arg.split(","):
+        # ';' separates cameras. Without one, a spec with '=' is ONE custom
+        # camera (its fields are comma-separated); otherwise a comma list of presets.
+        parts = arg.split(";") if ";" in arg else ([arg] if "=" in arg else arg.split(","))
+        for c in (c.strip() for c in parts if c.strip()):
             out += [f"tt{a}" for a in range(0, 360, 45)] if c == "tt" else [c]
         return out
     return ["portrait", "bust"] if light == "hero" else [f"tt{a}" for a in range(0, 360, 45)]

@@ -26,7 +26,10 @@ POSES maps a name to a function(Poser). The log lists what each pose did and
 any bone it could not find; nothing here edits the mesh or the weights.
 """
 
+import copy
+import json
 import math
+import os
 
 import bpy
 from mathutils import Matrix, Quaternion, Vector
@@ -294,7 +297,7 @@ def pose_rest(p):
     p.log.append("rest: the build's A-pose")
 
 
-def pose_stand(p):
+def pose_stand(p, look=(12.0, 4.0, -2.0)):
     """Relaxed hero stand: weight on the right leg, left knee eased, pelvis
     tilted (left hip down), shoulders counter-tilted and settled, arms down at
     the sides with a soft elbow, hands relaxed, head turned a little to its
@@ -315,7 +318,7 @@ def pose_stand(p):
         p.reach(s, wrist, pole=(s * 0.25, 1.0, -0.1), clavicle=4.0)
         p.hand(s, fingers=(-0.10, -0.12, -1.0), thumb=(0.0, -1.0, 0.0))
         p.curl(s, base=(14, 20, 26, 32), thumb=(6, 10, 10))
-    p.look(yaw=12.0, pitch=4.0, tilt=-2.0)
+    p.look(yaw=look[0], pitch=look[1], tilt=look[2])
 
 
 def pose_walk(p):
@@ -342,33 +345,156 @@ def pose_walk(p):
 
 
 def pose_ready(p):
-    """Low-ready: staggered feet (right foot back), knees bent, torso leaning
-    in, both arms forward and down as if holding a pistol at the low ready
-    (empty hands, the right hand closed in a grip, the left cupping it)."""
-    p.move("pelvis", (0.02, 0.04, -0.07))
-    p.rot("pelvis", Z, 12.0)       # right side back (bladed stance)
-    p.rot("spine_01", X, 8.0)
-    p.rot("spine_02", X, 6.0)
-    p.rot("spine_03", Z, -8.0)     # shoulders square up to the front
-    p.plant(+1, (0.15, -0.30), yaw=10, pole=(0.2, -1, 0))
-    p.plant(-1, (-0.20, 0.16), yaw=30, heel=8, pole=(-0.3, -1, 0))
-    grip = Vector((-0.02, -0.46, 1.06))
-    p.reach(-1, grip + Vector((-0.02, 0.0, 0.0)), pole=(-0.5, 0.4, -1.0), clavicle=-2.0, clav_fwd=6)
-    p.reach(+1, grip + Vector((0.065, 0.02, -0.01)), pole=(0.6, 0.4, -1.0), clavicle=-2.0, clav_fwd=8)
-    # right hand: fingers forward-down, closed; left hand: wraps under
-    p.hand(-1, fingers=(-0.15, -1.0, -0.55), thumb=(0.15, -0.1, 1.0))
-    p.curl(-1, base=(55, 60, 65, 70), seg=(1.0, 1.25, 0.7), spread=0.0, thumb=(5, 20, 20))
-    p.hand(+1, fingers=(-0.6, -1.0, -0.4), thumb=(0.0, -0.3, 1.0))
-    p.curl(+1, base=(40, 45, 50, 55), seg=(1.0, 1.2, 0.7), spread=0.0, thumb=(5, 15, 15))
+    """Compressed high-ready (direction §5 shot 4; the brief's low-ready is
+    `ready_low`): staggered feet (right foot back), knees soft, torso in,
+    elbows down and in, both hands together in front of the sternum as if
+    gripping a pistol (no weapon yet): right hand closed, left hand wrapped
+    over it."""
+    p.move("pelvis", (0.015, 0.03, -0.045))
+    p.rot("pelvis", Z, 14.0)       # right side back (bladed stance)
+    p.rot("spine_01", X, 6.0)
+    p.rot("spine_02", X, 5.0)
+    p.rot("spine_02", Z, -6.0)
+    p.rot("spine_03", Z, -8.0)     # shoulders square to the front
+    p.plant(+1, (0.14, -0.30), yaw=12)
+    p.plant(-1, (-0.17, 0.17), yaw=35, heel=6)
+    grip = Vector((-0.015, -0.36, 1.24))
+    p.reach(-1, grip + Vector((-0.01, 0.0, 0.0)), pole=(-0.25, 0.3, -1.0), clavicle=-1.0, clav_fwd=6)
+    p.reach(+1, grip + Vector((0.065, -0.012, -0.035)), pole=(0.3, 0.3, -1.0), clavicle=-1.0, clav_fwd=8)
+    p.hand(-1, fingers=(-0.1, -1.0, 0.15), thumb=(0.15, -0.2, 1.0))
+    p.curl(-1, base=(85, 88, 90, 92), seg=(1.0, 1.2, 0.6), spread=0.0, thumb=(5, 25, 20))
+    p.hand(+1, fingers=(-0.7, -1.0, 0.05), thumb=(0.0, -0.4, 1.0))
+    p.curl(+1, base=(45, 50, 55, 60), seg=(1.0, 1.1, 0.6), spread=0.0, thumb=(5, 15, 10))
+    p.look(yaw=-8.0, pitch=-2.0)
+
+
+def pose_ready_low(p):
+    """Low-ready: as `ready`, hands lower and further out (arms ~45 deg down)."""
+    p.move("pelvis", (0.015, 0.03, -0.04))
+    p.rot("pelvis", Z, 14.0)
+    p.rot("spine_01", X, 6.0)
+    p.rot("spine_02", X, 4.0)
+    p.rot("spine_02", Z, -6.0)
+    p.rot("spine_03", Z, -8.0)
+    p.plant(+1, (0.14, -0.30), yaw=12)
+    p.plant(-1, (-0.17, 0.17), yaw=35, heel=6)
+    grip = Vector((-0.02, -0.44, 1.02))
+    p.reach(-1, grip + Vector((-0.01, 0.0, 0.0)), pole=(-0.4, 0.4, -1.0), clavicle=-1.0, clav_fwd=6)
+    p.reach(+1, grip + Vector((0.07, 0.015, -0.01)), pole=(0.5, 0.4, -1.0), clavicle=-1.0, clav_fwd=8)
+    p.hand(-1, fingers=(-0.1, -1.0, -0.6), thumb=(0.15, -0.3, 1.0))
+    p.curl(-1, base=(70, 75, 78, 80), seg=(1.0, 1.2, 0.6), spread=0.0, thumb=(5, 20, 15))
+    p.hand(+1, fingers=(-0.7, -1.0, -0.5), thumb=(0.0, -0.4, 1.0))
+    p.curl(+1, base=(45, 50, 55, 60), seg=(1.0, 1.1, 0.6), spread=0.0, thumb=(5, 15, 10))
     p.look(yaw=-6.0, pitch=-4.0)
 
 
-POSES = {"rest": pose_rest, "stand": pose_stand, "walk": pose_walk, "ready": pose_ready}
+def pose_stand_profile(p):
+    """The hero stand, head straight ahead and chin 3 deg down (profile shot)."""
+    pose_stand(p, look=(0.0, 3.0, 0.0))
+
+
+# Track F's canonical poses (blender/character/deform_poses.py) drive the
+# hero stand and the ready stances; E's own solver versions stay available as
+# `*_e` (and for the walk, which F only has as a deformation test pose).
+F_POSES = {"stand": "hero", "ready": "high_ready", "ready_low": "low_ready"}
+
+POSES = {"rest": pose_rest, "stand_e": pose_stand, "stand_profile_e": pose_stand_profile,
+         "walk": pose_walk, "ready_e": pose_ready, "ready_low_e": pose_ready_low}
+
+
+def _dp():
+    try:
+        from character import deform_poses
+        return deform_poses
+    except ImportError:
+        return None
+
+
+def _f_spec(name):
+    """The deform_poses spec behind a stage pose name, or None."""
+    dp = _dp()
+    if dp is None:
+        return None
+    if name == "stand_profile":
+        # the hero pose, head straight ahead and chin a little down (profile shot)
+        spec = copy.deepcopy(dp.POSES["hero"])
+        spec["bones"]["neck_01"] = [["flex", 1.5]]
+        spec["bones"]["head"] = [["flex", 2.0]]
+        return spec
+    if name in F_POSES:
+        return dp.POSES[F_POSES[name]]
+    if name.startswith("f:") and name[2:] in dp.POSES:
+        return dp.POSES[name[2:]]
+    if name not in POSES and name in dp.POSES:
+        return dp.POSES[name]
+    return None
+
+
+def names():
+    dp = _dp()
+    out = list(POSES) + [n for n in list(F_POSES) + ["stand_profile"] if n not in POSES]
+    if dp is not None:
+        out += [n for n in dp.POSES if n not in out] + ["f:" + n for n in dp.POSES]
+    return out
+
+
+def _rules(arm):
+    if "deform_rules" in arm:
+        return json.loads(arm["deform_rules"])
+    if bpy.data.filepath:
+        p = os.path.join(os.path.dirname(bpy.data.filepath), "character.rig.json")
+        if os.path.exists(p):
+            with open(p) as f:
+                return json.load(f)
+    return None
+
+
+def _meshes(arm):
+    return [o for o in bpy.data.objects if o.type == "MESH" and (
+        o.parent == arm or any(m.type == "ARMATURE" and m.object == arm for m in o.modifiers))]
+
+
+def deform(arm):
+    """Track F's runtime after the pose: helper bones (twist split, deltoid and
+    hip helpers, skirt follow) and corrective shape keys, exactly as the game
+    drives them. Shape keys that are not correctives keep their values (the
+    reference runtime zeroes every key it does not drive)."""
+    R = _rules(arm)
+    if not R:
+        return "deform runtime: no rules in this build (helpers at bind)"
+    from character import deform_runtime as drt
+    meshes = _meshes(arm)
+    keep = {(o.name, kb.name): kb.value for o in meshes if o.data.shape_keys
+            for kb in o.data.shape_keys.key_blocks[1:]}
+    w = drt.Runtime(arm, meshes, R).apply()
+    for o in meshes:
+        if o.data.shape_keys:
+            for kb in o.data.shape_keys.key_blocks[1:]:
+                if kb.name not in w and (o.name, kb.name) in keep:
+                    kb.value = keep[(o.name, kb.name)]
+    bpy.context.view_layer.update()
+    on = ", ".join(f"{k} {v:.2f}" for k, v in sorted(w.items()) if v > 0.01)
+    return f"deform runtime: {len(R.get('helpers', []))} helpers, correctives: {on or 'none active'}"
 
 
 def apply(arm, name):
-    """Pose the armature; returns the log (missing bones, notes)."""
-    p = Poser(arm)
-    POSES[name](p)
-    p.log.append(f"pose {name}: ok")
-    return p.log
+    """Pose the armature (F's canonical spec or E's solver), then run F's
+    deformation runtime; returns the log (source, missing bones, notes)."""
+    spec = _f_spec(name)
+    if spec is not None:
+        _dp().apply_pose(arm, spec)
+        bpy.context.view_layer.update()
+        src = "hero, head straight" if name == "stand_profile" else (F_POSES.get(name) or name.removeprefix("f:"))
+        log = [f"pose {name}: deform_poses {src}"]
+    else:
+        if name not in POSES:
+            raise KeyError(f"unknown pose {name!r}; known: {', '.join(names())}")
+        dp = _dp()
+        if dp is not None:
+            dp.reset(arm)
+        p = Poser(arm)
+        POSES[name](p)
+        p.log.append(f"pose {name}: ok (hero/poses.py)")
+        log = p.log
+    log.append(deform(arm))
+    return log
