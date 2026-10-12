@@ -1,6 +1,6 @@
 # Spike 4: browser skeleton (Phase 0, §18 item 4)
 
-**Status: pass for everything that can be done on this machine. The M4 Air session is still to do (user gate).**
+**Status: pass. M4 Air session done 2026-10-12 (see [M4 Air results](#m4-air-results-2026-10-12-session-20261012t075030-m5ct7g-label-air-1x)).**
 
 The full runtime path works end to end in headless Chromium on this box:
 
@@ -250,6 +250,40 @@ node bench/server.mjs          # leave running; prints one line per telemetry PO
   - after warm-up (t ≥ 300 s) and late (t ≥ 1200 s): fps, missed-vsync %, rAF/CPU/GPU p50/p95/p99, sim costs;
   - peak memory;
   - a 5-minute trend table that shows thermal throttling.
+
+## M4 Air results (2026-10-12, session `20261012T075030-m5ct7g`, label `air-1x`)
+
+**Pass.** Locked 60 fps for the whole 41-minute run, with 0.00 % missed vsync and no sign of thermal throttling.
+
+Setup:
+- Chrome on macOS. Adapter `apple / metal-3`; `shader-f16`, `subgroups` and `timestamp-query` all present.
+- Canvas 1654 × 1026 at dpr 1. The window was not full screen, and dpr 1 renders well below native resolution.
+- Battery reported `charging=false` at 99 %.
+- The tab stayed **visible** the whole time, but was **unfocused** for 236 of 249 windows: another window had focus. macOS renders visible, unfocused windows at full rate, so the numbers below use `--include-hidden`. Every window was visible. The focused-only subset (13 windows) agrees: rAF p95 17.6, CPU p50 1.7, GPU p50 4.95 ms.
+
+`node bench/summarize.mjs --include-hidden`, after warm-up (t ≥ 300 s, 2191 s of data, 131k frames):
+
+| Metric | p50 | p95 | p99 | max |
+|---|---|---|---|---|
+| rAF interval (ms) | 16.7 | 17.9 | 18.6 | 18.7 |
+| CPU frame (ms) | 1.70 | 2.10 | 2.20 | 2.78 |
+| GPU pass (ms) | 3.10 | 5.60 | 7.65 | 22.9 |
+| Sim tick, worker (ms) | 2.66 | 3.18 | 3.36 | ≥ 5.1 |
+| – physics | 1.24 | 1.60 | 1.74 | 3.54 |
+| – pose | 1.34 | 1.74 | 1.80 | 4.88 |
+
+- Late slice (t ≥ 1200 s): rAF p95 18.1, CPU p50 1.65, GPU p50 3.05 ms. The 5-minute trend is flat to improving, with no throttling.
+- Sim held exactly 60 Hz with 0 resyncs and 0 catch-ups. Tick-interval p95 is 20.7 ms: worker wake-up jitter, absorbed by the fixed timestep.
+- Memory:
+  - Measured by the page (`measureUserAgentSpecificMemory`): peak 33.3 MiB. JS heap 11.9 MiB, WASM 6.9 MiB.
+  - Chrome Task Manager: GPU Process 374 MB for the whole browser, an upper bound for this tab. Browser process 150 MB. The tab's own footprint showed "–", and the GPU-memory column was not enabled.
+  - Even taking every number as the tab's, the total is far under the 1.5 GB budget.
+
+**Reading against m2 (NOTES §15, §17 q8):**
+- Work per frame is max(CPU p50, GPU p50) = **3.1 ms** against the 12 ms budget. That leaves about 9 ms of headroom for real shading.
+- This scene is light: instanced bones, flat shading, no post. It proves the plumbing and the sim cost, not the Painted Neon-Noir budget, which still needs measuring at `m4`.
+- **The "rAF p95 ≤ 16.6 ms" wording is unattainable as written.** rAF timestamps jitter by about ±1 ms around the 16.7 ms vsync even at 0 % missed frames, which is what this run shows. Proposed replacement: **missed vsync ≤ 1 %**, meaning frames whose rAF interval exceeds 1.5 × the refresh interval. That is the summariser's existing metric, and this run scores 0.00 %.
+- Next time: full screen at `?dpr=2` to measure native-resolution cost (optional).
 
 ## User actions
 1. **Run the M4 Air session** above. It is the only remaining gate for this spike.

@@ -490,7 +490,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Stylised face via scripted sculpting falls short | 🔴 | Verifier-heavy best-of-N loop, measurable checks, many iterations. User sign-off gates `m1`. |
-| Neon-rain look over budget on the Air | 🔴 | Measure on the Air in Phase 0 / `m4`. Dynamic resolution, half-res passes, baked spill. |
+| Neon-rain look over budget on the Air | 🔴 | Phase 0 Air run: the skeleton scene uses 3.1 ms of the 12 ms budget (GPU p50), so the plumbing leaves about 9 ms for shading, but the art stack itself is unmeasured. Measure at `m4`. Dynamic resolution, half-res passes, baked spill. |
 | No authentic Shinjuku audio under open licences | 🟠 | Programmatic pipeline (§12): real Tokyo CC0/CC-BY recordings + ffmpeg synthesis + PLATEAU-baked acoustics, with a user listening gate. Field recording as an optional upgrade. |
 | GVHMR CPU throughput / quality on film footage | 🟠 | **Measured**: 17.8 h per 60 min with bf16 (4 × 4), ~11–12 h with the accuracy trade. Clean walks look plausible (8.7 px reprojection error). Shot filtering, bf16, 100STYLE/CMU carry core locomotion. |
 | Detector failure on night and action shots means a low usable yield | 🔴 | Filter by track coverage and confidence. Take falls and stunts from mocap. Prioritise clean day or BTS footage. |
@@ -525,6 +525,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
    - "p95 ≤ 16.6 ms" applies to the rAF interval.
    - "median ≤ 12 ms" applies to max(CPU frame p50, GPU pass p50).
    - Measure after 5 min warm-up, for at least 20 min.
+   - **Air finding (2026-10-12):** rAF p95 was 17.9 ms at **0.00 % missed vsync**. Timestamps jitter by about ±1 ms around vsync, so "rAF p95 ≤ 16.6 ms" can't be met even by a perfect run. **Proposed: replace it with "missed vsync ≤ 1 %"** (rAF interval > 1.5 × refresh). Pending the user's decision.
 
 ## 18. Phase 0 — spikes
 
@@ -547,7 +548,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 | 1 | MPFB2 headless | ✅ pass | – |
 | 2 | Render test | ✅ pass | – |
 | 3 | GVHMR on CPU | 🟡 done except footage | User: YouTube cookie export |
-| 4 | Browser skeleton | 🟡 done except Air run | User: 20–30 min Air telemetry session |
+| 4 | Browser skeleton | ✅ pass (Air 2026-10-12) | Optional: full-screen `dpr=2` run |
 | 5 | PLATEAU chunk | ✅ pass | – |
 | 6 | Steam Audio IR | ✅ pass | User: headphone check of `alley-01-binaural.wav` |
 | 7 | Audio pipeline | 🟡 done except listening | User: listening gate (`bench/m0/listening-playlist.md`) |
@@ -642,6 +643,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - **SMPL-derived motion**: ships under a non-commercial exception (CC BY-NC 4.0), §14 rule 9.
 - **m2 frame-time definition**: used provisionally; user to review.
 - SMPL password rotation: done by the user.
+- **M4 Air session (spike 4) passed**: 60 fps locked for 41 min, 0.00 % missed vsync, work p50 3.1 ms (GPU) against the 12 ms budget, no throttling, page memory 33 MiB. **`m0` tagged.** Details in spike-4.
 - **Audio playback target**: the Air's built-in speakers, not headphones. The listening gate runs on speakers. Spatialisation defaults to a stereo speaker mode, with HRTF as a headphone option (§12).
 
 ### 2026-10-12 — Phase 0 executed (autonomous run)
