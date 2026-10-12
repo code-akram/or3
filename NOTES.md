@@ -61,7 +61,8 @@ A third-person gun-fu RPG shooter in the browser. One character, inspired by Joh
 - Available: Rust/cargo (stable + a nightly for WASM threads), Node 24, Python 3.14 (system), uv, ffmpeg, yt-dlp.
 - Installed 2026-10-12: Blender 5.2.2 LTS, OpenVINO 2026.4 and onnxruntime-cpu 1.29 (native libraries only; Python bindings come from uv envs).
 - Headless Chromium is available through Playwright (`~/.cache/ms-playwright`), with WebGPU on SwiftShader. Use it for correctness checks only.
-- Research codebases need **Python 3.10 envs via uv**. Never use the system Python for them.
+- Research codebases run in **uv-managed Python envs at the version their lockfile requires**: 3.10, or 3.11 for the GVHMR fork. Never use the system Python for them. The 3.11 change is pending user confirmation.
+- The machine is a **Hetzner** host: both its IPv4 and IPv6 addresses are in datacenter ranges (AS24940). This affects YouTube (§8).
 
 ### Play client
 - MacBook Air M4: fanless, 60 Hz display, unified memory, Apple tile-based GPU.
@@ -189,12 +190,17 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 
 ### Video → motion (CPU)
 **Footage source:** official studio-uploaded scene clips, trailers and behind-the-scenes featurettes, fetched with `yt-dlp` into `private/`. Full-film scenes are not used.
+- **YouTube** answers this machine with "confirm you're not a bot" whatever the client, IP family or PO token, because of the datacenter IP. Fetching needs the user's exported cookies at `private/youtube-cookies.txt` (mode 600), run through `pipeline/video-to-motion/fetch-youtube.sh`. yt-dlp warns that the account can be banned, so use a secondary account.
+- **Lionsgate UK/US TikTok** downloads without auth, but gives vertical re-edits (576–960 px) with captions. Use it only as a fallback.
+- **The behind-the-scenes Sacré-Cœur stair clip is an IGN exclusive.** It's studio-supplied but not studio-uploaded, so whether it counts as "official" is pending the user's ruling.
 
-`yt-dlp` → **TransNetV2** shot split (PySceneDetect as cross-check) → filter:
+`yt-dlp` → shot split from the **union of TransNetV2 and PySceneDetect** cuts (TransNetV2 alone missed a hard cut) → filter out:
 - shots < 1 s
-- median luma < ~40/255
+- median luma < ~15/255 (night Wick footage measures 6–36)
 - blur
 - subject < 256 px
+- protagonist track coverage < 90 %
+- ViTPose mean confidence < 0.7
 
 → YOLO + ByteTrack → protagonist ID (face + body embeddings, seeded with reference crops) → **GVHMR** (SimpleVO, or static camera via `-s`; bf16 / OpenVINO) → cleanup:
 - One Euro / Butterworth smoothing
@@ -204,12 +210,33 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 
 (reference: `squall01337/mixamo-llm-mocap`, MIT) → **own `bpy` retarget** (SMPL joint rotations → our rig with rest-pose correction, root scaled by leg ratio) → bake.
 
-- **Throughput estimate:** ~8–12 h per 60 min of footage optimised, ~22 h naive. ViT-H passes are > 90% of the time. **Unmeasured — Phase 0 measures it.**
-- **Weak spots:** camera cuts (split first), fast strikes (smoothed), falls and ground work, two-person grapples (deferred with enemies).
+- **GVHMR build**:
+  - The `ryanrudes/gvhmr` fork (CPU-native, Python 3.11), pinned at `e3876097` and installed `--frozen`.
+  - Keep a source bundle in `private/src/`. Treat its ZJU non-commercial `LICENSE` as binding.
+  - bf16 autocast for ViTPose and HMR2 is 2.8× faster with a 1.2 mm MPJPE change. OpenVINO adds only about 15 % more.
+- **Throughput (measured idle, Phase 0, 30 fps frames, per 60 min of footage)**:
+  - fp32 as shipped: **~35 h**. The old estimate of 22 h was too optimistic.
+  - bf16, accuracy-neutral, run as 4 processes × 4 threads: **17.8 h**.
+  - Skipping duplicated frames: ~15 h.
+  - With ViTPose flip-test off and YOLO at source fps: **~11–12 h**. This costs about +2.3 mm PA-MPJPE.
+  - 16 threads is no faster than 8 (8 physical cores).
+  - Stage shares: ViTPose 48 %, YOLO 28 %, HMR2 24 %.
+  - Ultralytics overrides the thread cap. `bench_gvhmr.py` pins it.
+- **Cleanup, foot lock v2**: contact detection (height + speed, hysteresis, minimum duration) plus **two-bone leg IK** that pins the heel and then the ball. The root's horizontal path is left alone.
+  - Measured: contact slide 23.7 → 2.5 cm/s on the walk clip and 4.0 → 1.3 cm/s on the Osaka clip.
+  - At least 99.4 % of travel is kept.
+- **Weak spots:**
+  - Camera cuts (split first).
+  - Fast strikes (smoothed).
+  - Falls and ground work.
+  - Dark, motion-blurred or inverted bodies, where the person detector fails: every YOLO variant found the Sacré-Cœur tumble in under 12 % of frames.
+  - Long coats hiding crossing legs.
+  - Two-person grapples (deferred with enemies).
+- **Falls and stumbles** come from mocap (CMU) plus physics blending or Kimodo, not from video.
 - **Video data never enters git.** Only derived motion on our own skeleton.
 
 ### Extraction targets (priority, from research)
-1. **JW4** Sacré-Cœur stairs (wide shots) + its **behind-the-scenes stair clip** (cleanest framing).
+1. **JW4** Sacré-Cœur stairs: the **climb and walk** wide shots only, because the tumble is unusable (spike 3). Plus its **behind-the-scenes stair clip** (cleanest framing; an IGN exclusive, pending the "official" ruling).
 2. **JW4** Paris duel / street walks, Paris Metro meeting (idle, suit adjust), Osaka Continental (walks, turns, draws).
 3. **JW4** top-down apartment oner (shooting while moving, reloads; check GVHMR's camera assumption).
 4. **JW4** Arc de Triomphe (hood slides, hops; night and occlusion make it hard, so cleanest shots only).
@@ -431,6 +458,12 @@ Target total ~11–12 ms, including 5–6 ms scene shading.
 6. **Required attributions**: PLATEAU (出典：国土交通省 PLATEAU, modified), Open-Meteo (CC BY 4.0), 100STYLE, CMU, HYG, SADIE II, every CC-BY asset → `CREDITS.md`.
 7. **The character is original** (no likeness). Real brand signage and logos are never reproduced.
 8. Research tool licences acceptable for this non-commercial open project: GVHMR (non-profit, derivatives open source), SMPL (non-commercial art), NVIDIA source licences.
+   - These tools run offline only and never ship:
+     - YOLO weights: AGPL-3.0.
+     - HMR2 checkpoint: SMPL-based.
+     - ViTPose: Apache-2.0.
+     - GVHMR fork: ZJU non-commercial (its `pyproject` "MIT" classifier is wrong).
+     - Steam Audio SDK binaries.
 
 ## 15. Benchmark ladder
 
@@ -455,11 +488,13 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 | Stylised face via scripted sculpting falls short | 🔴 | Verifier-heavy best-of-N loop, measurable checks, many iterations. User sign-off gates `m1`. |
 | Neon-rain look over budget on the Air | 🔴 | Measure on the Air in Phase 0 / `m4`. Dynamic resolution, half-res passes, baked spill. |
 | No authentic Shinjuku audio under open licences | 🟠 | Programmatic pipeline (§12): real Tokyo CC0/CC-BY recordings + ffmpeg synthesis + PLATEAU-baked acoustics, with a user listening gate. Field recording as an optional upgrade. |
-| GVHMR CPU throughput / quality on film footage | 🟠 | Measure in Phase 0. Shot filtering, bf16/OpenVINO, 100STYLE/CMU carry core locomotion. |
+| GVHMR CPU throughput / quality on film footage | 🟠 | **Measured**: 17.8 h per 60 min with bf16 (4 × 4), ~11–12 h with the accuracy trade. Clean walks look plausible (8.7 px reprojection error). Shot filtering, bf16, 100STYLE/CMU carry core locomotion. |
+| Detector failure on night and action shots means a low usable yield | 🔴 | Filter by track coverage and confidence. Take falls and stunts from mocap. Prioritise clean day or BTS footage. |
+| Third-party GVHMR fork | 🟡 | Pinned commit + `--frozen` lockfile + a source bundle in `private/src/`. Upstream plus CPU patches is the fallback. |
 | ~~MPFB2 headless untested~~ | ✅ | **Retired 2026-10-12**: verified in spike 1. |
 | WASM threads depend on nightly + build-std | 🟠 | Pin a dated nightly in `core/build-web.sh` and bump it deliberately. The stable fallback is single-threaded WASM with the sim on the main thread. |
 | WASM size: Rapier + parry ≈ 86 % of 506 KB (brotli) | 🟡 | Fine for now. Revisit if load time matters (lazy-load physics, or a slimmer collider set). |
-| YouTube blocks yt-dlp from this machine ("not a bot") | 🟠 | Cookies from the user's browser, or other official sources. Being worked on in the spike 3 follow-up. |
+| YouTube blocks yt-dlp from this machine ("not a bot", datacenter IP) | 🔴 until the cookies land | Root-caused in spike 3. Every documented yt-dlp route failed. **One user step fixes it:** export cookies, then `fetch-youtube.sh`. |
 | Suit deformation in extreme poses | 🟠 | Helper bones + Dem Bones baking + correctives |
 | PLATEAU LOD2 coverage, `nusamai` glTF sink thin | 🟡 | **Confirmed**: the sink's attributes are broken, and LOD2 is 46 % across the district. Mitigation in place: our own chunk writer, plus procedural facades for LOD1. |
 | Licence drift (PLATEAU wording, CMU, PARC provenance, SFU) | 🟡 | Provenance manifest + audit before use |
@@ -501,11 +536,23 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - Spikes 3 and 7 start as soon as the credentials land.
 - The result is one synthesised `m0` report.
 
+**Status (2026-10-12).** All reports are in `bench/m0/`. Idle 16-thread reruns are in `bench/m0/idle-rerun.md`. Handoff: `HANDOFF.md`.
+
+| # | Spike | Status | Remaining |
+|---|---|---|---|
+| 1 | MPFB2 headless | ✅ pass | – |
+| 2 | Render test | ✅ pass | – |
+| 3 | GVHMR on CPU | 🟡 done except footage | User: YouTube cookie export; IGN ruling |
+| 4 | Browser skeleton | 🟡 done except Air run | User: 20–30 min Air telemetry session |
+| 5 | PLATEAU chunk | ✅ pass | – |
+| 6 | Steam Audio IR | ✅ pass | User: headphone check of `alley-01-binaural.wav` |
+| 7 | Audio pipeline | 🟡 done except listening | User: listening gate (`bench/m0/listening-playlist.md`) |
+
 **M4 Air measurement:** the user opens the tunnel URL in Chrome and keeps the tab in front. The page POSTs frame-time histograms and memory to a local `bench/` endpoint on this machine, so Claude reads the results directly.
 
 1. **Install** Blender 5.2 (pacman). Run MPFB2 headless: create a human, add the `game_engine` rig, add the CC0 suit, export glTF.
 2. **Render** test: Cycles CPU turntable and EEVEE via llvmpipe/lavapipe, with timings.
-3. **GVHMR** on CPU in a uv Python 3.10 env, on one clean JW4 stair or behind-the-scenes shot. Measure s/frame per stage (YOLO, ViTPose, features, GVHMR) and output quality.
+3. **GVHMR** on CPU in a uv Python 3.11 env (fork; see §8), on one clean JW4 stair or behind-the-scenes shot. Measure s/frame per stage (YOLO, ViTPose, features, GVHMR) and output quality.
 4. **Browser skeleton**: Vite + three WebGPU + Rust/WASM threads with COOP/COEP. Served over an SSH tunnel and measured on the M4 Air (frame time, memory).
 5. **PLATEAU**: fetch the Shinjuku FY2025 data, parse one Kabukicho mesh cell with `nusamai`, reproject to EPSG:6677, export one chunk.
 6. **Steam Audio**: bake one alley impulse response from that chunk.
@@ -582,6 +629,21 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 ---
 
 ## Decision log
+
+### 2026-10-12 — Phase 0 executed (autonomous run)
+- All seven spikes ran as parallel agents in git worktrees and were merged to `main`. Spike 3 got a follow-up agent to find root causes and finish it.
+- **Findings folded into this file:**
+  - The iGPU runs EEVEE headless.
+  - MPFB2 headless works; that risk is retired.
+  - nusamai's glTF sink was replaced by our own chunk writer.
+  - Steam Audio calibration.
+  - The WASM threads recipe (nightly).
+  - Measured GVHMR throughput.
+  - Foot lock v2.
+  - The YouTube datacenter-IP root cause.
+- **Provenance:** a JSONL manifest format adopted as a draft (pending approval; §17 q3).
+- **Security fix:** credentials no longer reach `curl` via argv in `fetch-body-models.sh` and `freesound-auth.sh`. One SMPL password leaked through `pgrep -a`; the user is rotating it.
+- **Pending user gates:** listed in §18 Status and in `HANDOFF.md`.
 
 ### 2026-10-11 — alignment interview
 - **Working agreement**: Claude works autonomously and stops only at gates (`m1` look, audio listening, Air measurements, credentials, installs). Independent work runs in parallel, in git worktrees where that applies. The user runs `sudo` installs from commands Claude provides.
