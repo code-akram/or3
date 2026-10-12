@@ -32,7 +32,64 @@ DEFAULTS = {
         "edits": {},  # parametric head edits (head.edit_base); empty = stock head
     },
     "hair": {
-        "asset": "long01.mhclo",
+        # MPFB card hair (spike-1 placeholder); null = generated hair only.
+        "asset": None,
+        # Generated clump hair (hair_clumps.py). Default variant: shoulder.
+        "clumps": {
+            "seed": 7,
+            "clumps": 68,             # main clumps (roots spread over the scalp)
+            "length": {"f": 0.85,     # tip height: neck_01 joint (0) -> shoulder joints (1)
+                       "jitter_m": 0.02},
+            "max_len_m": 0.55,
+            "radius_m": 0.022,        # clump half-width at full size
+            "radius_jitter": 0.2,
+            "hang_widen": 0.5,        # extra half-width where a clump hangs free
+            "taper_power": 1.6,       # half-width ~ 1 - t^k: holds width, tapers late
+            "aspect": 3.6,            # half-width / half-thickness
+            "gap_m": 0.0015,          # clearance over skin and clothes
+            "layer_jitter_m": 0.002,
+            "part_x_m": 0.012,        # part, off-centre to the character's left
+            "part_push": 0.35,
+            "comb_drop": 0.15,
+            "side_drop": 0.3,         # extra drop for side roots (over the ear)
+            "gravity": 0.95,
+            "step_m": 0.01,
+            "turn": 0.6,
+            "segment_m": 0.035,
+            "min_segments": 5,
+            "max_segments": 12,
+            "sides": 6,
+            "front_fall": {"side": -1, "count": 2, "az0_deg": 35, "az_step_deg": 9,
+                           "el_deg": 22, "comb_side": 0.5, "comb_fwd": 0.0, "comb_down": 0.9,
+                           "fall_after_m": 0.02, "tip_above_lips_m": 0.035,
+                           "radius_scale": 0.85,
+                           "max_len_m": 0.22},
+            "region": {"temple_front_m": 0.045, "temple_above_ear_m": 0.0,
+                       "nape_above_neck_m": 0.04},
+            "cap": {"offset_m": 0.0025, "edge_taper": [0.2, 0.5, 0.8], "edge_smooth_iters": 6},
+            "color": "#1d1915",
+            "roughness": 0.5,
+        },
+        # Beard shell + jaw tufts (hair_beard.py).
+        "beard": {
+            "seed": 11,
+            "sideburn_back_m": 0.004,  # behind the front of the ear
+            "sideburn_up_m": 0.0,      # cheek line start above ear centre
+            "moustache_m": 0.009,      # cheek line end above the upper lip
+            "jaw_drop_m": 0.055,       # neckline start below ear centre
+            "cheek_dip_m": 0.02,       # cheek line sag under the cheekbone
+            "throat_back_m": 0.05,     # neckline end behind the chin front
+            "under_chin_m": 0.008,     # neckline end below the chin (clears the shirt collar)
+            "thickness_m": 0.005,
+            "chin_extra_m": 0.003,
+            "edge_taper": [0.15, 0.45, 0.8],
+            "edge_smooth_iters": 6,
+            "tufts": 24,
+            "tuft_len_m": 0.008,
+            "tuft_radius_m": 0.0035,
+            "color": "#201a15",
+            "roughness": 0.6,
+        },
     },
     "suit": {
         "clothes": ["toigo_male_suit_tie_and_jacket.mhclo", "shoes04.mhclo"],
