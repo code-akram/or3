@@ -17,6 +17,7 @@ import subprocess
 import sys
 
 VIEWS = ["front", "three_quarter", "profile", "closeup"]
+FACE_VIEWS = ["face_front", "face_profile"]  # mask-only (body + eyes), IoU only
 TILE = 512
 
 
@@ -76,7 +77,13 @@ def finalize(a):
         "tris": rm["tris"],
         "bones": rm["bones"],
         "max_weights_per_vertex": glb_max_w if glb_max_w is not None else rm["max_weights_per_vertex"],
-        "landmarks": rm["landmarks"],
+        # Spec landmarks (look-spec §1.1, nude body, measured in the build) and
+        # their pass/fail; joint-based landmarks of the shipped GLB as context.
+        "landmarks": build.get("spec_landmarks") or {},
+        "spec_checks": build.get("spec_checks") or {},
+        "read40": rm.get("read40"),
+        "landmarks_glb": rm.get("landmarks_glb", rm.get("landmarks")),
+        "head_edits": build.get("head_edits"),
         "silhouette": rm["silhouette"],
         "iou_target": rm["iou_target"],
         "iou_prev": rm["iou_prev"],
@@ -102,18 +109,43 @@ def finalize(a):
     summary(metrics)
 
 
+def spec_line(m):
+    """Spec checks as 'name value(+/-)': + = within tolerance, ! = outside."""
+    ch = m.get("spec_checks") or {}
+    short = {"stature": "stat", "heads_tall": "heads", "bideltoid": "bidelt",
+             "shoulder_to_hip": "sh:hip", "leg_ratio": "leg", "leg_to_torso": "leg:tor",
+             "bizygomatic": "bizyg", "jaw_to_cheek": "jaw:chk", "lower_face_index": "lfi",
+             "brow_overhang": "brow"}
+    parts = []
+    for k, c in ch.items():
+        v = c["value"] * 1000 if k == "brow_overhang" else c["value"]
+        parts.append(f"{short.get(k, k)} {v:.3g}{'+' if c['ok'] else '!'}")
+    fails = sum(1 for c in ch.values() if not c["ok"])
+    return "spec  " + "  ".join(parts) + f"   ({fails} out)"
+
+
+def read_line(m):
+    r = m.get("read40") or {}
+    if "eye_band_darker" not in r:
+        return "read40 " + str(r.get("skipped", "-"))
+    s = f"read40 eye band {100 * r['eye_band_darker']:.0f}% darker{'+' if r['eye_band_ok'] else '!'}"
+    if "beard_contrast" in r:
+        s += f"   beard {100 * r['beard_contrast']:.0f}%{'+' if r['beard_ok'] else '!'}"
+    else:
+        s += "   beard -"
+    return s + f"   (head {r['head_px']} px)"
+
+
 def header_text(m):
-    lm = m["landmarks"]
     iou_p = m["iou_prev"] or {}
     iou_t = m["iou_target"] or {}
     lines = [
         f"{m['label']}   {m['run']}   mode {m['mode']}   "
         f"tris {m['tris']['total']}   bones {m['bones']}   w/v {m['max_weights_per_vertex']}   "
         f"gltf errors {fmt(m['gltf_validator']['errors'])}",
-        f"heads {fmt(lm.get('heads_tall'))}   stature {fmt(lm.get('stature_m'))} m   "
-        f"shoulder:hip {fmt(lm.get('shoulder_to_hip'))}   leg:torso {fmt(lm.get('leg_to_torso'))}   "
-        f"head w:h {fmt(lm.get('head_width_to_height'))}",
-        "IoU prev  " + "  ".join(f"{v} {fmt(iou_p.get(v))}" for v in VIEWS)
+        spec_line(m),
+        read_line(m),
+        "IoU prev  " + "  ".join(f"{v} {fmt(iou_p.get(v))}" for v in VIEWS + FACE_VIEWS)
         + ("   IoU target  " + "  ".join(f"{v} {fmt(iou_t.get(v))}" for v in VIEWS) if iou_t else ""),
     ]
     return "\n".join(lines)
@@ -135,7 +167,7 @@ def sheet(run, m):
         chains.append(f"[{i + 4}]scale={TILE // 2}:{TILE // 2},pad={TILE}:{TILE // 2}:{TILE // 4}:0[m{i}]")
     fc = ";".join(chains) + (
         ";[b0][b1][b2][b3]hstack=4[top];[m0][m1][m2][m3]hstack=4[bot];[top][bot]vstack[g];"
-        f"[g]pad=iw:ih+84:0:84,{drawtext(txt, 18, y='8')}")
+        f"[g]pad=iw:ih+108:0:108,{drawtext(txt, 18, y='8')}")
     ffmpeg([*inputs, "-filter_complex", fc, os.path.join(run, "sheet.png")])
     for v in VIEWS:
         os.remove(os.path.join(run, f"sheet_{v}.txt"))

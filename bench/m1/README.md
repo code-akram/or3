@@ -24,15 +24,26 @@ bench/m1/lookdev.sh --compare <runA> <runB>          # side-by-side sheet + metr
 
 | Section | Module | Stage hooks |
 |---|---|---|
-| `body` (macros, race, skin) | `body.py` | `create` |
-| `head` (face parts, cut-outs, `edits`) | `head.py` | `edit_base` (base mesh, before fitting), `add_parts`, `post` |
+| `body` (macros, race, skin, `targets`) | `body.py` | `create` |
+| `head` (face parts, cut-outs, `targets`, `edits`, `planes`) | `head.py` (+ `head_shape.py`, `head_measure.py`) | `edit_base` (base mesh, before fitting), `add_parts` (then measures the spec landmarks on the still-nude human), `post` |
 | `hair` | `hair.py` | `add`, `post` |
 | `suit` (clothes list) | `suit.py` | `add`, `post` |
 | `rig` (builtin, `helpers`) | `rig.py` | `add`, `post` |
 | `budgets.decimate` (`{name part: max tris}`) | `budgets.py` | `apply` |
 | `export` | `export.py` | staging, target bake, alpha fix, GLB |
 
-The stage order is listed in `blender/character/__init__.py`. `post` hooks run on the staged export meshes after the macro targets are baked. In an override, `null` disables a default dict entry, e.g. `{"budgets": {"decimate": {"teeth": null}}}` reproduces the spike-1 GLB byte for byte.
+The stage order is listed in `blender/character/__init__.py`. `post` hooks run on the staged export meshes after the macro targets are baked. In an override, `null` disables a default dict entry. The m1 defaults carry the tuned proportions (`body.macros.height` 0.607 and three `body.targets`, see `head.md`) and the 480-tri teeth budget. Reverting them gives the earlier GLBs byte for byte, e.g. the spike-1 GLB:
+
+```json
+{"body": {"macros": {"height": 0.6}, "targets": {"measure-shoulder-dist-incr": null, "torso-vshape-incr": null, "hip-scale-horiz-decr": null}},
+ "budgets": {"decimate": {"teeth": null}}}
+```
+
+**Head and body controls** (look-spec §1–2; details and the variant configs in [`head.md`](head.md)):
+- `body.targets` / `head.targets`: MPFB detail targets `{file stem: weight}`, e.g. `"measure-shoulder-dist-incr": 0.12`. `"lr-<stem>"` loads the mirrored `l-`/`r-` pair.
+- `head.edits`: the 17 look-spec §2.3 controls, each in [−1, 1] (`head_shape.CONTROLS`).
+- `head.planes`: planarisation blend 0..1 per plane group (`head_shape.PLANES`); `brow_flatten`, `dorsum_crease` and `cheek_plane_break` drive their groups too.
+- Face variants for the direction checkpoint: `bench/m1/variants/face-{a,b,c}.json`.
 
 Example candidate:
 
@@ -48,6 +59,8 @@ Example candidate:
 | `glbstats.json` | Khronos glTF-Validator result + per-mesh weights-per-vertex histogram |
 | `<view>.png` | beauty frame: `front`, `three_quarter` (40°), `profile` (90°, character's left), `closeup` (25°, head) |
 | `<view>_mask.png` | silhouette, white = character |
+| `face_front_mask.png`, `face_profile_mask.png` | head silhouette with only the body and eyes shown (hair, clothes and face cards hidden), orthographic, 0.42 m frame; long hair hides head edits from `closeup`, these don't |
+| `read40.png` | the 40 px read test image (48 px, upscaled ×4) with its sample boxes: eye band red, cheek cyan, beard yellow |
 | `render_metrics.json` | raw metrics from the render pass |
 | `metrics.json` | the merged record (below) |
 | `sheet.png` | contact sheet: header with key metrics, beauty row, masks row |
@@ -69,21 +82,25 @@ Example candidate:
 | `bones` | joints in the GLB skeleton |
 | `max_weights_per_vertex` | max non-zero weights on any vertex in the GLB (from the validator pass) |
 | `gltf_validator.errors/warnings` | Khronos glTF-Validator counts (9 known `NODE_SKINNED_MESH_NON_ROOT` warnings) |
-| `landmarks.stature_m` | top of the body mesh to the lowest point of any mesh (shoe soles) |
-| `landmarks.head_height_m / width_m / depth_m` | extent of body vertices with ≥ 0.5 weight on `head`: crown to the lowest such vertex (≈ chin/jaw), and its x / y extent (incl. ears) |
-| `landmarks.heads_tall` | stature / head height |
-| `landmarks.shoulder_joint_width_m` | distance between the `upperarm_l` and `upperarm_r` joints |
-| `landmarks.hip_joint_width_m` | distance between the `thigh_l` and `thigh_r` joints |
-| `landmarks.shoulder_to_hip` | shoulder joint width / hip joint width |
-| `landmarks.leg_length_m`, `torso_length_m`, `leg_to_torso` | hip joints → floor; hip joints → `neck_01`; their ratio |
-| `landmarks.arm_length_m`, `arm_to_stature` | `upperarm_l` → `lowerarm_l` → `hand_l` |
-| `landmarks.head_width_to_height`, `head_width_to_shoulder` | face/head shape and head-to-body scale |
+| `landmarks.<name>` | **the look-spec §1.1 landmarks** (the m1 contract), measured in the build on the live, still-nude MPFB human after the face parts are fitted (`blender/character/head_measure.py`): `stature`, `head_height`, `heads_tall`, `bideltoid`, `hip_breadth`, `shoulder_to_hip`, `crotch_height`, `leg_ratio`, `leg_to_torso`, `bizygomatic`, `bigonial`, `jaw_to_cheek`, `lower_face_index`, plus `brow_overhang` (mean of both sides: most forward brow point on the mid-pupil vertical, 8–40 mm above the eye centre, minus the cornea front), `menton_z`, `eye_height`, `interpupillary` |
+| `spec_checks.<name>` | `{value, target, tol, ok}` against look-spec §1.2 (`brow_overhang`: ≥ 12 mm). The sheet header shows them, `+` = within tolerance, `!` = out |
+| `read40` | look-spec §2.2 read test: a ¾ render from the key-light side (azimuth −40°), key light only, the head rendered 320 px tall and box-averaged ×8 to 40 px. `eye_band_darker` = 1 − L(eye band) / L(cheek), relative luminance; pass ≥ 0.15. `beard_contrast` = \|L(beard) − L(cheek)\| / L(cheek), pass ≥ 0.25, skipped until a mesh named `*beard*` exists. The hair-vs-grey separation check is not implemented yet (hair track). Thresholds are *(cal.)* in the spec: the stock head already scores 40 % |
+| `head_edits` | the resolved controls and plane blends, max vertex move (mm), vertices moved |
+| `landmarks_glb.stature_m` | (context) joint/vertex measures of the **shipped** GLB: top of the body mesh to the lowest point of any mesh (shoe soles) |
+| `landmarks_glb.head_height_m / width_m / depth_m` | extent of body vertices with ≥ 0.5 weight on `head`: crown to the lowest such vertex (≈ chin/jaw), and its x / y extent (incl. ears) |
+| `landmarks_glb.heads_tall` | stature / head height (shoes included; reads lower than the spec value) |
+| `landmarks_glb.shoulder_joint_width_m`, `hip_joint_width_m`, `shoulder_to_hip` | joint distances `upperarm_l`–`upperarm_r`, `thigh_l`–`thigh_r`, and their ratio (not the spec's surface breadths) |
+| `landmarks_glb.leg_length_m`, `torso_length_m`, `leg_to_torso` | hip joints → floor; hip joints → `neck_01`; their ratio |
+| `landmarks_glb.arm_length_m`, `arm_to_stature` | `upperarm_l` → `lowerarm_l` → `hand_l` |
+| `landmarks_glb.head_width_to_height`, `head_width_to_shoulder` | face/head shape and head-to-body scale |
 | `silhouette.<view>` | mask bbox `height_m`, `width_m` and `area_px` |
-| `iou_prev.<view>` | mask IoU against the previous (or `--prev`) run: 1.000 = identical silhouette |
+| `iou_prev.<view>` | mask IoU against the previous (or `--prev`) run, for the 4 views and the 2 face mask views: 1.000 = identical silhouette |
 | `iou_target.<view>` | mask IoU against `--target DIR/<view>_mask.png` (same 512² orthographic framing) |
 | `timings_s` | build stages, Blender build total, beauty seconds per view, mask total, whole process |
 
-Joint names are the MPFB `game_engine` (UE-mannequin) names. The landmarks are measured in the rest (A-)pose and are meant for **relative** comparison between runs, not anthropometry.
+Joint names are the MPFB `game_engine` (UE-mannequin) names. All landmarks are measured in the rest (A-)pose. The spec landmarks follow look-spec §1.1 exactly (one implementation, shared with `look_spec_landmarks.py`); `landmarks_glb` is for relative comparison only.
+
+**Why two landmark sets.** Track A measured the clothed, staged GLB (joint distances; covered body polygons deleted), which gave heads 7.56 and shoulder:hip 1.744 on the spike-1 build. The spec measures surface breadths on a nude body, which gives 7.84 and 1.41 on the same build. The spec numbers are the contract, so the build now measures them on the live human before any clothes are fitted, in the same build (no second nude build).
 
 ### Using it in a best-of-N loop
 
@@ -102,7 +119,7 @@ Builds are deterministic: the same config gives IoU 1.000 against itself.
 | Validator | 0.2 s |
 | Loop beauty, EEVEE 512² / 16 samples | 0.45–0.68 s per view (mean 0.51 s; first view pays shader compile) |
 | Masks (4 views) | 0.3 s total |
-| **Whole loop iteration** | **5.4–5.6 s** |
+| **Whole loop iteration** | **5.4–5.6 s** (track A); **6.5–7.5 s** with the spec landmarks, read test (+0.3 s) and face masks (+0.15 s), at load average 5–7 from other jobs |
 | Sign-off beauty, Cycles 1024² / 128 spp + OIDN, 16 threads | 10.5–16.5 s per view (close-up slowest); 53 s per run |
 
 ## Provenance

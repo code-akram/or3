@@ -1,0 +1,13 @@
+{
+  "$comment": "Face variant C, weathered: deep sockets, hooded lids, hollow cheeks, longer face with a dorsal hump, thinner lips. look-spec §6; parameters only (§2.4).",
+  "head": {
+    "targets": {"head-age-incr": 0.6, "chin-height-incr": 0.12, "lr-cheek-volume-decr": 0.6,
+                "nose-hump-incr": 0.4, "nose-scale-vert-incr": 0.2, "lr-eye-bag-incr": 0.3,
+                "lr-eye-scale-decr": 0.2},
+    "edits": {"brow_depth": 0.9, "brow_angle": 0.5, "brow_flatten": 0.5, "socket_depth": 1.0,
+              "lid_hood": 0.9, "nose_length": 0.4, "dorsum_crease": 0.7, "cheek_height": 0.3,
+              "cheek_plane_break": 0.9, "submalar_hollow": 1.0, "jaw_width": 0.3, "jaw_angle": 0.4,
+              "chin_projection": 0.2, "lip_thickness": -0.4, "forehead_slope": 0.3},
+    "planes": {"forehead": 0.5, "jaw_side": 0.7, "chin_front": 0.5}
+  }
+}
