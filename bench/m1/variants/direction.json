@@ -31,13 +31,13 @@
   "edits": {
    "brow_depth": 0.9,
    "brow_angle": 0.5,
-   "brow_flatten": 0.8,
+   "brow_flatten": 0.5,
    "socket_depth": 1.0,
    "lid_hood": 1.0,
    "nose_length": 0.3,
-   "dorsum_crease": 0.8,
+   "dorsum_crease": 0.6,
    "cheek_height": 0.4,
-   "cheek_plane_break": 1.0,
+   "cheek_plane_break": 0.35,
    "submalar_hollow": 1.0,
    "jaw_width": 0.6,
    "jaw_angle": 0.6,
@@ -46,9 +46,42 @@
    "forehead_slope": 0.9
   },
   "planes": {
-   "forehead": 0.6,
-   "jaw_side": 0.9,
-   "chin_front": 0.6
+   "forehead": 0.5,
+   "malar": 0.45,
+   "jaw_side": 0.5,
+   "chin_front": 0.4
+  },
+  "forms": {
+   "tissue": {
+    "malar_pad_mm": 2.0,
+    "tear_trough_mm": 1.2,
+    "lid_bag_mm": 0.8,
+    "nasolabial_mm": 1.5,
+    "nasolabial_end_mm": 0.3,
+    "nasolabial_overhang_mm": 0.8,
+    "marionette_mm": 0.5,
+    "mentalis_mm": 0.8,
+    "labiomental_mm": 0.8
+   },
+   "lids": {
+    "upper_l_mm": 0.5,
+    "upper_r_mm": 1.0,
+    "lower_l_mm": 1.3,
+    "lower_r_mm": 1.3
+   },
+   "asym": {
+    "seed": 7,
+    "jitter": 0.0,
+    "brow_l_up_mm": 1.5,
+    "dorsum_dev_mm": 1.5,
+    "mouth_corners_down_mm": 0.8,
+    "mouth_l_down_mm": 0.8,
+    "ear_l_down_mm": 1.0,
+    "ear_top_out_mm": 3.0
+   }
+  },
+  "refine": {
+   "replanarise": 0.0
   }
  },
  "hair": {
