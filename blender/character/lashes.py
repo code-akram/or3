@@ -244,7 +244,8 @@ def build(b, frame, cfg):
         # kept out of the skin (a hooded upper lid would otherwise swallow the
         # upturned tips) before the strip is built along them
         beard_groom.collide(pts, frame.skin_bvh, np.concatenate([[0.0], np.full(k - 1, cfg["gap_m"])]))
-        rad = np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], n)[:, None]
+        rad = (np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], n)[:, None]
+               * lc.get("radius_scale", 1.0))
         mel = np.clip(cfg["melanin"] + rng.normal(0, 0.01, n), 0, 1)
         red = np.full(n, cfg["redness"])
         all_pts.append(pts)
@@ -270,7 +271,10 @@ def build(b, frame, cfg):
             # forward run is shortened), the standard cheat.
             for ri in range(1, rows):
                 off = grid[ri, ci] - grid[0, ci]
-                off[1] *= lc.get("strip_forward_scale", 1.0)
+                # not at the outer corner: there the lashes fan out of a
+                # recess under the hood, and a flattened strip sinks into it
+                s0 = lc.get("strip_forward_scale", 1.0)
+                off[1] *= s0 + (1 - s0) * min(max((cuv - 0.6) / 0.4, 0.0), 1.0)
                 q = Vector(grid[0, ci] + off)
                 loc, nrm, _, _ = frame.skin_bvh.find_nearest(q)
                 if loc is not None and (q - loc).dot(nrm) < cfg["strip_gap_m"]:
