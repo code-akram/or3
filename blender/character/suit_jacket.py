@@ -189,6 +189,16 @@ class Jacket:
                     d = (p - c)
                     pts[i] = c + d * (1 - J["underlap_tuck_m"] * k / max(d.length, 1e-6))
             r.update({"a0": a0, "a1": a1, "pts": pts})
+        # shoulder slope: the top rows drop toward the shoulder point, so the
+        # line from the neck point runs down to the sleeve head (not a box)
+        slope = J["shoulder"]["slope_m"]
+        for r in rows:
+            if r["z"] <= self.z_pit:
+                continue
+            w = smoothstep((r["z"] - self.z_pit) / max(self.z_sh - self.z_pit, 1e-6))
+            for p in r["pts"]:
+                t = smoothstep((abs(p.x) - self.x_n) / max(self.half_sh - self.x_n, 1e-6))
+                p.z -= slope * w * t * t
         self.rings = rows
         return rows
 

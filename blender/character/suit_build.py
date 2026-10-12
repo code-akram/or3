@@ -399,6 +399,20 @@ class Garment:
         """Create the object next to `like` (same parent and collections),
         with an armature modifier, and register it for export."""
         bm = self.bm
+        # degenerate faces (zero area: coincident vertices at a seam wrap or a
+        # collapsed row) export zero tangents, a glTF validator error
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
+
+        def area(f):  # vector area, zero for collinear faces (calc_area is not)
+            vs = [v.co for v in f.verts]
+            s = Vector((0, 0, 0))
+            for i in range(len(vs)):
+                s += vs[i].cross(vs[(i + 1) % len(vs)])
+            return 0.5 * s.length
+
+        degenerate = [f for f in bm.faces if area(f) < 1e-9]
+        if degenerate:
+            bmesh.ops.delete(bm, geom=degenerate, context="FACES_ONLY")
         loose = [v for v in bm.verts if not v.link_faces]
         if loose:
             bmesh.ops.delete(bm, geom=loose, context="VERTS")
@@ -414,7 +428,8 @@ class Garment:
                 for i, l in enumerate(f.loops):
                     l[self.uv].uv = (uvs[i].x + 0.0004 * math.cos(i * 2.1), uvs[i].y + 0.0004 * math.sin(i * 2.1))
                 flat += 1
-        self.stats = {"loose_verts_removed": len(loose), "flat_uv_faces_fixed": flat}
+        self.stats = {"loose_verts_removed": len(loose), "flat_uv_faces_fixed": flat,
+                      "degenerate_faces_removed": len(degenerate)}
         bm.normal_update()
         me = bpy.data.meshes.new(self.name)
         bm.to_mesh(me)

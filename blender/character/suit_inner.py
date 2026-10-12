@@ -286,6 +286,8 @@ class Inner:
             f.smooth = True
             for loop in f.loops:  # planar UVs, so the tangent is defined
                 loop[G.uv].uv = (0.5 + loop.vert.co.x, 0.6 - 0.03 - loop.vert.co.y * 0.5)
+            import bmesh
+            bmesh.ops.triangulate(G.bm, faces=[f])
         except ValueError:
             pass
         for row in g.rows:

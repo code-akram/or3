@@ -98,3 +98,8 @@ if not A.no_render:
     if r.returncode:
         print(r.stdout[-3000:], r.stderr[-3000:])
     print(f"[suit_dev] views in {A.out} ({time.perf_counter() - t0:.1f} s total)")
+
+if os.environ.get("SUIT_TANGENT_CHECK"):
+    sys.path.insert(0, "/tmp")
+    import tangent_check
+    tangent_check.check(b.meshes())
