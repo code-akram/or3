@@ -230,7 +230,7 @@ DEFAULTS = {
             # chin 12-15, soul patch 10, moustache 8-10 over the lip by 2 mm).
             "length": {"cheek_m": 0.0075, "jaw_m": 0.0105, "chin_extra_m": 0.0055,
                        "chin_radius_m": 0.03, "soul_m": 0.010, "soul_radius_m": 0.010,
-                       "moustache_m": 0.0095, "lip_overlap_m": 0.002, "neck_m": 0.009},
+                       "moustache_m": 0.0095, "lip_overlap_m": 0.002, "under_below_mouth_m": 0.02, "neck_m": 0.009},
             "comb": {"cheek_back": 0.3, "chin_forward": 0.3, "soul_forward": 0.8, "under_jaw_back": 0.6,
                      "moustache_down": 1.0, "moustache_side": 0.6, "philtrum_x_m": 0.006,
                      "smooth_iters": 3},

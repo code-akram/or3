@@ -190,7 +190,9 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
         near_soul = math.exp(-((p - soul).length / ln["soul_radius_m"]) ** 2)
         below = smoothstep(mouth_z + 0.004, mouth_z - 0.02, p.z)
         moustache = p.z > slit_z and abs(p.x - c.x) < corner_x - c.x + 0.010
-        under = v.normal.z < -0.35
+        # under the jaw (not the underside of the lower lip, whose hairs
+        # must grow down and out of the mentolabial fold, not back into it)
+        under = v.normal.z < -0.35 and p.z < mouth_z - ln["under_below_mouth_m"]
         if moustache:
             L = ln["moustache_m"]
             if p.z > upper_lip_z - 0.002:
