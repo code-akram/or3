@@ -60,6 +60,7 @@ Example candidate:
 | `<view>.png` | beauty frame: `front`, `three_quarter` (40°), `profile` (90°, character's left), `closeup` (25°, head) |
 | `<view>_mask.png` | silhouette, white = character |
 | `face_front_mask.png`, `face_profile_mask.png` | head silhouette with only the body and eyes shown (hair, clothes and face cards hidden), orthographic, 0.42 m frame; long hair hides head edits from `closeup`, these don't |
+| `face_strip.png`, `face/` | hair-hidden face strip (body, eyes, brows, lashes, mouth parts): front, ¾ key side (−35°), ¾ shadow side (+35°), profile (−90°), 320² each; row 1 full studio, row 2 key only, optional row 3 key only with the body shaded smooth-by-angle (`--facet DEG` on `lookdev_render.py`, a planarity test that doesn't ship) |
 | `read40.png` | the 40 px read test image (48 px, upscaled ×4) with its sample boxes: eye band red, cheek cyan, beard yellow |
 | `render_metrics.json` | raw metrics from the render pass |
 | `metrics.json` | the merged record (below) |
@@ -73,6 +74,16 @@ Example candidate:
 - **Body views use fixed world-space cameras** (target 0.98 m above the floor, 2.15 m frame height). Proportion changes therefore show up in the picture instead of being reframed away. The close-up tracks the `head` bone (0.42 m frame), so it shows the face whatever the height.
 - **Masks use orthographic cameras** along the same axis, 512², with a fixed metric size per pixel (2.15 m / 512 = 4.2 mm for body views, 0.82 mm for the close-up). That makes IoU and silhouette widths comparable between runs. They are rendered with EEVEE at 1 sample, film transparent, floor hidden. Hair cut-outs (MASK) are respected.
 - Studio: spike-2 rig at fixed positions (key front-left-high 900 W, fill front-right 250 W, rim behind 700 W, area lights, near-black world, dark floor).
+- **Exposure** (2026-10-12): AgX, look None, **−2.5 EV** (`STUDIO_EXPOSURE`; `LOOKDEV_EXPOSURE` overrides). Calibrated with `lookdev_render.py --calibrate`, which renders Lambertian cards at face and chest height and writes `calibration.json`. At −2.5 EV the full rig gives: 3 % black wool 0.18 display, 18 % grey 0.47, 30 % skin-mid 0.58, 80 % white shirt 0.74 (no clipping). Before, at 0 EV, the same cards read 0.47 / 0.78 / 0.84 / 0.92, so black cloth rendered mid-grey.
+- **Look-dev skin** (`--skin lookdev`, default; render-side only, the GLB keeps the MPFB material): the body texture desaturated (0.55) and darkened (0.88), multiplied by low-frequency value noise (0.86–1.06), roughness 0.62, specular 0.35. `--skin asset` renders the shipped material.
+
+### Face variants: distinctness guard
+
+`python3 -I bench/m1/face_distinct.py --stock RUN --variant a=RUN --variant b=RUN --variant c=RUN --out DIR` scores the hair-hidden face masks: every variant must be at IoU ≤ 0.95 against the stock head and ≤ 0.97 against every other variant, in both `face_front` and `face_profile`. Writes `distinct.json` and `faces.png` (the face strips stacked, labelled). Exit 1 on a failed guard.
+
+### Failing fast
+
+Blender exits 0 on a Python error, so both Blender calls run with `--python-exit-code 1`, and the script also checks that `character.glb` and `render_metrics.json` exist before going on.
 
 ## Metrics (`metrics.json`)
 
@@ -84,7 +95,7 @@ Example candidate:
 | `gltf_validator.errors/warnings` | Khronos glTF-Validator counts (9 known `NODE_SKINNED_MESH_NON_ROOT` warnings) |
 | `landmarks.<name>` | **the look-spec §1.1 landmarks** (the m1 contract), measured in the build on the live, still-nude MPFB human after the face parts are fitted (`blender/character/head_measure.py`): `stature`, `head_height`, `heads_tall`, `bideltoid`, `hip_breadth`, `shoulder_to_hip`, `crotch_height`, `leg_ratio`, `leg_to_torso`, `bizygomatic`, `bigonial`, `jaw_to_cheek`, `lower_face_index`, plus `brow_overhang` (mean of both sides: most forward brow point on the mid-pupil vertical, 8–40 mm above the eye centre, minus the cornea front), `menton_z`, `eye_height`, `interpupillary` |
 | `spec_checks.<name>` | `{value, target, tol, ok}` against look-spec §1.2 (`brow_overhang`: ≥ 12 mm). The sheet header shows them, `+` = within tolerance, `!` = out |
-| `read40` | look-spec §2.2 read test: a ¾ render from the key-light side (azimuth −40°), key light only, the head rendered 320 px tall and box-averaged ×8 to 40 px. `eye_band_darker` = 1 − L(eye band) / L(cheek), relative luminance; pass ≥ 0.15. `beard_contrast` = \|L(beard) − L(cheek)\| / L(cheek), pass ≥ 0.25, skipped until a mesh named `*beard*` exists. The hair-vs-grey separation check is not implemented yet (hair track). Thresholds are *(cal.)* in the spec: the stock head already scores 40 % |
+| `read40` | look-spec §2.2 read test: a ¾ render from the key-light side (azimuth −40°), key light only, the head rendered 320 px tall and box-averaged ×8 to 40 px, read from a **scene-linear EXR** (independent of exposure and view transform). `eye_band_darker` = 1 − L(eye band) / L(cheek); pass ≥ 0.75 (`READ_EYE_MIN`; calibrated 2026-10-12: stock head 0.71, the checkpoint variants 0.76–0.81). `beard_contrast` = \|L(beard) − L(cheek)\| / L(cheek); pass ≥ 0.47 (the spec's 25 % in display terms), skipped until a mesh named `*beard*` exists. The hair-vs-grey separation check is not implemented yet (hair track). |
 | `head_edits` | the resolved controls and plane blends, max vertex move (mm), vertices moved |
 | `landmarks_glb.stature_m` | (context) joint/vertex measures of the **shipped** GLB: top of the body mesh to the lowest point of any mesh (shoe soles) |
 | `landmarks_glb.head_height_m / width_m / depth_m` | extent of body vertices with ≥ 0.5 weight on `head`: crown to the lowest such vertex (≈ chin/jaw), and its x / y extent (incl. ears) |

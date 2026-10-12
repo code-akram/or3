@@ -1,13 +1,5 @@
 {
-  "$comment": "Face variant B, heavier: wide square jaw, deeper and lower brow, thick neck, broad nose. look-spec §6; parameters only (§2.4).",
-  "head": {
-    "targets": {"head-age-incr": 0.2, "chin-prominent-incr": 0.4, "lr-cheek-volume-decr": 0.2,
-                "neck-scale-horiz-incr": 0.3, "nose-scale-horiz-incr": 0.3, "nose-flaring-incr": 0.2,
-                "lr-eye-scale-decr": 0.3, "eyebrows-trans-down": 0.3},
-    "edits": {"brow_depth": 1.0, "brow_angle": 0.5, "brow_flatten": 0.8, "socket_depth": 0.7,
-              "lid_hood": 0.4, "nose_bridge_width": 0.6, "dorsum_crease": 0.5, "cheek_plane_break": 0.6,
-              "submalar_hollow": 0.3, "jaw_width": 0.6, "jaw_angle": 0.6, "chin_width": 0.8,
-              "chin_projection": 0.4, "lip_thickness": 0.3},
-    "planes": {"forehead": 0.5, "jaw_side": 1.0, "chin_front": 0.9}
-  }
+  "$comment": "Face variant B, broad and square (bolder pass): late-40s age, square block head, wide jaw and chin (jaw:cheek ~1.0, past the spec band by design), low heavy brow, broad straight nose, thick neck, flat back of head. look-spec \u00a76; parameters only (\u00a72.4).",
+  "body": {"macros": {"age": 0.68}},
+  "head": {"targets": {"head-square": 0.6, "head-scale-vert-incr": 0.12, "head-fat-decr": 0.3, "chin-bones-incr": 0.5, "chin-width-incr": 0.3, "neck-scale-horiz-incr": 0.6, "neck-scale-depth-incr": 0.4, "head-back-scale-depth-decr": 0.4, "nose-scale-horiz-incr": 0.5, "nose-flaring-incr": 0.3, "nose-hump-decr": 0.3, "eyebrows-trans-down": 0.4, "lr-cheek-volume-decr": 0.3, "mouth-laugh-lines-in": 0.4, "lr-eye-scale-decr": 0.35}, "edits": {"brow_depth": 1.0, "brow_angle": 0.3, "brow_flatten": 1.0, "socket_depth": 0.8, "lid_hood": 0.4, "nose_bridge_width": 0.8, "dorsum_crease": 0.6, "cheek_plane_break": 0.8, "submalar_hollow": 0.4, "jaw_width": 0.55, "jaw_angle": 0.4, "chin_width": 0.7, "chin_projection": 0.3, "forehead_slope": -0.3}, "planes": {"forehead": 0.7, "jaw_side": 1.0, "chin_front": 1.0}}
 }

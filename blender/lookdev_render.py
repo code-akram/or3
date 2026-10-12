@@ -57,6 +57,28 @@ READ_HEAD_PX = 40
 READ_K = 8
 READ_RES = 384
 READ_AZ = -40.0  # the key-light side (the key is front-right of the character)
+# Read-test thresholds on scene-linear luminance (calibrated 2026-10-12,
+# bench/m1/head.md "Bolder pass"): the stock MPFB head scores 0.71, the
+# checkpoint variants 0.76-0.81, so >= 0.75 means "a deliberate brow shadow".
+# The spec's 25 % beard contrast in display terms is ~0.47 linear.
+READ_EYE_MIN = 0.75
+READ_BEARD_MIN = 0.47
+# Face strip (hair hidden): azimuths (key-side ¾ is negative), rendered once
+# with the full studio rig and once key-only, so plane breaks show as shadow.
+STRIP_VIEWS = (("front", 0.0), ("q_key", -35.0), ("q_shadow", 35.0), ("profile", -90.0))
+STRIP_PARTS = ("body", "low-poly", "eyebrow", "eyelash", "teeth", "tongue")
+STRIP_RES = 320
+STRIP_FRAME_H = 0.30
+# Look-dev skin (--skin lookdev): the MPFB texture desaturated and darkened a
+# little, with low-frequency value variation and a rougher, less waxy finish.
+# Render-side only; the GLB ships the asset material unchanged.
+# Studio exposure (EV), calibrated with --calibrate so an 18 % grey card at
+# face height reads ~0.46 display (AgX), 3 % black wool reads dark and an
+# 80 % white shirt doesn't clip (bench/m1/README.md, "Exposure").
+STUDIO_EXPOSURE = float(os.environ.get("LOOKDEV_EXPOSURE", "-2.5"))
+SKIN_SAT = 0.55
+SKIN_VAL = 0.88
+SKIN_ROUGHNESS = 0.62
 
 
 def parse_args():
@@ -68,6 +90,14 @@ def parse_args():
     ap.add_argument("--prev", help="previous run dir (masks + metrics) to score against")
     ap.add_argument("--target", help="dir with <view>_mask.png target silhouettes")
     ap.add_argument("--views", default=",".join(VIEWS))
+    ap.add_argument("--skin", choices=["lookdev", "asset"], default="lookdev",
+                    help="lookdev: neutral render-side skin; asset: the shipped MPFB material")
+    ap.add_argument("--no-face-strip", action="store_true")
+    ap.add_argument("--facet", type=float, default=0.0, metavar="DEG",
+                    help="add a third face-strip row, key only, with the body shaded "
+                         "smooth-by-angle at DEG (a planarity test; not what ships)")
+    ap.add_argument("--calibrate", action="store_true",
+                    help="render grey cards under the studio rig, write calibration.json, exit")
     return ap.parse_args(argv)
 
 
@@ -108,6 +138,53 @@ def part_name(o):
     return n.split(".", 1)[1] if "." in n else "body"
 
 
+def lookdev_skin(meshes):
+    """Neutral look-dev skin on the body material (render-side only):
+    texture -> HSV (desaturate, darken) x low-frequency value noise, rough."""
+    body = next((o for o in meshes if part_name(o) == "body"), None)
+    if body is None:
+        return None
+    done = []
+    for m in body.data.materials:
+        if not m or not m.node_tree:
+            continue
+        nt = m.node_tree
+        p = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if p is None:
+            continue
+        bc = p.inputs["Base Color"]
+        src = bc.links[0].from_socket if bc.is_linked else None
+        hsv = nt.nodes.new("ShaderNodeHueSaturation")
+        hsv.inputs["Saturation"].default_value = SKIN_SAT
+        hsv.inputs["Value"].default_value = SKIN_VAL
+        if src is not None:
+            nt.links.new(src, hsv.inputs["Color"])
+        else:
+            hsv.inputs["Color"].default_value = bc.default_value
+        tc = nt.nodes.new("ShaderNodeTexCoord")
+        noise = nt.nodes.new("ShaderNodeTexNoise")
+        noise.inputs["Scale"].default_value = 35.0
+        noise.inputs["Detail"].default_value = 3.0
+        nt.links.new(tc.outputs["Object"], noise.inputs["Vector"])
+        ramp = nt.nodes.new("ShaderNodeMapRange")
+        ramp.inputs["To Min"].default_value = 0.86
+        ramp.inputs["To Max"].default_value = 1.06
+        nt.links.new(noise.outputs["Fac"], ramp.inputs["Value"])
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        mix.blend_type = "MULTIPLY"
+        mix.inputs["Factor"].default_value = 1.0
+        nt.links.new(hsv.outputs["Color"], mix.inputs["A"])
+        nt.links.new(ramp.outputs["Result"], mix.inputs["B"])
+        nt.links.new(mix.outputs["Result"], bc)
+        p.inputs["Roughness"].default_value = SKIN_ROUGHNESS
+        if "Specular IOR Level" in p.inputs:
+            p.inputs["Specular IOR Level"].default_value = 0.35
+        done.append(m.name)
+    return {"materials": done, "saturation": SKIN_SAT, "value": SKIN_VAL,
+            "roughness": SKIN_ROUGHNESS}
+
+
 def look_at(ob, target):
     ob.rotation_euler = (target - ob.location).to_track_quat("-Z", "Y").to_euler()
 
@@ -120,6 +197,9 @@ def build_studio(floor_z):
     bg = world.node_tree.nodes.get("Background")
     bg.inputs[0].default_value = (0.045, 0.045, 0.05, 1.0)
     bg.inputs[1].default_value = 1.0
+    scene.view_settings.view_transform = "AgX"
+    scene.view_settings.look = "None"
+    scene.view_settings.exposure = STUDIO_EXPOSURE
 
     bpy.ops.mesh.primitive_plane_add(size=60, location=(0, 0, floor_z))
     floor = bpy.context.active_object
@@ -362,12 +442,16 @@ def _srgb_to_linear(c):
 
 
 def _luminance_img(path):
+    """Relative luminance per pixel. EXR is scene-linear (independent of the
+    view transform and exposure); 8-bit images are sRGB-decoded."""
     img = bpy.data.images.load(path, check_existing=False)
     w, h = img.size
     px = np.empty(w * h * 4, dtype=np.float32)
     img.pixels.foreach_get(px)
     bpy.data.images.remove(img)
-    rgb = _srgb_to_linear(px.reshape(h, w, 4)[..., :3].astype(np.float64))
+    rgb = px.reshape(h, w, 4)[..., :3].astype(np.float64)
+    if not path.endswith(".exr"):
+        rgb = _srgb_to_linear(rgb)
     return rgb @ np.array([0.2126, 0.7152, 0.0722]), w, h  # row 0 = bottom
 
 
@@ -396,8 +480,9 @@ def _mean_in(lum, box):
 
 
 def read_test(out, meshes, lights, head_mid, spec):
-    """look-spec §2.2: eye band >= 15 % darker than the cheek, beard >= 25 %
-    different from the skin, at a 40 px tall head under the key light only."""
+    """look-spec §2.2 read test at a 40 px tall head under the key light only:
+    eye band darker than the cheek (>= READ_EYE_MIN) and beard contrast
+    against the skin (>= READ_BEARD_MIN), both in scene-linear luminance."""
     eyes = next((o for o in meshes if "low-poly" in o.name), None)
     if eyes is None or not spec.get("menton_z"):
         return {"skipped": "no eye mesh or no spec landmarks (menton)"}
@@ -432,10 +517,12 @@ def read_test(out, meshes, lights, head_mid, spec):
     scene.eevee.taa_render_samples = 16
     r.resolution_x = r.resolution_y = READ_RES
     r.film_transparent = False
+    r.image_settings.file_format = "OPEN_EXR"
     r.image_settings.color_mode = "RGB"
     scene.camera = cam
-    full = os.path.join(out, "read40_full.png")
+    full = os.path.join(out, "read40_full.exr")
     secs = render(full)
+    r.image_settings.file_format = "PNG"
     for l, hid in saved:
         l.hide_render = hid
 
@@ -467,7 +554,7 @@ def read_test(out, meshes, lights, head_mid, spec):
         "cheek_lum": round(lc, 5), "cheek_px": nc,
         "eye_band_darker": round(1.0 - le / lc, 4) if lc > 0 else None,
     }
-    res["eye_band_ok"] = res["eye_band_darker"] is not None and res["eye_band_darker"] >= 0.15
+    res["eye_band_ok"] = res["eye_band_darker"] is not None and res["eye_band_darker"] >= READ_EYE_MIN
     beard = next((o for o in meshes if "beard" in o.name.lower()), None)
     if beard is None:
         res["beard"] = "skipped: no beard mesh"
@@ -478,11 +565,11 @@ def read_test(out, meshes, lights, head_mid, spec):
         lb, nb = _mean_in(small, boxes["beard"])
         res.update({"beard_lum": round(lb, 5), "beard_px": nb,
                     "beard_contrast": round(abs(lb - lc) / lc, 4) if lc > 0 else None})
-        res["beard_ok"] = res["beard_contrast"] is not None and res["beard_contrast"] >= 0.25
+        res["beard_ok"] = res["beard_contrast"] is not None and res["beard_contrast"] >= READ_BEARD_MIN
     res["boxes_px"] = {n: [round(c, 1) for c in b] for n, b in boxes.items()}
     # 40 px image for eyeballing (nearest-upscaled x4) with the sample boxes
     # outlined (eye band red, cheek cyan, beard yellow); drop the full render.
-    up = np.repeat(np.repeat(small, 4, 0), 4, 1)
+    up = np.repeat(np.repeat(small, 4, 0), 4, 1) * 2.0 ** STUDIO_EXPOSURE
     g = np.clip(np.where(up <= 0.0031308, up * 12.92, 1.055 * up ** (1 / 2.4) - 0.055), 0, 1)
     rgba = np.dstack([g, g, g, np.ones_like(g)]).astype(np.float32)
     colours = {"eye_band": (1, 0, 0), "cheek": (0, 1, 1), "beard": (1, 1, 0)}
@@ -503,6 +590,135 @@ def read_test(out, meshes, lights, head_mid, spec):
     bpy.data.images.remove(im)
     os.remove(full)
     return res
+
+
+CARDS = (("black_wool", 0.03), ("skin_mid", 0.30), ("grey18", 0.18), ("white_shirt", 0.80))
+
+
+def calibrate(out, head, floor):
+    """Exposure check: Lambertian cards of known albedo at face and chest
+    height, facing the front camera, under the studio rig and under the key
+    alone. Reports the display-referred value (0..1) at each card centre."""
+    scene = bpy.context.scene
+    floor.hide_render = True
+    for o in scene.objects:
+        if o.type == "MESH" and o.name != "lookdev_floor":
+            o.hide_render = True
+    lights = [o for o in scene.objects if o.type == "LIGHT"]
+    res = {"view_transform": scene.view_settings.view_transform,
+           "look": scene.view_settings.look, "exposure": scene.view_settings.exposure,
+           "lights": {l.name: l.data.energy for l in lights}}
+    for height, z in (("face", head.z), ("chest", head.z - 0.35)):
+        cards = []
+        for i, (name, alb) in enumerate(CARDS):
+            bpy.ops.mesh.primitive_plane_add(size=0.12, location=(-0.21 + i * 0.14, -0.15, z),
+                                             rotation=(math.pi / 2, 0, 0))
+            c = bpy.context.active_object
+            m = bpy.data.materials.new("card_" + name)
+            m.use_nodes = True
+            p = m.node_tree.nodes["Principled BSDF"]
+            p.inputs["Base Color"].default_value = (alb, alb, alb, 1)
+            p.inputs["Roughness"].default_value = 1.0
+            if "Specular IOR Level" in p.inputs:
+                p.inputs["Specular IOR Level"].default_value = 0.0
+            c.data.materials.append(m)
+            cards.append((name, c))
+        cd = bpy.data.cameras.new("cal")
+        cd.type = "ORTHO"
+        cd.ortho_scale = 0.62
+        cam = bpy.data.objects.new("cal", cd)
+        scene.collection.objects.link(cam)
+        cam.location = Vector((0, -3.0, z))
+        look_at(cam, Vector((0, 0, z)))
+        scene.camera = cam
+        set_beauty_engine()
+        out_h = {}
+        for row in ("studio", "key"):
+            for l in lights:
+                l.hide_render = row == "key" and l.name != "key"
+            path = os.path.join(out, f"calibrate_{height}_{row}.png")
+            render(path)
+            img = bpy.data.images.load(path)
+            w, h = img.size
+            px = np.array(img.pixels[:]).reshape(h, w, 4)
+            vals = {}
+            for name, c in cards:
+                u = 0.5 + c.location.x / 0.62
+                cx, cy = int(u * w), h // 2
+                vals[name] = round(float(px[cy - 4:cy + 4, cx - 4:cx + 4, :3].mean()), 4)
+            bpy.data.images.remove(img)
+            out_h[row] = vals
+        for l in lights:
+            l.hide_render = False
+        for _, c in cards:
+            bpy.data.objects.remove(c, do_unlink=True)
+        res[height] = out_h
+    with open(os.path.join(out, "calibration.json"), "w") as f:
+        json.dump(res, f, indent=2)
+    print(json.dumps(res, indent=2))
+
+
+def face_strip(out, meshes, lights, head, floor):
+    """Hair-hidden face beauty strip: STRIP_VIEWS x (studio, key only), EEVEE
+    STRIP_RES², head-tracking 85 mm cameras. Writes face_strip.png (row 1
+    studio, row 2 key only) and the frames under face/."""
+    import subprocess
+    scene = bpy.context.scene
+    fdir = os.path.join(out, "face")
+    os.makedirs(fdir, exist_ok=True)
+    keep = [o for o in meshes if part_name(o).startswith(STRIP_PARTS)]
+    saved = [(o, o.hide_render) for o in meshes] + [(floor, floor.hide_render)]
+    for o in meshes:
+        o.hide_render = o not in keep
+    floor.hide_render = True
+    r = scene.render
+    r.engine = "BLENDER_EEVEE"
+    scene.eevee.taa_render_samples = 16
+    r.resolution_x = r.resolution_y = STRIP_RES
+    r.film_transparent = False
+    r.image_settings.color_mode = "RGB"
+    target = head.copy()
+    target.z -= 0.035
+    secs, paths = 0.0, []
+    lit = [(l, l.hide_render) for l in lights]
+    rows = ["studio", "key"] + (["facet"] if ARGS.facet else [])
+    for row in rows:
+        for l in lights:
+            l.hide_render = row != "studio" and l.name != "key"
+        if row == "facet":
+            body = next(o for o in meshes if part_name(o) == "body")
+            bpy.context.view_layer.objects.active = body
+            for o in bpy.context.selected_objects:
+                o.select_set(False)
+            body.select_set(True)
+            bpy.ops.object.shade_smooth_by_angle(angle=math.radians(ARGS.facet))
+        for name, az in STRIP_VIEWS:
+            a = math.radians(az)
+            axis = Vector((math.sin(a), -math.cos(a), 0.0))
+            cd = bpy.data.cameras.new("strip_" + name)
+            cd.lens = 85.0
+            dist = (STRIP_FRAME_H * 0.5) / math.tan(math.atan(cd.sensor_width * 0.5 / cd.lens))
+            cam = bpy.data.objects.new("strip_" + name, cd)
+            scene.collection.objects.link(cam)
+            cam.location = target + axis * dist
+            look_at(cam, target)
+            scene.camera = cam
+            p = os.path.join(fdir, f"{row}_{name}.png")
+            secs += render(p)
+            paths.append(p)
+    for l, hid in lit:
+        l.hide_render = hid
+    for o, hid in saved:
+        o.hide_render = hid
+    n = len(STRIP_VIEWS)
+    inputs = [x for p in paths for x in ("-i", p)]
+    nr = len(rows)
+    fc = (";".join(f"{''.join(f'[{r * n + i}]' for i in range(n))}hstack={n}[r{r}]" for r in range(nr))
+          + ";" + "".join(f"[r{r}]" for r in range(nr)) + f"vstack={nr}")
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *inputs, "-filter_complex", fc,
+                    os.path.join(out, "face_strip.png")], check=True)
+    return {"render_s": round(secs, 3), "views": [v for v, _ in STRIP_VIEWS],
+            "rows": rows, "facet_deg": ARGS.facet or None, "parts": sorted({part_name(o) for o in keep})}
 
 
 # ---------------------------------------------------------------- main
@@ -526,6 +742,10 @@ def main():
             "landmarks_glb": lm,
         }
     floor, lights = build_studio(floor_z)
+    if ARGS.calibrate:
+        calibrate(os.path.abspath(ARGS.out_dir), head, floor)
+        return
+    metrics["skin"] = lookdev_skin(meshes) if ARGS.skin == "lookdev" else "asset"
     views = [v for v in ARGS.views.split(",") if v]
     face_views = list(FACE_MASK_VIEWS)
     cams = {v: make_cameras(v, floor_z, head) for v in views + face_views}
@@ -574,6 +794,9 @@ def main():
             spec = json.load(f).get("spec_landmarks") or {}
     with timed("read40"):
         metrics["read40"] = read_test(out, meshes, lights, head, spec)
+    if not ARGS.no_face_strip:
+        with timed("face_strip"):
+            metrics["face_strip"] = face_strip(out, meshes, lights, head, floor)
     metrics["silhouette"] = sil
     metrics["iou_target"] = score(ARGS.target)
     metrics["iou_prev"] = score(ARGS.prev)

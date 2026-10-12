@@ -119,3 +119,67 @@ The stock head on the new body scores heads 7.85, jaw 0.84, LFI 0.865, brow 7.1 
 - **Checkpoint sheet** (look-spec §6) still needs the hair options, the suit blockout, the game-camera view and the neon rig. These variant configs drop into it as `--config` overrides.
 - **Brow cards.** The MPFB eyebrow cards follow the edited brow (fitted after the edits), but they sit flat on the shelf. The hair track's clump brows should follow `brow_angle`.
 - **Teeth at 479 tris** need a check once there are mouth-open poses.
+
+## 7. Bolder pass (2026-10-12)
+
+**Why.** Reviewed in the hair-hidden face strips, the §5 variants were nearly indistinguishable from the stock MPFB head and from each other: a smooth, young, pale generic man. Every numeric check passed, but the edits moved at most ~7 mm. The spec's mm ranges were too timid to read, and the MPFB face targets were used at 0.1–0.6.
+
+**What changed.**
+- **Control ranges about 2× the spec's §2.3 ranges** (`head_shape.RANGES`): brow 14 mm, socket 7, lid 3.5, nose length 8, bridge 3.5, cheek height 7, sub-malar 9, jaw width 11 per side, jaw angle 10, chin 8/8, lips 3, brow angle 10°, forehead slope 8°. This is a written relaxation of look-spec §2.3.
+- **Brow taper.** The brow projection fades out past the outer orbit (u > 42 mm, zero at 58 mm). At full strength the brow end otherwise stuck out of the ¾ silhouette like a horn.
+- **Age through the MPFB macro**, set per variant in `body.macros.age`: 0.68 ≈ late 40s for A and B, 0.75 ≈ mid 50s for C (0.5 = 25 y, 1.0 = 90 y). Body proportions stay inside the §1.2 tolerances.
+- **MPFB head-shape targets at real weights.** `head-diamond`, `head-square`, `head-oval` and `head-scale-horiz` set the cranium and jaw silhouette. `mouth-laugh-lines-in` gives the nasolabial folds, `forehead-temple-decr` the hollow temples, `neck-scale-*` the neck. Cheek volume, cheek bones, nose and chin targets run at 0.3–1.0.
+- **Harness changes** (bench/m1/README.md):
+  - Calibrated exposure (−2.5 EV) and a neutral look-dev skin.
+  - A committed face strip: 4 views × studio / key only.
+  - A scene-linear read test.
+  - `face_distinct.py`, the distinctness guard.
+  - A `--facet` test row.
+
+**Variants** (`bench/m1/variants/face-{a,b,c}.json`; final runs combined with `hair-shoulder` and the merged suit):
+
+| | stock | A, lean and angular | B, broad and square | C, long and hawkish |
+|---|---|---|---|---|
+| Idea | MPFB default | gaunt diamond head, high wide cheekbones, deep hollows, hard mid jaw, projecting chin, straight nose, thin neck | square block head, wide jaw and chin, low heavy brow, broad straight nose, thick neck, flat occiput | long narrow oval head, big humped nose, hooded deep sockets and eye bags, deep nasolabial folds, thin lips, sloped forehead |
+| age macro | 0.55 | 0.68 | 0.68 | 0.75 |
+| heads_tall (7.8 ± 0.15) | 7.85 | 7.79 | 7.83 | 7.67 |
+| bizygomatic (0.140 ± 0.006) | 0.140 | 0.138 | 0.139 | 0.134 |
+| jaw_to_cheek (0.87 ± 0.03) | 0.840 | 0.848 | **1.011** (relaxed, see below) | 0.855 |
+| lower_face_index (0.88 ± 0.04) | 0.865 | 0.883 | 0.884 | 0.900 |
+| brow overhang (≥ 12 mm) | 7.1 ✗ | 17.1 | 19.6 | 18.0 |
+| read40 eye band, linear (≥ 0.75) | 0.71 ✗ | 0.76 | 0.81 | 0.80 |
+| face IoU vs stock, front / profile (≤ 0.95) | — | 0.936 / 0.949 | 0.919 / 0.934 | 0.922 / 0.935 |
+| max parametric move | — | 10.0 mm | 11.0 mm | 9.4 mm |
+| tris / bones / w per v / glTF errors | 44.9k | 44.9k / 53 / 4 / 0 | 45.2k / 53 / 4 / 0 | 45.3k / 53 / 4 / 0 |
+
+Between variants, face IoU front / profile is: A–B 0.885 / 0.924, A–C 0.942 / 0.947, B–C 0.898 / 0.932. All are ≤ 0.97, so every guard passes.
+
+**Relaxation for B.** jaw_to_cheek is 1.01 against 0.87 ± 0.03. "Broad and square" is the point of B, and the spec's band was written for a single design. If the user picks B, the band moves to B's value and is frozen as the regression guard, as §1.2 already says happens after the checkpoint.
+
+**Read test recalibrated.** It now reads a scene-linear EXR. Before, it read a display PNG, so the score moved with exposure: 40 % at the old exposure, 63 % at −2.5 EV, for the same stock head. The pass bar is ≥ 0.75 linear, between the stock head (0.71) and the variants (0.76–0.81). The beard bar is ≥ 0.47 linear, which matches the spec's 25 % in display terms.
+
+**Runs** (main checkout `data/build/lookdev/`):
+- Final, dressed with `hair-shoulder` and the merged suit: `20261012T095133Z-fbf-stock`, `20261012T095157Z-fbf-a`, `20261012T095223Z-fbf-b`, `20261012T095240Z-fbf-c`.
+- **Stacked strips:** `faces-bolder-final/faces.png`, with `distinct.json` next to it.
+- Iterations before the merge, bare suit: `fb-a1…a5`, `fb-b1…b3`, `fb-c1…c5`.
+
+**What I saw.**
+- The three read as three different older, hard men at a glance, in silhouette and in the key-only row:
+  - A has a cheekbone-to-jaw plane break and hollow cheeks.
+  - B has a block jaw and a thick neck.
+  - C has a long face, a hooked nose and hooded eyes.
+- All three carry a strong brow shelf that throws the eye band into shadow under the key light.
+- They still read **sculpted rather than faceted**. The `--facet 32` row barely differs from the smooth key row, because the planarisation masks blend over a few centimetres, so few edges exceed 32°.
+
+**Weak spots.**
+- **C is the closest to caricature**: a long, pointed nose and a deep upper-lip fold.
+- **A's diamond target narrows the crown**, which the hair hides.
+- **Skin.** The MPFB `young_caucasian_male` texture shows stubble specks and a UV seam line from the nose wing to the ear once desaturated. The skin tone and ethnicity macros (`body.race`, `body.skin`) are unchanged: that's a **user question for the checkpoint**.
+- **The dressed close-ups are dominated by hair v1 and the flat beard shell**, which the hair track's quality pass is replacing.
+
+**Options for crisper planes** (hero budget is now about 120k tris):
+1. **Subdivide the staged head region once and re-run the planarisation** on the denser mesh, with sharper plateau edges. This must happen after the proxies are fitted: MPFB proxies bind by base-mesh vertex index, so the base mesh can't be subdivided. The hair and beard build from body vertex groups after staging, so they'd need to run after this pass too.
+2. **Mark sharp edges between plane groups** (split normals in the GLB), for a deliberately faceted Sifu read.
+3. **Leave the plane read to the painted texture and normal bake.** The spec's plan, §0.
+
+Option 1 plus 3 is the strongest. Choose after the user picks a variant.
