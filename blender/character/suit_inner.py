@@ -262,8 +262,10 @@ class Inner:
         y_knot = y_front - shirt_off - 0.004
         g = G.grid("knot")
         segs = 14
-        prof = [(0.0, 0.66, 0.5), (0.2, 0.9, 0.85), (0.45, 1.0, 1.0), (0.7, 0.96, 0.95),
-                (0.88, 0.88, 0.8), (1.0, 0.8, 0.55)]
+        # four-in-hand: widest just under the top, tapering to the blade; the
+        # top edge is nearly as wide as the knot (it sits between the collar points)
+        prof = [(0.0, 0.84, 0.45), (0.15, 1.0, 0.85), (0.4, 1.0, 1.0), (0.65, 0.94, 0.95),
+                (0.85, 0.84, 0.8), (1.0, 0.74, 0.55)]
         for (v, kw, kd) in prof:
             w, d = T["knot_w_m"] * kw * 0.5, T["knot_d_m"] * kd
             cx = T["knot_skew_m"] * math.sin(math.pi * v)
