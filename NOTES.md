@@ -365,7 +365,10 @@ Target total ~11–12 ms, including 5–6 ms scene shading.
   - In the browser: one shared `ConvolverNode` reverb bus with zone crossfade. IRs ≤ ~2 s, decoded at zone load, because Chrome sets convolver buffers on the main thread.
   - Fallback: pyroomacoustics.
 - **Occlusion**: raycast against simplified geometry → per-source lowpass + gain.
-- **Spatialisation**: **SADIE II** HRTF (Apache 2.0) via a custom convolver, or native `PannerNode` HRTF as fallback.
+- **Playback target (2026-10-12): the MacBook Air's built-in speakers.** The user listens and plays without headphones.
+  - **Default spatialisation is a speaker mode**: equal-power stereo panning plus distance filtering. Binaural HRTF over speakers smears the image, because each ear hears both channels.
+  - Mix and check for small speakers: they roll off below ~150 Hz, so weight and impact must survive in the 200 Hz–5 kHz band.
+  - **Headphone mode** is an option: **SADIE II** HRTF (Apache 2.0) via a custom convolver, or native `PannerNode` HRTF as fallback. A headphone check of the binaural assets is deferred until someone with headphones can do it.
 - **Anti-repetition**:
   - Round-robin pools of 8–12 takes per surface, with ± pitch and gain.
   - Granular ambience beds in an AudioWorklet.
@@ -639,6 +642,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - **SMPL-derived motion**: ships under a non-commercial exception (CC BY-NC 4.0), §14 rule 9.
 - **m2 frame-time definition**: used provisionally; user to review.
 - SMPL password rotation: done by the user.
+- **Audio playback target**: the Air's built-in speakers, not headphones. The listening gate runs on speakers. Spatialisation defaults to a stereo speaker mode, with HRTF as a headphone option (§12).
 
 ### 2026-10-12 — Phase 0 executed (autonomous run)
 - All seven spikes ran as parallel agents in git worktrees and were merged to `main`. Spike 3 got a follow-up agent to find root causes and finish it.
