@@ -84,6 +84,11 @@ class HeadFrame:
                         if any(e.group == ears and e.weight > 0.05 for e in v.groups))
         self.bvh = world_bvh(colliders, {self.body.name: ear_verts})
         self.skin_bvh = world_bvh([self.body])
+        # The same split in two, so the hair can keep a larger clearance over
+        # the clothes (collar, lapel) than over the skin.
+        self.body_bvh = world_bvh([self.body], {self.body.name: ear_verts})
+        cloth = [o for o in colliders if o is not self.body]
+        self.cloth_bvh = world_bvh(cloth) if cloth else None
         # Each ear as an ellipsoid (centre, radii) from its group's bounds, so
         # guides are pushed round it (tucked behind, or over the top) without
         # the thin ear faces' two-sided normals flinging them sideways.
@@ -114,12 +119,35 @@ class HeadFrame:
                 p = c + Vector((q.x * rr.x, q.y * rr.y, q.z * rr.z))
         return p
 
-    def signed(self, p):
-        """(nearest surface point, outward normal, signed distance) to the colliders."""
-        loc, nrm, _, _ = self.bvh.find_nearest(p)
-        if loc is None:
-            return None, None, 1e9
-        return loc, nrm, (p - loc).dot(nrm)
+    def signed(self, p, cloth_gap=0.0):
+        """(nearest surface point, outward normal, signed distance) to the
+        colliders. cloth_gap inflates the clothes by that much: the distance
+        to a suit face is reduced by it, so a strand kept `off` from the
+        colliders stays off + cloth_gap over the collar and lapel."""
+        if cloth_gap <= 0.0 or self.cloth_bvh is None:
+            loc, nrm, _, _ = self.bvh.find_nearest(p)
+            if loc is None:
+                return None, None, 1e9
+            return loc, nrm, (p - loc).dot(nrm)
+        # The nearer surface (by true distance, the cloth inflated by the
+        # gap) decides; its plane distance is the signed value. The signed
+        # distance alone is not comparable between trees: far above a collar
+        # edge the collar's plane distance is near zero or negative.
+        best, best_d = (None, None, 1e9), 1e9
+        for tree, gap in ((self.body_bvh, 0.0), (self.cloth_bvh, cloth_gap)):
+            loc, nrm, _, dist = tree.find_nearest(p)
+            if loc is not None and dist - gap < best_d:
+                if gap > 0.0:
+                    # Garments are solid to the hair: a collar's inner face
+                    # (normal toward the neck) would push a strand hanging
+                    # down the nape in between neck and collar and trap it.
+                    # Flipped, the strand is pushed out over the collar.
+                    radial = Vector((loc.x - self.center.x, loc.y - self.center.y, 0.0))
+                    if nrm.dot(radial) < 0.0:
+                        nrm = -nrm
+                best_d = dist - gap
+                best = (loc, nrm, (p - loc).dot(nrm) - gap)
+        return best
 
     def summary(self):
         r = lambda v: [round(x, 4) for x in v]

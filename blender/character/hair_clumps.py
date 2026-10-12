@@ -123,19 +123,49 @@ class Strand:
         self.lay = 0.0  # extra lift within the layer (0 .. layer_jitter)
         self.wave = (0.0, 0.0, 0.1)  # (amplitude, phase, period_m) of the hanging wave
         self.hug = 0.0  # pull toward the skin when hanging clear of it (front falls)
+        self.flare = (1e9, 0.0)  # (after_m, strength): front falls curl away from the cheek
+        # Volume: extra stand-off from the skull along the strand,
+        # (amplitude_m, rise_m, hold_m, fall_m, keep): 0 at the root, full
+        # after rise_m, held, then decaying to keep x amplitude over fall_m.
+        self.lift = (0.0, 0.03, 0.03, 0.08, 0.5)
+
+    def lift_at(self, length):
+        a, rise, hold, fall, keep = self.lift
+        if a <= 0.0:
+            return 0.0
+        up = smoothstep(0.0, rise, length)
+        down = smoothstep(rise + hold, rise + hold + fall, length)
+        return a * up * (1.0 - (1.0 - keep) * down)
 
 
-def march(frame, s, step, turn, ear_margin):
+def march(frame, s, step, turn, ear_margin, cloth_gap=0.0, tuck=0.0, tuck_z=-1e9,
+          cling=0.0, hang_turn=None):
     """Guide polyline for one strand (list of Vectors), root buried in the scalp."""
     d = tangent(s.comb, s.nrm)
     # Start under the skin a little upstream, so the open root ring lies
-    # along the scalp instead of standing up like a fin.
-    pts = [s.root - s.nrm * 0.003 - d * 0.012, s.root + s.nrm * s.off + d * 0.004]
+    # along the scalp instead of standing up like a fin. The upstream point
+    # is snapped to the skin first: a straight segment under a concave
+    # temple came out through it as a dark wedge in profile.
+    up = s.root - d * 0.006
+    loc, nrm, _, _ = frame.skin_bvh.find_nearest(up)
+    up = (loc - nrm * 0.003) if loc is not None else (up - s.nrm * 0.003)
+    # Emerge at skin level; the stand-off grows over the next steps through
+    # the collision push. Jumping straight to `off` at the root left the first
+    # quad bridging the hollow temple as a dark wedge in profile.
+    pts = [up, s.root + s.nrm * min(s.off, 0.001) + d * 0.004]
     p = pts[-1]
     length = 0.0
     while length < s.max_len:
+        off = s.off + s.lift_at(length)
         w = s.gravity(p, length)
         des = (s.comb * (1 - w) + DOWN * w).normalized()
+        if w > 0.5 and cling > 0:
+            # Hanging: lean in toward the head's axis, so the lengths drop
+            # close along the neck instead of belling out on the momentum
+            # they had leaving the skull (the colliders keep them off).
+            radial = Vector((p.x - frame.center.x, p.y - frame.center.y, 0.0))
+            if radial.length > 1e-6:
+                des = (des - radial.normalized() * (cling * w)).normalized()
         ear = None if s.front_fall else frame.near_ear(p)
         if ear is not None and p.y < ear[0].y + ear[1].y + 0.004:
             # Above an ear and not yet behind it: keep going back, so the
@@ -149,24 +179,32 @@ def march(frame, s, step, turn, ear_margin):
             if radial.length > 1e-6:
                 side_v = DOWN.cross(radial.normalized())
                 des = (des + side_v * (amp * w * math.sin(ph + 2 * math.pi * length / per))).normalized()
-        loc, nrm, sd = frame.signed(p)
-        if loc is not None and sd < s.off + 0.006 and des.dot(nrm) < 0:
+        if tuck > 0 and not s.front_fall and p.z < tuck_z and p.y < frame.center.y:
+            # Below the jaw and in front of the ear line: slide back, so the
+            # side lengths hang beside the neck and the collar's side instead
+            # of lying forward over the shirt collar and the lapel.
+            des = (des + Vector((0.0, tuck, 0.0))).normalized()
+        loc, nrm, sd = frame.signed(p, cloth_gap)
+        if loc is not None and sd < off + 0.006 and des.dot(nrm) < 0:
             des = tangent(des, nrm)
-        elif loc is not None and s.hug > 0 and sd > s.off + 0.003:
+        elif loc is not None and length >= s.flare[0] and s.flare[1] > 0:
+            # The end of a front fall curls away from the cheek.
+            des = (des + nrm * s.flare[1]).normalized()
+        elif loc is not None and s.hug > 0 and sd > off + 0.003:
             # Front falls drape against the temple and cheek rather than
             # hanging in the air in front of the face.
             des = (des - nrm * s.hug).normalized()
-        d = d.lerp(des, turn).normalized()
+        d = d.lerp(des, hang_turn if (hang_turn and w > 0.5) else turn).normalized()
         q = p + d * step
         for _ in range(3):
-            loc, nrm, sd = frame.signed(q)
-            if loc is None or sd >= s.off:
+            loc, nrm, sd = frame.signed(q, cloth_gap)
+            if loc is None or sd >= off:
                 break
-            q = q + nrm * (s.off - sd)
+            q = q + nrm * (off - sd)
         q = p + (q - p).normalized() * step
-        loc, nrm, sd = frame.signed(q)
-        if loc is not None and sd < s.off:
-            q = q + nrm * (s.off - sd)
+        loc, nrm, sd = frame.signed(q, cloth_gap)
+        if loc is not None and sd < off:
+            q = q + nrm * (off - sd)
         if not s.front_fall:
             q = frame.ear_push(q, s.off + ear_margin)
         d = (q - p).normalized()
@@ -178,11 +216,13 @@ def march(frame, s, step, turn, ear_margin):
     return pts
 
 
-def cap_uvs(bm, uv, uv2, c, cap):
+def cap_uvs(bm, uv, uv2, c, cap, vband=(0.0, 0.998)):
     """Cap UVs: u = arc length round the head / u_span (wraps), v = depth
-    from the cap's open boundary / v_span, clamped just under 1. The cap's
-    "edge" texture puts a feather band of fine short hairs at low v and the
-    opaque strand core at high v, so the hairline is a density ramp."""
+    from the cap's open boundary / v_span, mapped into vband (the rows of
+    the "edge" texture that carry the pattern; the image wraps in v too, so
+    the band keeps the opaque core away from the open edge). The texture
+    puts a feather band of fine short hairs at low v and the opaque strand
+    core at high v, so the hairline is a density ramp."""
     edge = [v for v in bm.verts if v.is_boundary]
     kd = KDTree(len(edge))
     for i, v in enumerate(edge):
@@ -193,7 +233,7 @@ def cap_uvs(bm, uv, uv2, c, cap):
             p = loop.vert.co
             u = math.atan2(p.x - c.x, -(p.y - c.y)) * cap["radius_m"] / cap["u_span_m"]
             _, _, d = kd.find(p)
-            loop[uv].uv = (u, min(d / cap["v_span_m"], 0.998))
+            loop[uv].uv = (u, vband[0] + (vband[1] - vband[0]) * min(d / cap["v_span_m"], 1.0))
             loop[uv2].uv = (0.5, 0.0)
     return kd
 
@@ -228,6 +268,19 @@ def build(b, frame, cfg):
                                "sides", "lift_m", "tip_m", "card", "curve")}
     top["shade"] = cfg["shade_top"]
     layers = [dict(cfg["under"], name="under"), dict(top, name="top")]
+    vol = cfg.get("volume") or {}
+
+    def lift_for(nrm, lay, scale=1.0):
+        """Volume stand-off profile for a strand rooted with normal nrm:
+        top_m on the crown, side_m on the sides and nape, more for cards
+        lifted higher in the layer (so the layers stack), jittered."""
+        if not vol:
+            return (0.0, 0.03, 0.03, 0.08, 0.5)
+        topness = smoothstep(0.3, 0.8, nrm.z)
+        amp = vol["side_m"] + (vol["top_m"] - vol["side_m"]) * topness
+        amp *= (1 - vol["jitter"] * rng.random()) * (1 - 0.5 * vol["layer"] + vol["layer"] * lay) * scale
+        return (amp, vol["rise_m"], vol["hold_m"], vol["fall_m"], vol["keep"])
+
     strands = []
     for layer in layers:
         thick = 0.0 if layer.get("card") else layer["radius_m"] / layer["aspect"]
@@ -243,6 +296,7 @@ def build(b, frame, cfg):
             lay = rng.uniform(0, cfg["layer_jitter_m"]) * (1.0 if layer.get("card") else 0.5)
             s = Strand(root, nrm, comb, tip, cfg["max_len_m"], main_gravity, off + lay, layer)
             s.lay = lay / max(cfg["layer_jitter_m"], 1e-6)
+            s.lift = lift_for(nrm, s.lay, 1.0 if layer.get("card") else vol.get("under", 0.6))
             s.wave = (wv["amp"] * rng.uniform(0.5, 1.0), rng.uniform(0, 6.3),
                       wv["period_m"] * rng.uniform(0.8, 1.25))
             strands.append(s)
@@ -255,8 +309,8 @@ def build(b, frame, cfg):
         tip = frame.lips_max.z + ff["tip_above_lips_m"]
         fl = dict(top, name="front", radius_m=top["radius_m"] * ff["radius_scale"],
                   aspect=ff["aspect"], hang_widen=0.0, curve=ff["curve"], shade=ff["shade"],
-                  segment_m=ff["segment_m"])
-        off = (0.0 if fl.get("card") else fl["radius_m"] / fl["aspect"]) + gap + top["lift_m"] * 0.5
+                  segment_m=ff["segment_m"], twist=ff.get("twist", 0.0))
+        off = (0.0 if fl.get("card") else fl["radius_m"] / fl["aspect"]) + gap + ff.get("clear_m", top["lift_m"] * 0.5)
 
         def fall_gravity(p, s, ff=ff):
             return smoothstep(0.0, ff["fall_after_m"], s) * 0.95
@@ -277,7 +331,8 @@ def build(b, frame, cfg):
                        off + 0.0015 * i, fl, side)
             s.lay = 0.6
             s.hug = ff["hug"]
-            s.wave = (wv["amp"] * 0.5, rng.uniform(0, 6.3), wv["period_m"])
+            s.flare = (ff.get("flare_after_m", 1e9) * rng.uniform(0.8, 1.2), ff.get("flare", 0.0))
+            s.wave = (wv["amp"] * ff.get("wave", 0.0), rng.uniform(0, 6.3), wv["period_m"])
             strands.append(s)
 
     obj, bm = hair_mesh.shell_from_body(b, frame.body, scalp_keep, "Human.hair_export")
@@ -291,7 +346,12 @@ def build(b, frame, cfg):
     hang_l = bm.verts.layers.float.new("hang_s")   # metres past the hang-start point
     sector_l = bm.verts.layers.int.new("sector")   # hair_springs sector id
     u_span = cfg["u_span_m"]
-    edge_kd = cap_uvs(bm, uv, uv2, c, cap)
+    def uv_band(tex):
+        lo, hi = tex.get("v_band") or (0.0, 1.0)
+        return (lo + 0.02, hi - 0.04) if tex.get("v_band") else (0.0, 0.998)
+
+    edge_kd = cap_uvs(bm, uv, uv2, c, cap, uv_band(cfg["texture_cap"]))
+    tube_band = uv_band(cfg["texture"])
     for f in bm.faces:
         f.material_index = 0
     for v in bm.verts:
@@ -321,6 +381,7 @@ def build(b, frame, cfg):
             s = Strand(v.co.copy(), nrm, comb, tip, cfg["max_len_m"], main_gravity,
                        gap + top["lift_m"] * 0.5, hlay)
             s.lay = 0.5
+            s.lift = lift_for(nrm, s.lay, vol.get("hairline", 1.0))
             s.wave = (wv["amp"] * rng.uniform(0.5, 1.0), rng.uniform(0, 6.3),
                       wv["period_m"] * rng.uniform(0.8, 1.25))
             strands.append(s)
@@ -349,32 +410,42 @@ def build(b, frame, cfg):
     counts = {}
     guides = []
     ear_margin = cfg["ear_margin_m"]
+    cloth_gap = cfg.get("cloth_gap_m", 0.0)
+    tuck = cfg.get("neck_tuck", 0.0)
     for s in strands:
         L = s.layer
         counts[L["name"]] = counts.get(L["name"], 0) + 1
-        guide = march(frame, s, cfg["step_m"], cfg["turn"], ear_margin)
+        guide = march(frame, s, cfg["step_m"], cfg["turn"], ear_margin, cloth_gap, tuck, frame.chin_z,
+                      cfg.get("cling", 0.0), cfg.get("hang_turn"))
         seg_m = L.get("segment_m", seg)
         nseg = min(max(round(sum((b_ - a).length for a, b_ in zip(guide, guide[1:])) / seg_m),
                        cfg["min_segments"]), cfg["max_segments"])
-        path, total = hair_mesh.resample(guide, nseg)
+        # The first row stays at the buried start and the second at the root,
+        # so the card leaves the skin within a centimetre; one 3 cm quad from
+        # under the skin to the lifted root cut through the air at the hollow
+        # temple of face C (a dark wedge in profile).
+        path, total = hair_mesh.resample(guide[1:], max(nseg - 1, 2))
+        path = [guide[0]] + path
+        nseg = len(path) - 1
+        total += (guide[1] - guide[0]).length
         lengths.append(total)
         tips.append(path[-1].z)
+        arc = [0.0]
+        for a, b_ in zip(path, path[1:]):
+            arc.append(arc[-1] + (b_ - a).length)
         normals, free = [], []
-        off = s.off
-        for p in path:
-            # Lie flat on the surface while touching it; hanging free, face
-            # out from the head's vertical axis so the ribbons stack in layers.
-            loc, nrm, sd = frame.signed(p)
+        for p, a in zip(path, arc):
+            # Lie flat on the surface while touching it (at its stand-off,
+            # which includes the volume lift); hanging free, face out from the
+            # head's vertical axis so the ribbons stack in layers.
+            loc, nrm, sd = frame.signed(p, cloth_gap)
             radial = Vector((p.x - c.x, p.y - c.y, max(p.z - c.z, 0.0))).normalized()
-            touching = nrm is not None and sd < 2.5 * off
+            touching = nrm is not None and sd < s.off + s.lift_at(a) + 0.008
             normals.append(nrm if touching else radial)
             free.append(0.0 if touching else 1.0)
         # Where the strand starts to hang: clear of the colliders, or past
         # the skull (below ear level, behind the head). From there on it
         # belongs to a spring chain (hair_springs); before, to the head.
-        arc = [0.0]
-        for a, b_ in zip(path, path[1:]):
-            arc.append(arc[-1] + (b_ - a).length)
         hang_i = nseg
         sp = cfg["springs"] or {"hang_below_ear_m": 0.01, "front_hang_m": 0.02}
         for i, p in enumerate(path):
@@ -394,7 +465,10 @@ def build(b, frame, cfg):
 
         def radius(t, rc=rc, k=cfg["taper_power"], free=free, n=nseg, hwid=L["hang_widen"]):
             widen = 1 + hwid * free[round(t * n)]
-            return rc * widen * (0.55 + 0.45 * smoothstep(0.0, 0.12, t)) * (1 - t ** k) + 0.001
+            # First ring (buried) near a point: a wide ring 3 mm under a
+            # concave temple poked out as a solid wedge in profile.
+            w0 = 0.1 + 0.9 * smoothstep(0.0, 0.5 / n, t)
+            return rc * widen * (0.55 * w0 + 0.45 * smoothstep(0.0, 0.12, t)) * (1 - t ** k) + 0.001 * w0
 
         # Flatter toward the tip, so ends are thin blades, not rope ends.
         aspect = (lambda t, a=L["aspect"], m=L["aspect_tip"]: a * (1 + (m - 1) * t * t))
@@ -415,21 +489,34 @@ def build(b, frame, cfg):
             # cards rooted within reach of the cap's edge), so their roots
             # don't show as dark notches in the feather band.
             d_edge = edge_kd.find(s.root)[2]
-            root_w = hl["root_w"] + (0.6 - hl["root_w"]) * smoothstep(0.004, 0.025, d_edge)
+            hl_w = (hl or {}).get("root_w", 0.2)
+            root_w = hl_w + (0.6 - hl_w) * smoothstep(0.004, 0.025, d_edge)
             if L["name"] == "hairline":
-                root_w = hl["root_w"]
-            tw = 0.0 if s.front_fall else rng.uniform(-1, 1) * cfg["twist"]
+                root_w = hl_w
+            if s.front_fall:
+                tw_max = L.get("twist", 0.0)
+            else:
+                tw_max = cfg["twist"] * (hl.get("twist_scale", 1.0) if L["name"] == "hairline" else 1.0)
+            tw = rng.uniform(-1, 1) * tw_max
 
             def halfwidth(t, rc=rc, k=cfg["taper_power"], free=free, n=nseg, hwid=L["hang_widen"],
-                          root_w=root_w):
+                          root_w=root_w, tip_w=cfg.get("tip_width", 0.3)):
                 widen = 1 + hwid * free[round(t * n)]
-                return (rc * widen * (root_w + (1 - root_w) * smoothstep(0.0, 0.12, t))
-                        * (1 - 0.7 * t ** k) + 0.0008)
+                ss = smoothstep(0.0, 0.12, t)
+                # The first row (buried) is a near-point, so the card's exit
+                # from the skin is a sliver, not a wedge.
+                w0 = 0.1 + 0.9 * smoothstep(0.0, 0.5 / n, t)
+                return (rc * widen * (root_w * w0 + (1 - root_w) * ss)
+                        * (1 - (1 - tip_w) * t ** k) + 0.0008 * (0.15 + 0.85 * ss))
 
             k = rng.randrange(tex_variants)
             tris += hair_mesh.card(bm, uv, uv2, dl, weights, path, lambda k: normals[k],
                                    halfwidth, (rng.random(), side), curve=L["curve"],
-                                   mat_index=1, twist=lambda t, tw=tw: tw * t,
+                                   mat_index=1,
+                                   # peak twist mid-length, flat again at the
+                                   # tip: twisted ends read as dark slivers
+                                   # (shards) over the collar
+                                   twist=lambda t, tw=tw: tw * math.sin(math.pi * t),
                                    u_range=(k / tex_variants, (k + 1) / tex_variants),
                                    on_vert=on_vert)
         else:
@@ -438,6 +525,7 @@ def build(b, frame, cfg):
             tris += hair_mesh.tube(bm, uv, uv2, dl, weights, path, lambda k: normals[k],
                                    radius, aspect, L["sides"], (rng.random(), side),
                                    u0=rng.random(), u_span=circ / u_span, mat_index=2,
+                                   v_map=lambda t, b=tube_band: b[0] + (b[1] - b[0]) * t,
                                    on_vert=on_vert)
         if L["name"] in ("top", "hairline"):
             guides.append((path, normals, hang_s, sector, s.lay))

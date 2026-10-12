@@ -54,8 +54,8 @@
  "hair": {
   "clumps": {
    "length": {
-    "f": 0.05,
-    "jitter_m": 0.015
+    "f": 0.25,
+    "jitter_m": 0.02
    }
   }
  }

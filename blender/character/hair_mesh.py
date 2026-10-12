@@ -134,6 +134,22 @@ def strand_image(name, cfg, kind):
         wob = sum(rng.uniform(0.3, 1) * np.sin(k * x + rng.uniform(0, 6.3)) for k in (3, 7, 13, 29))
         top = (h * (cfg["edge_v"] + cfg["solid_jitter_v"] * wob / 2.5)).astype(int)
         alpha[ys >= np.clip(top, 0, h - 1)[None, :]] = 1
+    if kind in ("tip", "edge") and cfg.get("v_band"):
+        # The image wraps in v as well as u (REPEAT; glTF samplers and the
+        # Blender node have one mode for both axes), so v = 0 and v = 1 are
+        # filtered together. For the cap that put the opaque core on the
+        # open hairline edge (a dark line, and solid slivers where a face
+        # lies entirely on the boundary); for the tubes the opaque root on
+        # the tips. Squeeze the pattern into rows [lo, hi) and leave the
+        # rest transparent; the UVs stay inside the band (cap_uvs, tube).
+        lo, hi = cfg["v_band"]
+        r0, r1 = int(lo * h), int(hi * h)
+        src = ((np.arange(r1 - r0) / max(r1 - r0, 1)) * h).astype(int)
+        val2 = np.full_like(val, cfg["base_value"])
+        alpha2 = np.zeros_like(alpha)
+        val2[r0:r1] = val[src]
+        alpha2[r0:r1] = alpha[src]
+        val, alpha = val2, alpha2
     rgba = np.zeros((h, w, 4), dtype=np.float32)
     rgba[..., :3] = np.clip(base[None, None, :] * val[..., None], 0, 1)
     rgba[..., 3] = alpha
@@ -285,12 +301,18 @@ def finish(b, obj, bm, mats):
         mats = [mats]
         for f in bm.faces:
             f.material_index = 0
+    idx = [f.material_index for f in bm.faces]
     bm.to_mesh(obj.data)
     bm.free()
     me = obj.data
+    # materials.clear() resets every polygon's material_index to 0 (the hair
+    # shipped with all faces on slot 0, the cap's feather texture, until this
+    # was restored), so the bmesh indices are written back afterwards.
     me.materials.clear()
     for m in mats:
         me.materials.append(m)
+    me.polygons.foreach_set("material_index", idx)
+    me.update()
     for p in me.polygons:
         p.use_smooth = True
     arm = b.armature()
