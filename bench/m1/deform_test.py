@@ -242,7 +242,7 @@ class Stage:
             ob.location = target + Vector((math.sin(la) * math.cos(le), -math.cos(la) * math.cos(le),
                                            math.sin(le))) * d
             look_at(ob, target)
-            ob.data.energy = (base_energy or 35.0) * k * d * d
+            ob.data.energy = (base_energy or 12.0) * k * d * d
         self.sc.view_settings.exposure = exposure
         self.sc.render.resolution_x = self.sc.render.resolution_y = res
         self.sc.render.filepath = path
@@ -260,9 +260,12 @@ def evaluated(o, dg):
     co = co.reshape(-1, 3)
     M = np.array(mw)
     co = co @ M[:3, :3].T + M[:3, 3]
+    nrm = np.empty(len(me.vertices) * 3, dtype=np.float64)
+    me.vertex_normals.foreach_get("vector", nrm)
+    nrm = nrm.reshape(-1, 3) @ M[:3, :3].T
     tris = [tuple(p.vertices) for p in me.polygons]
     ev.to_mesh_clear()
-    return co, tris
+    return co, tris, nrm
 
 
 def boundary_faces(o):
@@ -300,9 +303,13 @@ class Poke:
         self.bfaces = {k: boundary_faces(o) for k, o in self.by.items()}
         self.cover = {}
 
-    def _side(self, inner_co, outer_co, outer_tris, bfaces):
+    def _side(self, inner_co, outer_co, outer_tris, bfaces, inner_nrm=None):
+        """Per inner vertex: 1 outside the outer surface by > tol, -1 inside,
+        0 not judged (nothing within cover_m, or an open-edge face). With
+        inner_nrm (rest pass), "inside" also needs the ray along the inner
+        normal to hit the outer layer within cover_m (it is really under it)."""
         bvh = BVHTree.FromPolygons([tuple(v) for v in outer_co], outer_tris, all_triangles=False)
-        out = np.zeros(len(inner_co), dtype=np.int8)  # 0 not judged, -1 inside, 1 outside
+        out = np.zeros(len(inner_co), dtype=np.int8)
         depth = np.zeros(len(inner_co))
         for i, p in enumerate(inner_co):
             pv = Vector(p)
@@ -313,6 +320,10 @@ class Poke:
             if s > A.tol_m:
                 out[i], depth[i] = 1, s
             elif s < 0:
+                if inner_nrm is not None:
+                    n = Vector(inner_nrm[i])
+                    if bvh.ray_cast(pv + n * 0.0005, n, A.cover_m)[0] is None:
+                        continue
                 out[i] = -1
         return out, depth
 
@@ -320,7 +331,8 @@ class Poke:
         cos = {k: evaluated(o, dg) for k, o in self.by.items()}
         res = {}
         for inner, outer in self.pairs:
-            side, depth = self._side(cos[inner][0], cos[outer][0], cos[outer][1], self.bfaces[outer])
+            side, depth = self._side(cos[inner][0], cos[outer][0], cos[outer][1], self.bfaces[outer],
+                                     cos[inner][2] if rest else None)
             key = f"{inner}>{outer}"
             if rest:
                 self.cover[key] = side == -1

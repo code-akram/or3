@@ -341,6 +341,12 @@ class Rig:
             if base == "hand":
                 f, t, nrm = self.palm(s)
                 return f.cross(nrm).normalized()
+            if base.startswith("thumb"):
+                # the thumb flexes across the palm toward the little finger;
+                # the metacarpal (01) opposes, more toward the palm
+                f, t, nrm = self.palm(s)
+                to = (nrm - t * 0.5) if base == "thumb_01" else (nrm * 0.4 - t)
+                return self.dir(n).cross(to.normalized()).normalized()
             if any(base.startswith(f) for f in FINGERS):
                 _, _, nrm = self.palm(s)
                 return self.dir(n).cross(nrm).normalized()

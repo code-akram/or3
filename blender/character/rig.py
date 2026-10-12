@@ -1,4 +1,24 @@
-"""Rig: MPFB builtin skeleton, then helper/twist bones on the staged armature."""
+"""Rig: MPFB builtin skeleton, then the deformation stage on the staged armature.
+
+rig.post (after head_refine, before budgets) runs, on the staged export objects:
+
+1. deform_rig: helper and twist bones, half-joint / twist / finger / skirt
+   weight remaps, garment weight smoothing, <= 4 influences;
+2. deform_correctives: corrective morph targets baked from delta mush plus
+   layer collision, with their cone drivers;
+3. writes the runtime rules (character.rig.json next to the GLB, and the
+   armature's "deform_rules" property in the .blend).
+
+Config: cfg["rig"]["deform"] deep-merges over DEFAULTS below; null disables
+the stage (stock MPFB rig and weights); {"correctives": null} skips the morphs.
+See bench/m1/v2/deform.md and blender/character/deform_runtime.py.
+"""
+
+from . import config
+from . import deform_correctives as dcor
+from . import deform_rig as drig
+
+DEFAULTS = {"weights": drig.DEFAULTS, "correctives": dcor.DEFAULTS}
 
 
 def add(b):
@@ -6,5 +26,14 @@ def add(b):
 
 
 def post(b):
-    if b.cfg["rig"]["helpers"]:
-        raise NotImplementedError("helper/twist bones: owned by the m1 deformation track")
+    over = b.cfg["rig"].get("deform", {})
+    if over is None:
+        return
+    cfg = config.merge(DEFAULTS, over)
+    rules, info = drig.run(b, cfg["weights"])
+    note = {"weights": info}
+    if cfg["correctives"] is not None:
+        note["correctives"] = dcor.run(b, cfg["correctives"], rules)
+    note["rules_path"] = drig.write_rules(b, rules)
+    note["morphs"] = [m["name"] for m in rules["morphs"]]
+    b.notes["deform"] = note

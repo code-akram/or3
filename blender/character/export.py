@@ -86,11 +86,14 @@ def write_glb(b, out):
         if not _hero_only(o):
             o.select_set(True)
     bpy.context.view_layer.objects.active = b.export_root
+    # corrective morph targets (rig.post / deform_correctives) are the only
+    # shape keys left after bake_targets
+    morph = any(o.type == "MESH" and o.data.shape_keys for o in b.export_objs)
     bpy.ops.export_scene.gltf(
         filepath=out, export_format="GLB", use_selection=True,
         export_skins=True, export_influence_nb=b.cfg["export"]["max_influences"],
         export_all_influences=False, export_animations=False,
-        export_morph=False, export_yup=True, export_apply=False,
+        export_morph=morph, export_morph_normal=morph, export_yup=True, export_apply=False,
         export_tangents=True, export_image_format="AUTO")
 
 
