@@ -93,6 +93,9 @@ class Jacket:
         ef = zone(e["chest"], e["waist_front"], e["hip"])
         eb = zone(e["back"], e["waist_back"], e["hip"])
         es = zone(e["side"], e["waist_side"], e["hip"])
+        # over the deltoids the side ease closes to the shoulder-point allowance
+        sh = self.J["shoulder"]
+        es = lerp(es, sh["over_body_m"], smoothstep((z - self.z_pit) / max(self.z_sh - self.z_pit, 1e-6)))
 
         def f(a):
             s, c = math.sin(a), math.cos(a)
@@ -125,15 +128,62 @@ class Jacket:
     def build_rings(self):
         body = self.body
         torso = body.verts(sb.TORSO)
-        # the deltoid cap joins the slices near the top: the shoulder wraps it
-        z_cap = body.joint("upperarm_l").z - self.J["shoulder"]["cap_below_joint_m"]
-        cap = [v for v in body.verts({"upperarm_l", "upperarm_r"}) if v.co.z > z_cap]
         J = self.J
+        sh = J["shoulder"]
+        js = body.joint("upperarm_l")
+        z_cap = js.z - sh["cap_below_joint_m"]
+        cap = [v for v in body.verts({"upperarm_l", "upperarm_r"}) if v.co.z > js.z - 0.06]
+        # the shoulder point's height: the body's top over the deltoid (rays
+        # down at the shoulder line's x) + the pad clearance. No horizontal row
+        # lies above it (a horizontal slice of the sloping shoulder folds): the
+        # yoke sheet spans from the last row below it up to the ring
+        tree = body.bvh()
+        down = Vector((0, 0, -1))
+        cy_s = 0.5 * (body.joint("upperarm_l").y + body.joint("clavicle_l").y)
+        tops = []
+        for x in (self.half_sh - 0.04, self.half_sh - 0.025, self.half_sh - 0.01):
+            for y in (cy_s - 0.03, cy_s, cy_s + 0.03):
+                for sx in (1, -1):
+                    hit = tree.ray_cast(Vector((sx * x, y, 1.9)), down, 0.6)
+                    if hit[0] is not None and hit[1].z > 0.2:
+                        tops.append(hit[0].z)
+        self.z_sp = (max(tops) if tops else js.z) + sh["clear_m"]
+        self.m["shoulder_point_body_top_z"] = round(self.z_sp - sh["clear_m"], 4)
+        # the deltoid ring: the widest slice of torso + shoulder caps; the top
+        # ring has its shape, narrowed in x to the shoulder line and shallower
+        # (the trapezius slice stretched in x gave a thin wedge)
+        deltoid = None
+        for dz in (-0.035, -0.025, -0.015, -0.005, 0.005):
+            cy_c, rad = sb.slice_profile(torso + cap, js.z + dz, J["slice_band_m"], min_pts=60)
+            nb = len(rad)
+            xe = max(rad[i] * abs(math.cos(TAU * (i + 0.5) / nb)) for i in range(nb))
+            if deltoid is None or xe > deltoid[0]:
+                deltoid = (xe, cy_c, rad)
+        self.x_cap, cy_cap, cap_radii = deltoid
+        cap_radii = sb.chord_fill(sb.smooth_ring(cap_radii, 2), limit=J["canvas_limit_m"])
+        self.z_cap = z_cap
         run_max = None
         rows = []
+        # between the armpit and the shoulder point the block encloses the
+        # deltoid out to the armhole: the scye runs from the pit (at the torso's
+        # side) up to the shoulder point, and the body inboard of it is the
+        # block's, outboard of it the sleeve's
+        cap_all = [v for v in body.verts({"upperarm_l", "upperarm_r"}) if v.co.z > self.z_pit - 0.03]
+        _, pit_r = sb.slice_profile(torso, self.z_pit, J["slice_band_m"], min_pts=60)
+        nb = len(pit_r)
+        self.x_pit_body = max(pit_r[i] * abs(math.cos(TAU * (i + 0.5) / nb)) for i in range(nb))
         for z in reversed(self.levels()):
+            if z >= self.z_sh - 1e-6:
+                rows.append({"z": z, "cy": cy_cap, "raw": list(cap_radii), "cap": True})
+                continue
+            if z > self.z_sp - sh["under_cap_m"]:
+                continue
             try:
-                vs = torso + cap if z > z_cap else torso
+                vs = torso
+                if z > self.z_pit:
+                    u = (z - self.z_pit) / max(self.z_sp - self.z_pit, 1e-6)
+                    x_lim = lerp(self.x_pit_body, self.half_sh, u ** sh["scye_pow"]) + 0.005
+                    vs = torso + [v for v in cap_all if abs(v.co.x) <= x_lim]
                 cy, radii = sb.slice_profile(vs, z, J["slice_band_m"], min_pts=60)
                 radii = sb.smooth_ring(radii, 2)
                 radii = sb.chord_fill(radii, limit=J["canvas_limit_m"])
@@ -163,16 +213,19 @@ class Jacket:
             # shoulder zone: the slice is widened in x only, so the sides reach the
             # shoulder point while the chest and back keep the body's depth
             if z >= self.z_pit - 1e-6:
-                t = smoothstep((z - self.z_pit) / max(self.z_sh - self.z_pit, 1e-6)) ** J["shoulder"]["bulge_pow"]
+                t = smoothstep((z - self.z_pit) / max(self.z_sh - self.z_pit, 1e-6)) ** sh["bulge_pow"]
                 nb = len(radii)
                 x_prof = max(radii[i] * abs(math.cos(TAU * (i + 0.5) / nb)) for i in range(nb))
                 x_pit = self._x_pit if hasattr(self, "_x_pit") else x_prof
                 if not hasattr(self, "_x_pit"):
                     self._x_pit = x_prof
                 x_want = lerp(x_pit, self.half_sh - ease(0.0), t)
-                k = max(1.0, x_want / max(x_prof, 1e-6))
+                if r.get("cap"):
+                    k, g = x_want / max(x_prof, 1e-6), sh["depth_top"]
+                else:
+                    k, g = max(1.0, x_want / max(x_prof, 1e-6)), 1.0
                 pts = [(radii[i] * math.cos(TAU * (i + 0.5) / nb) * k,
-                        radii[i] * math.sin(TAU * (i + 0.5) / nb)) for i in range(nb)]
+                        radii[i] * math.sin(TAU * (i + 0.5) / nb) * g) for i in range(nb)]
                 radii = sb.smooth_ring(sb.polar_profile(pts, nb), 1)
             r["radii"] = radii
             r["ease"] = ease
@@ -189,16 +242,43 @@ class Jacket:
                     d = (p - c)
                     pts[i] = c + d * (1 - J["underlap_tuck_m"] * k / max(d.length, 1e-6))
             r.update({"a0": a0, "a1": a1, "pts": pts})
-        # shoulder slope: the top rows drop toward the shoulder point, so the
-        # line from the neck point runs down to the sleeve head (not a box)
-        slope = J["shoulder"]["slope_m"]
-        for r in rows:
-            if r["z"] <= self.z_pit:
-                continue
-            w = smoothstep((r["z"] - self.z_pit) / max(self.z_sh - self.z_pit, 1e-6))
-            for p in r["pts"]:
-                t = smoothstep((abs(p.x) - self.x_n) / max(self.half_sh - self.x_n, 1e-6))
-                p.z -= slope * w * t * t
+        # shoulder slope: the ring runs from the neck point down to the shoulder
+        # point (the body's top over the deltoid + the pad), never below the
+        # trapezius + clearance, smoothed along the line away from the neck
+        top = rows[-1]["pts"]
+        for p in top:
+            t = smoothstep((abs(p.x) - self.x_n) / max(self.half_sh - self.x_n, 1e-6))
+            p.z = lerp(self.z_sh, min(self.z_sp, self.z_sh), t)
+        clear = sh["clear_m"]
+        lifted = 0
+        for _ in range(2):
+            lifted += sb.lift_onto_body(tree, top, clear, above=0.15)
+            for _ in range(2):
+                zs = [p.z for p in top]
+                for i in range(1, N):
+                    if abs(top[i].x) > self.x_n + 0.02:
+                        top[i].z = 0.25 * zs[i - 1] + 0.5 * zs[i] + 0.25 * zs[i + 1]
+        self.m["shoulder_verts_lifted"] = lifted
+        self.m["shoulder_point_z"] = round(max(top, key=lambda p: p.x).z, 4)
+        self.m["shoulder_drop_m"] = round(self.z_sh - max(top, key=lambda p: p.x).z, 4)
+        # the yoke sheet between the last deltoid-level row and the ring: rows
+        # interpolated by column (not horizontal slices), each lifted over the
+        # trapezius and the deltoid cap, so the sheet drapes over them
+        base, ring = rows[-2], rows[-1]
+        K = sh["yoke_rows"]
+        mid = []
+        for k in range(1, K):
+            t = k / K
+            pts = [a.lerp(b, t) for a, b in zip(base["pts"], ring["pts"])]
+            sb.lift_onto_body(tree, pts, clear, above=0.15)
+            for _ in range(2):
+                zs = [p.z for p in pts]
+                for i in range(1, N):
+                    pts[i].z = 0.25 * zs[i - 1] + 0.5 * zs[i] + 0.25 * zs[i + 1]
+            mid.append({"z": lerp(base["z"], ring["z"], t), "cy": lerp(base["cy"], ring["cy"], t),
+                        "raw": ring["raw"], "radii": ring["radii"], "ease": ring["ease"],
+                        "a0": ring["a0"], "a1": ring["a1"], "pts": pts, "yoke": True})
+        rows = rows[:-1] + mid + [ring]
         self.rings = rows
         return rows
 
@@ -229,6 +309,9 @@ class Jacket:
             if i == 0 or i == N:  # the gorge points are the top row's ends
                 p = top["pts"][i].copy()
             pts.append(p)
+        # the collar seam rides over the trapezius where it rises above the neck circle
+        self.m["neckline_verts_lifted"] = sb.lift_onto_body(body.bvh(), pts[1:-1],
+                                                            J["shoulder"]["clear_m"], above=0.15)
         self.neck_pts = pts
         self.neck_cy = cy
         return pts
@@ -322,11 +405,10 @@ class Jacket:
                 h = J["roll_m"] * (0.3 + 0.7 * math.sin(math.pi * u) ** 0.7)
                 h *= min(1.0, max(0.0, s_e / 0.03))
                 e = J["edge_m"]
-                self.lapel_row(g, k, col, left, s_e, h, e, u)
-            # tip row: rises past the gorge
-            k = rows_k[-1]
-            self.lapel_row(g, k, col, left, J["width_m"], J["roll_m"] * 0.3, J["edge_m"], 1.0,
-                           rise=J["tip_rise_m"], tip=True)
+                # the top edge (gorge line) tilts up toward the lapel point over
+                # the last rows, so the point sits above the gorge without a wall
+                rise = J["tip_rise_m"] * smoothstep((u - (1 - J["rise_frac"])) / J["rise_frac"])
+                self.lapel_row(g, k, col, left, s_e, h, e, u, rise=rise, tip=(k == rows_k[-1]))
             g.fill(G.uv, G.tag, TAG["lapel"], flip=not left)
             for row in g.rows[1:]:
                 for v in row[1:]:
@@ -359,7 +441,7 @@ class Jacket:
             if rise:
                 q.z += rise * max(0.0, s) / max(s_e, 1e-6)
             if tip and s > 0:
-                q += t * (0.012 * s / s_e)  # the tip leans outboard
+                q += n * (self.J["lapel"]["tip_lift_m"] * s / s_e)  # the point stands off the chest
             verts.append(g.bm.verts.new(q))
             uvs.append((max(s, 0.0) + 0.01, u * 0.4 + rise))
         g.add_shared_row(verts, uvs)
@@ -367,9 +449,10 @@ class Jacket:
     # --- collar ------------------------------------------------------------------------------
 
     def build_collar(self):
-        """Stand, fold and fall along the neckline, then E extra columns on
-        each end running out along the lapel's top edge (the gorge seam) to
-        the notch point, where the fall edge turns up into the collar point."""
+        """Stand, fold and fall along the neckline. At each front end the seam
+        runs E more columns along the lapel's top edge (the gorge seam) to the
+        notch, where the fall edge turns up into the collar point: the notch
+        opens between that leading edge and the lapel's top edge."""
         G, J = self.G, self.J["collar"]
         N = self.N
         top = self.block.rows[-1]
@@ -380,63 +463,81 @@ class Jacket:
         seam_m = J["gorge_seam_m"]
         up = Vector((0, 0, 1))
 
-        # seam points: lapel top edge (right end, reversed), neckline, lapel top edge (left)
         def lapel_top(left):
             grid = self.lapel_l if left else self.lapel_r
-            row = grid.rows[-1]  # tip row: root (gorge) then outward
-            pts = [v.co.copy() for v in row[1:]]
-            pts.insert(0, row[0].co.copy())
-            return pts
+            return [v.co.copy() for v in grid.rows[-1]]   # root (gorge point) outward, lip last
 
-        seam = []  # (point, shared vert or None, kind, e) with e in [0,1] along the seam ext
-        lt_r, lt_l = lapel_top(False), lapel_top(True)
+        # seam: lapel top edge (left, from the seam end in), neckline, lapel top edge (right)
+        seam = []  # (point, shared vert or None, e in [0, 1] along the gorge seam, left)
+        lt = {True: lapel_top(True), False: lapel_top(False)}
         for k in range(E, 0, -1):  # column 0 of the neckline is the wearer's left end
-            s = seam_m * k / E
-            seam.append((sb.point_at_arc(lt_l, s), None, "ext", k / E, True))
+            seam.append((sb.point_at_arc(lt[True], seam_m * k / E), None, k / E, True))
         for i in range(N + 1):
-            seam.append((top[i].co.copy(), top[i], "neck", 0.0, i < N // 2))
+            seam.append((top[i].co.copy(), top[i], 0.0, i < N // 2))
         for k in range(1, E + 1):
-            s = seam_m * k / E
-            seam.append((sb.point_at_arc(lt_r, s), None, "ext", k / E, False))
+            seam.append((sb.point_at_arc(lt[False], seam_m * k / E), None, k / E, False))
         M = len(seam)
+        # the collar point: from the gorge seam end, up at notch_deg to the lapel's
+        # top edge; the fall edge comes round from point_back_m behind it
+        cp, f0, nrm = {}, {}, {}
+        ang = math.radians(J["notch_deg"])
+        G.bm.normal_update()
+        for left in (True, False):
+            pts = lt[left]
+            e_pt = sb.point_at_arc(pts, seam_m)
+            # the collar end lies in the lapel's plane: its leading edge turns up
+            # from the gorge seam end by notch_deg within that plane
+            hit = under.find_nearest(e_pt, 0.05)
+            n = hit[1] if hit[0] is not None else Vector((e_pt.x, e_pt.y - cy, 0.0)).normalized()
+            nrm[left] = n
+            edge = pts[-2] - pts[0]
+            edge = (edge - n * edge.dot(n)).normalized()
+            upl = (up - n * up.dot(n)).normalized()
+            d = (edge * math.cos(ang) + upl * math.sin(ang)).normalized()
+            cp[left] = e_pt + d * J["point_m"] + n * 0.003
+            end = top[0].co if left else top[N].co
+            nxt = top[1].co if left else top[N - 1].co
+            f0[left] = cp[left] + (nxt - end).normalized() * J["point_back_m"]
         rows = [[] for _ in range(6)]
         uvs = [[] for _ in range(6)]
-        ang = math.radians(J["point_angle_deg"])
-        for i, (p0, shared, kind, e, left) in enumerate(seam):
-            c = (i - E) / N  # 0..1 along the neckline, <0 / >1 on the extensions
-            bk = math.sin(math.pi * min(max(c, 0.0), 1.0))
+        rested = 0
+        for i, (p0, shared, e, left) in enumerate(seam):
+            c = min(max((i - E) / N, 0.0), 1.0)  # 0..1 along the neckline
+            bk = math.sin(math.pi * c)
             out = Vector((p0.x, p0.y - cy, 0.0)).normalized()
-            # toward the front end along the seam
-            a = seam[max(i - 1, 0)][0]
-            b = seam[min(i + 1, M - 1)][0]
-            fwd = (a - b).normalized() if i < M // 2 else (b - a).normalized()
-            endness = max(0.0, 1 - min(c, 1 - c) / J["end_frac"]) if 0 <= c <= 1 else 1.0
-            w = smoothstep(endness)
-            d_back = (-up * 0.85 + out * 0.5).normalized()
-            side = Vector((1.0 if left else -1.0, 0.0, 0.0))  # outboard, toward the shoulder
-            d_end = (side * math.cos(ang) + up * math.sin(ang) + out * 0.3).normalized()
             if e == 0:
-                stand = lerp(J["stand_front_m"], J["stand_back_m"], bk) * (1 - 0.3 * w)
-                p1 = p0 + up * stand - out * J["lean_in_m"]
+                w = smoothstep(max(0.0, 1 - min(c, 1 - c) / J["end_frac"]))
+                # the fold comes down to the lapel's roll height at the gorge point
+                stand = lerp(lerp(J["stand_front_m"], J["stand_back_m"], bk), J["stand_end_m"], w)
+                p1 = p0 + up * stand - out * J["lean_in_m"] * (1 - w)
                 p2 = p1 + up * 0.004 + out * 0.003
-                d = (d_back * (1 - w) + d_end * w).normalized()
-                L = lerp(lerp(J["fall_front_m"], J["fall_back_m"], bk), J["point_m"] * 0.9, w)
+                d_back = (-up * 0.85 + out * 0.5).normalized()
+                L_back = lerp(J["fall_front_m"], J["fall_back_m"], bk)
+                v_front = f0[left] - p2
+                d = (d_back * (1 - w) + v_front.normalized() * w).normalized()
+                L = lerp(L_back, v_front.length, w)
+                p3 = p2 + d * (L * 0.5)
+                p4 = p2 + d * L
+                if w < 0.5:
+                    # rest the fall on what is beneath it (the yoke, the back)
+                    for q in (p3, p4):
+                        hit = under.find_nearest(q, 0.08)
+                        if hit[0] is not None:
+                            h = (q - hit[0]).dot(hit[1])
+                            if h < 0.003:
+                                q += hit[1] * (0.003 - h)
+                                rested += 1
             else:
-                # along the gorge seam the collar lies flat on the body/lapel
-                stand = 0.0
-                p1 = p0 + up * 0.002 + out * 0.003
-                p2 = p1 + up * 0.002
-                d = d_end
-                L = lerp(J["point_m"] * 0.9, J["point_m"], e)
-            p3 = p2 + d * (L * 0.5)
-            p4 = p2 + d * L
-            # rest the fall on what is beneath it (block, lapels)
-            for q in (p3, p4):
-                hit = under.find_nearest(q, 0.08)
-                if hit[0] is not None:
-                    h = (q - hit[0]).dot(hit[1])
-                    if h < 0.003:
-                        q += hit[1] * (0.003 - h)
+                # along the gorge seam the collar lies on the lapel: the fold fades
+                # out and the fall edge is the collar's end, running to the point
+                n = nrm[left]
+                upl = (up - n * up.dot(n)).normalized()
+                stand = J["stand_end_m"] * (1 - e)
+                p1 = p0 + upl * stand + n * 0.002
+                p2 = p1 + upl * 0.001 + n * 0.001
+                p4 = f0[left].lerp(cp[left], e)
+                p3 = p2.lerp(p4, 0.5) + n * 0.002
+                L = (p4 - p2).length
             p5 = p4 + (p3 - p4).normalized() * 0.004 - out * 0.0025
             u = (i / M) * self.J["uv_circ_m"] * 0.55
             for j, (p, v) in enumerate(((p0, 0.0), (p1, stand), (p2, stand + 0.01),
@@ -447,11 +548,12 @@ class Jacket:
                 else:
                     rows[j].append(g.bm.verts.new(p))
                 uvs[j].append((u, v))
-        # smooth the fall rows along the collar (resting introduces steps)
+        # smooth the fall rows along the neck columns (resting introduces steps)
+        lo, hi = E + 2, M - E - 3
         for j in (3, 4, 5):
             co = [v.co.copy() for v in rows[j]]
             for _ in range(2):
-                co = [co[i] if i in (0, len(co) - 1) else (co[i - 1] + 2 * co[i] + co[i + 1]) / 4
+                co = [co[i] if not (lo <= i <= hi) else (co[i - 1] + 2 * co[i] + co[i + 1]) / 4
                       for i in range(len(co))]
             for v, p in zip(rows[j], co):
                 v.co = p
@@ -465,8 +567,8 @@ class Jacket:
             for j in range(1, 6):
                 G.copy_weights(src, rows[j][i])
         self.collar = g
+        self.m["collar_rested_verts"] = rested
         G.mark_row(TAG["collar"], g, 4, "edge", inside_sign=-1.0)
-        G.mark_row(TAG["collar"], g, 2, "seam")
 
     # --- vents -------------------------------------------------------------------------------
 
@@ -579,46 +681,104 @@ class Jacket:
         g = G.grid(f"sleeve_{side}")
         taper0, taper1 = J["top_r_m"], J["cuff_r_m"]
         rope = J["rope_m"]
-        ring0 = None
-        for k in range(K + 1):
+        H = J["head_rows"]
+
+        def arm_radius(t, C, up, sd, phi):
+            band = J["band_m"]
+            while True:
+                near = [p for (tv, p) in proj if abs(tv - t) < band]
+                if len(near) >= 24 or band > 0.05:
+                    break
+                band *= 1.5
+            if not near:
+                return 0.0
+            prof = sb.polar_profile([((p - C).dot(up), (p - C).dot(sd)) for p in near], 90)
+            prof = sb.smooth_ring(sb.chord_fill(prof, ks=(2, 4, 8), iters=2), 2)
+            return sb.sample_ring(prof, phi)
+
+        # the scye (armhole seam): a loop on the block's surface from the shoulder
+        # point down the front and the back to the armpit depth, found with
+        # horizontal rays from inside the block, so the sleeve head is sewn to the
+        # block all round (no open wedge under the shoulder)
+        sd_y = 1.0 if axis(t_pit)[3].y > 0 else -1.0
+        b_scye = J["scye_half_w_m"]
+        ring0, t0, misses = [], [], 0
+        for i in range(n_cols + 1):
+            phi = TAU * i / n_cols
+            s = (1 - math.cos(phi)) / 2
+            z = lerp(SP.z, z_pit, s)
+            ring = min(self.rings, key=lambda rr: abs(rr["z"] - z))
+            cy = ring["cy"]
+            x_ring = max(abs(p.x) for p in ring["pts"])
+            yc = S.y + (T1.y / T1.z) * (z - S.z) if abs(T1.z) > 1e-3 else S.y
+            y = yc + b_scye * math.sin(phi) * sd_y * (0.85 + 0.15 * (1 - s))
+            o = Vector((0.0, cy, z))
+            d = Vector((sign * x_ring, y - cy, 0.0)).normalized()
+            hit = block_tree.ray_cast(o, d, 1.0)
+            if hit[0] is None:
+                C, T, up, sd = axis(t_pit)
+                dd = up * math.cos(phi) + sd * math.sin(phi)
+                p = C + dd * (arm_radius(t_pit, C, up, sd, phi) + J["ease_m"])
+                misses += 1
+            else:
+                p = hit[0] + hit[1] * J["seam_out_m"]
+            ring0.append(p)
+            t0.append((p - S).dot(T1))
+        self.m[f"scye_misses_{side}"] = misses
+        g.add_row(ring0, [(J["uv_circ_m"] * i / n_cols, t0[i]) for i in range(n_cols + 1)])
+        cleared = 0
+        body_tree = body.bvh()
+
+        def body_exit(C, d, reach=0.14):
+            """Distance along d from C to the last skin exit (normal along d)
+            within reach, or None."""
+            o, acc, best = C, 0.0, None
+            for _ in range(4):
+                hit = body_tree.ray_cast(o, d, reach - acc)
+                if hit[0] is None:
+                    break
+                acc += hit[3] + 1e-4
+                if hit[1].dot(d) > 0:
+                    best = acc
+                o = hit[0] + d * 1e-4
+            return best
+        for k in range(1, K + 1):
             uk = k / K
             pts, uvs = [], []
+            s_head = smoothstep(k / H) if k < H else 1.0
             for i in range(n_cols + 1):
                 phi = TAU * i / n_cols  # 0 at the top of the arm
-                head_t = lerp(t_top, t_pit, (1 - math.cos(phi)) / 2)
-                t_uni = lerp(t_pit, L, uk)
-                blend = smoothstep(k / J["head_rows"])
-                t = head_t if k == 0 else t_uni
+                t_tube = lerp(t_pit, L, uk)
+                t = lerp(t0[i], t_tube, k / H) if k < H else t_tube
                 C, T, up, sd = axis(t)
                 d = up * math.cos(phi) + sd * math.sin(phi)
-                # arm profile at t
-                band = J["band_m"]
-                while True:
-                    near = [p for (tv, p) in proj if abs(tv - t) < band]
-                    if len(near) >= 24 or band > 0.05:
-                        break
-                    band *= 1.5
-                r_arm = 0.0
-                if near:
-                    prof = sb.polar_profile([((p - C).dot(up), (p - C).dot(sd)) for p in near], 90)
-                    prof = sb.smooth_ring(sb.chord_fill(prof, ks=(2, 4, 8), iters=2), 2)
-                    r_arm = sb.sample_ring(prof, phi)
+                r_arm = arm_radius(t, C, up, sd, phi)
                 r = max(r_arm + J["ease_m"], lerp(taper0, taper1, (t - t_pit) / max(L - t_pit, 1e-6)))
-                if k < 3:
-                    r += rope * max(0.0, math.cos(phi)) ** 2 * (1 - k / 3)
-                p = C + d * r
-                if k == 0:
-                    hit = block_tree.ray_cast(C, d, 0.16)
-                    if hit[0] is not None and hit[3] > r_arm + 0.002:
-                        p = hit[0] + d * J["seam_out_m"]
-                if 0 < k < J["head_rows"] and ring0 is not None:
-                    # ease from the armhole seam into the tube
-                    p = ring0[i].lerp(p, blend)
-                pts.append(p)
+                if k <= 3:
+                    r += rope * max(0.0, math.cos(phi)) ** 2 * (0.7, 1.0, 0.5)[k - 1]
+                off = d * r
+                if k < H:
+                    # the cross-section morphs from the scye's shape into the tube
+                    # while it slides along the arm: the cap follows the deltoid
+                    C0 = axis(t0[i])[0]
+                    off = (ring0[i] - C0).lerp(off, s_head)
+                # never inside the body: a ray from the arm axis along the point's
+                # direction leaves the skin (the deltoid, the back of the shoulder,
+                # the lat) at r_body; the cloth stays ease outside it
+                dn = off.normalized()
+                r_body = body_exit(C, dn)
+                ease = J["ease_m"] * (1.6 - 0.6 * s_head)   # extra over the deltoid's bulge
+                if r_body is not None and off.length < r_body + ease:
+                    off = dn * (r_body + ease)
+                    cleared += 1
+                pts.append(C + off)
                 uvs.append((J["uv_circ_m"] * i / n_cols, t))
-            if k == 0:
-                ring0 = pts
+            if k < H:
+                # ridges between the rays (the axillary folds) are caught by the
+                # nearest-surface push
+                cleared += sb.clear_of_body(body_tree, pts, J["ease_m"] * 0.8, reach=0.03)
             g.add_row(pts, uvs)
+        self.m[f"sleeve_head_cleared_{side}"] = cleared
         # cuff lip: a ring stepping back inside the sleeve end
         last = g.rows[-1]
         C, T, up, sd = axis(L)
@@ -704,7 +864,7 @@ class Jacket:
     # --- measurements ------------------------------------------------------------------------
 
     def measure(self):
-        m = {}
+        m = dict(self.m)
         m["hem_z"] = round(self.z_h, 4)
         m["hem_to_suprasternale"] = round(self.z_h / self.supra, 4)
         m["button_stance_to_stature"] = round(self.z_b / self.stature, 4)

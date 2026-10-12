@@ -485,6 +485,51 @@ def tuck_under(verts, outer_tree, gap=0.002, reach=0.03):
     return moved
 
 
+def clear_of_body(tree, pts, clear, reach=0.08):
+    """Push every point of `pts` (Vectors or BMVerts, moved in place) out
+    along the nearest body normal until it is `clear` metres off the skin.
+    Returns the number moved."""
+    moved = 0
+    for p in pts:
+        co = p.co if hasattr(p, "co") else p
+        hit = tree.find_nearest(co, reach)
+        if hit[0] is None:
+            continue
+        d = (co - hit[0]).dot(hit[1])
+        if d < clear:
+            co = co + hit[1] * (clear - d)
+            if hasattr(p, "co"):
+                p.co = co
+            else:
+                p[:] = co
+            moved += 1
+    return moved
+
+
+def lift_onto_body(tree, pts, clear, above=0.08, min_nz=0.3):
+    """Points under the body's top surface (the trapezius, the deltoid cap)
+    are raised to `clear` above it: a ray from `above` metres over the point
+    straight down finds the skin between. Only up-facing skin counts (a ray
+    that starts inside the body and leaves through its underside is ignored).
+    Moved in place; returns the count."""
+    moved = 0
+    down = Vector((0, 0, -1))
+    for p in pts:
+        co = p.co if hasattr(p, "co") else p
+        hit = tree.ray_cast(co + Vector((0, 0, above)), down, above)
+        if hit[0] is None or hit[1].z < min_nz:
+            continue
+        z = hit[0].z + clear
+        if z > co.z:
+            co = Vector((co.x, co.y, z))
+            if hasattr(p, "co"):
+                p.co = co
+            else:
+                p[:] = co
+            moved += 1
+    return moved
+
+
 def offset_from(tree, p, n, gap, back=0.01, reach=0.06):
     """Move p out along n until it is `gap` clear of the surface in `tree`
     (ray from behind p). Returns the new point."""
