@@ -80,8 +80,16 @@ TT_EXPOSURE = 0.0
 # spec ratios the rims did not separate the hair edge from the black.
 # name: (colour or temperature K, ratio, shape (w, h m), azimuth deg from the
 # camera axis (+ = camera-left), elevation deg, distance m)
+# Key warmth: direction §5 says amber 3,000 K, but under the render's 6,500 K
+# white and AgX Medium High Contrast that put the skin at HSV saturation
+# 0.66-0.78 (orange-tan) where the turntable reads 0.30-0.39. The skin sits in
+# the toe of the AgX curve, where the channel ratios stretch, and the set
+# lights are not the cause (the void set is as orange). 5,000 K plus the
+# grade's 0.85 saturation gives 0.33-0.46: neutral-warm skin, while the neon
+# rims and signs keep the colour (deviation, see hero-stage.md).
+KEY_K = 5000
 HERO_LIGHTS = {
-    "key":     (3000, 1.00, (0.8, 0.8), 40.0, 25.0, 1.5),
+    "key":     (KEY_K, 1.00, (0.8, 0.8), 40.0, 25.0, 1.5),
     "rim":     ((1.0, 0.18, 0.55), 1.40, (0.3, 1.5), -140.0, 25.0, 1.5),
     "kicker":  ((0.1, 0.8, 0.9), 0.80, (0.3, 1.2), 135.0, 15.0, 1.6),
     "fill":    ((0.55, 0.7, 1.0), 0.08, (2.0, 2.0), -55.0, -5.0, 2.5),
@@ -162,9 +170,9 @@ class Character:
             return self.bone_head(what) * 0.6 + self.bone_head("middle_01" + what[-2:]) * 0.4
         if what == "hands":
             return (self.bone_head("hand_l") + self.bone_head("hand_r")) * 0.5 + Vector((0, 0, -0.25))
-        if what == "cuff_feet":    # halfway between the left cuff and the floor under it
-            h = self.bone_head("hand_l")
-            return Vector((h.x * 0.6, h.y * 0.6 - 0.03, h.z * 0.5))
+        if what == "cuff_feet":    # between the hands and the floor under them
+            h = (self.bone_head("hand_l") + self.bone_head("hand_r")) * 0.5
+            return Vector((h.x * 0.6, h.y * 0.6 - 0.03, h.z * 0.5 + 0.06))
         if what == "feet":
             return Vector((0, -0.05, 0.25))
         raise ValueError(what)

@@ -89,6 +89,7 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
     cam["obj"].data.shift_y = spec.get("shift_y", 0.0)
     if set_kind == "alley":
         sets.turn(cam["az"] + spec.get("set_yaw", 15.0))
+        sets.neon(spec.get("neon", 1.0))
     lights = dict(spec.get("lights") or {})
     rig.hero_rig(ch, cam, lights=lights,
                  flag=spec.get("flag", ("key", "fill", "eye")) if set_kind == "alley" else ())
