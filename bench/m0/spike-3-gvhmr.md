@@ -1,29 +1,41 @@
 # Phase 0 spike 3: video to motion with GVHMR on CPU
 
 Date: 2026-10-12. Machine: Ryzen 7 7700 (Zen 4, AVX-512 bf16), 62 GB RAM, CPU only.
-The box was shared with other spikes. **Every timing below uses 4 threads**, with `loadavg` recorded next to it.
+The box was shared with other spikes. **Every timing in the first part uses 4 threads**, with `loadavg` recorded next to it.
+The idle 8/16-thread numbers, the foot-lock rewrite and the YouTube root cause are in **Follow-up (completion)** at the end;
+where they replace a first-pass number, the first-pass text says so.
+
+**Status after the follow-up: partial.** Everything that can run on this machine is done and measured. The one remaining
+blocker is footage: YouTube refuses this machine's datacenter IP, so the Lionsgate Movies featurettes need one user step
+(export cookies, `scp`, run `fetch-youtube.sh`).
 
 ## Summary
 
 - **It runs on CPU with zero patches.**
   - The full pipeline ran end to end: shot split, YOLO + BoT-SORT, ViTPose-H, HMR2 ViT-H features, SimpleVO, GVHMR, then QC, cleanup and npz/BVH export.
   - It uses the `ryanrudes/gvhmr` fork, which is device-agnostic, plus a 3-line external `torch.autocast("cpu", bfloat16)` wrapper.
-- **Throughput at 4 threads**:
+- **Throughput at 4 threads** (first pass):
   - As shipped (fp32): **2.5 s per frame**.
   - With bf16 autocast on the two ViT-H stages: **0.99 s per frame** for the whole pipeline. That is 2.8× faster on the ViTs, with no measurable quality change: 1.2 mm root-aligned MPJPE between the fp32 and bf16 runs.
-- **Projection for 60 min of footage at 16 threads** (≈108k frames once resampled to 30 fps):
-  - bf16: **≈ 15–17 h**.
-  - bf16 + skipping duplicated frames: **≈ 13 h**.
-  - bf16 + skipping duplicates + ViTPose flip-test off (an accuracy trade): **≈ 9–10 h**.
-  - fp32 as shipped: **≈ 40–47 h**.
-  - NOTES §8 estimated 22 h naive and 8–12 h optimised. Naive is about 2× worse than estimated. Optimised is reachable only with the accuracy trade.
+  - Correction from the follow-up: ultralytics silently resets torch to 8 threads, so YOLO ran on 8 threads in every first-pass run. True 4-thread YOLO is 0.31 s/frame, so a true 4-thread bf16 total is about 1.12 s/frame.
+- **Measured on the idle machine, 60 min of footage (108k frames at 30 fps)** (follow-up; replaces the first pass's extrapolation):
+  - fp32 as shipped, best single process (8 threads): **1.155 s/frame, about 35 h**.
+  - bf16 ViTs, accuracy-neutral: 1 × 8 threads **0.66–0.68 s/frame, about 20 h**; best schedule 4 processes × 4 threads **0.593 s/frame, about 17.8 h**.
+  - 16 threads gives nothing over 8 (SMT): bf16 1 × 16 is 0.727 s/frame including model loads.
+  - Derived from measured stage costs: skipping duplicated frames gives about 15 h; also turning ViTPose flip-test off (accuracy trade) gives about 12 h; also running YOLO at source fps gives about 11 h.
+  - NOTES §8 said 22 h naive and 8–12 h optimised. Measured naive is 1.6× worse (35 h). 8–12 h needs both the flip-test-off accuracy trade and source-fps YOLO.
 - **Quality**:
   - **Clean, lit, full-body walks**: plausible, usable motion. The 2D fit is good (8.7 px median reprojection on 576×1024). Jitter is high raw and drops about 82% with zero-phase One Euro.
   - **The Sacré-Cœur stair tumble** (NOTES target #1) is **unusable**. YOLOv8x, YOLO26x and YOLO11x all lose the tumbling, dark, motion-blurred body. The protagonist's track covers 4–12% of frames, so GVHMR is fed garbage boxes.
+- **Foot contact (follow-up)**: the root-level lock is replaced by contact detection plus analytic two-bone leg IK.
+  - Pivot slide on contact frames: walk 23.7 → **2.5 cm/s**, Osaka 4.0 → **1.3 cm/s**.
+  - Travel kept: **99.4–99.5 %** of the path, and 100 % of net displacement. The first version kept 83–91 %.
+  - No new knee pops on the walks. Jitter stays at the One Euro level: Osaka 33 → 40 m/s³, against 208 raw.
 - **Biggest blocker: footage access.**
   - YouTube answers every client from this machine with "Sign in to confirm you're not a bot", so the Lionsgate Movies YouTube featurettes and clips could not be fetched.
+  - **Root cause** (follow-up): both public addresses are Hetzner datacenter ranges (AS24940), IPv4 and IPv6 alike. The current yt-dlp nightly, every documented player client, `-4`/`-6` and the recommended PO-token provider all still hit the wall. yt-dlp's documentation says this needs cookies.
   - The only official source that worked is **Lionsgate UK's TikTok**. Those are 576×1024 vertical re-frames with captions and fast cuts: low resolution, unknown crop intrinsics and few long clean shots.
-  - The user needs to supply YouTube cookies (see User actions).
+  - The user needs to supply YouTube cookies once (see User actions). `pipeline/video-to-motion/fetch-youtube.sh` does the rest.
 
 ## What was done
 
@@ -114,6 +126,7 @@ DPVO was not fetched. SimpleVO is the default, and DPVO is CUDA-only.
 How to read the table:
 
 - The two ViT-H stages take **89% of the time in fp32** and **80% in bf16**. In bf16, YOLO becomes 18%.
+- **Correction (follow-up):** every YOLO figure in this table actually ran on **8** threads, because ultralytics resets torch's thread count. Measured 4-thread YOLO is 0.309 s/frame.
 - The fp32 Sacré-Cœur run overlapped heavy load from other spikes (loadavg up to 14.6). The idle micro-bench gives about 0.69 s per pass, so the true idle fp32 total is about 2.3 s per frame.
 - Thread scaling, HMR2 on 32 frames, 1 / 2 / 4 threads:
   - bf16: 0.934 / 0.489 / 0.261 s per frame, which is near-linear (3.6× at 4 threads).
@@ -154,7 +167,7 @@ How to read the table:
 Cleanup used here:
 
 - Zero-phase One Euro (forward and backward average): min cutoff 1.5 Hz, β 0.3, on quaternion-continuous joint rotations and on root translation.
-- A root-level foot lock, which integrates and cancels the planted foot's horizontal slide.
+- A root-level foot lock, which integrates and cancels the planted foot's horizontal slide. **Replaced in the follow-up** by contact-aware two-bone leg IK; the skate and root-speed rows above are from the old lock. See "Follow-up → 3".
 - A global floor clamp.
 - Contacts use a relative-height + velocity rule, so stairs need no floor assumption.
 
@@ -203,9 +216,14 @@ What they show:
 
 Runs: `walk-fp32`, `walk-bf16`, `osaka-bf16`, `sc-fp32`, `sc-bf16`.
 
-## Throughput projection: 60 min of footage at 16 threads
+## Throughput projection: 60 min of footage at 16 threads (first pass, superseded)
 
-Assumptions:
+> **Superseded by measurement.** See "Follow-up (completion) → 4. Idle benchmark". The two assumptions below
+> did not hold. 4 → 16 threads is not 1.9×: 16 threads equals 8, and the ViTs scale 1.7× from 4 to 8.
+> The 4-thread YOLO figure was really 8 threads. Measured: fp32 about 35 h, bf16 17.8–20 h. The table is
+> kept only as a record of the extrapolation.
+
+Assumptions (first pass):
 
 - 60 min of 24 fps footage is resampled to 30 fps, giving **108,000 frames**. 20% of them are duplicates.
 - 4 → 16 threads gives about **1.9×** for bf16. Only 4 more physical cores are added beyond our 4, and SMT adds little to GEMM. bf16 scaled 3.6× from 1 to 4 threads.
@@ -269,34 +287,39 @@ private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/compare_run
 | Tracker fragments the protagonist; GVHMR keeps one ID and interpolates the rest | Added `--stitch` (chains fragments by box continuity). It fails anyway when the detector does not fire at all (the tumble) |
 | TransNetV2 missed a hard cut that PySceneDetect found | Use the **union** of both detectors' cuts |
 | OpenVINO could not trace HMR2 (a LightningModule) | Trace a plain `nn.Module` view (backbone + smpl_head) |
-| Foot lock too crude | Measured and documented: root-level lock removes 11–17% of real travel and made skating worse on the clean Osaka walk. Production needs contact-aware two-bone IK |
+| Foot lock too crude | Measured and documented: root-level lock removes 11–17% of real travel and made skating worse on the clean Osaka walk. **Fixed in the follow-up**: contact-aware two-bone leg IK (`foot_lock.py`) |
+| YOLO ignores the thread cap (follow-up) | ultralytics' `select_device()` calls `torch.set_num_threads(min(8, ncpu-1))`; `bench_gvhmr.py` now overrides `ultralytics.utils.torch_utils.NUM_THREADS` |
 | `exiftool` missing (focal from metadata) | Irrelevant for web video; GVHMR falls back to its diagonal-FOV heuristic. **That heuristic is wrong for vertical crops of 2.39:1 film**, which makes the root scale suspect |
 
 ## Risks
 
 1. **Footage access and quality (🔴).**
-   - Without YouTube we only have vertical, captioned, 576-px TikTok re-edits.
+   - Without YouTube we only have vertical, captioned TikTok re-edits (576 px from Lionsgate UK; up to 720–960 px h264 from Lionsgate US).
    - They carry unknown crop intrinsics, so GVHMR's focal guess is wrong and root speed and depth are biased.
    - They are also few in clean shots longer than 3 s.
+   - The fix is one user step (cookies). See the follow-up.
 2. **Most Wick footage fails at detection, not at GVHMR (🔴).**
    - Night, motion blur, tumbles and fights defeat YOLO (v8x, 11x and 26x alike).
    - The NOTES §8 luma filter (< 40/255) would reject almost all night material anyway: Sacré-Cœur shot medians are 6–23, and the Osaka walk is 36.
    - The usable yield of identity motion per hour of footage may be low.
-3. **Throughput (🟠).** 13–17 h per hour of footage, accuracy-neutral. Acceptable only with aggressive shot gating before the ViTs.
-4. **Cleanup quality (🟠).**
+3. **Throughput (🟠).**
+   - Measured, accuracy-neutral (bf16): 17.8 h per hour of footage with 4 processes × 4 threads, and about 15 h with duplicate-frame skipping.
+   - That is acceptable only with aggressive shot gating before the ViTs.
+4. **Cleanup quality (🟡, was 🟠).**
    - Raw jitter is high: 200–500 m/s³ on clean walks.
-   - One Euro fixes jitter, but the simple foot lock fights real locomotion.
-   - Coat-occluded leg crossings glitch.
+   - One Euro plus the v2 IK foot lock gives pinned feet without losing travel.
+   - Coat-occluded leg crossings still glitch. That needs the glitch detector.
 5. **Dependencies and licences (🟡).**
-   - The fork has a single third-party maintainer, so pin the commit.
+   - The fork has a single third-party maintainer, so pin the commit (see follow-up §5).
    - The GVHMR licence is non-commercial; HMR2 is SMPL-based; YOLO is AGPL.
    - All are offline only and never shipped, and §17 item 6 (SMPL-derived motion) still governs shipping.
 
 ## Recommendation
 
 - **Adopt** GVHMR via the `ryanrudes` fork at the pinned commit, with Python 3.11 in a uv venv. Run bf16 autocast on CPU for ViTPose and HMR2 by default: 2.8× faster on those stages and quality-neutral.
+- **Schedule** batch runs as 4 processes × 4 threads, with the YOLO thread fix. Never use 16 threads in one process.
 - **Do not chase OpenVINO yet.** It is only about 15% over torch bf16.
-- **Next optimisation:** run the ViTs at source fps and reuse their outputs for the duplicated 30 fps frames (−20%).
+- **Next optimisation:** run the ViTs (and YOLO) at source fps and reuse their outputs for the duplicated 30 fps frames (−20%).
 - **Spend the effort on shot selection, not compute.** Gate shots, in this order:
   1. Union of TransNetV2 and PySceneDetect cuts.
   2. Protagonist track coverage ≥ 90%.
@@ -305,43 +328,65 @@ private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/compare_run
   5. Recalibrate the luma floor down to about 15 rather than 40.
 - **Prefer** walks, stands and draws in lit or daylight shots. Treat falls and fights as out of scope for video-to-motion, as NOTES already lists them among the weak spots.
 - **Get the YouTube Lionsgate featurettes** (1080p horizontal) before judging Wick-identity yield. TikTok re-edits are a poor proxy.
-- **Cleanup v2:**
-  - Keep zero-phase One Euro, with a lower cutoff on the torso than on the feet.
-  - Replace the root-level lock with contact-aware IK on the legs.
-  - Add a glitch detector (angular-speed spikes) that masks and re-infills frames.
+- **Cleanup:**
+  - Done: v2 foot lock (contacts + two-bone leg IK) and edge-padded translation smoothing.
+  - Still to do: a lower One Euro cutoff on the torso than on the feet, and a glitch detector (angular-speed spikes) that masks and re-infills frames.
 
 ## User actions
 
-1. **YouTube cookies.**
-   - Export Netscape-format cookies for youtube.com from a logged-in browser to `/home/akram/code/or3/private/youtube-cookies.txt`, then `chmod 600` it. That path is gitignored. Treat the file as a secret.
-   - Then run: `YTDLP_EXTRA="--cookies /home/akram/code/or3/private/youtube-cookies.txt" pipeline/video-to-motion/fetch-footage.sh yt-ohieMx5bSM8 yt-3oIxZLUKYtI yt-r7a4g-65SzA`.
-   - Alternatively, decide that TikTok-only is acceptable for now.
-2. Optional, on an idle machine: rerun `THREADS=16 pipeline/video-to-motion/run-bench.sh …` and `thread-scaling.sh … 8 16` to replace the 16-thread estimates with measurements.
-3. Confirm the Python 3.11 deviation and the use of the third-party fork.
+1. **YouTube cookies: the one remaining blocker.** This takes about 3 minutes on the Mac. The steps follow the yt-dlp wiki, "Exporting YouTube cookies".
+   1. Install a cookies.txt exporter from the yt-dlp FAQ:
+      - Chrome: **"Get cookies.txt LOCALLY"**.
+      - Firefox: **"cookies.txt"**.
+      - Allow it in private windows.
+   2. Open a **new private/incognito window** and log in to YouTube. yt-dlp warns that the account can be rate-limited or banned, so a secondary account is safer.
+   3. In the **same tab**, go to `https://www.youtube.com/robots.txt`. It must be the only private tab.
+   4. Use the extension to export the **youtube.com** cookies (Netscape format) to `~/Downloads/youtube-cookies.txt`. Then **close the private window**, so YouTube does not rotate the session.
+   5. Copy the file over with its mode, then delete the local copy:
+      ```bash
+      chmod 600 ~/Downloads/youtube-cookies.txt
+      scp -p ~/Downloads/youtube-cookies.txt akram@<this-machine>:/home/akram/code/or3/private/youtube-cookies.txt
+      ssh akram@<this-machine> chmod 600 /home/akram/code/or3/private/youtube-cookies.txt
+      rm ~/Downloads/youtube-cookies.txt
+      ```
+   6. On this machine, run `pipeline/video-to-motion/fetch-youtube.sh`. It:
+      - checks the mode (600) and the format without printing the file;
+      - installs the current yt-dlp nightly into `private/tools/yt-dlp`;
+      - fetches every `yt-*` entry, writing no `info.json`, because those would contain cookie values.
+
+   Alternatively, decide that TikTok-only is acceptable for now.
+2. **Rule on IGN-hosted studio featurettes.** The behind-the-scenes Sacré-Cœur stair clip (NOTES §8 target 1) is an **IGN exclusive** (`youtube.com/watch?v=fdNkGq4kroQ`, also on IGN's Facebook). It is studio-supplied but not uploaded by the studio, so it is not in the fetch list until you say it counts as official.
+3. Confirm the Python 3.11 deviation and the use of the third-party fork (follow-up §5 has the recommendation).
 4. No `sudo pacman` was needed for this spike. OpenVINO came in as a pip wheel inside the venv.
 
 ## Proposed NOTES.md updates
 
-- **§4 / §6:** "Python 3.10 envs via uv" becomes "Python 3.10–3.11 uv envs. GVHMR uses the `ryanrudes/gvhmr` fork (CPU-native, Python ≥ 3.11) at commit `e3876097`."
+- **§4 (build machine):** "Research codebases need Python 3.10 envs via uv" becomes "Research codebases run in **uv-managed Python envs at the version their lockfile requires (3.10 or 3.11)**. Never use the system Python."
+- **§6:** add "GVHMR uses the `ryanrudes/gvhmr` fork (CPU-native, Python ≥ 3.11) at commit `e3876097`, installed `--frozen` from its `uv.lock`."
 - **§8 Video → motion, footage source:**
-  - Add: "YouTube blocks this machine ('confirm you're not a bot'), so fetching needs user cookies (`private/youtube-cookies.txt`)."
-  - Add: "Lionsgate UK TikTok downloads without auth, but gives 576×1024 vertical re-edits with captions. Use them only as a fallback."
+  - Add: "This machine's IPs are Hetzner datacenter ranges. YouTube answers with 'confirm you're not a bot' regardless of client, IP family or PO token, so fetching needs user cookies (`private/youtube-cookies.txt`, via `fetch-youtube.sh`)."
+  - Add: "Lionsgate UK and US TikTok download without auth, but give vertical re-edits (576–960 px) with captions. Use them only as a fallback."
 - **§8 pipeline:**
   - "TransNetV2 shot split (PySceneDetect as cross-check)" becomes "**union** of TransNetV2 and PySceneDetect cuts (TransNetV2 missed a hard cut in testing)".
   - Filter: replace "median luma < ~40/255" with "median luma < ~15/255" (night Wick footage measures 6–36). Add "protagonist track coverage < 90%" and "ViTPose mean confidence < 0.7".
   - GVHMR line: "bf16 autocast on CPU for ViTPose/HMR2 (measured 2.8×, 1.2 mm MPJPE change). OpenVINO measured at only +15% over that."
-- **§8 throughput line:** replace with "**Measured (Phase 0):**
-  - 2.5 s/frame fp32 and 0.99 s/frame bf16 at 4 threads (30 fps frames).
-  - ViT-H passes are 89% (fp32) / 80% (bf16) of the time; YOLO is 18% in bf16.
-  - About 15–17 h per 60 min at 16 threads with bf16 (accuracy-neutral), about 13 h when skipping duplicated frames, and about 9.5 h with ViTPose flip-test off. fp32 as shipped is about 43–47 h."
+  - Cleanup: "foot-contact lock" becomes "contact detection (height + speed, hysteresis, min duration) + **two-bone leg IK** pinning heel then ball; root horizontal untouched (measured: pivot slide 1.3–2.5 cm/s, ≥ 99.4 % travel kept)".
+- **§8 throughput line:** replace with "**Measured (Phase 0, idle, 30 fps frames):**
+  - fp32 as shipped: 1.155 s/frame on 8 threads, about 35 h per 60 min.
+  - bf16 ViTs: 0.66 s/frame on 1 × 8 threads (about 20 h), or 0.593 s/frame aggregate on **4 processes × 4 threads (about 17.8 h)**. 16 threads gives nothing over 8.
+  - About 15 h when skipping duplicated frames, about 11–12 h with ViTPose flip-test off and source-fps YOLO.
+  - ViTs are about 72% of bf16 time; YOLO is about 28%."
 - **§8 weak spots:** add "dark / motion-blurred / inverted bodies, where the person detector fails (YOLOv8x/11x/26x all under 12% coverage on the Sacré-Cœur tumble)" and "long coats hiding crossing legs".
-- **§8 extraction targets:** demote the "Sacré-Cœur stairs (wide shots)" tumble. The usable stair content is the climbing and walking shots, not the fall.
+- **§8 extraction targets:**
+  - Demote the "Sacré-Cœur stairs (wide shots)" tumble. The usable stair content is the climbing and walking shots, not the fall.
+  - Note that the behind-the-scenes stair clip is an IGN exclusive, pending the user's ruling on "official".
 - **§14:** record the offline-only tool licences: YOLO weights are AGPL-3.0, the HMR2 checkpoint is SMPL-based, ViTPose is Apache-2.0, and GVHMR is non-commercial (the fork's `pyproject` "MIT" classifier contradicts its `LICENSE` file).
 - **§16 risks:**
   - Update the "GVHMR CPU throughput / quality" row with the numbers above.
-  - Add "footage access (YouTube bot wall)", rated 🔴.
+  - Add "footage access (YouTube bot wall from a datacenter IP; one cookie export fixes it)", rated 🔴 until the cookies land.
   - Add "detector failure on night/action shots, so low usable yield", rated 🔴.
-- **§18 item 3:** mark it done, linking `bench/m0/spike-3-gvhmr.md`.
+  - Add "third-party GVHMR fork", rated 🟡, mitigated by the pin plus a source archive.
+- **§18 item 3:** change "uv Python 3.10 env" to "uv Python 3.11 env". Mark it done except the YouTube footage, linking `bench/m0/spike-3-gvhmr.md`.
 
 ## Files
 
@@ -350,12 +395,249 @@ Committed under `pipeline/video-to-motion/`:
 | File | Purpose |
 |---|---|
 | `setup-gvhmr.sh` | build the env |
-| `fetch-footage.sh` | fetch the official clips |
+| `fetch-footage.sh` | fetch the official clips (`YTDLP` / `YTDLP_EXTRA` overrides; no `info.json` when cookies are used) |
+| `fetch-youtube.sh` | **follow-up:** the one-step cookie route: checks `private/youtube-cookies.txt` (mode, format, no printing), installs current yt-dlp under `private/tools/`, fetches the `yt-*` entries |
 | `cut-shot.sh` | cut one shot by frame range |
 | `shots.py` | shot split and filter stats |
-| `run-bench.sh` + `bench_gvhmr.py` | the reproducible per-stage bench, plus protagonist stitching and the bf16 wrapper |
+| `run-bench.sh` + `bench_gvhmr.py` | the reproducible per-stage bench, plus protagonist stitching, the bf16 wrapper and (follow-up) the YOLO thread-cap fix |
+| `idle-bench.sh`, `concurrency-bench.sh` | **follow-up:** idle 16/8-thread benches and N × T concurrent schedules |
 | `vit_backends.py`, `thread-scaling.sh` | ViT backends micro-bench and thread scaling |
-| `motion_qc.py` | metrics, cleanup, npz/BVH export and visual check |
+| `motion_qc.py` | metrics, cleanup, npz/BVH export and visual check; v2 foot lock by default (`--foot-lock root` for the old one) |
+| `foot_lock.py` | **follow-up:** contact detection, two-bone leg IK foot lock, and the slide / travel / knee-pop metrics |
+| `foot_lock_table.py` | **follow-up:** the foot-lock A/B table from `qc.json` |
 | `compare_runs.py` | fp32 vs bf16 comparison |
 
 No patch diff is needed; the fork runs unmodified.
+
+---
+
+## Follow-up (completion)
+
+Date: 2026-10-12, a second pass, run unattended. The first pass was partial on three counts:
+
+- no YouTube footage;
+- 16-thread numbers that were extrapolated, not measured;
+- a foot lock that lost travel.
+
+This pass root-causes the first, measures the second and replaces the third. **Status: partial.** The only remaining
+blocker is YouTube, which now needs one user step (User actions 1). Everything else is measured.
+
+### 1. YouTube block: root cause
+
+| Check | Result |
+|---|---|
+| Public IPv4 | `213.239.205.88`, **AS24940 Hetzner Online GmbH**, Falkenstein DC (`static.….clients.your-server.de`): a hosting / datacenter range |
+| Public IPv6 | `2a01:4f8:222:9a0::2`, inside Hetzner's `2a01:4f8::/32`, so the same ASN |
+| yt-dlp age | system `2026.08.19` (pacman, about 8 weeks old); latest nightly `2026.10.10.233141` installed in a throwaway uv venv with `yt-dlp[default,curl-cffi]` (includes `yt-dlp-ejs`; deno 2.9 present for JS challenges) |
+| Player clients (`--extractor-args youtube:player_client=…`) | `default`, `tv`, `web_safari`, `android_vr`, `mweb`, `ios`, `web_embedded`, `tv_simply`, `web_creator`: **all "Sign in to confirm you're not a bot", on both `-4` and `-6`**, nightly and stable |
+| PO token (yt-dlp wiki PO-Token-Guide; recommended provider `bgutil-ytdlp-pot-provider` 2.0.2, HTTP server on Node 24, plugin via pip, `fetch_pot=always`) | Tokens **were generated** (the server logged a POT per video). The player API still returned `LOGIN_REQUIRED` on every client and both IP families |
+
+**Root cause:** YouTube's sign-in wall keys on IP reputation. Both address families are a hosting ASN.
+- The yt-dlp version and the player client make no difference.
+- The provider README says a PO token "does not bypass IP-based login restrictions", which is common on datacenter IPs, and that cookies are required.
+- Proxies and VPNs are out of scope by rule.
+
+So the documented route is account cookies, now one user step: `fetch-youtube.sh`, with the export steps under User actions.
+- The script was tested with a dummy file. It refuses mode 644, accepts 600, reports only counts (rows, youtube.com rows, number of login-cookie names) and runs the fetch.
+- With dummy cookies, YouTube still shows the wall, as expected.
+
+**Other official sources reachable from here:**
+
+| Source | Result |
+|---|---|
+| Lionsgate UK TikTok `@lionsgateuk` | works without auth (used in the first pass) |
+| **Lionsgate US TikTok `@lionsgate`** | Works without auth.<br>Listed 892 posts, 69 tagged Wick/Keanu, and pulled 14 for contact sheets.<br>Renditions: h264 576–960 px, metadata up to 1080×1920 / 1440×1080.<br>Content: mostly premiere/press footage (a real person, not the film character), meme edits, trailers letterboxed to about 576×240 inside the vertical frame, and one static-camera stunt rehearsal (Osaka escalator falls).<br>**No NOTES §8 target** (stair BTS, Osaka Wick walk/turn, Paris walks) appears in better form than the UK clips, so no new GVHMR run was worth doing |
+| TikTok `@johnwickmovie` | account has no videos |
+| X `@JohnWickMovie`, Instagram `@johnwickmovie` | login wall |
+| Vimeo / Dailymotion `lionsgate` | old or unrelated uploads only |
+| IMDb video gallery | AWS WAF challenge (first pass) |
+| BTS Sacré-Cœur stair clip | It is an **IGN exclusive** (YouTube `fdNkGq4kroQ`, IGN Facebook), not a studio upload. Not fetched. It needs a user ruling and is on YouTube anyway |
+
+### 2. New pipeline runs on NOTES §8 targets
+
+**Not run.** No new official footage of the three targets became reachable; see above.
+- The pipeline, bf16 and the QC tools are ready.
+- Once the cookies land: `fetch-youtube.sh`, then `shots.py`, then `cut-shot.sh`, then `run-bench.sh … --bf16 vitpose,hmr2 --stitch`, then `motion_qc.py`.
+- The three existing clips were re-run through the new cleanup (below).
+
+### 3. Foot-contact locking v2 (`foot_lock.py`, default in `motion_qc.py`)
+
+**Contact detection**, run on the One-Euro-smoothed motion:
+- Height signal: the foot's lowest point (ankle or ball) above the lower foot this frame, so stairs need no floor.
+- Speed signal: 3D speed of the foot point.
+- Hysteresis: a contact starts below 5 cm and 0.30 m/s, and ends above 8 cm or 0.50 m/s.
+- Gaps of ≤ 2 frames are filled, and contacts shorter than 5 frames (167 ms) are dropped.
+- ViTPose ankle confidence below 0.5 relaxes the exit speed up to 2×, so occlusion noise does not break a contact.
+
+**Locking:**
+- Each contact has a **heel phase**: the ankle is pinned at its mean position while within 1.5 cm of its lowest height.
+- It is followed by a **toe phase** (heel-off): the ball stays where it was at the switch, and the ankle follows the foot's own rotation about it.
+- Feet keep their FK world orientation, so the heel-to-toe roll survives.
+- Analytic **two-bone IK** works on the hip–knee–ankle SMPL-X chain (Holden's method):
+  - It keeps the current knee plane, using the knee hinge as a tie-breaker near full extension, so the knee never swivels.
+  - Soft IK starts at 98% of leg length.
+  - It runs two passes against fixed targets.
+- Smoothstep **blend-in / blend-out** of 6 frames. Ramps never overlap the same foot's next contact.
+- Pin offsets are Gaussian-smoothed with σ = 1 frame, so stance onsets do not become velocity steps.
+- **Root:** the horizontal path is untouched. The only vertical change is a max-filtered, σ = 6-frame drop where a pinned ankle would be beyond 99.5% of leg length (max 0.9–2.7 cm).
+- A numpy FK identical to the SMPL-X layer is asserted at < 0.1 mm.
+
+**Also fixed:** the zero-phase One Euro on root translation pulled the clip ends inward, costing 2% of net travel on the 3 s walk. It is now edge-padded by odd reflection.
+
+**Measured** (`foot_lock_table.py`; every variant is scored with the **same** contact labels, which the old metric did not do). Columns:
+- *Foot*: speed of the ankle–ball midpoint.
+- *Pivot*: speed of the slower of ankle and ball, which a correct heel-to-toe roll keeps near 0.
+- *Travel*: the root's 2 Hz low-passed horizontal path and its net displacement, both relative to raw.
+- *Jitter*: mean |jerk| over the 22 joints.
+- *Knees*: knee local-rotation speed; a "pop" is a frame above 500 °/s.
+
+| Clip | Variant | Slide in contact, foot / pivot (cm/s) | Travel vs raw (path / net) | Jitter (m/s³) | Knees |
+|---|---|---|---|---|---|
+| walk-fp32 (Wick, 94 f) | raw GVHMR | 26.3 / 23.7 | 100 / 100 % | 494 | p99 185 °/s, 0 pops |
+| | One Euro | 15.3 / 12.9 | 99.4 / 100 % | 78 | |
+| | root lock (v1) | 5.8 / 4.8 | **90.6 / 90.7 %** | 84 | |
+| | **IK lock (v2)** | **4.4 / 2.5** | **99.4 / 100 %** | 81 | p99 271 °/s, 0 pops, 0 new; root drop ≤ 2.3 cm |
+| walk-bf16 | **IK lock (v2)** (raw 26.6 / 24.0) | **4.4 / 2.5** | 99.4 / 100 % | 82 (raw 498) | 0 new pops |
+| osaka-bf16 (Shimazu, 155 f) | raw GVHMR | 4.9 / 4.0 | 100 / 100 % | 208 | p99 157 °/s, 0 pops |
+| | One Euro | 10.5 / 8.8 | 99.5 / 100 % | 33 | |
+| | root lock (v1) | 4.7 / 3.9 | **83.5 / 82.7 %** | 40 | |
+| | **IK lock (v2)** | **2.9 / 1.3** | **99.5 / 100 %** | 40 | p99 185 °/s, 0 pops, 0 new; root drop ≤ 2.7 cm |
+| sc-fp32 (tumble, 479 f) | raw → **IK lock (v2)** | 48.7 / 45.0 → 10.1 / 4.7 | 89.9 / 100 % | 3431 → 849 | 0 new pops |
+| sc-bf16 | raw → **IK lock (v2)** | 41.0 / 36.4 → 10.1 / 5.0 | 90.9 / 100 % | 3307 → 757 | **1 new frame > 500 °/s** |
+
+What the table shows:
+
+- **Travel ≥ 98 %: met on the clean clips (99.4–99.5 % path, 100 % net).** The IK leaves the root's horizontal path untouched. On the tumble, the 10 % path difference is One Euro removing raw jitter from a garbage track; the lock contributes nothing to it.
+- **Slide:** pivot slide is down **10× on the walk (23.7 → 2.5 cm/s)** and **3× on Osaka (4.0 → 1.3)**. Pin error is ≤ 1.4 mm mean and ≤ 7.3 mm max.
+- **One Euro alone makes skating worse.** On Osaka it doubles the slide, 4.0 → 8.8 cm/s, because smoothing the root and the legs separately de-syncs the feet. That is why v1 looked bad there. v2 fixes it.
+- **Jitter:** on the walk it stays at the One Euro level (78 → 81). On Osaka it rises 33 → 40: planted feet start and stop more sharply than sliding ones, which is real. Both are still −80 to −84 % against raw.
+- **Knees:** p99 knee speed rises (185 → 271 °/s on the walk), as the knees now absorb the slide, but stays well under pop range. **No new pops on any clean clip.** One frame on the unusable tumble.
+- **The old in-motion skate metric** (`foot_skate_mean_cm_s` in `qc.json`, contacts re-detected on each variant) is kept for continuity but is not comparable across variants.
+
+How the parameters were picked (Osaka sweep):
+
+| Setting | Jitter (m/s³) | Pin error max | Root drop | Notes |
+|---|---|---|---|---|
+| Ankle pinned at the mean over the whole contact (first try) | 58–72 | | 6–7 cm | heel-off was being dragged down |
+| Heel/toe phases | | | 2.3–2.7 cm | |
+| Offset smoothing σ = 0 | 47 | | | |
+| Offset smoothing σ = 1 (**chosen**) | 40 | 7 mm | | |
+| Offset smoothing σ = 2.5 | 35 | 20 mm | | |
+
+Changing the blend from 4 to 8 frames changed little.
+
+### 4. Idle benchmark, measured (replaces the extrapolation)
+
+Gate: `data/build/bench-idle/DONE` was present, and each run waited for 1-min loadavg < 1.5 (`idle-bench.sh`).
+
+Clip: the same as the first bench, `jw4-osaka-shimazu-walk.mp4`, 124 source frames staged to 155 at 30 fps, with `--stitch`.
+
+The loadavg in the logs rises during runs because of the runs themselves.
+
+**Found on the way: YOLO ignored the thread cap.**
+- Cause: ultralytics' `select_device()` calls `torch.set_num_threads(min(8, ncpu − 1))`, so YOLO always ran on 8 threads.
+- Measured after the fix (`bench_gvhmr.py` now sets `ultralytics.utils.torch_utils.NUM_THREADS`): 1 / 4 / 8 / 16 threads give 1.046 / 0.309 / 0.182 / 0.207 s/frame.
+- Consequence 1: the first pass's "4-thread" totals contain 8-thread YOLO. The true 4-thread bf16 total is about 1.12, not 0.99, s/frame.
+- Consequence 2: before the fix, 4 concurrent 4-thread processes ran 32 YOLO threads on 16 logical CPUs. YOLO took 3.64 s/frame per process, and the aggregate was 1.36 s/frame (842 s wall).
+
+**Per-stage seconds per frame, single process, idle:**
+
+| Stage | bf16 t16 | fp32 t16 | **bf16 t8** | **fp32 t8** | first pass bf16 "t4" |
+|---|---|---|---|---|---|
+| stage to 30 fps | 0.005 | 0.005 | 0.005 | 0.005 | 0.005 |
+| YOLOv8x + BoT-SORT | 0.207¹ | 0.207¹ | 0.183 | 0.180 | 0.181 (really t8) |
+| decode + crop | 0.001 | 0.001 | 0.001 | 0.001 | 0.001 |
+| ViTPose-H (flip-test) | 0.318 | 0.650 | **0.309** | **0.640** | 0.529 |
+| HMR2 ViT-H features | 0.151 | 0.339 | **0.150** | **0.319** | 0.261 |
+| SimpleVO + GVHMR | 0.010 | 0.010 | 0.010 | 0.010 | 0.010 |
+| **Total** | **0.69¹** | **1.21¹** | **0.657** | **1.155** | 0.99 |
+| h per 60 min (108k frames) | 20.8 | 36.4 | **19.7** | **34.7** | |
+
+¹ The t16 runs went before the YOLO fix, with YOLO on 8 threads at 0.184. The totals substitute the post-fix 16-thread YOLO probe (0.207).
+
+**HMR2 thread scaling** (32 frames, `thread-scaling.sh`, idle):
+
+| Threads | 1 | 2 | 4 | 8 | 16 |
+|---|---|---|---|---|---|
+| fp32 (s/frame) | 1.862 | 0.979 | 0.685 | 0.302 | 0.368 |
+| bf16 (s/frame) | 0.939 | 0.492 | 0.264 | **0.146** | 0.153 |
+
+- bf16 scales 6.4× to 8 threads and 0 beyond: 8 physical cores, so SMT does not help GEMM.
+- fp32 4 → 8 is 2.3× (oneDNN picks a different kernel). The fp32 bf16 gap shrinks to 2.07× at 8 threads.
+
+**Concurrent schedules** (bf16, `concurrency-bench.sh`, wall time including model loads, after the YOLO fix):
+
+| Schedule | Wall for N × 155 frames | **Aggregate s/frame** | h per 60 min |
+|---|---|---|---|
+| 1 × 16 threads | 112.6 s | 0.727 | 21.8 |
+| 1 × 8 | 105.3 s | 0.679 | 20.4 |
+| 2 × 8 | 195.1 s | 0.629 | 18.9 |
+| 2 × 4 | 192.3 s | 0.620 | 18.6 |
+| **4 × 4** | 367.8 s | **0.593** | **17.8** |
+
+In the 4 × 4 run, each process measured YOLO 0.645, ViTPose 1.11 and HMR2 0.553 s/frame. As shares of the time, that is YOLO 28 %, ViTPose 48 % and HMR2 24 %.
+
+**Projection for 60 min of footage (108k frames).** The 4 × 4 schedule row is measured. The rows below it are derived from the measured 4 × 4 stage shares.
+
+| Configuration | h per 60 min |
+|---|---|
+| fp32 as shipped, best single process (8 threads) | **34.7** (measured) |
+| bf16 ViTs, 4 × 4 schedule (accuracy-neutral) | **17.8** (measured) |
+| + ViTs only on source frames (skip the 20 % duplicates) | ≈ 15.3 |
+| + ViTPose flip-test off (accuracy trade: +2.3 mm PA-MPJPE on 3DPW per the fork) | ≈ 11.9 |
+| + YOLO also at source fps | ≈ 10.9 |
+
+**Against the estimates:**
+
+| Configuration | NOTES §8 | First-pass extrapolation | **Measured** |
+|---|---|---|---|
+| Naive (fp32, as shipped) | 22 h | 43–47 h | **35 h** |
+| bf16, accuracy-neutral | — | 15–17 h at 16 threads | **17.8 h** (4 × 4); 20–22 h as a single 8/16-thread process |
+| Optimised | 8–12 h | 9.5 h | ≈ 11–12 h, and only with flip-test off and source-fps YOLO |
+
+- NOTES' 22 h naive figure is 1.6× too optimistic.
+- The first pass was too pessimistic on fp32, because fp32 scales better 4 → 8 than it assumed.
+- It was too optimistic on bf16 at 16 threads: 16 threads equals 8, and YOLO had already been at 8 threads in its numbers.
+
+### 5. Risk notes
+
+- **Third-party fork (`ryanrudes/gvhmr`), 🟡.**
+  - Risks:
+    - It has one maintainer and could disappear or be rewritten.
+    - Its `pyproject` says MIT while `LICENSE` is the ZJU non-commercial text.
+    - It is a supply-chain surface: we run its code and its lockfile's wheels.
+  - Mitigating facts:
+    - Its stated prime directive is behaviour preservation, with golden-output tests against the released checkpoint. Its eval reproduces the paper (3DPW / EMDB-1).
+    - Our bench uses only its public entry points (`build_demo_cfg`, `load_data_dict`, `recover_motion`).
+    - It runs unmodified, and the checkpoints are the authors' own.
+  - **Recommendation:** keep it, pinned at `e3876097` and installed `--frozen` from its `uv.lock`. Also:
+    1. Store a `git bundle` or source tarball and the `uv.lock` hash under `private/src/` so a deleted repo cannot strand us.
+    2. Treat the ZJU `LICENSE` as binding.
+    3. Keep the upstream `zju3dv/GVHMR` clone as the reference. If the fork goes stale, the fallback is upstream plus CPU patches (87 `.cuda()` sites).
+- **Python 3.11 instead of 3.10, 🟢.**
+  - NOTES' 3.10 rule exists to keep research code off the system Python 3.14 and in uv-managed envs. A uv python-build-standalone 3.11.16 venv satisfies that intent.
+  - The fork's floor is 3.11 (`tomllib`), and upstream's own 3.10 pin was just its era's default.
+  - **Recommendation:** accept, and change NOTES §4 as proposed: "uv-managed envs at the version the codebase's lockfile requires (3.10 or 3.11); never the system Python".
+- **Sacré-Cœur tumble unusable, 🟢 (expected).**
+  - It matches the NOTES §8 weak spot "falls and ground work". The failure is upstream of GVHMR: YOLO coverage is 3–12 % on the dark, inverted, blurred body.
+  - The v2 foot lock does not change that verdict: jitter is still 757–849 m/s³ after cleanup.
+  - **Recommendation:** drop the tumble as a video→motion target. Keep the Sacré-Cœur **climb/walk** shots and the BTS stair clip (pending the IGN ruling) for stairs.
+  - Source falls and stumbles from mocap (CMU) plus physics/ragdoll blending, or Kimodo fill-in, per §8's layering.
+
+### Reproduce (follow-up)
+
+```bash
+# YouTube (after the user's cookie export)
+pipeline/video-to-motion/fetch-youtube.sh
+# idle benches: waits for loadavg < 1.5 before each step
+pipeline/video-to-motion/idle-bench.sh
+pipeline/video-to-motion/concurrency-bench.sh 4 4
+# QC with the v2 foot lock on every run, then the A/B table
+for r in walk-fp32 walk-bf16 osaka-bf16 sc-fp32 sc-bf16; do
+  OMP_NUM_THREADS=2 GVHMR_CHECKPOINTS=private/models/gvhmr private/src/gvhmr-rudes/.venv/bin/python -I \
+    pipeline/video-to-motion/motion_qc.py private/work/runs/$r --motion-out private/motion/$r --vis-out private/work/vis/$r
+done
+private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/foot_lock_table.py private/motion/{walk-fp32,osaka-bf16,sc-fp32}
+```
+
+All outputs (`private/motion/*`, `private/work/*`, footage, logs) stay under `private/`, which is gitignored.

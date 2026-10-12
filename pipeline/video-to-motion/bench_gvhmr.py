@@ -184,6 +184,12 @@ def main() -> None:
     if "yolo" in reuse and Path(paths.bbx).exists():
         bbx_xys = torch.load(paths.bbx, weights_only=False)["bbx_xys"]
     else:
+        # ultralytics' select_device() calls torch.set_num_threads(NUM_THREADS) with NUM_THREADS =
+        # min(8, cpu_count - 1) on every predict/track setup, overriding our cap: YOLO always ran on 8
+        # threads (flat 0.18 s/frame at 1-16 threads, and 4 concurrent processes oversubscribed to 32).
+        import ultralytics.utils.torch_utils as _ul_tu
+
+        _ul_tu.NUM_THREADS = a.threads
         t = time.perf_counter()
         tracker = make_detector(cfg.detector.name, **_ctor_kwargs(cfg.detector))
         load_s = time.perf_counter() - t
