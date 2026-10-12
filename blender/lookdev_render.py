@@ -66,7 +66,7 @@ READ_BEARD_MIN = 0.47
 # Face strip (hair hidden): azimuths (key-side ¾ is negative), rendered once
 # with the full studio rig and once key-only, so plane breaks show as shadow.
 STRIP_VIEWS = (("front", 0.0), ("q_key", -35.0), ("q_shadow", 35.0), ("profile", -90.0))
-STRIP_PARTS = ("body", "low-poly", "eyes_hq", "eyebrow", "eyelash", "teeth", "tongue")
+STRIP_PARTS = ("body", "low-poly", "eyes_hq", "eyebrow", "brows", "eyelash", "teeth", "tongue")
 STRIP_RES = 320
 STRIP_FRAME_H = 0.30
 # Look-dev skin (--skin lookdev): the MPFB texture desaturated and darkened a

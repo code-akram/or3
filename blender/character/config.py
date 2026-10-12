@@ -47,7 +47,7 @@ DEFAULTS = {
         "refine": {
             "subdiv": {"face": 1, "hands": 1, "smooth": 0.6},
             "replanarise": 1.0, "plane_sharp": 3.0,
-            "sculpt": {"knuckle_mm": 1.1, "tendon_mm": 0.5, "nail_mm": 0.35, "lid_margin_mm": 0.4},
+            "sculpt": {"knuckle_mm": 2.0, "tendon_mm": 0.9, "nail_mm": 0.35, "lid_margin_mm": 0.4},
             "uv": True, "uv_px": {"head_px": 4096, "hands_px": 2048},
             "skin": {"bake_px": 4096, "ao_samples": 16, "ao_down": 2, "margin_px": 16, "sss": 0.0,
                      "save_maps": True, "base": "#c4a996",

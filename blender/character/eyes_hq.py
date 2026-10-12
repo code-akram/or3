@@ -215,7 +215,6 @@ def build(b):
     if old is None:
         return None
     co = np.array([(old.matrix_world @ v.co)[:] for v in old.data.vertices])
-    arm = b.armature()
     new = bpy.data.objects.new("Human.eyes_hq_export", bpy.data.meshes.new("Human.eyes_hq_export"))
     for col in old.users_collection:
         col.objects.link(new)

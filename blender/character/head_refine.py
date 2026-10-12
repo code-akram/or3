@@ -26,12 +26,8 @@ helpers are stripped at export). Everything is parameters in the JSON; the
 face stays defined by the spec controls only (look-spec §2.4).
 """
 
-import math
-
 import bmesh
-import bpy
 import numpy as np
-from mathutils import Vector
 
 from . import head_shape
 
@@ -139,6 +135,13 @@ def subdivide(body, select, smooth):
     before = len(bm.faces)
     bmesh.ops.subdivide_edges(bm, edges=edges, cuts=1, use_grid_fill=True, smooth=smooth,
                               use_only_quads=False)
+    # Border quads with one split edge become 5-gons whose new vertex is
+    # (nearly) collinear with its neighbours; the glTF exporter's ear-clip
+    # triangulation can then emit a zero-area sliver and a zero tangent
+    # (validator ACCESSOR_VECTOR3_NON_UNIT). Triangulate them here instead.
+    ngons = [f for f in bm.faces if len(f.verts) > 4]
+    if ngons:
+        bmesh.ops.triangulate(bm, faces=ngons, quad_method="BEAUTY", ngon_method="BEAUTY")
     after = len(bm.faces)
     bm.to_mesh(body.data)
     bm.free()
@@ -185,7 +188,7 @@ def hand_frames(arm):
     mw = arm.matrix_world
     out = {}
     for side in ("l", "r"):
-        def head(n):
+        def head(n, side=side):
             return np.array((mw @ arm.data.bones[f"{n}_{side}"].head_local)[:])
         wrist = head("hand")
         mcp = {f: head(f"{f}_01") for f in FINGERS}
@@ -229,7 +232,7 @@ def sculpt(body, arm, eyes, lab, scfg):
     k = float(scfg.get("knuckle_mm", 0.0))
     t = float(scfg.get("tendon_mm", 0.0))
     if hands.any() and (k or t):
-        for side, f in hf.items():
+        for f in hf.values():
             facing = nr @ f["back"]           # > 0: back of the hand
             w_back = np.clip(facing, 0.0, 1.0) ** 1.5
             if k:
@@ -241,14 +244,17 @@ def sculpt(body, arm, eyes, lab, scfg):
                         c = joint + f["back"] * 0.004
                         d2 = ((co - c) ** 2).sum(1)
                         disp += k * mm * amp * np.exp(-0.5 * d2 / (r * r)) * w_back
-                        if joint is f["mcp"][name]:
-                            # Crease across the joint on the back: a shallow
-                            # groove 4 mm distal of the bump.
-                            g = joint + f["back"] * 0.004 + f["fingers"] * 0.007
-                            along = (co - g) @ f["fingers"]
-                            across = np.linalg.norm(co - g - np.outer(along, f["fingers"]), axis=1)
-                            disp -= 0.25 * k * mm * np.exp(-0.5 * (along / 0.0012) ** 2) \
-                                * np.exp(-0.5 * (across / 0.006) ** 2) * w_back
+                        if joint is f["dip"][name]:
+                            continue
+                        # Crease across the joint on the back: a shallow
+                        # groove just distal of the bump (skin folds over the
+                        # joint when the finger straightens).
+                        wide = 0.006 if joint is f["mcp"][name] else 0.0045
+                        g = joint + f["back"] * 0.004 + f["fingers"] * (0.007 if wide > 0.005 else 0.005)
+                        along = (co - g) @ f["fingers"]
+                        across = np.linalg.norm(co - g - np.outer(along, f["fingers"]), axis=1)
+                        disp -= 0.3 * k * mm * amp * np.exp(-0.5 * (along / 0.0012) ** 2) \
+                            * np.exp(-0.5 * (across / wide) ** 2) * w_back
             if t:
                 for name in FINGERS:
                     a = f["wrist"] + f["fingers"] * 0.02 + f["back"] * 0.006

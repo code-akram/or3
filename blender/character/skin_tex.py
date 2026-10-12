@@ -42,7 +42,7 @@ import numpy as np
 
 from . import head_refine
 
-HEX = lambda h: np.array([int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)], dtype=np.float32)  # noqa: E731
+HEX = lambda h: np.array([int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)], dtype=np.float32)
 
 
 def srgb_to_linear(c):
@@ -367,10 +367,9 @@ def synth_head(m, c, cl, cr):
     """Albedo (linear), roughness, height, cavity-darkening for the head map."""
     m.face_frame(cl, cr)
     mm = 0.001
-    u, h, f, x = m.u, m.h, m.f, m.x
+    u, h, f = m.u, m.h, m.f
     front = m.front
     lips = np.clip(m.lips, 0, 1)
-    face_w = smoothstep(-0.01, 0.03, f) * (m.region > 0.35) * (m.region < 0.6)   # face label
 
     # --- region weights (0..1) in the face frame
     cheek = gauss(u - 0.046, 0.022) * gauss(h + 0.038, 0.020) * smoothstep(-0.02, 0.01, f)
@@ -499,7 +498,6 @@ def synth_hands(m, c, hf, arm_mw):
     back = np.zeros(P.shape[:2], np.float32)
     knuckle = np.zeros_like(back)
     hgt = np.zeros_like(back)
-    palm_lines = np.zeros_like(back)
     for side, f in hf.items():
         near = np.linalg.norm(P - f["wrist"], axis=-1) < 0.25
         b = np.clip((N * f["back"]).sum(-1), -1, 1) * near
@@ -520,7 +518,7 @@ def synth_hands(m, c, hf, arm_mw):
                     hgt -= c["palm_crease_mm"] * mm * 0.6 * gauss(along - off - 0.002, 0.0006) * inr * wp
         # palm lines: three long creases in the hand plane
         wrist, fd, ad = f["wrist"], f["fingers"], f["across"]
-        def pl(pts, amp, w):
+        def pl(pts, amp, w, back=back, wrist=wrist, fd=fd, ad=ad, wp=wp):
             nonlocal hgt
             d = np.full(back.shape, np.inf, np.float32)
             a = (P - wrist) @ fd
@@ -531,7 +529,7 @@ def synth_hands(m, c, hf, arm_mw):
                 t = np.clip(((a - p0[0]) * e[0] + (bb - p0[1]) * e[1]) / L2, 0, 1)
                 d = np.minimum(d, np.hypot(a - (p0[0] + t * e[0]), bb - (p0[1] + t * e[1])))
             hgt -= amp * mm * (gauss(d, w) - 0.3 * gauss(d, 2.2 * w)) * wp
-        s_ = 1.0 if side == "l" else 1.0
+        s_ = 1.0   # the hand frame's across axis is already mirrored per side
         pl([(0.045, -0.035 * s_), (0.062, 0.0), (0.072, 0.03 * s_)], c["palm_line_mm"], 0.0012)      # heart line
         pl([(0.030, -0.035 * s_), (0.042, 0.0), (0.050, 0.025 * s_)], c["palm_line_mm"] * 0.9, 0.0012)  # head line
         pl([(0.075, -0.030 * s_), (0.040, -0.028 * s_), (0.012, -0.010 * s_)], c["palm_line_mm"], 0.0013)  # life line
@@ -748,7 +746,7 @@ DEFAULT_HANDS = {
     "mottle_low": 0.10, "mottle_mid": 0.07,
     "speck_thr": 0.72, "speck": 0.5,
     "pore_mm": 0.05, "grain_mm": 0.006,
-    "knuckle_crease_mm": 0.3, "palm_crease_mm": 0.3, "palm_line_mm": 0.5, "cuticle_mm": 0.15,
+    "knuckle_crease_mm": 0.45, "palm_crease_mm": 0.4, "palm_line_mm": 0.5, "cuticle_mm": 0.15,
     "cavity_scale": 0.0006,
     "plane_paint": 0.05, "ao_in_albedo": 0.25,
     "rough": 0.56,
