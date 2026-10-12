@@ -69,6 +69,11 @@ def landmarks(ch):
     body = next(o for o in ch.objs if o.type == "MESH" and o.vertex_groups.get("scalp"))
     lo, hi = bbox(group_pts(body, "lips", 0.3))
     el, er = ch.eyes()
+    eo = next((o for o in ch.objs if o.type == "MESH" and ("eyes_hq" in o.name or "low-poly" in o.name)), None)
+    if eo is not None:  # a build without the refine stage has only the MPFB eyes
+        co = [eo.matrix_world @ v.co for v in eo.data.vertices]
+        el = sum((c for c in co if c.x > 0), Vector()) / max(1, sum(1 for c in co if c.x > 0))
+        er = sum((c for c in co if c.x <= 0), Vector()) / max(1, sum(1 for c in co if c.x <= 0))
     hp = group_pts(body, "head")
     front = [p for p in hp if abs(p.x) < 0.02 and p.y < hi.y + 0.03]
     chin = Vector((0, min(p.y for p in front if p.z < lo.z), min(p.z for p in front)))

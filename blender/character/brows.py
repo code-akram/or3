@@ -105,7 +105,9 @@ def build(b, frame, cfg):
         along = min(max((p.x - inner) / (outer - inner), 0.0), 1.0)
         hh = cfg["half_height_m"][0] + (cfg["half_height_m"][1] - cfg["half_height_m"][0]) * along
         zc = zc + cfg["centre_up_m"]
-        if abs(p.y - y) > cfg["depth_tol_m"] or abs(p.z - zc) > hh + margin:
+        # the patch reaches select_m past the feather (the body is coarse
+        # here: whole faces must be inside); the density map shapes the band
+        if abs(p.y - y) > cfg["depth_tol_m"] or abs(p.z - zc) > hh + margin + cfg["select_m"]:
             continue
         info[v.index] = (side, (p.z - zc) / hh, along, hh)
     obj, bm = hair_mesh.shell_from_body(b, body, set(info), "Human.brows_export")

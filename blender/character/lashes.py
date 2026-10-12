@@ -63,11 +63,15 @@ def lid_lines(proxy, eyes, skin_bvh, bins):
     mw = proxy.matrix_world
     co = np.array([(mw @ v.co)[:] for v in proxy.data.vertices])
     out = {}
-    for isl in _islands(proxy.data):
-        p = co[isl]
+    isls = [co[i] for i in _islands(proxy.data)]
+    for p in isls:
         side = 1 if p[:, 0].mean() > 0 else -1
-        e = eyes[side]
-        lid = "upper" if p[:, 2].mean() > e[2] else "lower"
+        pair = [q for q in isls if (1 if q[:, 0].mean() > 0 else -1) == side]
+        # upper / lower by the two islands of this eye, not the eye mesh
+        lid = "upper" if p[:, 2].mean() >= max(q[:, 2].mean() for q in pair) else "lower"
+        # the eyeball centre: between the lids, behind the lid margin
+        allp = np.concatenate(pair)
+        e = np.array([allp[:, 0].mean(), allp[:, 1].max() + 0.008, allp[:, 2].mean()])
         d = np.linalg.norm(p - e, axis=1)
         # angle round the eye seen from the front, inner corner first
         ang = np.arctan2(p[:, 2] - e[2], (p[:, 0] - e[0]) * side)

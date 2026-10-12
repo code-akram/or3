@@ -251,8 +251,8 @@ DEFAULTS = {
             "tone": {"melanin": 0.965, "redness": 0.5, "sigma": 0.025,
                      "warm_share": 0.12, "warm": [0.86, 0.7],
                      "grey_share": 0.025, "grey_extra": 0.05, "grey": [0.2, 0.15],
-                     "swatches": [[0.2, "#a29d96"], [0.86, "#5a3e2a"], [0.965, "#2e221a"],
-                                  [1.0, "#201812"]],
+                     "swatches": [[0.2, "#948e86"], [0.86, "#7a5638"], [0.965, "#4a3628"],
+                                  [1.0, "#33261c"]],
                      "value_sigma": 0.3},
             "hero": {"radius_m": [0.00004, 0.00007], "tip_radius": 0.35,
                      "material": {"roughness": 0.32, "radial_roughness": 0.35, "coat": 0.1,
@@ -291,7 +291,8 @@ DEFAULTS = {
             "half_height_m": [0.004, 0.002],  # band half-height at the head .. tail
             "centre_up_m": 0.0005,     # band centre over the proxy's spine
             "margin_m": 0.002,         # feather past the band
-            "end_extend_m": 0.003,     # patch beyond the proxy's ends
+            "select_m": 0.006,         # patch selection beyond the feather (density 0 there)
+            "end_extend_m": 0.004,     # patch beyond the proxy's ends
             "depth_tol_m": 0.015,      # skin within this y of the proxy (the face front only)
             "core": 0.45,              # |dz|/hh below this is full density
             "tail_start": 0.55, "tail_thin": 0.85,  # the tail thins to 1 - tail_thin
@@ -305,8 +306,8 @@ DEFAULTS = {
                       "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
                       "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4},
             "tone": {"melanin": 0.97, "redness": 0.45, "sigma": 0.02,
-                     "swatches": [[0.2, "#a29d96"], [0.86, "#5a3e2a"], [0.97, "#2b2019"],
-                                  [1.0, "#201812"]],
+                     "swatches": [[0.2, "#948e86"], [0.86, "#7a5638"], [0.97, "#46342a"],
+                                  [1.0, "#33261c"]],
                      "redness_ref": 0.45, "value_sigma": 0.25},
             "hero": {"radius_m": [0.00003, 0.00005], "tip_radius": 0.3,
                      "material": {"roughness": 0.3, "radial_roughness": 0.35, "coat": 0.1,
@@ -336,9 +337,9 @@ DEFAULTS = {
         "lashes": {
             "seed": 17, "proxy": "eyelashes", "drop_proxy": True, "bins": 14, "points": 7,
             "upper": {"count": 165, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.0085, 0.006],
-                      "curl_deg": 75, "forward": 0.55, "splay_deg": 6, "fan_deg": 25,
+                      "curl_deg": 105, "forward": 0.3, "splay_deg": 6, "fan_deg": 25,
                       "row_jitter_m": 0.00025, "strip_cols": 8},
-            "lower": {"count": 80, "length_m": [0.002, 0.0045, 0.0058, 0.0055, 0.004],
+            "lower": {"count": 80, "length_m": [0.002, 0.0038, 0.0052, 0.005, 0.0035],
                       "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
                       "row_jitter_m": 0.0002, "strip_cols": 6},
             "melanin": 0.99, "redness": 0.3, "clump": 0.55,
