@@ -5,15 +5,19 @@ Stages (shot_filter.py has already applied duration / luma / blur and cut the st
 into ``private/work/runs/<prefix><clip>-sNNN``):
 
 * ``select``: per shot, protagonist track coverage (stitched chain) and subject size (median box height of
-  the selected track, source px), plus the manual content review (``--content``: protagonist ID by contact
-  sheet, standing in for the face/body-embedding step). Prints the GVHMR list: shots passing coverage,
-  subject size and showing Wick.
+  the selected track, source px), plus whether the shot shows Wick. With ``--auto-id`` all three come from
+  ``RUN_DIR/protagonist.json`` (protagonist_id.py score: embedding-chosen seed, presence call); ``--content``
+  labels (manual contact-sheet review) override the automatic presence call shot by shot. ``--min-probe``
+  also requires ``RUN_DIR/vitpose-probe.json`` (ViTPose on 16 frames of the chosen track): close-ups and
+  occluded bodies fail it at a fraction of the GVHMR cost. Prints the GVHMR list: shots passing coverage,
+  subject size, (probe) and showing Wick.
 * ``summary``: after GVHMR + motion_qc.py, adds ViTPose mean confidence and the QC verdict and prints the
   per-clip yield table (markdown) plus a JSON dump.
 
 Everything read here derives from film frames; outputs go under private/.
 
     python -I footage_run.py select  --clips ID [ID …] --content content.json --out sel.json
+    python -I footage_run.py select  --clips ID [ID …] --auto-id [--content overrides.json] --prefix b2- --out sel.json
     python -I footage_run.py summary --sel sel.json --out yield.json
 """
 
@@ -27,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(os.environ.get("MAIN_ROOT", "/home/akram/code/or3"))
-WICK = ("wick_loco", "wick_action")
+WICK = ("wick_loco", "wick_action", "wick_auto", "wick_checked")  # wick_checked: auto pick confirmed by eye
 
 
 def run_dir(prefix: str, name: str) -> Path:
@@ -45,11 +49,11 @@ def subject_px(rd: Path, name: str) -> float | None:
 
 
 def select(a) -> None:
-    content = json.loads(Path(a.content).read_text())
+    content = json.loads(Path(a.content).read_text()) if a.content else {}
     shots = []
     for clip in a.clips:
         u = json.loads((ROOT / f"private/work/shots/{clip}/union.json").read_text())
-        label = {i: k for k, v in content[clip].items() for i in v}
+        label = {i: k for k, v in content.get(clip, {}).items() for i in v}
         for s in u["shots"]:
             rec = {"clip": clip, "idx": s["idx"], "dur_s": s["dur_s"], "median_luma": s["median_luma"],
                    "median_lapvar": s["median_lapvar"], "fail": list(s["stage1_fail"]), "content": None}
@@ -59,8 +63,22 @@ def select(a) -> None:
                 rec |= {"name": name, "content": label.get(s["idx"])}
                 t = rd / "timings-yolo.json"  # copy of the YOLO-stage timings (the GVHMR run rewrites timings.json)
                 t = t if t.exists() else rd / "timings.json"
+                pj = rd / "protagonist.json"
                 if not t.exists():
                     rec["fail"].append("no_track")
+                elif a.auto_id:
+                    pick = json.loads(pj.read_text()) if pj.exists() else {"seed": None, "present": False}
+                    rec["auto_id"] = {k: pick.get(k) for k in ("seed", "present", "reason", "body_sim", "face_sim",
+                                                               "margin", "exclude", "chain")}
+                    rec["coverage"] = pick.get("coverage")
+                    rec["n_tracks"] = len(pick.get("tracks", {}))
+                    rec["subject_px"] = pick.get("subject_px")
+                    if rec["content"] is None:
+                        rec["content"] = "wick_auto" if pick["present"] else "not_wick_auto"
+                    if rec["coverage"] is None or rec["coverage"] < a.min_coverage:
+                        rec["fail"].append("coverage")
+                    if rec["subject_px"] is None or rec["subject_px"] < a.min_subject:
+                        rec["fail"].append("subject")
                 else:
                     y = json.loads(t.read_text())["stages"].get("yolo_track", {})
                     rec["coverage"] = y.get("selected_frame_coverage")
@@ -72,9 +90,15 @@ def select(a) -> None:
                         rec["fail"].append("subject")
                 if rec["content"] not in WICK:
                     rec["fail"].append("content")
+                if a.min_probe and not rec["fail"]:  # ViTPose on a few frames (bench_gvhmr.py --vitpose-probe)
+                    vp = rd / "vitpose-probe.json"
+                    rec["probe_conf"] = json.loads(vp.read_text())["mean_conf"] if vp.exists() else None
+                    if rec["probe_conf"] is None or rec["probe_conf"] < a.min_probe:
+                        rec["fail"].append("probe")
             shots.append(rec)
     gv = [s["name"] for s in shots if not s["fail"]]
-    params = {"min_coverage": a.min_coverage, "min_subject_px": a.min_subject, "prefix": a.prefix}
+    params = {"min_coverage": a.min_coverage, "min_subject_px": a.min_subject, "prefix": a.prefix,
+              "auto_id": a.auto_id, "min_probe": a.min_probe}
     Path(a.out).write_text(json.dumps({"params": params, "shots": shots, "gvhmr": gv}, indent=1))
     print("\n".join(gv))
 
@@ -120,8 +144,10 @@ def summary(a) -> None:
                              "max_spike_frac": a.max_spike_frac}
     Path(a.out).write_text(json.dumps(sel, indent=1))
 
-    print("| clip | shots | ≥1 s | luma | blur | Wick content | coverage ≥ 90 % | subject ≥ 256 px | GVHMR'd | ViTPose ≥ 0.7 | QC-clean | clean s |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    probe = sel["params"].get("min_probe") or 0
+    print("| clip | shots | ≥1 s | luma | blur | Wick content | coverage ≥ 90 % | subject ≥ 256 px | "
+          + (f"probe ≥ {probe} | " if probe else "") + "GVHMR'd | ViTPose ≥ 0.7 | QC-clean | clean s |")
+    print("|---" * (12 + bool(probe)) + "|")
     for clip in dict.fromkeys(s["clip"] for s in sel["shots"]):
         ss = [s for s in sel["shots"] if s["clip"] == clip]
         alive = ss
@@ -133,6 +159,9 @@ def summary(a) -> None:
         cols.append(len(alive))
         for stage in ("coverage", "subject"):
             alive = [s for s in alive if stage not in s["fail"] and "no_track" not in s["fail"]]
+            cols.append(len(alive))
+        if probe:
+            alive = [s for s in alive if "probe" not in s["fail"]]
             cols.append(len(alive))
         cols.append(sum(1 for s in alive if "vitpose_conf" in s))
         alive = [s for s in alive if "vitpose_conf" in s and "vitpose_conf" not in s["fail"]]
@@ -148,11 +177,14 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("select")
     p.add_argument("--clips", nargs="+", required=True)
-    p.add_argument("--content", required=True)
+    p.add_argument("--content", help="manual labels {clip: {label: [idx, …]}}; required without --auto-id")
+    p.add_argument("--auto-id", action="store_true", help="protagonist pick from RUN_DIR/protagonist.json")
     p.add_argument("--out", required=True)
     p.add_argument("--prefix", default="fr-")
     p.add_argument("--min-coverage", type=float, default=0.9)
     p.add_argument("--min-subject", type=float, default=256)
+    p.add_argument("--min-probe", type=float, default=0.0,
+                   help="also require the ViTPose probe's mean body-joint confidence (0 = off)")
     p = sub.add_parser("summary")
     p.add_argument("--sel", required=True)
     p.add_argument("--out", required=True)
@@ -161,6 +193,8 @@ def main() -> None:
     p.add_argument("--max-jerk", type=float, default=150.0, help="mean |jerk| after cleanup (m/s^3)")
     p.add_argument("--max-spike-frac", type=float, default=0.02, help="share of frames with a joint > 1000 deg/s")
     a = ap.parse_args()
+    if a.cmd == "select" and not (a.content or a.auto_id):
+        ap.error("select needs --content or --auto-id")
     select(a) if a.cmd == "select" else summary(a)
 
 
