@@ -104,14 +104,49 @@ DEFAULTS = {
     "trousers": {"back_hem_m": 0.035, "break_from_z": 0.45, "crease_depth_m": 0.0025,
                  "opening_half_m": 0.095, "taper_from_z": 0.50},
     "shoes": {
+        # black calf cap-toe derbies on a parametric last (suit_shoes.py)
         "build": True,              # False: keep the stock shoes04 placeholder
-        "rows": 26, "columns": 24, "band_m": 0.008, "leather_m": 0.004,
-        "heel_ease_m": 0.010, "toe_ease_m": 0.026, "toe_box_m": 0.004,
-        "topline_m": 0.064, "throat_y_m": 0.125,    # throat: this far from the toe tip
-        "cap_m": 0.075, "quarter_m": 0.16,          # seam positions from the toe tip
-        "welt_m": 0.005, "sole_m": 0.010, "heel_m": 0.026, "heel_len_m": 0.085,
-        "laces": {"count": 3, "first_m": 0.165, "pitch_m": 0.018, "half_gap_cols": 1,
-                  "eyelet_r_m": 0.0028, "radius_m": 0.0015},
+        "rows": 27, "half_columns": 9,
+        "leather_m": 0.003, "width_ease_m": 0.003, "top_ease_m": 0.004, "max_top_m": 0.12,
+        "smooth_m": 0.012,          # the last is the foot envelope smoothed along the foot
+        "heel_ease_m": 0.008, "toe_ease_m": 0.028, "heel_r_m": 0.042, "heel_p": 2.0,
+        # toe outline: superellipse exponents (2 round, higher squarer), medial straighter
+        "toe_p_lat": 1.8, "toe_p_med": 2.3, "toe_shift_m": 0.006,
+        "section_p": 2.6, "section_taper": 0.22, "ridge_shift_m": 0.004,
+        "toe_box_h_m": 0.030, "nose_p": 2.4, "toe_spring_m": 0.009,
+        "vamp_soft_m": 0.015,       # the vamp line is the convex envelope of the foot, softened
+        "seat_m": 0.014, "waist_start_m": 0.015, "heel_curve_m": 0.008,
+        "cap_m": 0.072, "cap_step_m": 0.0007,       # cap seam from the toe tip; cap leather step
+        "throat_m": 0.150, "open_m": 0.212,         # lacing throat / ankle opening front, from the toe tip
+        "tongue_row_m": 0.004,      # a full row this far ahead of the opening rounds the tongue top
+        # topline: just under the ridge at the opening's front (the tongue top), then above
+        # the foot's sole under the ankle bones and at the back
+        "topline": {"front_drop_m": 0.003, "side_lat_m": 0.050, "side_med_m": 0.055, "back_m": 0.070,
+                    "dip_at": 0.45},
+        "lip_m": 0.0025,
+        "backstay_m": 0.009, "backstay_lift_m": 0.0006, "counter_m": 0.075,
+        # flex creases behind the cap: distance from the cap seam (main ones first, then fine)
+        "creases_m": [0.013, 0.022, 0.009, 0.017, 0.027], "creases_main": 2,
+        "crease_span_m": 0.042, "crease_depth_m": 0.00045, "crease_w_m": 0.0014, "crease_tilt": 0.12,
+        "welt_m": 0.0045, "welt_heel_m": 0.002, "welt_h_m": 0.0035, "sole_m": 0.0065,
+        "heel_len_m": 0.078, "toplift_m": 0.005,
+        "facing": {"rows": 7, "width_m": 0.026, "gap_bottom_m": 0.004, "gap_top_m": 0.008,
+                   "lift_m": 0.0011, "edge_lift_m": 0.0003, "past_top_m": 0.012},
+        "laces": {"count": 3, "first_m": 0.165, "pitch_m": 0.018, "edge_in_m": 0.0055,
+                  "eyelet_r_m": 0.0024, "radius_m": 0.0011, "sides": 5,
+                  "bow": {"behind_m": 0.007, "knot_r_m": 0.0022, "knot_w_m": 0.007, "loop_pts": 11,
+                          "loop_len_m": 0.026, "loop_w_m": 0.013, "loop_fwd_m": 0.006,
+                          "tail_pts": 4, "tail_side_m": 0.022, "tail_fwd_m": 0.016}},
+        # leather surfaces (suit_leather.py): linear albedo, roughness, clear coat per region
+        "surface": {"albedo": {"upper": 0.012, "cap": 0.011, "facing": 0.012, "lip": 0.010,
+                               "lace": 0.008, "sole": 0.009, "sole_m": 0.009,
+                               "bottom": 0.030, "heel": 0.009, "toplift": 0.016},
+                    "rough": {"upper": 0.28, "cap": 0.18, "facing": 0.27, "lip": 0.45, "lace": 0.42,
+                              "sole": 0.30, "sole_m": 0.30, "bottom": 0.72,
+                              "heel": 0.34, "toplift": 0.7},
+                    "coat": {"upper": 0.45, "cap": 0.9, "facing": 0.45, "lip": 0.1, "lace": 0.15},
+                    "coat_rough": 0.08, "cap_polish": 0.05, "crease_rough": 0.08, "crease_albedo": 1.35,
+                    "paint_r": 2, "paint_amp": 0.14, "seed": 5},
     },
     "buttons": {"segments": 8, "jacket_r_m": 0.011, "jacket_height_m": 0.004,
                 "cuff_r_m": 0.0075, "vest_r_m": 0.0065, "vest_height_m": 0.003},
@@ -122,8 +157,8 @@ DEFAULTS = {
         "shirt": [0.75, 0.55, 0.0],
         "silk": [0.02, 0.62, 0.12],
         "button": [0.015, 0.3, 0.0],
-        "leather": [0.012, 0.28, 0.0],   # polished black calf
-        "sole": [0.02, 0.65, 0.0],
+        "leather": [0.012, 0.28, 0.0],   # polished black calf (maps and coat: shoes.surface)
+        "sole": [0.012, 0.45, 0.0],
     },
     "textures": {"enabled": True, "wool_px": 2048, "shirt_px": 1024, "tie_px": 512,
                  "shoe_px": 1024, "seed": 3, "slope": 1.0},
