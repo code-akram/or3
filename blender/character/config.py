@@ -59,6 +59,11 @@ DEFAULTS = {
     "hair": {
         # MPFB card hair (spike-1 placeholder); null = generated hair only.
         "asset": None,
+        # Strand groom (hair_groom.py; defaults in hair_groom.DEFAULTS): the
+        # hero strands (hero_only) and the source of the game cards
+        # (hair_groom_cards.py). null = the hair_clumps cards only. The guide
+        # shaping (length, part, gravity, ...) is read from `clumps`.
+        "groom": {},
         # Generated clump hair (hair_clumps.py). Default variant: shoulder.
         # Hero budget (user, 2026-10-12): hair + beard up to ~35k tris.
         "clumps": {

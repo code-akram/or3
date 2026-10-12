@@ -1,9 +1,12 @@
 """Hair and beard.
 
-Default: generated clump-mesh hair (hair_clumps) and a beard shell with jaw
-tufts (hair_beard), both built post-staging on the baked body so they follow
-the head track's edits. The MPFB card hair is still available for
-comparison: {"hair": {"asset": "long01.mhclo", "clumps": null, "beard": null}}.
+Default: a strand groom (hair_groom: Blender hair curves + Geometry Nodes,
+render-only in the `hero_only` collection) and game cards baked from it
+(hair_groom_cards), a beard shell with jaw tufts (hair_beard) and brows,
+all built post-staging on the baked body so they follow the head track's
+edits. {"hair": {"groom": null}} falls back to the hair_clumps cards; the
+MPFB card hair is still available for comparison:
+{"hair": {"asset": "long01.mhclo", "groom": null, "clumps": null, "beard": null}}.
 Variants for the direction checkpoint: bench/m1/variants/hair-*.json.
 """
 
@@ -20,6 +23,9 @@ def add(b):
 
 def post(b):
     cfg = b.cfg["hair"]
+    groom = cfg.get("groom")
+    if groom is not None and groom.get("enabled", True) is False:
+        groom = None
     if not (cfg.get("clumps") or cfg.get("beard")):
         return
     # Clothes as staged: the stock garments, or the suit track's tailored
@@ -31,7 +37,19 @@ def post(b):
     frame = HeadFrame(b, colliders)
     b.notes["head_frame"] = frame.summary()
     if cfg.get("clumps"):
-        hair_clumps.build(b, frame, cfg["clumps"])
+        if groom is not None:
+            from . import hair_groom
+            g = hair_groom.build(b, frame, cfg["clumps"], groom)
+            if g["cfg"].get("cards", "groom") == "groom":
+                from . import hair_groom_cards
+                cards = hair_groom_cards.build(b, frame, cfg["clumps"], g)
+            else:
+                cards = hair_clumps.build(b, frame, cfg["clumps"])
+            # The kept .blend renders the groom (hero stage); the cards stay
+            # in the GLB (the exporter ignores render visibility).
+            cards.hide_render = True
+        else:
+            hair_clumps.build(b, frame, cfg["clumps"])
     if cfg.get("beard"):
         hair_beard.build(b, frame, cfg["beard"])
     if cfg.get("brows"):
