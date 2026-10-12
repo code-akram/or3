@@ -126,6 +126,8 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 ## 7. Character spec (must be nailed, no compromise)
 
 ### Method: agent-driven look-dev loop
+**The m1 contract is [`bench/m1/look-spec.md`](bench/m1/look-spec.md)**: proportion targets, face planes and controls, hair, suit, budgets, and the direction checkpoint.
+
 **Image-to-3D is ruled out.** TRELLIS, Hunyuan3D, SAM 3D and TripoSG all have one or more of: CUDA-only, an EU/UK licence exclusion, poor topology, no style control. Instead:
 
 1. **Base body**: MPFB2 (MakeHuman for Blender). Core assets are CC0. Uses the `game_engine` rig.
@@ -143,9 +145,18 @@ private/       (gitignored) footage, SMPL, weights, commercial material
    - Scripts: `blender/render_turntable.py`, `bench/m0/bench_spike2_render.sh`.
    - Agent critique, then **best-of-N small edits with revert**. BlenderGym (CVPR 2025) found verifier-heavy compute works best.
    - Measurable checks: silhouette IoU against reference, landmark ratios, poly budget.
-4. **Concept guidance** (optional): SD-Turbo / SDXS via OpenVINO on CPU (~1.5–3 s per image) for mood boards only.
+4. **Concept guidance**: SD-Turbo / SDXS are **downgraded to environment mood boards only (m4)**. Prompts for this archetype drift toward the actor's likeness.
+5. **Modular build (m1 track A).** `blender/build_character.py` drives stage modules in `blender/character/` (`config`, `body`, `head`, `hair`, `suit`, `rig`, `budgets`, `export`, `stats`) from one config. Defaults are deep-merged with a `--config` JSON, and `null` in an override disables a default. Separate tracks own `head`, `hair`, `suit` and `rig`.
+6. **Harness**: `bench/m1/lookdev.sh <label>`.
+   - Fixed world cameras, EEVEE 512² at 16 samples, orthographic 512² silhouette masks.
+   - `metrics.json`: tris, bones, landmarks, and IoU against the previous run or a `--target`.
+   - Also `--compare A B` and `--signoff` (Cycles 1024²).
+   - **Measured: 5.4–7.4 s per full iteration, 0.5–0.6 s per view.** Builds are deterministic (IoU 1.000 against itself).
+7. **Anti-likeness**: the face is defined only by spec parameters. No photos of real people and no real names anywhere in the loop. The user is asked "does this resemble a real person?" at the direction checkpoint and at sign-off.
 
 ### Suit
+- **No waistcoat exists in any MPFB / suits01 asset.** Build it by script from an offset of the body surface. The tie tucks under it, so it needs no spring bones; secondary motion is the jacket hem, the vents and the hair.
+- Measured on the spike-1 build: the jacket hem is about 10 cm too short and the tie tip 10 cm short. The button stance and the trouser rise already pass.
 - **Base**: MPFB CC0 `suits01` (toigo suit, tie and jacket). Retopo, then **script-tailor**:
   - Separate shells for shirt, vest, jacket and tie.
   - Bevelled lapel roll and notch, shoulder volume, a real jacket vent, trouser crease (ridge + normal line).
@@ -164,7 +175,9 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 
 ### Budgets (initial, to calibrate)
 - LOD0: 40–60k tris (body ~15k, suit 15–20k, hair 8–12k, face/eyes ~5k). LOD1 50%, LOD2 20% (meshoptimizer).
-  - Spike-1 baseline: 50.2k tris (body 15.2k, suit 19.2k, hair 4.1k, **teeth 7.1k: swap them for a lighter shape**, shoes 3.3k), 53 bones, 4 weights per vertex.
+  - Spike-1 baseline: 50.2k tris (body 15.2k, suit 19.2k, hair 4.1k, teeth 7.1k, shoes 3.3k), 53 bones, 4 weights per vertex.
+  - **Teeth fixed (m1 track A).** All six MPFB teeth variants are 7,120 tris, so the teeth are collapse-decimated to 899 tris (mean deviation 0.3 mm). The spec targets ≤ 500. The m1 baseline is **43,949 tris**.
+  - Spec cap is ≤ 50k tris (hard cap 60k). The bone plan is 86 of 90: 6 twist, 4 helper, 3 face, 8 jacket, 12 hair.
 - 60–90 bones, 4 weights per vertex.
 - Textures 2048 (body, suit) and 1024 (hair), KTX2.
 
@@ -653,6 +666,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - SMPL password rotation: done by the user.
 - **m2 frame-time criterion** (user, 2026-10-12): ≤ 1 % missed vsync plus work median ≤ 12 ms, measured ≥ 20 min after 5 min warm-up, late slice included (§15).
 - **m1 started** (2026-10-12).
+- **m1 wave 1 merged**: the look-dev harness plus modular build (track A) and the look spec (track C). Wave 2 (suit, head plus proportions, hair plus beard) runs in parallel worktrees, leading to the direction checkpoint.
 - **Audio listening gate (spike 7), on the Air's speakers:**
   - Approved: dry steps, the alley IR (the 8.6 dB calibration stands), and clarity at low volume.
   - Main footstep pool: Artninja.
