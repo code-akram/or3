@@ -41,6 +41,7 @@ ap.add_argument("--check", action="store_true", help="run suit_check.py (holes, 
 ap.add_argument("--collar", action="store_true",
                 help="run suit_collar.py (collar-zone guard: bare skin, backfaces, intersections) on the GLB")
 ap.add_argument("--res", type=int, default=600)
+ap.add_argument("--save-blend", action="store_true", help="also save DIR/character.blend (the staged scene)")
 A = ap.parse_args(argv)
 
 main_root = subprocess.run(["git", "-C", REPO, "rev-parse", "--path-format=absolute",
@@ -86,6 +87,8 @@ s["timings_s"] = b.timings
 s["config"] = cfg
 with open(os.path.join(A.out, "character.stats.json"), "w") as f:
     json.dump(s, f, indent=2, default=str)
+if A.save_blend:
+    export.save_blend(b, os.path.join(A.out, "character.blend"))
 print(f"[suit_dev] build {time.perf_counter() - t0:.1f} s, total tris {s['total_tris']}")
 for name, m in sorted(s["meshes"].items()):
     if "suit" in name or "shoe" in name:
