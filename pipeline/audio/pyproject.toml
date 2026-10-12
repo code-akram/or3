@@ -5,6 +5,7 @@ description = "Programmatic audio pipeline: fetch, analyse, clean, design, spati
 requires-python = ">=3.14"
 dependencies = [
     "numpy>=2.5.4",
+    "onnxruntime>=1.31.0",
     "scipy>=1.18.1",
     "soundfile>=0.14.0",
 ]

@@ -8,7 +8,10 @@
 #   uv run python -I -m audiopipe.search 'dress shoes footsteps concrete'
 #   IA: collection:radio-aporee-maps AND (tokyo OR shinjuku OR shibuya ...) via advancedsearch.php
 
-# --- Tokyo / Shinjuku ambience (Freesound, geotag + tag filtered) -------------
+# --- Tokyo / Shinjuku ambience (spike 7; REJECTED at the listening gate 2026-10-12) ----
+# These street recordings are full of people. NOTES §12 (human-free soundscape) bars them
+# from the bed; they stay listed so the manifest and analysis can be rebuilt, and the VAD
+# uses 679335 as its positive control.
 [[freesound]]
 id = 679335
 role = "ambience"
@@ -82,3 +85,80 @@ file = "nov820131600shibuya.mp3"
 role = "ambience"
 licence_note = "CC BY-SA 3.0: anything derived from it must stay CC BY-SA 3.0 and be kept separate from CC-BY-4.0 assets. Analysis-only in spike 7."
 why = "Shibuya Dogenzaka street crossings, afternoon, 2013. CC BY-SA 3.0 (accepted only with a note). Original is MP3."
+
+# =============================================================================
+# Round 2 (2026-10-12): human-free ambience "Shinjuku side street at night, nobody left".
+# Roles: bed-* = loopable layers, event-* = sparse one-shots, rain = weather-driven layer.
+# Every file must pass the Silero VAD check (audiopipe.vad); windows are cut around anything
+# that scores as speech. Candidate search: audiopipe.search with the queries in the round-2
+# report (bench/m1/listening-round-2.md).
+# =============================================================================
+
+# --- wind ------------------------------------------------------------------------------
+[[freesound]]
+id = 786004
+role = "bed-wind"
+why = "newlocknew, winter midnight residential area, distant gusts, trees creaking; 'practically no traffic', a boiler-room hum is the only man-made sound. CC-BY 4.0, 48k."
+
+[[freesound]]
+id = 664257
+role = "bed-wind"
+why = "felix.blume, wind shaking an electrical wire with muffled whistling. CC0, 96k/24, MS. Overhead wires are everywhere in Shinjuku side streets."
+
+# --- machinery that keeps running ----------------------------------------------------------
+[[freesound]]
+id = 454261
+role = "bed-ac"
+why = "kyles, exterior air-conditioner vent with dripping condensate. CC0, 48k."
+
+[[freesound]]
+id = 192240
+role = "bed-ac"
+why = "Ligidium, outdoor air-conditioning unit (mic in a wind sock). CC0, 96k/32."
+
+[[freesound]]
+id = 453489
+role = "bed-neon"
+why = "kyles, neon sign buzz/hum, stereo, close. CC0, 48k."
+
+[[freesound]]
+id = 641208
+role = "bed-transformer"
+why = "ideaph, large pedestal-mount electrical transformer at night. CC0, 44.1k/24."
+
+[[freesound]]
+id = 730438
+role = "bed-vending"
+why = "HECKFRICKER, vending machine cooling/ventilation hum with rattle. CC0, 44.1k."
+
+# --- rain / drips (weather-driven layer) ---------------------------------------------------
+[[freesound]]
+id = 81731
+role = "rain"
+why = "Silencyo, rain on a stone sidewalk at night in a very quiet village, 'no traffic at all'. CC0, 48k, MS."
+
+[[freesound]]
+id = 612817
+role = "rain"
+why = "xkeril, clean rain on roofs, concrete and tiles in a small courtyard. CC0, 48k/24 mono."
+
+# --- sparse events -------------------------------------------------------------------------
+[[freesound]]
+id = 365257
+role = "event-insects"
+why = "RutgerMuller, crickets far and close, Kashiwa (Chiba, east of Tokyo), late October night. CC0, 96k/24 MS. Japanese species."
+
+[[freesound]]
+id = 568820
+role = "event-insects"
+why = "TRP, single cricket, close (parabolic). CC0, 48k/24."
+
+[[freesound]]
+id = 386768
+role = "event-crow"
+why = "ken788, crows cawing. CC0, 44.1k/24. Carrion crows live in Tokyo alongside large-billed crows."
+
+[[freesound]]
+id = 476139
+role = "event-crow"
+why = "cupido-1, crow call in a park. CC0, 48k."

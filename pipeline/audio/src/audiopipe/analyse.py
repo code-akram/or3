@@ -13,6 +13,10 @@ Per file it writes data/build/audio/analysis/<slug>.{json,png} and prints a tabl
     20.5 kHz = lossy-codec origin (rejected even inside a WAV); a wall at 20.5-22 kHz
     below Nyquist = resampled from 44.1/48 kHz (accepted, noted)
   * showspectrumpic spectrogram (linear frequency, log magnitude) for visual inspection
+  * human presence (NOTES §12, human-free soundscape) for ambience roles (ambience, bed-*, event-*,
+    rain): Silero VAD speech segments (audiopipe.vad) and AudioSet tagger windows (audiopipe.tagger).
+    A source is rejected when more than 2 % of its 2 s windows show human presence or the VAD finds
+    more than 1 s of speech; below that it is accepted and the bed builder cuts around the spans.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ import numpy as np
 from scipy import signal
 
 from . import provenance as prov
+from . import tagger, vad
 from .common import BUILD, DATA_ROOT, FFMPEG, THREADS, ffmpeg, ffmpeg_stderr, log
 
 OUT = BUILD / "analysis"
@@ -39,7 +44,20 @@ FLOOR = {
     "max_clipped_fraction": 1e-5,  # samples in runs of >=3 at full scale
     "lossy_codecs": {"mp3", "aac", "vorbis", "opus"},
     "min_snr_db": {"footsteps": 30.0, "ambience": 0.0, "rain": 0.0},
+    "max_human_window_fraction": 0.02,
+    "max_speech_s": 1.0,
 }
+HUMAN_FREE_ROLES = ("ambience", "bed-", "event-", "rain")
+
+
+def human_free_role(role: str) -> bool:
+    return role.startswith(HUMAN_FREE_ROLES)
+
+
+def human_check(x: np.ndarray, sr: int) -> dict:
+    v = vad.check_array(x, sr)
+    t = tagger.public(tagger.check_array(x, sr))
+    return {"vad": v, "tagger": t}
 
 
 def slug_of(rid: str) -> str:
@@ -165,8 +183,15 @@ def spectrogram(path: Path, png: Path, title: str) -> None:
            "-frames:v", "1", str(png))
 
 
-def gate(role: str, fmt: dict, ff: dict, npst: dict, sp: dict) -> tuple[str, str]:
+def gate(role: str, fmt: dict, ff: dict, npst: dict, sp: dict, human: dict | None = None) -> tuple[str, str]:
     reasons = []
+    if human:
+        t, v = human["tagger"], human["vad"]
+        if t["human_fraction"] > FLOOR["max_human_window_fraction"] or v["speech_seconds"] > FLOOR["max_speech_s"]:
+            worst = max(t["groups"].items(), key=lambda kv: kv[1]["closest_to_threshold"][1])
+            reasons.append(f"human presence: {t['human_windows']}/{t['windows']} tagger windows "
+                           f"(strongest {worst[0]}: {worst[1]['closest_to_threshold'][0]}), VAD speech {v['speech_seconds']} s "
+                           "(NOTES §12 human-free rule)")
     if fmt.get("codec") in FLOOR["lossy_codecs"]:
         reasons.append(f"lossy original ({fmt['codec']})")
     if sp["brick_wall"] and sp["steepest_drop_at_hz"] < LOSSY_WALL_HZ and fmt.get("codec") not in FLOOR["lossy_codecs"]:
@@ -186,6 +211,10 @@ def gate(role: str, fmt: dict, ff: dict, npst: dict, sp: dict) -> tuple[str, str
         notes.append(f"DC offset {ff['dc_offset']:.4f} (removed by high-pass)")
     if npst["digital_silence_fraction"] > 0.01:
         notes.append(f"{npst['digital_silence_fraction']*100:.1f}% digital silence (edited/gated source)")
+    if human:
+        n_t, n_v = len(human["tagger"]["human_spans_s"]), len(human["vad"]["speech_segments"])
+        notes.append(f"human-free check passed (tagger {human['tagger']['human_windows']}/{human['tagger']['windows']} windows, "
+                     f"VAD {human['vad']['speech_seconds']} s)" + (f"; {n_t + n_v} span(s) cut by the bed builder" if n_t + n_v else ""))
     return "accepted", "passes floor" + (": " + "; ".join(notes) if notes else "")
 
 
@@ -213,16 +242,19 @@ def main() -> None:
         png = OUT / f"{slug}.png"
         spectrogram(path, png, rec["title"])
         role = roles.get(rid, "ambience")
-        status, reason = gate(role, rec["original_format"], ff, npst, sp)
+        human = human_check(x, sr) if human_free_role(role) else None
+        status, reason = gate(role, rec["original_format"], ff, npst, sp, human)
         result = {"id": rid, "role": role, "format": rec["original_format"], "ffmpeg": ff,
                   "numpy": npst, "spectral": sp, "status": status, "reason": reason,
                   "spectrogram": str(png.relative_to(BUILD))}
+        if human:
+            result["human"] = human
         (OUT / f"{slug}.json").write_text(json.dumps(result, indent=2))
         rows.append(result)
         if not a.no_gate:
             prov.update(rid, status=status, status_reason=reason)
     (OUT / "summary.json").write_text(json.dumps(rows, indent=2))
-    hdr = "| id | role | fmt | LUFS-I | LRA | TP dBFS | DC | eff. bits | noise floor | SNR proxy | clipped | content edge | steepest drop | verdict | gate |"
+    hdr = "| id | role | fmt | LUFS-I | LRA | TP dBFS | DC | eff. bits | noise floor | SNR proxy | clipped | content edge | steepest drop | verdict | human (tagger windows / VAD s) | gate |"
     print(hdr)
     print("|" + "---|" * (hdr.count("|") - 1))
     for r in rows:
@@ -230,7 +262,14 @@ def main() -> None:
         print(f"| {r['id']} | {r['role']} | {f['codec']} {f['sample_rate']//1000}k/{f['bit_depth']} | {ff['lufs_i']} | {ff['lra_lu']} | "
               f"{ff['true_peak_dbfs']} | {ff['dc_offset']:.5f} | {ff['effective_bits']} | {n['noise_floor_dbfs']} | {n['snr_proxy_db']} | "
               f"{n['clipped_samples']} | {s['content_edge_hz']/1000:.1f}k | {s['steepest_drop_db_per_khz']} dB @ {s['steepest_drop_at_hz']/1000:.1f}k | "
-              f"{s['verdict']} | **{r['status']}**: {r['reason']} |")
+              f"{s['verdict']} | {hum(r)} | **{r['status']}**: {r['reason']} |")
+
+
+def hum(r: dict) -> str:
+    h = r.get("human")
+    if not h:
+        return "n/a"
+    return f"{h['tagger']['human_windows']}/{h['tagger']['windows']} / {h['vad']['speech_seconds']}"
 
 
 if __name__ == "__main__":

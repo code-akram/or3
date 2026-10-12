@@ -10,10 +10,18 @@
 4. Round-robin variation baked per take: pitch via `asetrate` resampling (changes pitch and
    length together, like Web Audio playbackRate; keeps the heel transient intact; rubberband
    was measured to soften the attack, see report), gain offsets in dB. Seeded and recorded.
-5. Wet variant per take = dry step + synthesised splash transient (slap + spray + Minnaert
-   bubble droplets at heel and toe impacts) + shelf EQ (firequalizer: -2 dB low shelf below
-   200 Hz, +3 dB high shelf above 6 kHz).
-Writes 24-bit FLAC to data/build/audio/masters/foley/<name>/{dry,wet}/ and pool.json.
+5. Wet variant per take = dry step + synthesised splash at heel and toe impacts + EQ.
+   v2 (round 2, the default): the round-1 splash (v1) was not evident on laptop speakers (user
+   listening gate 2026-10-12, MacBook Air built-in speakers). Its energy sat in 350-2600 Hz (the
+   slap, masked by the step itself) and above 6 kHz (spray + high shelf, where small drivers and
+   the ear at low volume give little). v2 moves the splash into 1.5-6 kHz: a sharp crack
+   (0.3 ms attack, 8 ms decay) over a short water body, a granular sheet of spray, louder
+   Minnaert droplets, a small fall-back slap 15-25 ms after the impact, a 2.5-5 kHz presence
+   lift instead of the >6 kHz shelf; the step keeps its level and the splash alone sits 1 LU
+   under it (v1 renormalised the sum to dry + 1 LU with the splash peak 10 dB under the step's).
+   Measured through a laptop-speaker model in audiopipe.speaker.
+   v1 is still built (wet-v1/) for the before/after comparison.
+Writes 24-bit FLAC to data/build/audio/masters/foley/<name>/{dry,wet,wet-v1}/ and pool.json.
 """
 
 from __future__ import annotations
@@ -35,10 +43,17 @@ FOLEY_STEP_LUFS_M = -30.0   # per-take loudness match before variation (relative
 TP_CEIL_DBTP = -1.5         # hottest take of the pool (dry or wet) lands here
 CENTS = [-50, -35, -20, -5, 5, 20, 35, 50]
 GAINS_DB = [-1.5, -1.0, -0.5, 0.0, 0.0, 0.5, 1.0, 1.5]
-SPLASH_DB = -10.0   # splash peak relative to the dry step's peak
-WET_LIFT_LU = 1.0   # wet take momentary-max = dry take + 1 LU
-WET_EQ = ("firequalizer=gain_entry='entry(0,-2);entry(150,-2);entry(300,0);entry(4000,0);"
-          "entry(6000,2);entry(8000,3);entry(24000,3)':accuracy=4:fixed=1")
+WET = {
+    # splash_db: splash peak relative to the dry step's peak; lift_lu: wet momentary max - dry
+    "v1": {"splash_db": -10.0, "lift_lu": 1.0,
+           "eq": ("firequalizer=gain_entry='entry(0,-2);entry(150,-2);entry(300,0);entry(4000,0);"
+                  "entry(6000,2);entry(8000,3);entry(24000,3)':accuracy=4:fixed=1")},
+    # splash_lu: the splash alone, momentary max relative to the dry step (step level kept)
+    "v2": {"splash_db": -3.0, "splash_lu": -1.0,
+           "eq": ("firequalizer=gain_entry='entry(0,-3);entry(150,-3);entry(300,0);entry(1200,0);"
+                  "entry(2500,3);entry(5000,3);entry(8000,1);entry(24000,0)':accuracy=4:fixed=1")},
+}
+WET_VERSION = "v2"
 
 
 PROFILES = {
@@ -118,8 +133,8 @@ def impacts(y: np.ndarray) -> list[int]:
     return sorted(int(peaks[i]) for i in order)
 
 
-def splash(n: int, at: list[int], rng: np.random.Generator, level: float) -> np.ndarray:
-    """Synthesised water splash at each impact: slap + spray + bubble droplets."""
+def splash_v1(n: int, at: list[int], rng: np.random.Generator, level: float) -> np.ndarray:
+    """Round-1 splash at each impact: slap + spray + bubble droplets."""
     out = np.zeros(n)
     t = np.arange(n) / SR
     for k, i0 in enumerate(at):
@@ -150,13 +165,80 @@ def splash(n: int, at: list[int], rng: np.random.Generator, level: float) -> np.
     return out * level
 
 
-def eq_wet(y: np.ndarray) -> np.ndarray:
+def _burst(n: int, t: np.ndarray, t0: float, band: tuple[float, float], attack: float, decay: float,
+           rng: np.random.Generator) -> np.ndarray:
+    b, a = signal.butter(2, band, btype="band", fs=SR)
+    nz = signal.lfilter(b, a, rng.standard_normal(n))
+    env = np.where(t >= t0, np.exp(-(t - t0) / decay), 0) * np.clip((t - t0) / attack, 0, 1)
+    return nz * env / (np.abs(nz).max() + 1e-9)
+
+
+def splash_v2(n: int, at: list[int], rng: np.random.Generator, level: float) -> np.ndarray:
+    """Small-speaker splash at each impact, energy in 1.5-6 kHz: crack + water body + granular
+    spray + fall-back slap + Minnaert droplets. Peak normalised to `level`."""
+    out = np.zeros(n)
+    t = np.arange(n) / SR
+    for k, i0 in enumerate(at):
+        s = 1.0 if k == 0 else 0.6   # toe splash is smaller than the heel's
+        t0 = i0 / SR
+        out += 1.0 * s * _burst(n, t, t0, (1500, 6000), 0.0003, 0.008, rng)        # crack
+        out += 0.45 * s * _burst(n, t, t0, (600, 2500), 0.001, 0.02, rng)          # water body
+        # spray sheet: band noise gated by ~400 grains/s of 1 ms bumps (fizz, not hiss)
+        grains = np.zeros(n)
+        g0 = t0 + 0.003
+        for tg in g0 + np.cumsum(rng.exponential(1 / 400, 80)):
+            j = int(tg * SR)
+            if j < n - 48:
+                grains[j:j + 48] += np.hanning(48) * rng.uniform(0.3, 1.0)
+        out += 0.6 * s * _burst(n, t, g0, (1800, 7000), 0.002, 0.09, rng) * (0.35 + grains)
+        tf = t0 + rng.uniform(0.015, 0.025)                                          # fall-back slap
+        out += 0.35 * s * _burst(n, t, tf, (1500, 5000), 0.0005, 0.006, rng)
+        for _ in range(int(rng.integers(8, 17) * s) + 1):                           # Minnaert droplets
+            td = t0 + rng.exponential(0.1) + 0.01
+            if td >= n / SR - 0.02:
+                continue
+            f0 = rng.uniform(1500, 5000)
+            tau = rng.uniform(0.005, 0.02)
+            amp = 10 ** (rng.uniform(-18, -6) / 20) * s
+            tt = t - td
+            m = tt >= 0
+            ph = 2 * np.pi * f0 * (tt + 0.5 * 18.0 * tt ** 2)
+            out[m] += amp * np.sin(ph[m]) * np.exp(-tt[m] / tau)
+    return out / (np.abs(out).max() + 1e-12) * level
+
+
+SPLASH = {"v1": splash_v1, "v2": splash_v2}
+
+
+def eq_wet(y: np.ndarray, version: str = WET_VERSION) -> np.ndarray:
     with tempfile.TemporaryDirectory() as td:
         i, o = Path(td) / "i.wav", Path(td) / "o.wav"
         sf.write(i, y, SR, subtype="FLOAT")
-        ffmpeg("-i", str(i), "-af", WET_EQ, "-c:a", "pcm_f32le", str(o))
+        ffmpeg("-i", str(i), "-af", WET[version]["eq"], "-c:a", "pcm_f32le", str(o))
         z, _ = sf.read(o, dtype="float64")
     return z[: len(y)]
+
+
+def wet_parts(dry: np.ndarray, hits: list[int], seed: int, version: str = WET_VERSION) -> dict[str, np.ndarray]:
+    """Wet take and its two components after EQ, end fade and loudness lift. The EQ is linear,
+    so wet = step + splash exactly and the splash can be measured on its own."""
+    w = WET[version]
+    level = np.abs(dry).max() * 10 ** (w["splash_db"] / 20)   # splash peak relative to the step peak
+    drypad = np.concatenate([dry, np.zeros(int(0.12 * SR))])  # room for the droplets to finish
+    sp = SPLASH[version](len(drypad), hits, np.random.default_rng(seed), level)
+    f = int(0.03 * SR)
+    ramp = np.concatenate([np.ones(len(drypad) - f), np.linspace(1, 0, f)])
+    step, spl = eq_wet(drypad, version) * ramp, eq_wet(sp, version) * ramp
+    if "splash_lu" in w:
+        # v2: the step keeps its level; the splash alone sits splash_lu under the dry step's
+        # momentary max (a splash at -3 dB *peak* is much louder than the click once K-weighted,
+        # so renormalising the sum, as v1 did, would pull the heel click down ~12 dB)
+        spl *= 10 ** ((L.momentary_max(dry) + w["splash_lu"] - L.momentary_max(spl)) / 20)
+        return {"wet": step + spl, "step": step, "splash": spl}
+    # v1: a wet step is a little louder than the dry one, not a different category
+    wet = step + spl
+    g = 10 ** ((L.momentary_max(dry) + w["lift_lu"] - L.momentary_max(wet)) / 20)
+    return {"wet": wet * g, "step": step * g, "splash": spl * g}
 
 
 def write(path: Path, y: np.ndarray) -> None:
@@ -180,15 +262,9 @@ def build(source_slug: str, name: str, seed: int, profile: str = "default") -> d
         base_attack = attack_ms(y)
         dry = asetrate_pitch(y, cents[k - 1]) * 10 ** (gains[k - 1] / 20)
         hits = impacts(dry)
-        level = np.abs(dry).max() * 10 ** (SPLASH_DB / 20)  # splash peak relative to the step peak
-        tail = np.zeros(int(0.12 * SR))                      # room for the droplets to finish
-        drypad = np.concatenate([dry, tail])
-        sp = splash(len(drypad), hits, np.random.default_rng(seed * 100 + k), level)
-        wet = eq_wet(drypad + sp)
-        wet[-int(0.03 * SR):] *= np.linspace(1, 0, int(0.03 * SR))
-        # a wet step is a little louder than the dry one, not a different category
-        wet *= 10 ** ((L.momentary_max(dry) + WET_LIFT_LU - L.momentary_max(wet)) / 20)
-        audio.append((dry, wet))
+        wet = wet_parts(dry, hits, seed * 100 + k)["wet"]
+        wet1 = wet_parts(dry, hits, seed * 100 + k, "v1")["wet"]
+        audio.append((dry, wet, wet1))
         takes.append({
             "take": k, "source_onset_s": round(e["onset"] / SR, 3), "source_peak_db": e["peak_db"],
             "pitch_cents": cents[k - 1], "gain_db": gains[k - 1], "impacts_ms": [round(h / SR * 1000, 1) for h in hits],
@@ -197,18 +273,24 @@ def build(source_slug: str, name: str, seed: int, profile: str = "default") -> d
         })
     # Heel clicks have a peak-to-loudness ratio near 30 dB, so the binding limit for one-shots is
     # the peak, not loudness: one gain for the whole pool puts the hottest take at TP_CEIL.
-    max_tp = max(max(L.true_peak_db(d), L.true_peak_db(w)) for d, w in audio)
+    # The pool gain comes from the dry and v1-wet takes (as in round 1, so the approved dry takes
+    # stay bit-identical); a v2 wet take that would then pass the ceiling gets its own trim.
+    max_tp = max(max(L.true_peak_db(d), L.true_peak_db(w1)) for d, _, w1 in audio)
     pool_gain = TP_CEIL_DBTP - max_tp
-    for (dry, wet), t in zip(audio, takes):
-        dry, wet = dry * 10 ** (pool_gain / 20), wet * 10 ** (pool_gain / 20)
+    for (dry, wet, wet1), t in zip(audio, takes):
+        dry, wet, wet1 = (z * 10 ** (pool_gain / 20) for z in (dry, wet, wet1))
+        t["wet_trim_db"] = round(min(0.0, TP_CEIL_DBTP - L.true_peak_db(wet)), 2)
+        wet *= 10 ** (t["wet_trim_db"] / 20)
         write(root / "dry" / f"{name}-dry-{t['take']:02d}.flac", dry)
         write(root / "wet" / f"{name}-wet-{t['take']:02d}.flac", wet)
+        write(root / "wet-v1" / f"{name}-wet-v1-{t['take']:02d}.flac", wet1)
+        t["wet_v1_tp"] = round(L.true_peak_db(wet1), 2)
         t["dry"], t["wet"] = L.summary(dry[:, None]), L.summary(wet[:, None])
         log(f"take {t['take']}: cents {t['pitch_cents']:+d} gain {t['gain_db']:+.1f} dB "
             f"dry M {t['dry']['lufs_m_max']} TP {t['dry']['true_peak_dbtp']} | wet M {t['wet']['lufs_m_max']} TP {t['wet']['true_peak_dbtp']}")
     pool = {"name": name, "source": source_slug, "seed": seed, "profile": profile, "variation": "asetrate pitch + gain",
             "base_lufs_m": FOLEY_STEP_LUFS_M, "pool_gain_db": round(pool_gain, 2), "tp_ceiling_dbtp": TP_CEIL_DBTP,
-            "wet_eq": WET_EQ, "takes": takes, "candidates": len(events)}
+            "wet_version": WET_VERSION, "wet": WET, "takes": takes, "candidates": len(events)}
     (root / "pool.json").write_text(json.dumps(pool, indent=2))
     return pool
 
