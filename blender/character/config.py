@@ -360,8 +360,8 @@ DEFAULTS = {
                       "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
                       "row_jitter_m": 0.0002, "strip_cols": 6, "radius_scale": 0.7},
             # dark brown, not black; clumps of 3-5 (guide distance)
-            "melanin": 0.94, "redness": 0.45, "clump": 0.6, "gap_m": 0.00015,
-            "hero": {"radius_m": [0.000035, 0.000045], "tip_radius": 0.05,
+            "melanin": 0.96, "redness": 0.45, "clump": 0.6, "gap_m": 0.00015,
+            "hero": {"radius_m": [0.00004, 0.00005], "tip_radius": 0.15,
                      "material": {"roughness": 0.25, "radial_roughness": 0.3, "coat": 0.1,
                                   "root_dark": 0.0},
                      "clump": {"shape": 0.5, "tip_spread": 0.0001, "guide_distance_m": 0.0006}},

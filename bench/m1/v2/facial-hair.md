@@ -6,7 +6,34 @@ The baseline beard was a pasted, single-tone black patch with a hard outline, th
 
 Everything is placed off landmarks and by surface sampling: lip, ear, head and neck groups, profile lines, brow-proxy spines, and lid margins ray-cast on the final skin. So Track A's forms v1 → v2 change rebuilt the grooms with no edits.
 
-## Evidence
+## Round 3 (lashes and brows from the main4 eye close-up)
+
+Evidence run: `data/build/lookdev/20261012T232216Z-fhv2-full8`, built on main `1e8d26f`. Renders are in `fh/`.
+
+| Item | Change | Verdict |
+|---|---|---|
+| Lashes read as a few thick black spikes | **Upper:** 165 → 190 per eye. Root radius 0.04–0.05 mm (was up to 0.055), tapering to 15 % at the tip (was 25 %). Clump guide distance 1.2 → 0.6 mm, giving clumps of about 3–5. Dark brown: melanin 0.99 → 0.96, redness 0.45. **Lower:** 80 → 60 per eye at 0.7× the radius. **Game:** the strip draws finer, brown lines (1.6 px, `#2a1f17`). | **Fixed.** A fine, dark-brown, clumped fringe curving up and out; the lower lashes are sparse and fine. full8 was built with a finer first pass (radius 0.035–0.045 mm, tip 5 %, melanin 0.94), and at close-up the fringe there is almost too faint (`fh/hero_turntable_eye.png`). The committed values are one step back toward visible. They are checked on `20261012T235412Z-fhv2-dev16/fh/hero_turntable_eye.png`, a no-refine build with the same lash code, against full8's settings in `…231727Z-fhv2-dev15`. |
+| Brows are dense, dark, thick bars with a hard top edge | **Density:** 230 → 185 roots/cm² (1,050 → about 810 per side). **Strands:** radius 0.03–0.045 mm, tip 15 %. **Values:** 20 % of the hairs are a lighter brown (melanin 0.9). **Top edge:** a softer falloff (+0.5 band height) with an irregular wobble. **Tail:** thins from 50 % along the brow to 10 % density. **Game:** the shells bake 55 % of the strands at 1.0× width and 2× albedo, with `visible_shadow` off. | **Fixed** (hero), **improved** (game). **Hero:** fine strands with skin showing through, lighter hairs mixed in, a soft irregular top, and a tail that thins out (`fh/hero_turntable_brow.png`, `fh/hero_turntable_eye.png`). At bust distance the brow is now softer and lighter than round 1's "heavy" brow (`fh/hero_turntable_bust.png`). If the review wants more weight back, the knob is `groom.per_cm2`. **Game:** lighter and sparser. In extreme close-up the shells are still black dashes (`fh/game_turntable_brow.png`), but at bust distance the game brows read close to the hero's (`fh/game_turntable_bust.png`). |
+| Game upper strip short at the outer corner | Over the outer 40 % of the lid the strip keeps its full forward run (it no longer sinks into the recess under the hood). | **Improved.** The upper strip now runs to about 90 % of the lid toward the outer corner (about 2/3 in dev14); see `fh/game_turntable_eye.png`. |
+
+**read40 eye band:** 0.593 here, against 0.626 in full7. Lighter, see-through brows darken the eye band less. That is the cost of this request; the metric is still mostly the socket shading.
+
+## Round 2 (after the first merge)
+
+Evidence run: `data/build/lookdev/20261012T221954Z-fhv2-full7`, built on main `2949bf7` (A's skin v2, E's stage, B's hair). Renders are in `fh/`.
+
+| Item | Verdict | Notes |
+|---|---|---|
+| Under-lip bare strip (hero) | **Fixed** | The strip was lip-group skin: the lower lip's bottom band, under its curl and facing forward again, which A's texture paints close to skin. The beard kept off the whole `lips` group, so that band stayed bare. That band (3 mm, `lower_lip_root_m`) now takes roots. A projection probe along the moustache camera shows strands start right at the lip's curl, where before there was 4 mm of bare skin. See `fh/hero_hero_moustache.png` and `fh/hero_turntable_moustache.png`. The game shells still leave a thin strip there. |
+| Game beard near-black and blotchy | **Improved** | **Bake:** the shells take 60 % of the beard strands and 35 % of the stubble (`beard_keep`, `stubble_keep`), because a baked hair is about 3× a real hair's width at this atlas resolution. Colour ×1.6 with saturation 0.8 (lifted warm strands went orange), root shade 0.8, and `visible_shadow` off on the shell object, so the 14 alpha layers don't self-shadow. **Result:** at bust under the turntable the beard's value is now close to the hero's (it was about 50 % darker in full5), with warm and grey specks and skin showing through at the edges. It still reads grainier, more salt-and-pepper, than the strands. In extreme close-up it is blotchy, as shells are. See `fh/game_turntable_bust.png` against `fh/hero_turntable_bust.png`. |
+| Game upper lash strip short at the outer corner | **Improved** (hero), **not re-checked** (game) | The upper lashes fan 40° toward the outer corner and are longer there (7.5 mm), so the hero fringe now reaches the corner (`fh/hero_turntable_eye.png`). The margin finder admits narrower openings (0.6 mm). |
+
+**Render script:**
+- Game mode now keeps the hero skin and eyes; only hero hair curves toggle.
+- Close-ups hide Track B's scalp strands (out of frame, and they multiply render time).
+- Game mode does not show B's game hair cards (the head reads bald). That is a visibility issue in the kept blend, not in the GLB.
+
+## Evidence (round 1)
 
 The final run is `data/build/lookdev/20261012T212117Z-fhv2-full5`, built on main `8fa40c6` (A's forms v2) plus this branch's own commits (it was rebased onto `ff03f62`, Track F, afterwards with no conflicts), with `direction.json`. Its renders are in `fh/`.
 
