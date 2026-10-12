@@ -5,6 +5,7 @@
 
 # Large downloaded source data (fetched by scripts, not committed)
 /data/raw/
+/data/vendor/
 
 # Pipeline build outputs (rebuildable; large ones ship as release artifacts)
 /data/build/
