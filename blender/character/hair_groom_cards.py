@@ -60,8 +60,8 @@ CARDS = {
                  "color": "#1d1915"},
     "proxy": {"voxel_m": 0.004, "radius_m": 0.008, "every": 4},
     # Cap texture from the groom's hairline (bake_cap_texture).
-    "cap": {"window_az_deg": -28.0, "strand_px": 0.9, "core_m": [0.012, 0.026], "seed": 9,
-            "near_skin_m": 0.003, "max_len_m": 0.03, "shade": 0.85},
+    "cap": {"window_az_deg": -28.0, "strand_px": 0.7, "core_m": [0.012, 0.026], "seed": 9,
+            "near_skin_m": 0.003, "max_len_m": 0.015, "shade": 0.85},
 }
 
 smoothstep = hair_clumps.smoothstep
@@ -552,11 +552,13 @@ def build(b, frame, ccfg, g):
         count(p["layer"], add_card(p, cell, p["layer"]))
     # Flyaways along the groom's flyaway strands.
     fc = cfg["flyaways"]
-    fidx = np.argsort(-fly)[:fc["count"]]
+    s0 = int(m * fc["start"])
+    # Not round the ear (a loose strip across the ear reads as a stray card).
+    ok = (fly > 0) & ((E[:, s0, 1] > frame.ears_max.y) | (E[:, s0, 2] > frame.ears_max.z + 0.02))
+    fidx = np.argsort(-(fly * ok))[:fc["count"]]
     for j in fidx:
-        if fly[j] <= 0:
+        if not ok[j]:
             continue
-        s0 = int(m * fc["start"])
         S = E[j:j + 1]
         p = {"C": E[j], "hang": H[j], "kind": "fly"}
         T, Nn, B, touch = frame_along(frame, E[j], cloth_gap, 0.02)
@@ -637,6 +639,10 @@ def silhouette(frame, obj, g):
         if min(l, r) > min(best[0], best[1]):
             best = (l, r, z)
     out["side_break_m"] = [round(float(best[0]), 4), round(float(best[1]), 4)]
+    zt = frame.ears_max.z + 0.01
+    he, ce = ext(H, zt), ext(Cv, zt)
+    if he and ce:
+        out["side_break_temple_m"] = [round(float(ce[0] - he[0]), 4), round(float(he[1] - ce[1]), 4)]
     out["side_break_z"] = round(float(best[2]), 3) if best[2] is not None else None
     return out
 

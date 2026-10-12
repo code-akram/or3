@@ -87,15 +87,15 @@ DEFAULTS = {
     # character's right. Each takes the `strands` nearest strands.
     "front_fall": [
         {"side": -1, "count": 3, "az0_deg": 30, "az_step_deg": 6.0, "el_deg": 24,
-         "comb_side": 0.2, "comb_fwd": 0.05, "comb_down": 0.9, "fall_after_m": 0.025,
+         "comb_side": 0.2, "comb_fwd": 0.2, "comb_down": 0.9, "fall_after_m": 0.025,
          "tip_above_lips_m": 0.03, "tip_jitter_m": 0.02, "hug": 0.15, "clear_m": 0.005,
          "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 180,
-         "factor": 0.85},
-        {"side": 1, "count": 1, "az0_deg": 18, "az_step_deg": 0.0, "el_deg": 30,
-         "comb_side": 0.7, "comb_fwd": 0.25, "comb_down": 0.6, "fall_after_m": 0.04,
-         "tip_above_lips_m": 0.08, "tip_jitter_m": 0.0, "hug": 0.1, "clear_m": 0.004,
-         "flare_after_m": 0.06, "flare": 0.08, "max_len_m": 0.13, "strands": 110,
-         "factor": 0.7}],
+         "factor": 0.6, "wave_m": 0.004},
+        {"side": 1, "count": 1, "az0_deg": 22, "az_step_deg": 0.0, "el_deg": 32,
+         "comb_side": 0.5, "comb_fwd": 0.35, "comb_down": 0.5, "fall_after_m": 0.05,
+         "tip_above_lips_m": 0.075, "tip_jitter_m": 0.0, "hug": 0.2, "clear_m": 0.004,
+         "flare_after_m": 0.06, "flare": 0.08, "max_len_m": 0.10, "strands": 80,
+         "factor": 0.55, "wave_m": 0.003}],
     "shader": {"model": "HUANG", "melanin": 0.95, "redness": 0.3,
                "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
                "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.03, "light_melanin": 0.85},
@@ -685,7 +685,9 @@ def build(b, frame, ccfg, gcfg_in):
     ph = np.array([uniq[int(p)][2] for p in prim]) + rng.normal(0, wv["jitter"], n)
     ramp = np.clip(H / 0.04, 0, 1) ** 2
     lat = (amp[:, None] * np.sin(2 * np.pi * H / per[:, None] + ph[:, None]) * ramp)
-    lat[kind == 2] = 0.0
+    for fi, ff in enumerate(ffs):
+        sel = ffid == fi
+        lat[sel] *= ff["cfg"].get("wave_m", 0.0) / max(amp[sel].mean(), 1e-6) if sel.any() else 0.0
     S += side_vectors(frame, S) * lat[..., None]
     pushed = push_out(frame, S, gcfg["gap_m"], ccfg.get("cloth_gap_m", 0.0))
 
