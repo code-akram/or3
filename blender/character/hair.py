@@ -7,7 +7,7 @@ comparison: {"hair": {"asset": "long01.mhclo", "clumps": null, "beard": null}}.
 Variants for the direction checkpoint: bench/m1/variants/hair-*.json.
 """
 
-from . import hair_beard, hair_clumps
+from . import brows, hair_beard, hair_clumps
 from .hair_frame import HeadFrame
 
 
@@ -34,3 +34,5 @@ def post(b):
         hair_clumps.build(b, frame, cfg["clumps"])
     if cfg.get("beard"):
         hair_beard.build(b, frame, cfg["beard"])
+    if cfg.get("brows"):
+        brows.build(b, frame, cfg["brows"])

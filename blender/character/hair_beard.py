@@ -1,18 +1,24 @@
-"""Short full beard: a textured shell over the jaw, chin and upper lip, plus
-hundreds of small alpha-card tufts over it (denser and longer at the chin)
-for depth and a broken silhouette.
+"""Short, dense-but-scruffy full beard as shell-textured hair (facial_hair.py).
 
-The beard edge is defined by landmarks (MPFB `lips` and `ears` groups, the
-chin) as lines in profile (y, z): a cheek line from the sideburn, dipping
+The beard region is defined by landmarks (MPFB `lips` and `ears` groups, the
+chin) as two lines in profile (y, z): a cheek line from the sideburn, dipping
 under the cheekbone, to just above the mouth corner, and a neckline from
-under the ear to about 2 cm above the Adam's apple. Each body vertex gets a
-signed distance to that region. The shell is every face inside the lines plus
-a margin band outside them; its boundary is relaxed along the skin. A
-generated strand texture (UV0 v = depth into the beard) is alpha-tested, so
-in the margin band the beard ends in ragged strands of different lengths
-instead of an outline. Thickness grows from the cheeks to the chin. The
-shell keeps the skin weights of the faces it covers, so it moves with the
-head and neck.
+under the ear to just under the chin. Each body vertex gets a signed depth
+into that region (plus a low-frequency wobble, so the lines are irregular).
+The base patch is every skin face deeper than -margin: the band outside the
+lines is where the density map fades the beard into stubble and bare skin.
+The vermilion (`lips` group) is left out of the patch; the moustache and the
+hair under the lower lip grow from its very edge and lean over it, so there
+is no bare ring around the mouth.
+
+Fields on the patch drive the shells: hair length (short on the cheeks and
+moustache, longer along the jaw, longest at the chin), density (one inside,
+fading through the band), stubble length factor in the band, and a comb
+direction (down the cheeks, down and forward at the chin, sideways from the
+philtrum on the moustache, back toward the throat under the jaw). The patch
+is decimated before the shells are stacked, so the N shells cost
+N x base_tris. The shells keep the skin weights of the faces they came from
+(head and neck_01), so the beard deforms with the face.
 """
 
 import math
@@ -21,8 +27,7 @@ import random
 from mathutils import Vector
 from mathutils.kdtree import KDTree
 
-from . import hair_mesh
-from .hair_frame import world_bvh
+from . import facial_hair, hair_mesh
 
 
 def _line_dist(p, pts, below):
@@ -60,14 +65,21 @@ def landmarks(frame, cfg):
     return cheek, neck, side[0]
 
 
-def inside_dist(p, w, groups, cheek, neck, back_y):
+def inside_dist(p, w, groups, cheek, neck, back_y, margins, moustache_top, nose):
+    """(signed depth into the beard, the margin band width at this point).
+    The lines are in profile, so in front of the mouth corners (the
+    philtrum, the nose) the beard is capped at the moustache's top edge, and
+    anything above the lips and in front of them (the nose) is out."""
     lips, ears, head, neck_g = groups
     if w.get(ears, 0) > 0.2 or w.get(head, 0) + w.get(neck_g, 0) < 0.5:
-        return -1.0
-    d = min(_line_dist(p, cheek, True), _line_dist(p, neck, False), back_y - p.y)
-    if w.get(lips, 0) > 0.05:
-        d = min(d, -0.002 - 0.01 * w[lips])
-    return d
+        return -1.0, margins[0]
+    if p.z > nose[1] and p.y < nose[0]:
+        return -1.0, margins[0]
+    ds = [(_line_dist(p, cheek, True), margins[0]), (_line_dist(p, neck, False), margins[1]),
+          (back_y - p.y, margins[2])]
+    if p.y < cheek[0][0]:
+        ds.append((moustache_top - p.z, margins[3]))
+    return min(ds)
 
 
 def smoothstep(e0, e1, x):
@@ -83,145 +95,110 @@ def build(b, frame, cfg):
     mw = body.matrix_world
     dist = {}
     # A low-frequency wobble on the distance, so the beard lines (and the
-    # feather band along them) are irregular rather than straight.
+    # stubble band along them) are irregular rather than straight.
     wob, ph = cfg["line_wobble_m"], [rng.uniform(0, 6.3) for _ in range(3)]
+    margins = (cfg["margin_m"], cfg["neck_margin_m"], cfg["back_margin_m"], cfg["moustache_margin_m"])
+    moustache_top = frame.lips_max.z + cfg["moustache_height_m"]
+    nose = (frame.lips_min.y - cfg["nose_clear_m"], frame.lips_max.z)
+    margin_of = {}
     for v in body.data.vertices:
         p = mw @ v.co
-        d = inside_dist(p, {e.group: e.weight for e in v.groups}, groups, cheek, neck, back_y)
+        d, m = inside_dist(p, {e.group: e.weight for e in v.groups}, groups, cheek, neck,
+                           back_y, margins, moustache_top, nose)
         if d > -1:
             d += wob * (math.sin(p.z * 160 + ph[0]) + math.sin(p.y * 110 + ph[1])
                         + math.sin((p.x + p.z) * 260 + ph[2])) / 3
         dist[v.index] = d
-    lips_i = body.vertex_groups["lips"].index
+        margin_of[v.index] = m
+    lips_i = groups[0]
     on_lips = set(v.index for v in body.data.vertices
                   if any(e.group == lips_i and e.weight > 0.02 for e in v.groups))
     kd = KDTree(len(on_lips))
     for i in on_lips:
         kd.insert(mw @ body.data.vertices[i].co, i)
     kd.balance()
-    # The lip line feathers like the beard lines, over a narrower band: depth
-    # is also capped by the (scaled) distance from the lips, so the moustache
-    # and the hair under the lower lip thin out toward the lip instead of
-    # ending at the cut-out.
-    lf = cfg["lip_feather"]
-    for v in body.data.vertices:
-        if v.index not in on_lips and dist[v.index] > -1:
-            lip_d = kd.find(mw @ v.co)[2]
-            dist[v.index] = min(dist[v.index], (lip_d - lf["gap_m"]) * lf["scale"])
-    # The shell reaches margin_m past the beard lines; that outer band is
-    # where the strand texture's sparse stubble feathers the edge.
-    margin = cfg["margin_m"]
-    keep = set(i for i, d in dist.items() if d > -margin and i not in on_lips)
+    fade = cfg["fade_m"]
+    keep = set(i for i, d in dist.items() if d > -margin_of[i] and i not in on_lips)
     obj, bm = hair_mesh.shell_from_body(b, body, keep, "Human.beard_export")
     idx = bm.verts.layers.int.get("src")
     depth = {v: dist[v[idx]] for v in bm.verts}
+    vmargin = {v: margin_of[v[idx]] for v in bm.verts}
     hair_mesh.smooth_boundary(bm, frame.skin_bvh, cfg["edge_smooth_iters"])
-    mouth_z = frame.lips_min.z
-    chin = Vector((frame.center.x, frame.chin_y, frame.chin_z))
-    th = cfg["thickness"]
-
-    # Volume: thin on the cheeks and moustache, fuller on the jaw, fullest at
-    # the chin; fading to nothing across the edge band.
-    def thickness(v):
-        below = smoothstep(mouth_z + 0.005, mouth_z - 0.025, v.co.z)
-        t = th["cheek_m"] + (th["jaw_m"] - th["cheek_m"]) * below
-        t += th["chin_extra_m"] * math.exp(-((v.co - chin).length / th["chin_radius_m"]) ** 2)
-        # (a floor, so the stubble band never z-fights the skin)
-        return max(t * smoothstep(-margin, th["fade_m"], depth[v]), th["floor_m"])
-
-    hair_mesh.offset_shell(bm, thickness, [1.0])
-    shell_tris = sum(len(f.verts) - 2 for f in bm.faces)
-    for f in bm.faces:
-        f.material_index = 0
-
-    uv = bm.loops.layers.uv.verify()
-    uv2 = bm.loops.layers.uv.new("strand")
-    # UV0 for the "edge" strand texture: u = arc length around the head's
-    # vertical axis (strands run up and down the face), v = depth into the
-    # beard from the shell's outer edge.
-    c = frame.center
-    u_span, v_span, r_ref = (cfg["uv"][k] for k in ("u_span_m", "v_span_m", "radius_m"))
-    for f in bm.faces:
-        for loop in f.loops:
-            p = loop.vert.co
-            u = math.atan2(p.x - c.x, -(p.y - c.y)) * r_ref / u_span
-            loop[uv].uv = (u, min(max((depth[loop.vert] + margin) / v_span, 0.0), 1.0))
-            loop[uv2].uv = (0.0, 0.0)
-    dl = bm.verts.layers.deform.verify()
     bm.normal_update()
-    # Tufts over the whole beard, inside the edge: short curved spikes that
-    # grow down and out of the shell, longer and denser at the chin, giving
-    # the beard depth and a broken silhouette. Their UVs run from the opaque
-    # part of the texture out into the ragged band, so their tips feather.
-    tc = cfg["tuft"]
-    # Keep tufts off the lips: none may root within lip_clear_m of a lip
-    # vertex, and above the mouth (moustache) they need more depth into the
-    # beard, so none root on the lip line and cross it.
-    def clear_of_lips(p):
-        hit = kd.find(p)
-        return hit[0] is None or hit[2] > tc["lip_clear_m"]
 
-    # Nor into the clothes: a tuft at the neckline must not cross or touch the
-    # shirt collar (unsigned tests: the collar is a thin open shell).
-    cloth = [o for o in frame.colliders if o is not body]
-    cloth_bvh = world_bvh(cloth)
-    clear = tc["cloth_clear_m"]
-
-    def clear_of_clothes(pts):
-        if any(cloth_bvh.find_nearest(p, clear)[0] is not None for p in pts):
-            return False
-        return not any(cloth_bvh.ray_cast(a, q - a, (q - a).length)[0] is not None
-                       for a, q in zip(pts, pts[1:]))
-
-    cand = [v for v in bm.verts if depth[v] > (tc["moustache_min_depth_m"]
-                                               if v.co.z > mouth_z - 0.004 else tc["min_depth_m"])
-            and clear_of_lips(v.co)
-            # none under the jaw and chin: they hung down in a fringe and made
-            # a short beard long; the shell's texture carries it there
-            and v.normal.z > -tc["under_jaw_nz"]]
-    cand.sort(key=lambda v: (round(v.co.x, 4), round(v.co.y, 4), round(v.co.z, 4)))
-    weights_c = [1.0 + tc["chin_weight"] * math.exp(-((v.co - chin).length / th["chin_radius_m"]) ** 2)
-                 for v in cand]
-    picks = rng.choices(cand, weights=weights_c, k=tc["count"]) if cand else []
-    tris = skipped = 0
+    mouth_z = frame.lips_min.z
+    corner_x = frame.lips_max.x
+    c = frame.center
+    chin = Vector((c.x, frame.chin_y, frame.chin_z))
+    ln, cb = cfg["length"], cfg["comb"]
+    density, short, length, comb = {}, {}, {}, {}
     down = Vector((0, 0, -1))
-    for v in picks:
-        n = v.normal.copy()
-        near_chin = math.exp(-((v.co - chin).length / th["chin_radius_m"]) ** 2)
-        # Growth: down along the skin, out of it a little, plus jitter; on the
-        # moustache, also away from the philtrum.
-        g = down - n * down.dot(n)
-        g = g.normalized() if g.length > 1e-3 else Vector((0, -0.4, -1)).normalized()
-        lift = tc["lift"]
-        if v.co.z > mouth_z:
-            g = (g + Vector((math.copysign(0.6, v.co.x - c.x), 0, 0))).normalized()
-            lift *= 0.5  # the moustache lies flat over the lip
-        direction = (g * 0.85 + n * lift + Vector(
-            (rng.gauss(0, 0.2), rng.gauss(0, 0.2), rng.gauss(0, 0.1)))).normalized()
-        length = tc["len_m"] * rng.uniform(0.6, 1.2) * (1 + tc["chin_len"] * near_chin)
-        # Root sunk into the shell, so a card never shows a straight root edge.
-        base = v.co - n * tc["sink_m"] + Vector((rng.gauss(0, 0.002), rng.gauss(0, 0.002),
-                                                 rng.gauss(0, 0.002)))
-        bend = (direction + down * 0.5).normalized()
-        path = [base, base + direction * (length * 0.5), base + direction * (length * 0.5) + bend * (length * 0.5)]
-        if not clear_of_clothes(path + [v.co]):
-            skipped += 1
-            continue
-        weights = {g_: w for g_, w in v[dl].items()}
-        hw = tc["halfwidth_m"] * rng.uniform(0.7, 1.3)
-        tris += hair_mesh.card(bm, uv, uv2, dl, weights, path, lambda k, n=n: n,
-                               lambda t, hw=hw: hw * (1 - 0.3 * t), (rng.random(), 0.0),
-                               curve=0.25, mat_index=1)
-    mats = [hair_mesh.material("beard", cfg["texture"]["color"], cfg["roughness"],
-                               hair_mesh.strand_image("beard_strands", cfg["texture"], "edge"),
-                               cfg["specular"]),
-            hair_mesh.material("beard_cards", cfg["texture_card"]["color"], cfg["roughness"],
-                               hair_mesh.strand_image("beard_cards", cfg["texture_card"], "card"),
-                               cfg["specular"], wrap=False)]
-    hair_mesh.finish(b, obj, bm, mats)
+    for v in bm.verts:
+        d, margin = depth[v], vmargin[v]
+        p = v.co
+        # Density: one inside the lines, fading through the band to nothing.
+        x = min(max((d + margin) / (margin + fade), 0.0), 1.0)
+        density[v] = x ** cfg["density_pow"]
+        short[v] = cfg["stubble_short"] + (1 - cfg["stubble_short"]) * smoothstep(0, 1, x)
+        lip_d = kd.find(p)[2]
+        near_chin = math.exp(-((p - chin).length / ln["chin_radius_m"]) ** 2)
+        below = smoothstep(mouth_z + 0.004, mouth_z - 0.02, p.z)
+        moustache = p.z > mouth_z - 0.004 and abs(p.x - c.x) < corner_x - c.x + 0.012
+        if moustache:
+            L = ln["moustache_m"]
+        else:
+            L = ln["cheek_m"] + (ln["jaw_m"] - ln["cheek_m"]) * below
+            L += ln["chin_extra_m"] * near_chin
+            if v.normal.z < -0.35:  # under the jaw and chin
+                L = min(L, ln["neck_m"] + ln["chin_extra_m"] * near_chin * 0.5)
+        if lip_d is not None and lip_d < ln["lip_near_m"]:
+            L *= ln["lip_scale"] + (1 - ln["lip_scale"]) * lip_d / ln["lip_near_m"]
+        length[v] = L
+        # Comb direction.
+        side = math.copysign(1.0, p.x - c.x)
+        if moustache:
+            phil = min(abs(p.x - c.x) / cb["philtrum_x_m"], 1.0)
+            g = Vector((side * phil * cb["moustache_side"], 0, 0)) + down * (cb["moustache_down"] + (1 - phil) * 0.8)
+            # the lower edge of the moustache turns down over the lip
+            if lip_d is not None and lip_d < 0.006:
+                g = g + down * 1.0
+        elif v.normal.z < -0.35:
+            g = down + Vector((0, cb["under_jaw_back"], 0))
+        elif p.z > mouth_z:
+            g = down + Vector((0, cb["cheek_back"], 0))  # cheeks: down and back
+        else:
+            fwd = near_chin * cb["chin_forward"]
+            g = down + Vector((0, -fwd, 0)) + Vector((side * 0.15 * (1 - near_chin), 0, 0))
+        comb[v] = facial_hair.tangent(v, g.normalized())
+    facial_hair.smooth_field(bm, comb, cb["smooth_iters"])
+    for v in bm.verts:
+        comb[v] = facial_hair.tangent(v, comb[v]) if comb[v].length > 1e-6 else Vector((0, 0, -1))
+    facial_hair.smooth_field(bm, length, 1)
+
+    fields = {"density": density, "short": short, "length_m": length, "comb": comb}
+    base_tris_before = sum(len(f.verts) - 2 for f in bm.faces)
+    bm, fields = facial_hair.decimate_patch(obj, bm, fields, cfg["base_tris"], frame.skin_bvh)
+    base_tris = sum(len(f.verts) - 2 for f in bm.faces)
+
+    # Cylindrical projection around the head's vertical axis into the tile:
+    # u = angle from the front, v = height over the patch.
+    zs = [v.co.z for v in bm.verts]
+    z0, z1 = min(zs) - 0.01, max(zs) + 0.015
+    pad = cfg["uv"]["pad"]
+    amax = math.radians(cfg["uv"]["max_angle_deg"])
+
+    def project(p):
+        a = math.atan2(p.x - c.x, -(p.y - c.y))
+        u = 0.5 + (a / amax) * (0.5 - pad)
+        w = pad + (p.z - z0) / (z1 - z0) * (1 - 2 * pad)
+        return (min(max(u, 0.0), 1.0), min(max(w, 0.0), 1.0))
+
+    sh = cfg["shells"]
+    nprng = __import__("numpy").random.default_rng(cfg["seed"])
+    stats = facial_hair.build_shells(b, obj, bm, fields, sh, "beard", project, sh["tile"], nprng)
     b.cutouts.append("beard_export")
     r = lambda pts: [[round(x, 4) for x in pt] for pt in pts]
-    b.notes["beard"] = {"shell_tris": shell_tris, "tuft_tris": tris,
-                        "tufts_skipped_clothes": skipped,
-                        "cheek_line_yz": r(cheek), "neckline_yz": r(neck)}
+    stats.update({"base_tris": base_tris, "base_tris_before_decimate": base_tris_before,
+                  "cheek_line_yz": r(cheek), "neckline_yz": r(neck)})
+    b.notes["beard"] = stats
     return obj
