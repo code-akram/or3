@@ -477,7 +477,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 |---|---|---|
 | `m0` | **Phase 0 spikes** | All spikes in [§18](#18-phase-0--spikes) run with recorded numbers |
 | `m1` | **Character look** | Turntable set (front/¾/profile/close-up) approved by the user. Budgets in §7 met. Licence audit clean. |
-| `m2` | **Character in browser gym** | Motion-matched locomotion (idle → sprint, starts, stops, pivots, turn-in-place, stairs, slopes). Foot slide during contact < *(cal.)* cm/s. **p95 frame ≤ 16.6 ms and median ≤ 12 ms on the M4 Air after 20 min warm-up.** Tab memory ≤ 1.5 GB. Keyboard-only playable. |
+| `m2` | **Character in browser gym** | Motion-matched locomotion (idle → sprint, starts, stops, pivots, turn-in-place, stairs, slopes). Foot slide during contact < *(cal.)* cm/s. **≤ 1 % missed vsync (rAF interval > 1.5 × refresh) and work median ≤ 12 ms (max of CPU p50 and GPU p50) on the M4 Air, measured for ≥ 20 min after a 5 min warm-up; the late slice (t ≥ 20 min) must pass too.** Tab memory ≤ 1.5 GB. Keyboard-only playable. |
 | `m3` | **Wick identity** | Wick walk, draw/holster, C.A.R.-style stance + aim, reloads, hop and hood slide, shooting-range targets. Secondary motion (tie, hem, hair) stable in all clips. |
 | `m4` | **One Kabukicho block** | Painted Neon-Noir at night in rain, matching the Blender look-dev target. `m2` performance criteria still hold. |
 | `m5` | **Starting district** | ~1.5 km² streamed, day/night with real ephemeris, weather tape replay. Performance and memory criteria hold while traversing. |
@@ -521,11 +521,11 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
    - Our CC BY 4.0 asset licence allows commercial reuse downstream, which conflicts with that.
    - Options were: email smpl@max-planck-innovation.de, or ship GVHMR-derived motion under a non-commercial licence as a documented exception. The user chose the exception.
 7. ~~Public Domain Mark items~~ **Resolved 2026-10-12: accepted with a note** (each record needs a `licence_note`; credit the recordist anyway). `licences.json` keeps them under "note".
-8. **m2 frame-time definition** (proposed in spike 4; **used provisionally** until the user decides):
+8. ~~m2 frame-time definition~~ **Resolved 2026-10-12**: missed vsync ≤ 1 % replaces rAF p95 (see §15). History:
    - "p95 ≤ 16.6 ms" applies to the rAF interval.
    - "median ≤ 12 ms" applies to max(CPU frame p50, GPU pass p50).
    - Measure after 5 min warm-up, for at least 20 min.
-   - **Air finding (2026-10-12):** rAF p95 was 17.9 ms at **0.00 % missed vsync**. Timestamps jitter by about ±1 ms around vsync, so "rAF p95 ≤ 16.6 ms" can't be met even by a perfect run. **Proposed: replace it with "missed vsync ≤ 1 %"** (rAF interval > 1.5 × refresh). Pending the user's decision.
+   - **Air finding (2026-10-12):** rAF p95 was 17.9 ms at **0.00 % missed vsync**. Timestamps jitter by about ±1 ms around vsync, so "rAF p95 ≤ 16.6 ms" can't be met even by a perfect run. **Proposed: replace it with "missed vsync ≤ 1 %"** (rAF interval > 1.5 × refresh). Accepted by the user 2026-10-12.
 
 ## 18. Phase 0 — spikes
 
@@ -649,6 +649,8 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - **SMPL-derived motion**: ships under a non-commercial exception (CC BY-NC 4.0), §14 rule 9.
 - **m2 frame-time definition**: used provisionally; user to review.
 - SMPL password rotation: done by the user.
+- **m2 frame-time criterion** (user, 2026-10-12): ≤ 1 % missed vsync plus work median ≤ 12 ms, measured ≥ 20 min after 5 min warm-up, late slice included (§15).
+- **m1 started** (2026-10-12).
 - **M4 Air session (spike 4) passed**: 60 fps locked for 41 min, 0.00 % missed vsync, work p50 3.1 ms (GPU) against the 12 ms budget, no throttling, page memory 33 MiB. **`m0` tagged.** Details in spike-4.
 - **Audio playback target**: the Air's built-in speakers, not headphones. The listening gate runs on speakers. Spatialisation defaults to a stereo speaker mode, with HRTF as a headphone option (§12).
 
