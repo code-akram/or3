@@ -3,17 +3,19 @@
 edit_base runs on the base mesh before any proxy is fitted, so fitted assets
 follow the edited head: first the MPFB face targets (head.targets), then the
 parametric controls and planarisation pass (head.edits, head.planes; see
-head_shape.py and bench/m1/look-spec.md §2.3). add_parts fits the face parts
-and then measures the spec landmarks on the still-nude human
+head_shape.py and bench/m1/look-spec.md §2.3), then the soft-tissue forms,
+lid heights and seeded asymmetry (head.forms; head_forms.py). add_parts fits
+the face parts and then measures the spec landmarks on the still-nude human
 (head_measure.py). post runs on the staged export meshes.
 """
 
-from . import body, head_measure, head_refine, head_shape
+from . import body, head_forms, head_measure, head_refine, head_shape
 
 
 def edit_base(b):
     body.load_targets(b, b.cfg["head"].get("targets"))
     head_shape.apply(b)
+    head_forms.apply(b)
 
 
 def add_parts(b):
