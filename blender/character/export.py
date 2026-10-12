@@ -62,11 +62,29 @@ def fix_alpha(b):
     b.notes["alpha_modes"] = modes
 
 
+HERO_ONLY = "hero_only"
+
+
+def hero_collection():
+    """Collection for render-only hero geometry (e.g. strand grooms for the
+    Cycles hero renders). It is saved in the .blend but never exported."""
+    col = bpy.data.collections.get(HERO_ONLY)
+    if col is None:
+        col = bpy.data.collections.new(HERO_ONLY)
+        bpy.context.scene.collection.children.link(col)
+    return col
+
+
+def _hero_only(o):
+    return any(c.name == HERO_ONLY for c in o.users_collection)
+
+
 def write_glb(b, out):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     bpy.ops.object.select_all(action="DESELECT")
     for o in b.export_objs:
-        o.select_set(True)
+        if not _hero_only(o):
+            o.select_set(True)
     bpy.context.view_layer.objects.active = b.export_root
     bpy.ops.export_scene.gltf(
         filepath=out, export_format="GLB", use_selection=True,

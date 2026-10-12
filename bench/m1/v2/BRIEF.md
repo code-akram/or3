@@ -32,7 +32,7 @@ Baseline to beat: `data/build/m1-signoff/{closeup,three_quarter,front,profile}.p
 - Build: `bench/m1/lookdev.sh [--config X.json] <label>`; runs land in the main checkout `data/build/lookdev/<UTC>-<label>/` (worktrees share it). `KEEP_BLEND=1` keeps `character.blend`. Read `bench/m1/README.md` first.
 - The chosen direction config is `bench/m1/variants/direction.json` (face C + collar hair). Use it as your base.
 - Machine: 16 cores, 62 GB RAM, AMD Raphael iGPU (EEVEE runs headless on it), **no discrete GPU**. Up to six agents share it: use `THREADS=4` for Cycles during development; EEVEE for the inner loop; full 16-thread Cycles only for your final evidence renders.
-- **Render-only hero geometry** (e.g. strand hair for the Cycles hero renders) lives in a collection named `hero_only`. `export.py` must skip it, so the GLB stays game-ready; the kept `.blend` carries it for the hero stage. The game-ready version (cards / shells baked from the same groom) must stay in the GLB.
+- **Render-only hero geometry** (e.g. strand hair for the Cycles hero renders) lives in a collection named `hero_only`. Create it with `export.hero_collection()`; `export.write_glb` skips anything in it, so the GLB stays game-ready; the kept `.blend` carries it for the hero stage. The game-ready version (cards / shells baked from the same groom) must stay in the GLB.
 - Budgets: hero LOD0 ≤ 150k tris (hair + beard ≤ ~35k), ≤ 4 weights per vertex, 0 glTF validator errors, ≤ 90 bones.
 
 ## Report (final message)
