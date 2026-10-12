@@ -58,11 +58,12 @@ mkdir -p "$RUN"
 T0=$(date +%s.%N)
 echo "== lookdev $LABEL mode=$MODE threads=$THREADS prev=${P:+$(basename "$P")} loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 
-blender -b -t "$THREADS" --factory-startup --python "$REPO/blender/build_character.py" -- \
+blender -b -t "$THREADS" --factory-startup --python-exit-code 1 --python "$REPO/blender/build_character.py" -- \
   --system-assets "$DATA/raw/makehuman/makehuman_system_assets/unpacked" \
   --suit-assets "$DATA/raw/makehuman/suits01/unpacked" \
   --out "$RUN/character.glb" "${CONFIG[@]}" > "$RUN/build.log" 2>&1 \
   || { echo "build failed: $RUN/build.log" >&2; tail -20 "$RUN/build.log" >&2; exit 1; }
+[[ -s "$RUN/character.glb" ]] || { echo "build wrote no character.glb: $RUN/build.log" >&2; tail -20 "$RUN/build.log" >&2; exit 1; }
 [[ "${KEEP_BLEND:-0}" == 1 ]] || rm -f "$RUN/character.blend"
 
 # glTF validation + per-mesh weights (Khronos validator; needs the glb-stats npm deps).
@@ -72,10 +73,11 @@ GS="$REPO/bench/m0/glb-stats"
 node "$GS/glb_stats.mjs" "$RUN/character.glb" --json "$RUN/glbstats.json" > /dev/null \
   || echo "warning: glTF validator reported errors (see $RUN/glbstats.json)" >&2
 
-blender -b -t "$THREADS" --factory-startup --python "$REPO/blender/lookdev_render.py" -- \
+blender -b -t "$THREADS" --factory-startup --python-exit-code 1 --python "$REPO/blender/lookdev_render.py" -- \
   --glb "$RUN/character.glb" --out-dir "$RUN" --mode "$MODE" "${PREV_ARG[@]}" "${TARGET[@]}" \
   > "$RUN/render.log" 2>&1 \
   || { echo "render failed: $RUN/render.log" >&2; tail -20 "$RUN/render.log" >&2; exit 1; }
+[[ -s "$RUN/render_metrics.json" ]] || { echo "render wrote no metrics: $RUN/render.log" >&2; tail -20 "$RUN/render.log" >&2; exit 1; }
 
 T1=$(date +%s.%N)
 "${REPORT[@]}" finalize "$RUN" --label "$LABEL" --process-s "$(python3 -I -c "print(round($T1-$T0,2))")"
