@@ -128,10 +128,22 @@ def camera(ch, name, spec):
     return {"obj": cam, "subject": ch.aim("eyes"), "aim": aim}
 
 
-def set_mode(mode):
+FACIAL_HERO = ("beard_hero", "brows_hero", "lashes_hero")
+WIDE_VIEWS = ("bust", "front", "profile")
+
+
+def set_mode(mode, view):
+    # only the hero hair strands (curves) toggle; other hero_only parts (the
+    # hero skin and eyes) stay on in both modes, so the comparison is the hair.
+    # The scalp strands (Track B) are left out of the close-ups: out of frame,
+    # and they multiply the render time.
     hero = bpy.data.collections.get("hero_only")
     if hero is not None:
-        hero.hide_render = mode != "hero"
+        hero.hide_render = False
+        for o in hero.all_objects:
+            if o is not None and o.type == "CURVES":
+                facial = o.name.startswith(FACIAL_HERO)
+                o.hide_render = mode != "hero" or (not facial and view not in WIDE_VIEWS)
     for o in bpy.data.objects:
         if o.type == "MESH" and any(p in o.name for p in GAME_PARTS):
             o.hide_render = mode == "hero"
@@ -157,10 +169,10 @@ def main():
     modes = ["hero", "game"] if A.mode == "both" else [A.mode]
     lights = ["hero", "turntable"] if A.light == "both" else [A.light]
     for mode in modes:
-        set_mode(mode)
         for light in lights:
             files = []
             for v in names:
+                set_mode(mode, v)
                 for c in ("hero_rig", "tt_rig", "tt_cyc", "hero_ground", "hero_cams"):
                     rig.collection(c)
                 cam = camera(ch, v, vs[v])
