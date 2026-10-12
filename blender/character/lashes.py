@@ -241,6 +241,9 @@ def build(b, frame, cfg):
             dirj = (d0 * np.cos(th)[:, None] + bend_ax * np.sin(th)[:, None])
             dirj = dirj * np.cos(yaw)[:, None] + side_ax * np.sin(yaw)[:, None] * side
             pts[:, j] = pts[:, j - 1] + dirj * (L / (k - 1))[:, None]
+        # kept out of the skin (a hooded upper lid would otherwise swallow the
+        # upturned tips) before the strip is built along them
+        beard_groom.collide(pts, frame.skin_bvh, np.concatenate([[0.0], np.full(k - 1, cfg["gap_m"])]))
         rad = np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], n)[:, None]
         mel = np.clip(cfg["melanin"] + rng.normal(0, 0.01, n), 0, 1)
         red = np.full(n, cfg["redness"])
@@ -262,6 +265,17 @@ def build(b, frame, cfg):
             # the root row on the lid margin itself
             ri0 = int(np.clip(round(cuv * 63), 0, 63))
             grid[0, ci] = line[ri0]
+            # A ribbon along lashes that leave the lid forward is seen edge-on
+            # from the front; card lashes are tilted toward the viewer (the
+            # forward run is shortened), the standard cheat.
+            for ri in range(1, rows):
+                off = grid[ri, ci] - grid[0, ci]
+                off[1] *= lc.get("strip_forward_scale", 1.0)
+                q = Vector(grid[0, ci] + off)
+                loc, nrm, _, _ = frame.skin_bvh.find_nearest(q)
+                if loc is not None and (q - loc).dot(nrm) < cfg["strip_gap_m"]:
+                    q = loc + nrm * cfg["strip_gap_m"]
+                grid[ri, ci] = q[:]
         vs = [[None] * cols for _ in range(rows)]
         for ri in range(rows):
             for ci in range(cols):
@@ -300,11 +314,8 @@ def build(b, frame, cfg):
         ly = np.full(200, y0 + pad + 1.0)
         canvas.lines(np.stack([lx[:-1], ly[:-1]], 1), np.stack([lx[1:], ly[1:]], 1),
                      np.full(199, cfg["lash_line_px"]), np.tile(col * 0.5, (199, 1)))
-    # hero curves: all lashes in one object, kept out of the skin (a hooded
-    # upper lid would otherwise swallow the upturned tips), clumped
+    # hero curves: all lashes in one object (collided above), clumped
     P = np.concatenate(all_pts)
-    k = cfg["points"]
-    beard_groom.collide(P, frame.skin_bvh, np.concatenate([[0.0], np.full(k - 1, cfg["gap_m"])]))
     o = beard_groom.make_curves("lashes_hero", P, np.concatenate(all_rad),
                                 {"melanin": np.concatenate(all_mel), "redness": np.concatenate(all_red),
                                  "clump": np.full(len(P), cfg["clump"]), "frizz": np.zeros(len(P))}, mat)
