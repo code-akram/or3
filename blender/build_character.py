@@ -27,8 +27,8 @@ import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from character import (body, budgets, config, export, hair, head,  # noqa: E402
-                       rig, stats, suit)
+from character import (beard_groom, body, budgets, config, export, hair,  # noqa: E402
+                       head, rig, stats, suit)
 from character.context import Build, Mpfb  # noqa: E402
 
 
@@ -90,6 +90,7 @@ def main():
     b.step("suit_post", suit.post)
     b.step("hair_post", hair.post)  # after the suit, so hair collides with the final collar
     b.step("head_refine", head.refine)  # dense face/hands, skin and eye textures (hair/beard sampled the low-res body)
+    b.step("facial_hair_refit", beard_groom.refit)  # beard/brows/lashes follow the refined skin
     b.step("rig_post", rig.post)
     b.step("budgets", budgets.apply)
     b.step("fix_alpha", export.fix_alpha)
