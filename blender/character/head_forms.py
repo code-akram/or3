@@ -12,7 +12,10 @@ What it adds (all in head.forms; mm amplitudes; null or 0 disables a term):
            tear trough, lower-lid bag, nasolabial fold (deep at the alar,
            fading to the mouth corner, with the cheek mass overhanging it),
            marionette crease, mentalis pad and labiomental fold, a temporal
-           hollow and a soft zygomatic arch.
+           hollow and a soft zygomatic arch; a rounded brow shelf (the
+           supraorbital roll brought forward) over a slight upper-orbit
+           hollow, so a high key leaves the eye band in shadow (look-spec
+           §0, the heavy brow) without v1's hard planar shelf.
   lids     upper and lower lids rotated about the eyeball centre (the eye-
            helper sphere), so the lid margin slides on the eye instead of
            cutting into it; the lash helpers follow. Signed mm at the margin:
@@ -44,6 +47,7 @@ DEFAULTS = {
         "nasolabial_mm": 1.5, "nasolabial_end_mm": 0.3, "nasolabial_overhang_mm": 0.8,
         "marionette_mm": 0.5, "mentalis_mm": 0.8, "labiomental_mm": 0.8,
         "temple_hollow_mm": 0.0, "zygomatic_arch_mm": 0.0,
+        "brow_shelf_mm": 0.0, "orbit_hollow_mm": 0.0,
     },
     "lids": {"upper_l_mm": 0.0, "upper_r_mm": 0.0, "lower_l_mm": 0.0, "lower_r_mm": 0.0},
     "asym": {
@@ -147,6 +151,12 @@ def tissue(fr, t):
     # temporal hollow and a soft zygomatic arch (mostly under the hair)
     out -= t["temple_hollow_mm"] * MM * gauss(u - 0.060, 0.008) * gauss(h - 0.015, 0.014) * gauss(f + 0.02, 0.02)
     out += t["zygomatic_arch_mm"] * MM * gauss(h + 0.012, 0.004) * smoothstep(0.050, 0.058, u) * gauss(f + 0.03, 0.02)
+    # brow shelf: the supraorbital roll forward, a soft band fading at the
+    # glabella and past the lateral orbital rim
+    lat = smoothstep(0.004, 0.013, u) * (1 - smoothstep(0.044, 0.056, u))
+    out += t.get("brow_shelf_mm", 0.0) * MM * gauss(h - 0.017, 0.0055) * lat * front
+    # upper-orbit hollow: the sulcus between the lid fold and the shelf
+    out -= t.get("orbit_hollow_mm", 0.0) * MM * gauss(u - 0.027, 0.010) * gauss(h - 0.0085, 0.0035) * front
     return out
 
 

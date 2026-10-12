@@ -1,5 +1,5 @@
 {
- "$comment": "Face variant C, long and weathered, as frozen for m1 v2 (track A, bench/m1/v2/head.md): about 45 (age macro 0.66), long narrow oval head, strong nose with a slight hump deviated to the right at the bridge, deep hooded sockets, moderate cheek hollows under a malar pad, nasolabial folds, a narrow firm mouth with corners down, seeded asymmetry (head.forms), planes as hints (blends 0.35-0.6). look-spec §6, direction.md §2-3; parameters only (§2.4).",
+ "$comment": "Face variant C, long and weathered, as frozen for m1 v2 (track A, bench/m1/v2/head.md): about 45 (age macro 0.66), long narrow oval head, strong nose with a slight hump deviated to the right at the bridge, deep hooded sockets under a soft, heavy brow shelf (forms v2: +1.5 mm brow roll, 0.8 mm upper-orbit hollow), moderate cheek hollows under a malar pad, nasolabial folds, a narrow firm mouth with corners down, seeded asymmetry (head.forms), planes as hints (blends 0.35-0.6). look-spec §6, direction.md §2-3; parameters only (§2.4).",
  "body": {
   "macros": {
    "age": 0.66
@@ -69,7 +69,9 @@
     "nasolabial_overhang_mm": 0.8,
     "marionette_mm": 0.5,
     "mentalis_mm": 0.8,
-    "labiomental_mm": 0.8
+    "labiomental_mm": 0.8,
+    "brow_shelf_mm": 1.5,
+    "orbit_hollow_mm": 0.8
    },
    "lids": {
     "upper_l_mm": 0.5,
