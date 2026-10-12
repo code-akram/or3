@@ -285,12 +285,18 @@ def finish(b, obj, bm, mats):
         mats = [mats]
         for f in bm.faces:
             f.material_index = 0
+    idx = [f.material_index for f in bm.faces]
     bm.to_mesh(obj.data)
     bm.free()
     me = obj.data
+    # materials.clear() resets every polygon's material_index to 0 (the hair
+    # shipped with all faces on slot 0, the cap's feather texture, until this
+    # was restored), so the bmesh indices are written back afterwards.
     me.materials.clear()
     for m in mats:
         me.materials.append(m)
+    me.polygons.foreach_set("material_index", idx)
+    me.update()
     for p in me.polygons:
         p.use_smooth = True
     arm = b.armature()
