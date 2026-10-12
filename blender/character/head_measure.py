@@ -29,6 +29,11 @@ TARGETS = {
     "lower_face_index": (0.88, 0.04),
 }
 BROW_OVERHANG_MIN = 0.012  # metres, look-spec §1.2 (cal.)
+# Nose caricature guard (face C, bench/m1/head.md §8): dorsal hump <= 2.5 mm
+# over the nasion-pronasale chord; projection/length 0.60 +- 0.10 (the
+# stock MPFB head is 0.63; a hooked, drooping nose reads > 0.75).
+NOSE_HUMP_MAX = 2.5
+NOSE_PROJ_RATIO = (0.60, 0.10)
 
 
 def _rest_coords(obj):
@@ -137,6 +142,30 @@ def measure(arm, body, eyes):
         m["eye_menton"] = ez - chin.z
         m["lower_face_index"] = m["eye_menton"] / m["bizygomatic"]
 
+        # Nose profile (face-C caricature guard, bench/m1/head.md §8): nasion =
+        # most recessed midline point from eye level to 25 mm above it;
+        # pronasale = most forward midline point 10-60 mm below eye level;
+        # hump = largest forward deviation of the dorsum from the nasion-
+        # pronasale chord (y-z plane); projection and length from the same two.
+        nas_c = [p for p in mid if ez - 0.005 < p.z < ez + 0.025]
+        prn_c = [p for p in mid if ez - 0.060 < p.z < ez - 0.010]
+        if nas_c and prn_c:
+            nas = max(nas_c, key=lambda p: p.y)
+            prn = min(prn_c, key=lambda p: p.y)
+            chord = Vector((prn.y - nas.y, prn.z - nas.z))
+            n2 = Vector((-chord.y, chord.x)).normalized()      # in-plane normal
+            if n2.x > 0:                                       # pointing forward (-y) means n2.x < 0
+                n2 = -n2
+            hump = 0.0
+            for p in mid:
+                if prn.z < p.z < nas.z:
+                    d = Vector((p.y - nas.y, p.z - nas.z)).dot(n2)
+                    hump = max(hump, d)
+            m["nose_hump_mm"] = hump * 1000
+            m["nose_projection_mm"] = (nas.y - prn.y) * 1000
+            m["nose_length_mm"] = (nas.z - prn.z) * 1000
+            m["nose_proj_ratio"] = m["nose_projection_mm"] / max(m["nose_length_mm"], 1e-6)
+
         # Brow overhang (look-spec §1.2): on the mid-pupil vertical, the most
         # forward brow point minus the cornea front, along -Y. Mean of both sides.
         over = []
@@ -164,6 +193,12 @@ def checks(m):
     if "brow_overhang" in m:
         out["brow_overhang"] = {"value": m["brow_overhang"], "target": BROW_OVERHANG_MIN,
                                 "tol": None, "ok": m["brow_overhang"] >= BROW_OVERHANG_MIN}
+    if "nose_hump_mm" in m:   # caricature guard: rugged, not hooked
+        out["nose_hump_mm"] = {"value": m["nose_hump_mm"], "target": NOSE_HUMP_MAX,
+                               "tol": None, "ok": m["nose_hump_mm"] <= NOSE_HUMP_MAX}
+        out["nose_proj_ratio"] = {"value": m["nose_proj_ratio"], "target": NOSE_PROJ_RATIO[0],
+                                  "tol": NOSE_PROJ_RATIO[1],
+                                  "ok": abs(m["nose_proj_ratio"] - NOSE_PROJ_RATIO[0]) <= NOSE_PROJ_RATIO[1]}
     return out
 
 

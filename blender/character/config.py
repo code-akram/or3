@@ -41,6 +41,20 @@ DEFAULTS = {
         "edits": {},
         # Planarisation blend 0..1 per plane group (head_shape.PLANES).
         "planes": {},
+        # Post-staging refinement (head_refine.py, skin_tex.py, eyes_hq.py):
+        # dense face + hands, re-fitted planes, sculpt forms, re-packed UVs,
+        # generated 4k skin. null disables the whole stage.
+        "refine": {
+            "subdiv": {"face": 1, "hands": 1, "smooth": 0.6},
+            "replanarise": 1.0, "plane_sharp": 3.0,
+            "sculpt": {"knuckle_mm": 1.1, "tendon_mm": 0.5, "nail_mm": 0.35, "lid_margin_mm": 0.4},
+            "uv": True, "uv_px": {"head_px": 4096, "hands_px": 2048},
+            "skin": {"bake_px": 4096, "ao_samples": 16, "ao_down": 2, "margin_px": 16, "sss": 0.0,
+                     "save_maps": True, "base": "#c4a996",
+                     "head": {}, "hands": {}},
+            # Generated eyeballs + iris texture (eyes_hq.py); null keeps the MPFB eyes.
+            "eyes": {},
+        },
     },
     "hair": {
         # MPFB card hair (spike-1 placeholder); null = generated hair only.

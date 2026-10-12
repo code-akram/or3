@@ -114,12 +114,15 @@ def _group_weights(obj, name):
 
 
 class Frame:
-    """Face frame from the eye helpers; local coords for every vertex."""
+    """Face frame from the two eye centres; local coords for every point.
 
-    def __init__(self, obj, co):
-        le = _group_weights(obj, "helper-l-eye") > 0
-        re = _group_weights(obj, "helper-r-eye") > 0
-        cl, cr = co[le].mean(0), co[re].mean(0)
+    Frame(co, cl, cr): co (n, 3) points, cl / cr the left / right eye centres
+    (same space). Frame.from_helpers(obj, co) reads the centres from the MPFB
+    eye-helper groups on the live base mesh; after staging (helpers gone) use
+    the fitted eye mesh centroids instead (head_refine)."""
+
+    def __init__(self, co, cl, cr):
+        cl, cr = np.asarray(cl, dtype=np.float64), np.asarray(cr, dtype=np.float64)
         self.origin = (cl + cr) * 0.5
         self.ipd = float(np.linalg.norm(cl - cr))
         self.s = self.ipd / REF_IPD
@@ -130,12 +133,19 @@ class Frame:
         self.f = -d[:, 1] / self.s
         self.x = d[:, 0] / self.s
 
-    def mask(self, centre, radii, flat=False):
+    @classmethod
+    def from_helpers(cls, obj, co):
+        le = _group_weights(obj, "helper-l-eye") > 0
+        re = _group_weights(obj, "helper-r-eye") > 0
+        return cls(co, co[le].mean(0), co[re].mean(0))
+
+    def mask(self, centre, radii, flat=False, sharp=2.0):
         """Anisotropic Gaussian; flat=True gives a plateau with a quick edge
-        (exp(-r^4/2)), so a plane group moves as one facet."""
+        (exp(-q^sharp/2), q the squared normalised radius; sharp 2 = exp(-r^4/2)),
+        so a plane group moves as one facet. Higher sharp = crisper edge."""
         (cu, ch, cf), (ru, rh, rf) = centre, radii
         q = ((self.u - cu) / ru) ** 2 + ((self.h - ch) / rh) ** 2 + ((self.f - cf) / rf) ** 2
-        return np.exp(-0.5 * q * q) if flat else np.exp(-0.5 * q)
+        return np.exp(-0.5 * q ** sharp) if flat else np.exp(-0.5 * q)
 
     def region(self, name):
         return self.mask(*REGIONS[name])
@@ -184,15 +194,16 @@ def displacement(fr, ctl, lips_w):
     return d * fr.s
 
 
-def planarise(fr, co, blends, exclude):
+def planarise(fr, co, blends, exclude, sharp=2.0):
     """Pull each plane group toward its weighted least-squares plane.
-    blends: {group: 0..1}. exclude: bool mask of vertices never moved."""
+    blends: {group: 0..1}. exclude: bool mask of vertices never moved.
+    sharp: plateau edge sharpness of the group masks (Frame.mask)."""
     out = co.copy()
     for name, blend in blends.items():
         if not blend:
             continue
         centre, radii, midline = PLANES[name]
-        w = fr.mask(centre, radii, flat=True)
+        w = fr.mask(centre, radii, flat=True, sharp=sharp)
         w[exclude] = 0.0
         sides = (1.0,) if midline else (1.0, -1.0)
         for side in sides:
@@ -233,7 +244,7 @@ def apply(b):
 
     obj = b.basemesh
     co = _mix_coords(obj)
-    fr = Frame(obj, co)
+    fr = Frame.from_helpers(obj, co)
     disp = displacement(fr, ctl, _group_weights(obj, "lips"))
     edited = co + disp
     # Never planarise helpers (proxies fit to them) or the eyelids.

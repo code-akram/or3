@@ -8,7 +8,7 @@ and then measures the spec landmarks on the still-nude human
 (head_measure.py). post runs on the staged export meshes.
 """
 
-from . import body, head_measure, head_shape
+from . import body, head_measure, head_refine, head_shape
 
 
 def edit_base(b):
@@ -25,3 +25,16 @@ def add_parts(b):
 
 def post(b):
     pass
+
+
+def refine(b):
+    """After suit_post (covered body polygons gone) and hair_post (hair and
+    beard sampled the low-res surface): subdivide the face and hands,
+    re-planarise, sculpt, re-pack UVs, then generate the skin and eyes
+    (head_refine, skin_tex, eyes_hq)."""
+    notes = head_refine.refine(b)
+    if notes is None:
+        return
+    from . import eyes_hq, skin_tex
+    skin_tex.build(b)
+    eyes_hq.build(b)
