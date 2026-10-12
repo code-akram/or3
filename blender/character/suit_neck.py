@@ -698,6 +698,32 @@ def build_jacket_collar(jk, nf, J, tag):
             if r_hit is not None and r < r_hit + J["rest_m"]:
                 cols[i][j] = nf.point(a, z, r_hit + J["rest_m"])
                 pushed += 1
+    # the front ends' fall: the rest and the push move single points (teeth
+    # along the notch and the outer edge); relax them over their neighbours,
+    # then put them back outside the layers beneath
+    for _ in range(J.get("end_relax", 0)):
+        ends_i = [i for i in range(1, N) if min(i, N - i) <= i_e + 1]
+        new = {}
+        for i in ends_i:
+            for j in range(5, 4 + NF + 1):
+                nb = [cols[i - 1][j], cols[i + 1][j]]
+                if j < 4 + NF:
+                    nb += [cols[i][j - 1], cols[i][j + 1]]
+                new[(i, j)] = cols[i][j] * 0.5 + sum(nb, Vector()) * (0.5 / len(nb))
+        for (i, j), p in new.items():
+            a, z, r = nf.polar(p)
+            d = Vector((math.cos(a), math.sin(a), 0.0))
+            o = nf.point(a, z, 0.01)
+            r_hit, travelled = None, 0.0
+            while travelled < r + 0.012:
+                h = under.ray_cast(o + d * travelled, d, r + 0.012 - travelled)
+                if h[0] is None:
+                    break
+                travelled = (h[0] - o).length + 1e-4
+                r_hit = nf.polar(h[0])[2]
+            if r_hit is not None and r < r_hit + J["rest_m"]:
+                p = nf.point(a, z, r_hit + J["rest_m"])
+            cols[i][j] = p
     rows = [[cols[i][j] for i in range(N + 1)] for j in range(5 + NF)]
     if DEBUG:
         for i in (0, 2, 4, 6, 9, 12):

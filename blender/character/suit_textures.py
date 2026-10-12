@@ -543,11 +543,14 @@ def apply(o, parts, mats, marks, folds=None):
     {object name: suit_drape.Fold}. Groups: wool_a (jacket), wool_b
     (waistcoat + trousers), shirt, silk (tie)."""
     T = o["textures"]
+    vest = mats.get("vest")
     groups = [("wool_a", [parts["jacket"]], T["wool_px"], "wool", mats["wool"]),
-              ("wool_b", [parts["waistcoat"], parts["trousers"]], T["wool_px"], "wool", None),
+              ("wool_b", [parts["trousers"]] + ([] if vest else [parts["waistcoat"]]), T["wool_px"], "wool", None),
               ("shirt", [parts["shirt"]], T["shirt_px"], "shirt", mats["shirt"]),
               ("silk", [parts["tie"]], T["tie_px"], "silk", mats["silk"]),
               ("leather", [parts.get("shoes")], T["shoe_px"], "leather", mats["leather"])]
+    if vest:   # the waistcoat's own cloth (suit.DEFAULTS materials.vest)
+        groups.insert(2, ("vest", [parts["waistcoat"]], T.get("vest_px", T["wool_px"]), "wool", vest))
     out = {}
     for gname, objs, px, weave, mat in groups:
         objs = [x for x in objs if x is not None]
@@ -572,7 +575,8 @@ def apply(o, parts, mats, marks, folds=None):
         mat["suit_atlas_side_m"] = side   # suit_hero: metric UVs for the hero-only detail
         surf = None
         if weave == "wool" and o.get("surface"):
-            ai, oi, surf = surface_maps(H, layout, side, o["materials"]["wool"], o["surface"], gname)
+            spec = o["materials"]["vest" if gname == "vest" else "wool"]
+            ai, oi, surf = surface_maps(H, layout, side, spec, o["surface"], gname)
             attach_surface(mat, ai, oi)
         for ob in objs:
             keep_second = len(ob.data.materials) > 1   # shoes: upper + sole

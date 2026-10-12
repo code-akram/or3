@@ -429,7 +429,7 @@ class Inner:
         bg.fill(G.uv, G.tag, 2)
         for row in bg.rows:
             G.weight(row, sb.TORSO)
-        self.vest = G.finish(self.b, self.like, self.mats["wool"])
+        self.vest = G.finish(self.b, self.like, self.mats.get("vest", self.mats["wool"]))
         self.marks[self.vest.name] = G.marks
         self.m["waistcoat"] = {"v_bottom_z": round(self.z_v, 4), "neck_point_z": round(self.z_vn, 4),
                                "side_hem_z": round(self.z_side, 4), "point_z": round(self.z_point, 4),

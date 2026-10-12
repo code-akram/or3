@@ -60,7 +60,14 @@ class Jacket:
         js = body.joint("upperarm_l")
         self.z_pit = js.z - sh["armpit_below_joint_m"]
         self.z_hip = body.joint("pelvis").z
-        self.half_sh = 0.5 * body_bideltoid(body) + sh["over_body_m"]
+        # the shoulder point: past the shoulder's edge (natural shoulder; the
+        # sleeve head covers the deltoid), or past the deltoids, which in the
+        # A pose stand well out on the raised upper arm (a square, padded line)
+        if sh.get("point_from", "deltoid") == "acromion":
+            self.x_acr = acromion_x(body, sh.get("acromion_deg", 40.0))
+            self.half_sh = self.x_acr + sh["over_body_m"]
+        else:
+            self.half_sh = 0.5 * body_bideltoid(body) + sh["over_body_m"]
         self.ease = J["ease"]
         self.rings = []   # per planar row: dict(z, cy, radii, a0, a1, pts)
 
@@ -137,8 +144,11 @@ class Jacket:
         # make sure a row sits at the button and one just above it (the lapel start)
         extra = [self.z_b, self.z_b + 0.012]
         if self.z_gl < self.z_sh - 0.006:   # a row at the gorge seam
-            zs = [x for x in zs if abs(x - self.z_gl) > 0.004]
             extra.append(self.z_gl)
+        # no regular row within 4 mm of an extra one: a row at z_b + 0.011
+        # next to the one at z_b + 0.012 made a 1 mm sliver whose shading
+        # drew a hard line across the whole jacket at the button
+        zs = [x for x in zs if all(abs(x - e) > 0.004 for e in extra)]
         zs = sorted(set(round(x, 5) for x in zs + extra))
         return zs
 
@@ -159,7 +169,8 @@ class Jacket:
         down = Vector((0, 0, -1))
         cy_s = 0.5 * (body.joint("upperarm_l").y + body.joint("clavicle_l").y)
         tops = []
-        for x in (self.half_sh - 0.04, self.half_sh - 0.025, self.half_sh - 0.01):
+        for dx in sh.get("point_probe_m", (0.04, 0.025, 0.01)):
+            x = self.half_sh - dx
             for y in (cy_s - 0.03, cy_s, cy_s + 0.03):
                 for sx in (1, -1):
                     hit = tree.ray_cast(Vector((sx * x, y, 1.9)), down, 0.6)
@@ -267,9 +278,13 @@ class Jacket:
         # shoulder slope: the ring runs from the neck point down to the shoulder
         # point (the body's top over the deltoid + the pad), never below the
         # trapezius + clearance, smoothed along the line away from the neck
+        # (linear for the natural shoulder: smoothstep levels the line off at
+        # the point, a square corner over the sleeve head)
         top = rows[-1]["pts"]
+        linear = sh.get("slope_ease", "smooth") == "linear"
         for p in top:
-            t = smoothstep((abs(p.x) - self.x_n) / max(self.half_sh - self.x_n, 1e-6))
+            u = min(1.0, max(0.0, (abs(p.x) - self.x_n) / max(self.half_sh - self.x_n, 1e-6)))
+            t = u if linear else smoothstep(u)
             p.z = lerp(self.z_sh, min(self.z_sp, self.z_sh), t)
         clear = sh["clear_m"]
         lifted = 0
@@ -301,6 +316,7 @@ class Jacket:
                         "raw": ring["raw"], "radii": ring["radii"], "ease": ring["ease"],
                         "a0": ring["a0"], "a1": ring["a1"], "pts": pts, "yoke": True})
         rows = rows[:-1] + mid + [ring]
+        self.m["front_dart_verts"] = self.front_dart(rows)
         self.m["canvas_bridged_verts"] = self.bridge_columns(rows)
         if __import__("os").environ.get("SUIT_JACKET_DEBUG"):
             for i in (1, 4, 8, 12, 16, 20):
@@ -308,6 +324,104 @@ class Jacket:
                                                     for r in rows if r["z"] > self.z_pit - 0.04))
         self.rings = rows
         return rows
+
+    def front_dart(self, rows):
+        """The front dart: the waist is taken in along the dart line (a seam
+        mark, build_block) and at the sides, not by the front following the
+        body's waist dip, which bends sharply just above the button and
+        printed as a horizontal crease across both fronts. Over a band round
+        the button the front's depth is raised, at each fixed x, to its upper
+        hull over z (capped at max_m), then 1-2-1 smoothed over z and x and
+        weighted to the front. Fixed x, not per column: a column drifts 2 cm
+        in x where the front edge turns into the roll line just above the
+        button, and a hull along it stood the button rows proud (a ridge).
+        The right front's tucked edge columns take column N-3's move (the
+        tuck under the left front survives). Returns the count moved."""
+        D = self.J.get("front_dart") or {}
+        if not D.get("enabled"):
+            return 0
+        z_lo, z_hi = self.z_b - D["below_button_m"], self.z_b + D["above_button_m"]
+        ks = [k for k, r in enumerate(rows) if z_lo - 1e-6 <= r["z"] <= z_hi + 1e-6]
+        if len(ks) < 4:
+            return 0
+        N = self.N
+        half = N // 2
+        step = D.get("x_step_m", 0.005)
+        xs = [-0.22 + step * j for j in range(int(0.44 / step) + 1)]
+
+        def front_w(p, cy):
+            d = Vector((p.x, p.y - cy, 0.0))
+            if d.length < 1e-6 or d.y >= 0:
+                return 0.0
+            return smoothstep((-d.normalized().y - 0.55) / 0.3)
+
+        def y_at(P, x):
+            if len(P) < 2 or x < P[0][0] or x > P[-1][0]:
+                return None
+            for (x0, y0), (x1, y1) in zip(P, P[1:]):
+                if x0 <= x <= x1:
+                    return y0 + (y1 - y0) * (x - x0) / max(x1 - x0, 1e-9)
+            return None
+
+        moved = 0
+        for cols in (range(0, half + 1), range(half, N - 2)):
+            prof = []
+            for k in ks:
+                r = rows[k]
+                prof.append(sorted((r["pts"][i].x, r["pts"][i].y) for i in cols if r["pts"][i].y < r["cy"]))
+            # depth gain per x sample and row (forward = -y)
+            gain = []
+            for x in xs:
+                g = [0.0] * len(ks)
+                idx = [j for j in range(len(ks)) if y_at(prof[j], x) is not None]
+                if len(idx) >= 3:
+                    z = [rows[ks[j]]["z"] for j in idx]
+                    d = [-y_at(prof[j], x) for j in idx]
+                    hull = [0]
+                    for m in range(1, len(idx)):
+                        while len(hull) >= 2:
+                            a, b = hull[-2], hull[-1]
+                            t = (z[b] - z[a]) / max(z[m] - z[a], 1e-9)
+                            if d[b] <= d[a] + (d[m] - d[a]) * t:
+                                hull.pop()
+                            else:
+                                break
+                        hull.append(m)
+                    dn = list(d)
+                    for a, b in zip(hull, hull[1:]):
+                        for m in range(a + 1, b):
+                            t = (z[m] - z[a]) / max(z[b] - z[a], 1e-9)
+                            dn[m] = max(d[m], d[a] + (d[b] - d[a]) * t)
+                    dn = [d[m] + min(dn[m] - d[m], D["max_m"]) for m in range(len(d))]
+                    for _ in range(D.get("smooth", 2)):
+                        ds = list(dn)
+                        for m in range(1, len(dn) - 1):
+                            dn[m] = max(d[m], 0.25 * ds[m - 1] + 0.5 * ds[m] + 0.25 * ds[m + 1])
+                    for m, j in enumerate(idx):
+                        g[j] = dn[m] - d[m]
+                gain.append(g)
+            for _ in range(D.get("smooth_x", 2)):   # across x
+                gs = [list(g) for g in gain]
+                for q in range(1, len(xs) - 1):
+                    gain[q] = [0.25 * a + 0.5 * b + 0.25 * c for a, b, c in zip(gs[q - 1], gs[q], gs[q + 1])]
+            for j, k in enumerate(ks):
+                r = rows[k]
+                for i in cols:
+                    p = r["pts"][i]
+                    w = front_w(p, r["cy"])
+                    if w <= 0:
+                        continue
+                    q = (p.x - xs[0]) / step
+                    q0 = min(max(int(math.floor(q)), 0), len(xs) - 2)
+                    t = min(max(q - q0, 0.0), 1.0)
+                    dy = (gain[q0][j] * (1 - t) + gain[q0 + 1][j] * t) * w
+                    if dy > 1e-5:
+                        p.y -= dy
+                        moved += 1
+                        if cols.stop == N - 2 and i == N - 3:
+                            for i2 in range(N - 2, N + 1):
+                                r["pts"][i2].y -= dy
+        return moved
 
     def bridge_columns(self, rows):
         """The chest and back canvas up the columns: from below the armpit to
@@ -483,6 +597,20 @@ class Jacket:
         k_vent = max(k for k, r in enumerate(self.rings) if r["z"] <= self.z_h + self.J["vent_height_m"])
         G.mark_column(tag, g, i_cb, "seam", rows=range(k_vent, len(g.rows)))
         k_b = max(k for k, r in enumerate(self.rings) if r["z"] <= self.z_b)
+        D = self.J.get("front_dart") or {}
+        if D.get("enabled") and D.get("mark"):
+            # the dart line: from the flap pocket up to under the chest, at
+            # dart x from the centre front on each side
+            ring_b = self.rings[k_b]["pts"]
+            P = self.J["pockets"]
+            z0 = self.z_b - P["flap_below_button_m"]
+            z1 = self.z_b + D["mark_above_button_m"]
+            ks = [k for k, r in enumerate(self.rings) if z0 <= r["z"] <= z1]
+            for s in (1, -1):
+                i_d = min(range(N + 1), key=lambda i: abs(ring_b[i].x - s * D["x_m"])
+                          + (1.0 if ring_b[i].y > 0 else 0.0))
+                if len(ks) >= 2:
+                    G.mark_column(tag, g, i_d, "seam", rows=range(ks[0], ks[-1] + 1))
         G.mark_column(tag, g, 0, "edge", rows=range(0, k_b + 1), inside_sign=1.0)
         G.mark_column(tag, g, N, "edge", rows=range(0, k_b + 1), inside_sign=-1.0)
         G.mark_row(tag, g, 0, "edge", inside_sign=1.0)
@@ -937,8 +1065,14 @@ class Jacket:
         clear = sh.get("armpit_clear_m", 0.004)
         tree = self.body.bvh()
         z0, z1 = self.z_pit - 0.06, self.z_pit + 0.09
+        x1 = self.half_sh + 0.04
+        if sh.get("clear_above_point_m") is not None:
+            # natural shoulder: the deltoid stands out past the shoulder point,
+            # under the sleeve head and the scye's front and back
+            z1 = max(z1, self.z_sp + sh["clear_above_point_m"])
+            x1 = self.half_sh + 0.08
         vs = [v for v in self.G.bm.verts
-              if z0 < v.co.z < z1 and self.x_pit_body - 0.06 < abs(v.co.x) < self.half_sh + 0.04]
+              if z0 < v.co.z < z1 and self.x_pit_body - 0.06 < abs(v.co.x) < x1]
         moved = sb.clear_of_body(tree, vs, clear, reach=0.05)
         moved += sb.clear_of_body(tree, vs, clear, reach=0.05)
         return moved
@@ -1095,6 +1229,32 @@ def seat_fold(body):
     return {"fold_z": round(fold, 4), "peak_z": round(z_peak, 4), "peak_y": round(y_peak, 4),
             "thigh_y": round(y_thigh, 4), "knuckle_hanging_z": round(knuckle, 4),
             "half_back_neck_rule_z": round(0.5 * (body.joint("neck_01").z - 0.022), 4)}
+
+
+def acromion_x(body, deg=40.0, band=0.005, step=0.005):
+    """|x| of the shoulder's edge: out along the body's top profile (front
+    view, both sides folded) from the trapezius, the first x where the line
+    falls steeper than deg over the next 2 cm (the shoulder line turning down
+    into the deltoid and the raised arm)."""
+    bones = sb.TORSO | {"upperarm_l", "upperarm_r", "clavicle_l", "clavicle_r"}
+    co = [(abs(v.co.x), v.co.z) for v in body.verts(bones)]
+    s = body.joint("upperarm_l")
+    top = {}
+    x = 0.10
+    while x < s.x + 0.16:
+        zs = [z for (vx, z) in co if abs(vx - x) < band]
+        if zs:
+            top[round(x, 4)] = max(zs)
+        x += step
+    xs = sorted(top)
+    k = int(round(0.02 / step))
+    tan = math.tan(math.radians(deg))
+    for i in range(len(xs) - k):
+        if xs[i] < s.x:
+            continue
+        if (top[xs[i]] - top[xs[i + k]]) / (xs[i + k] - xs[i]) > tan:
+            return xs[i]
+    return s.x + 0.04
 
 
 def body_bideltoid(body):
