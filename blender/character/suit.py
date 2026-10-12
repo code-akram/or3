@@ -189,11 +189,13 @@ DEFAULTS = {
         # suit_textures.material(): albedo (linear, grey or rgb), rough, sheen
         # (strength; the glTF sheen colour is sheen x sheen_tint), sheen_rough,
         # spec (Specular IOR Level: 0.5 = F0 0.04), coat, coat_rough, aniso, sss.
-        # Wool: blue-black (reads black, not brown, under the amber key), low
+        # Wool: blue-black (reads black, not brown, under the 3000 K key: at
+        # direction's 0.025 grey the key lifted it to dark brown), low
         # specular so the broad lobe does not grey it, a cool fuzz lobe at
-        # grazing angles; roughness and albedo also vary per pixel (surface).
-        "wool": {"albedo": [0.020, 0.021, 0.025], "rough": 0.68, "sheen": 0.22, "sheen_rough": 0.4,
-                 "sheen_tint": [0.9, 0.9, 1.0], "spec": 0.15},
+        # grazing angles (sheen 0.35, roughness 0.4, the tint pulls the amber
+        # out of the rim); roughness and albedo also vary per pixel (surface).
+        "wool": {"albedo": [0.013, 0.014, 0.019], "rough": 0.68, "sheen": 0.35, "sheen_rough": 0.4,
+                 "sheen_tint": [0.72, 0.8, 1.0], "spec": 0.15},
         "shirt": {"albedo": 0.72, "rough": 0.5, "sheen": 0.2, "sheen_rough": 0.5, "spec": 0.4},
         "silk": {"albedo": 0.015, "rough": 0.45, "sheen": 0.15, "sheen_rough": 0.35, "spec": 0.45,
                  "aniso": 0.3},
