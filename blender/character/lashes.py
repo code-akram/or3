@@ -271,7 +271,10 @@ def build(b, frame, cfg):
             # forward run is shortened), the standard cheat.
             for ri in range(1, rows):
                 off = grid[ri, ci] - grid[0, ci]
-                off[1] *= lc.get("strip_forward_scale", 1.0)
+                # not at the outer corner: there the lashes fan out of a
+                # recess under the hood, and a flattened strip sinks into it
+                s0 = lc.get("strip_forward_scale", 1.0)
+                off[1] *= s0 + (1 - s0) * min(max((cuv - 0.6) / 0.4, 0.0), 1.0)
                 q = Vector(grid[0, ci] + off)
                 loc, nrm, _, _ = frame.skin_bvh.find_nearest(q)
                 if loc is not None and (q - loc).dot(nrm) < cfg["strip_gap_m"]:

@@ -316,15 +316,15 @@ DEFAULTS = {
             "edge_turn": 0.45,         # upper-edge hairs turn down, lower-edge up (x dz)
             "smooth_iters": 2,
             "top_soft": 0.5, "top_jag": 0.35,  # softer top falloff (in hh) and its irregular wobble
-            "groom": {"per_cm2": 140, "points": 6, "root_sink_m": 0.0003,
+            "groom": {"per_cm2": 185, "points": 6, "root_sink_m": 0.0003,
                       "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
                       "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4},
-            "tone": {"melanin": 0.96, "redness": 0.45, "sigma": 0.025,
-                     "light_share": 0.25, "light_melanin": 0.88,  # some lighter brown hairs
+            "tone": {"melanin": 0.975, "redness": 0.45, "sigma": 0.02,
+                     "light_share": 0.2, "light_melanin": 0.9,  # some lighter brown hairs
                      "swatches": [[0.2, "#948e86"], [0.86, "#5a3e2a"], [0.97, "#2a1f18"],
                                   [1.0, "#1e1712"]],
                      "redness_ref": 0.45, "value_sigma": 0.25},
-            "hero": {"radius_m": [0.000025, 0.00004], "tip_radius": 0.15,
+            "hero": {"radius_m": [0.00003, 0.000045], "tip_radius": 0.15,
                      "material": {"roughness": 0.3, "radial_roughness": 0.35, "coat": 0.1,
                                   "root_dark": 0.04},
                      "clump": {"shape": 0.3, "tip_spread": 0.0003, "guide_distance_m": 0.0018},
@@ -332,10 +332,10 @@ DEFAULTS = {
             "base_tris": 0,            # (unused; shells.base_tris)
             "shells": {"layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
                        "atlas_cols": 2, "tile": [512, 192], "px_per_m": 6000.0,
-                       "radius_scale": 1.3, "min_radius_px": 0.5,
+                       "radius_scale": 1.0, "min_radius_px": 0.5,
                        "canopy_radius_m": 0.003, "canopy_pct": 85, "canopy_floor_m": 0.0005,
                        "shade": {"root": 0.7, "full_at": 0.7},
-                       "albedo_gain": 1.25, "cast_shadow": False,
+                       "albedo_gain": 2.0, "saturation": 0.85, "cast_shadow": False, "strand_keep": 0.55,
                        "roughness": 0.6, "specular": 0.25},
             "cards": {"per_side": 20, "spacing_m": 0.0025, "clump_radius_m": 0.0015,
                       "min_members": 3, "min_len_m": 0.004, "segments": 2,

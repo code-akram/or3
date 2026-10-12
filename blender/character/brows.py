@@ -220,7 +220,11 @@ def build(b, frame, cfg):
         return beard_bake.build_cards(bmx, uv, uv2, dl, gr, centres, rolls,
                                       lambda r: wcache[ckd.find(Vector(r))[1]], cd, "brows", rng)
 
-    stats = beard_bake.build_shells(b, obj, bm, canopy, project, [gr], sh, "brows", extra=extra)
+    # a baked hair is 2-3x a real brow hair's width at the atlas resolution:
+    # bake a share of them, or the brow is a solid black bar
+    keep = np.random.default_rng(cfg["seed"] + 101).random(len(gr["pts"])) < sh.get("strand_keep", 1.0)
+    gr_bake = {key: val[keep] for key, val in gr.items()}
+    stats = beard_bake.build_shells(b, obj, bm, canopy, project, [gr_bake], sh, "brows", extra=extra)
     b.facial_refit.add("mesh", obj)
     b.cutouts.append("brows_export")
     # Drop the MPFB proxy: the groom and its bake replace it.
