@@ -18,7 +18,7 @@ import math
 from mathutils import Vector
 
 from . import suit_build as sb
-from .suit_build import TAU, lerp, smoothstep
+from .suit_build import lerp
 
 NECK = {"neck_01", "head"}
 UPPER = {"spine_03", "clavicle_l", "clavicle_r", "neck_01"}
@@ -107,7 +107,8 @@ class Inner:
         off = S["offset_m"]
         # front: inside the vest V plus margin, from under the V bottom to the collar base
         z0 = self.z_v - 0.04
-        z1 = self.shirt_base_front + 0.012
+        nf = self.neck
+        z1 = nf.zb(-math.pi / 2) + S["front_into_band_m"]   # up inside the collar band
         rows = [z0 + (z1 - z0) * k / 14 for k in range(15)]
         margin = S["front_margin_m"]
 
@@ -136,8 +137,20 @@ class Inner:
         G.mark_column(2, g, 1, "topstitch", pitch_m=0.002, height=0.00015)
         G.mark_column(2, g, 3, "topstitch", pitch_m=0.002, height=0.00015)
         self.shirt_front_top = rows[-1]
+        # where the front and placket run up into the collar band, keep them
+        # inside it (they would cross the band, which is the same 5 mm off the skin)
+        inset = 0
+        for v in G.bm.verts:
+            a, z, r = nf.polar(v.co)
+            if nf.zb(a) - 0.001 <= z <= nf.zt(a):
+                lim = nf.band_r(a, z) - S["band_inset_m"]
+                if r > lim:
+                    v.co = nf.point(a, z, lim)
+                    inset += 1
+        self.m["shirt_front_inset_verts"] = inset
         self.build_shirt_collar(G)
-        self.build_yoke(G)
+        if S["yoke"]:
+            self.build_yoke(G)
         self.build_cuffs(G)
         # placket buttons (tiny white discs)
         tree = sb.bvh_of_bm(G.bm)
@@ -153,90 +166,46 @@ class Inner:
         return self.shirt
 
     def build_shirt_collar(self, G):
-        """Band (stand) around the neck, fold, leaves spreading at the front."""
-        C = self.o["shirt"]["collar"]
-        body = self.body
-        neck = body.verts(NECK)
-        n_cols = C["columns"]
-        g = G.grid("collar")
-        z_fb, z_bb = self.shirt_base_front, self.shirt_base_front + C["back_rise_m"]
-        cy0, _ = self.slice(z_fb + 0.02, neck, 0.012)
-        rows = [[] for _ in range(6)]
-        uvs = [[] for _ in range(6)]
-        body_tree = body.bvh()
-
-        def neck_r(z, a, fallback=0.06):
-            # exact neck radius: a ray from the neck axis (the slices' max-radius
-            # bins over a widened band pick up the trapezius and the jaw)
-            hit = body_tree.ray_cast(Vector((0.0, cy0, z)), Vector((math.cos(a), math.sin(a), 0.0)), 0.3)
-            return hit[3] if hit[0] is not None else fallback
-
-        for i in range(n_cols + 1):
-            c = i / n_cols
-            # psi from the front centre (wearer's left side first) round the back
-            a = -math.pi / 2 + TAU * c
-            bk = 0.5 - 0.5 * math.cos(TAU * c)  # 0 front, 1 back
-            z_base = lerp(z_fb, z_bb, bk ** 0.8)
-            stand = lerp(C["stand_front_m"], C["stand_m"], bk ** 0.5)
-            # the band hugs the neck: its radius is the neck's at the fold height
-            # (and just above, where the trapezius cannot reach), the base 4 mm wider
-            z_t = z_base + stand - 0.004
-            r1 = min(neck_r(z_t + dz, a) for dz in (0.0, 0.01, 0.02)) + C["gap_m"]
-            r0 = r1 + 0.004
-            out = Vector((math.cos(a), math.sin(a), 0.0))
-            up = Vector((0, 0, 1))
-            p0 = Vector((r0 * math.cos(a), cy0 + r0 * math.sin(a), z_base))
-            sb.lift_onto_body(body_tree, [p0], 0.002)   # the base sits on the trapezius
-            p1 = Vector((r1 * math.cos(a), cy0 + r1 * math.sin(a), max(z_base, p0.z) + stand))
-            p2 = p1 + up * 0.003 + out * 0.003
-            # leaves: none across the front gap (the tie sits there), full length
-            # at the points, then short where the jacket collar covers them
-            cf = min(c, 1 - c)  # 0 at the front centre, 0.5 at the back
-            gap, pt, hide = C["gap_frac"], C["point_frac"], C["hidden_from_frac"]
-            if cf < gap:
-                leaf = 0.0
-            elif cf < pt:
-                leaf = C["point_m"] * smoothstep((cf - gap) / (pt - gap))
-            else:
-                leaf = lerp(C["point_m"], C["leaf_m"], smoothstep((cf - pt) / (hide - pt)))
-            frontness = 1 - smoothstep((cf - pt) / (hide - pt))
-            lat = Vector((1.0 if math.cos(a) > 0 else -1.0, 0, 0))
-            spread = math.sin(math.radians(C["spread_deg"])) * frontness
-            # the leaves fold down from the band and lie on the chest (the shirt
-            # front) spreading toward the lapels; past the points they hang
-            # straight down inside the jacket collar
-            d = (-up * (1 - spread * 0.6) + lat * spread).normalized()
-            p3 = p2 + d * (leaf * 0.5) + out * 0.003 * frontness
-            p4 = p2 + d * leaf + out * 0.003 * frontness
-            lay = C["lay_m"]
-            for q in (p3, p4):
-                hit = body_tree.find_nearest(q, 0.08)
-                if hit[0] is not None:
-                    # the points lie on the chest; round the back the short leaves
-                    # hang straight from the fold (the trapezius is too uneven)
-                    q[:] = q.lerp(hit[0] + hit[1] * (self.o["shirt"]["offset_m"] + lay), frontness)
-            sb.lift_onto_body(body_tree, [p3, p4], 0.002)
-            p5 = p4 + (p3 - p4).normalized() * 0.003 - out * 0.002
-            u = 0.5 * c
-            for j, (p, v) in enumerate(((p0, 0.0), (p1, stand), (p2, stand + 0.008),
-                                        (p3, stand + 0.008 + leaf * 0.5), (p4, stand + 0.008 + leaf),
-                                        (p5, stand + 0.011 + leaf))):
-                rows[j].append(g.bm.verts.new(p))
-                uvs[j].append((u, v))
-        for j in range(6):
-            g.add_shared_row(rows[j], uvs[j])
-        g.fill(G.uv, G.tag, 3, flip=True)
-        for j in range(6):
-            G.weight(rows[j], NECK | {"spine_03", "clavicle_l", "clavicle_r"})
-        G.mark_row(3, g, 4, "edge", inside_sign=-1.0, stitch_in_m=0.004)
-        G.mark_row(3, g, 1, "topstitch", pitch_m=0.002, height=0.00015)
-        # the leaves stay under the jacket's lapels and collar where they overlap
+        """Band, fold and fall with two points, plus the front closure
+        (suit_neck.build_shirt_collar, in the neck frame shared with the
+        jacket collar). The points stay under the jacket where they meet it."""
+        from . import suit_neck
+        info = suit_neck.build_shirt_collar(self.neck, G, self.o["shirt"]["collar"],
+                                            NECK | {"spine_03", "clavicle_l", "clavicle_r"}, 3)
         G.bm.normal_update()
         jt = sb.bvh_of([self.jacket])
-        leaves = [v for j in (3, 4, 5) for v in rows[j]]
-        self.m["shirt_collar_tucked_verts"] = sb.tuck_under(leaves, jt, gap=0.0025)
-        self.collar_front_z = z_fb
-        self.collar_rows = rows
+        g = info["grid"]
+        # radial order check against the built jacket (the frame already keeps
+        # them apart; this catches the block's straight strips near the gorge)
+        nf = self.neck
+        tucked = 0
+        for v in [v for row in g.rows for v in row]:
+            a, z, r = nf.polar(v.co)
+            d = nf.radial(v.co)
+            hit = jt.ray_cast(nf.point(a, z, 0.01), d, 0.4)
+            if hit[0] is not None and hit[3] + 0.01 < r + 0.002:
+                r_new = max(hit[3] + 0.01 - 0.002, nf.r_body(a, z) + 0.004)
+                v.co = nf.point(a, z, r_new)
+                tucked += 1
+        # the root strips lie on the skin: keep them under the jacket along the
+        # skin normal
+        for rg in (info["root"] if self.o["shirt"]["collar"].get("ring_tuck", True) else []):
+            for v in [v for row in rg.rows[2:] for v in row]:
+                bh = nf.tree.find_nearest(v.co, 0.05)
+                if bh[0] is None:
+                    continue
+                n = (v.co - bh[0])
+                n = n.normalized() if n.length > 1e-6 else bh[1]
+                hit = jt.ray_cast(bh[0], n, 0.03)
+                if hit[0] is not None:
+                    room = hit[3]
+                    want = min((v.co - bh[0]).length, max(0.0012, room - 0.0025))
+                    if want < (v.co - bh[0]).length - 1e-5:
+                        v.co = bh[0] + n * want
+                        tucked += 1
+        self.m["shirt_collar_tucked_verts"] = tucked
+        self.m["shirt_collar"] = {k: v for k, v in info.items() if k not in ("grid", "closure", "root")}
+        self.collar_front_z = info["z_base_front"]
         return g
 
     def build_yoke(self, G):
@@ -307,54 +276,21 @@ class Inner:
     # --- tie ----------------------------------------------------------------------------------
 
     def build_tie(self):
+        from . import suit_neck
         T = self.o["tie"]
         G = sb.Garment(self.part.format("tie"), self.arm, self.body)
         body_tree = self.body.bvh()
         shirt_off = self.o["shirt"]["offset_m"]
-        # knot frame: at the collar front, in front of the collar band
-        z_top = self.collar_front_z + T["knot_top_above_base_m"]
-        hit = body_tree.ray_cast(Vector((0, -1, z_top - 0.01)), Vector((0, 1, 0)), 2.0)
-        y_front = hit[0].y if hit[0] is not None else -0.1
-        y_knot = y_front - shirt_off   # the back of the knot sits in the collar band
-        g = G.grid("knot")
-        segs = 14
-        # four-in-hand: a narrow, slightly asymmetric knot, widest just under its
-        # top edge (which tucks under the collar fold), tapering to the blade.
-        # The front is a flattened arch (depth ~0.45 of the width), not a ball;
-        # one side bulges a little and the top edge tilts (the knot is pulled
-        # toward the wearer's left).
-        prof = [(0.0, 0.86, 0.6), (0.08, 1.0, 0.9), (0.3, 0.97, 1.0), (0.55, 0.88, 0.95),
-                (0.8, 0.75, 0.8), (1.0, 0.64, 0.6)]
-        tilt = T["knot_tilt_m"]
-        for (v, kw, kd) in prof:
-            w, d = T["knot_w_m"] * kw * 0.5, T["knot_d_m"] * kd
-            cx = T["knot_skew_m"] * math.sin(math.pi * v)
-            cz = z_top - T["knot_h_m"] * v
-            cyk = y_knot - T["knot_d_m"] * 0.2 * v   # leans forward at the bottom
-            pts, uvs = [], []
-            for i in range(segs + 1):
-                a = lerp(-math.pi * 0.95, math.pi * 0.95, i / segs)
-                sx = math.sin(a)
-                x = cx + w * sx * (1 + 0.08 * sx)        # the left side a little fuller
-                y = cyk - d * (max(math.cos(a), 0.0) ** 0.6 - 0.15 * max(-math.cos(a), 0.0))
-                pts.append(Vector((x, y, cz + tilt * sx * (1 - v))))
-                uvs.append((0.5 + 0.12 * i / segs, 0.6 + T["knot_h_m"] * v))
-            g.add_row(pts, uvs)
-        g.fill(G.uv, G.tag, 1, flip=True)
-        # cap the top with its own vertices (a hard edge: the top of the knot is
-        # a crease under the collar, not a rounded cushion)
-        top = [G.bm.verts.new(v.co) for v in reversed(g.rows[0][:-1])]
-        try:
-            f = G.bm.faces.new(top)
-            f.smooth = False
-            for loop in f.loops:  # planar UVs, so the tangent is defined
-                loop[G.uv].uv = (0.5 + loop.vert.co.x, 0.6 - 0.03 - loop.vert.co.y * 0.5)
-            import bmesh
-            bmesh.ops.triangulate(G.bm, faces=[f])
-        except ValueError:
-            pass
-        for row in g.rows + [top]:
+        shirt_tree0 = sb.bvh_of([self.shirt])
+
+        def front_y(z):
+            ys = [h[0].y for x in (-0.012, 0.0, 0.012)
+                  for h in [shirt_tree0.ray_cast(Vector((x, -1, z)), Vector((0, 1, 0)), 2.0)] if h[0] is not None]
+            return min(ys) if ys else None
+        g, z_kb = suit_neck.build_knot(self.neck, G, T, self.o["shirt"]["collar"], 1, front_y)
+        for row in g.rows:
             G.weight(row, {"spine_03", "neck_01", "clavicle_l", "clavicle_r"})
+        z_top = z_kb + T["knot_h_m"]
         # blade, over the shirt front
         shirt_tree = sb.bvh_of([self.shirt])
         z_kb = z_top - T["knot_h_m"]
@@ -389,7 +325,7 @@ class Inner:
                     p.z += 0.008
                     p.y += 0.004
             bg.add_row(pts, uvs)
-        bg.fill(G.uv, G.tag, 2)
+        bg.fill(G.uv, G.tag, 2, flip=True)   # normals out (toward the viewer)
         for row in bg.rows:
             G.weight(row, sb.TORSO)
         self.tie = G.finish(self.b, self.like, self.mats["silk"])
@@ -503,8 +439,9 @@ class Inner:
         return self.buttons
 
 
-def build(b, body, o, arm, jk, jacket, like, waistband, mats, part):
+def build(b, body, o, arm, jk, jacket, like, waistband, mats, part, neck):
     inr = Inner(b, body, o, arm, jk, jacket, like, waistband, mats, part)
+    inr.neck = neck
     shirt = inr.build_shirt()
     tie = inr.build_tie()
     vest = inr.build_vest()

@@ -16,13 +16,15 @@ Options live in DEFAULTS and are overridden through the build config's
 "suit" section, e.g. {"suit": {"jacket": {"vents": "centre"}}}.
 """
 
+import os
+
 import bmesh
 import bpy
 from mathutils import Vector
 
 from . import budgets, config
 from . import suit_build as sb
-from . import suit_inner, suit_jacket, suit_ops, suit_shoes, suit_textures
+from . import suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures
 
 DEFAULTS = {
     "tailor": True,             # False: stock shell, as in spike 1
@@ -42,17 +44,22 @@ DEFAULTS = {
         "shoulder": {"over_body_m": 0.012, "back_neck_m": -0.022, "neck_point_drop_m": 0.012,
                      "depth_top": 0.78, "clear_m": 0.010, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
                      "neck_half_m": 0.072, "neck_ease_m": 0.016, "neck_curve_pow": 0.8,
+                     "neck_clear_m": 0.012, "neck_blend_frac": 0.12, "seam_below_band_m": 0.010, "gorge_cols": 6, "band_clear_m": 0.004,
                      "armpit_below_joint_m": 0.115, "bulge_pow": 0.7, "cap_below_joint_m": 0.02},
         "overlap_m": 0.02, "underlap_tuck_m": 0.003, "front_cut_m": 0.03,
         "quarter_cut_m": 0.025, "quarter_height_m": 0.12,
         "skirt_leg_weight": 0.5,
         "lapel": {"width_m": 0.080, "width_pow": 2.2, "swing_u": 0.10,
                   "gorge_below_neck_m": 0.032, "roll_m": 0.012, "edge_m": 0.003,
-                  "tip_rise_m": 0.026, "rise_frac": 0.30, "tip_lift_m": 0.002},
-        "collar": {"stand_front_m": 0.028, "stand_back_m": 0.032, "lean_in_m": 0.002,
-                   "fall_front_m": 0.048, "fall_back_m": 0.044, "end_frac": 0.12,
-                   "end_columns": 4, "gorge_seam_m": 0.034, "point_m": 0.032,
-                   "notch_deg": 65, "point_back_m": 0.012, "stand_end_m": 0.004},
+                  "tip_rise_m": 0.010, "rise_h_m": 0.05, "tip_lift_m": 0.0, "min_row_m": 0.006},
+        # collar (suit_neck): the fold sits reveal_* under the shirt band's top;
+        # the front end lies on the lapel's top edge to the notch, then turns
+        # up at notch_deg to the collar point
+        "collar": {"reveal_back_m": 0.014, "reveal_side_m": 0.014, "stand_min_m": 0.006,
+                   "shirt_clear_m": 0.003, "body_clear_m": 0.012, "thickness_m": 0.004,
+                   "fall_back_m": 0.040, "fall_side_m": 0.042, "seam_cover_m": 0.008,
+                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09,
+                   "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015},
         "vents": "double", "vent_height_m": 0.24, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         "sleeve": {"columns": 28, "row_m": 0.016, "band_m": 0.012, "ease_m": 0.010,
@@ -76,13 +83,23 @@ DEFAULTS = {
         "columns": 48, "row_m": 0.015,
     },
     "shirt": {"offset_m": 0.005, "front_margin_m": 0.03,
-              "collar": {"base_above_supra_m": 0.002, "back_rise_m": 0.055, "gap_m": 0.005,
-                         "stand_front_m": 0.032, "stand_m": 0.038, "leaf_m": 0.016,
-                         "point_m": 0.070, "spread_deg": 28, "columns": 64, "lay_m": 0.006,
-                         "gap_frac": 0.025, "point_frac": 0.085, "hidden_from_frac": 0.15},
-              "placket_w_m": 0.035, "cuff_reveal_m": 0.013, "cuff_inside_m": 0.02},
-    "tie": {"knot_w_m": 0.038, "knot_h_m": 0.044, "knot_d_m": 0.017, "knot_skew_m": 0.003,
-            "knot_tilt_m": 0.003, "knot_top_above_base_m": 0.031, "blade_top_w_m": 0.025,
+              # collar (suit_neck): a band closed at the front, a fall over it with
+              # two points on the chest; lead_deg is each leading edge's angle
+              # from vertical (a moderate spread), point_m its length
+              "collar": {"base_above_supra_m": 0.015, "base_flare_m": 0.012, "base_win_m": 0.001, "base_rise_pow": 0.7, "gap_m": 0.005,
+                         "stand_front_m": 0.034, "stand_m": 0.040, "columns": 64,
+                         "lead_half_gap_m": 0.016, "lead_deg": 38, "point_m": 0.075,
+                         "point_cols_frac": 0.13, "fall_rows": 6, "fall_off_m": 0.003,
+                         "flare": 0.35, "body_clear_m": 0.008, "overhang_m": 0.0,
+                         "closure_overlap_rad": 0.06, "ring_columns": 20, "ring_open_rad": 0.30, "ring_to_deg": 115, "ring_drop_m": 0.012,
+                         "ring_steps_m": [0.004, 0.009, 0.016, 0.026, 0.040], "ring_off_m": 0.0045},
+              "placket_w_m": 0.035, "cuff_reveal_m": 0.013, "cuff_inside_m": 0.02,
+              "front_into_band_m": 0.003, "band_inset_m": 0.002, "yoke": False},
+    # four-in-hand (suit_neck.build_knot): width at its widest, height top to
+    # the blade, depth off the band; taper = how much narrower the bottom is
+    "tie": {"knot_w_m": 0.036, "knot_h_m": 0.046, "knot_d_m": 0.015, "knot_skew_m": 0.003,
+            "knot_top_above_band_m": 0.002, "knot_taper": 0.42, "knot_full": 0.10,
+            "knot_wrap_m": 0.0015, "blade_top_w_m": 0.021,
             "blade_w_m": 0.078, "blade_full_at_m": 0.44, "dimple_m": 0.005},
     "trousers": {"back_hem_m": 0.035, "break_from_z": 0.45, "crease_depth_m": 0.0025,
                  "opening_half_m": 0.095, "taper_from_z": 0.50},
@@ -103,7 +120,7 @@ DEFAULTS = {
         # Sheen Weight is ignored, so the strength goes in the tint).
         "wool": [0.028, 0.70, 0.08],
         "shirt": [0.75, 0.55, 0.0],
-        "silk": [0.02, 0.48, 0.10],
+        "silk": [0.02, 0.62, 0.12],
         "button": [0.015, 0.3, 0.0],
         "leather": [0.012, 0.28, 0.0],   # polished black calf
         "sole": [0.02, 0.65, 0.0],
@@ -190,14 +207,15 @@ def post(b):
 
     mats = {k: suit_textures.material(f"suit_{k}", *v) for k, v in o["materials"].items()}
 
+    neck = suit_neck.NeckFrame(body, supra, o["shirt"]["collar"])
     G = sb.Garment(PART.format("jacket"), arm, body)
-    jk, jm = suit_jacket.build(G, body, o["jacket"], stature, z_b, supra)
+    jk, jm = suit_jacket.build(G, body, o["jacket"], stature, z_b, supra, neck)
     jacket = G.finish(b, trousers, mats["wool"])
     jm["finish"] = G.stats
     jm["shoulder_over_body_m"] = r(2 * jk.half_sh - m["body_bideltoid_m"])
     m["jacket"] = jm
 
-    inner = suit_inner.build(b, body, o, arm, jk, jacket, trousers, waistband, mats, PART)
+    inner = suit_inner.build(b, body, o, arm, jk, jacket, trousers, waistband, mats, PART, neck)
     m.update(inner["measure"])
     vest, shirt, tie, buttons = inner["vest"], inner["shirt"], inner["tie"], inner["buttons"]
 
@@ -212,6 +230,10 @@ def post(b):
     bpy.data.meshes.remove(src_me)
     b.suit_src = None
 
+    debug_tags = None
+    if os.environ.get("SUIT_DEBUG_TAGS"):   # diagnosis: colour the jacket's panels
+        a = jacket.data.attributes.get("panel")
+        debug_tags = [a.data[i].value for i in range(len(jacket.data.polygons))] if a else None
     if o["textures"]["enabled"]:
         marks = dict(inner["marks"])
         marks[jacket.name] = G.marks
@@ -227,6 +249,17 @@ def post(b):
         m.get("shoes", {}).pop("marks", None)
         suit_textures.strip_panel_attr([jacket, trousers, vest, shirt, tie, shoes])
 
+    if debug_tags:
+        cols = {2: (0.8, 0.1, 0.1), 3: (0.1, 0.7, 0.1), 1: (0.1, 0.2, 0.8)}
+        slots = {}
+        for t, c in cols.items():
+            mt = suit_textures.material(f"debug_tag_{t}", c[0], 0.6, 0.0)
+            next(n for n in mt.node_tree.nodes if n.type == "BSDF_PRINCIPLED").inputs[0].default_value = c + (1.0,)
+            jacket.data.materials.append(mt)
+            slots[t] = len(jacket.data.materials) - 1
+        for p, t in zip(jacket.data.polygons, debug_tags):
+            if t in slots:
+                p.material_index = slots[t]
     m["decimated"] = {}
     for key, obj in (("jacket", jacket), ("tie", tie), ("waistcoat", vest),
                      ("shirt", shirt), ("trousers", trousers), ("shoes", shoes)):

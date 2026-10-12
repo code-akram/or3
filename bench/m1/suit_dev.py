@@ -4,10 +4,11 @@ for the build, a second for the views (the views script resets the scene).
 
     blender -b -t 4 --factory-startup --python bench/m1/suit_dev.py -- \
         --out DIR [--config bench/m1/variants/direction.json] [--override '{"suit": {...}}'] \
-        [--views torso,lapel] [--wire] [--hide hair] [--no-render] [--hair] [--check]
+        [--views torso,lapel] [--wire] [--hide hair] [--no-render] [--hair] [--check] [--collar]
 
 Writes DIR/character.glb, DIR/character.stats.json, DIR/<view>.png; --check runs
-suit_check.py (silhouette holes, open armhole seams) into DIR/check/.
+suit_check.py (silhouette holes, open armhole seams) into DIR/check/; --collar runs
+suit_collar.py (the collar-zone guard, suit.md §6) into DIR/collar/.
 """
 
 import argparse
@@ -37,6 +38,8 @@ ap.add_argument("--hide", default="")
 ap.add_argument("--no-render", action="store_true")
 ap.add_argument("--hair", action="store_true", help="build the hair and beard too")
 ap.add_argument("--check", action="store_true", help="run suit_check.py (holes, open seams) on the GLB")
+ap.add_argument("--collar", action="store_true",
+                help="run suit_collar.py (collar-zone guard: bare skin, backfaces, intersections) on the GLB")
 ap.add_argument("--res", type=int, default=600)
 A = ap.parse_args(argv)
 
@@ -108,6 +111,14 @@ if A.check:
     print("\n".join(l for l in r.stdout.splitlines() if l.startswith("[suit_check]")))
     if r.returncode:
         print(f"[suit_dev] suit_check FAILED (see {os.path.join(A.out, 'check', 'check.json')})")
+
+if A.collar:
+    r = subprocess.run([bpy.app.binary_path, "-b", "-t", "4", "--factory-startup", "--python",
+                        os.path.join(HERE, "suit_collar.py"), "--", "--glb", glb,
+                        "--out-dir", os.path.join(A.out, "collar"), "--beauty"], capture_output=True, text=True)
+    print("\n".join(l for l in r.stdout.splitlines() if l.startswith("[suit_collar]")))
+    if r.returncode:
+        print(f"[suit_dev] suit_collar FAILED (see {os.path.join(A.out, 'collar', 'collar.json')})")
 
 if os.environ.get("SUIT_TANGENT_CHECK"):
     sys.path.insert(0, "/tmp")
