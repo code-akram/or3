@@ -62,8 +62,8 @@
   "forms": {
    "tissue": {
     "malar_pad_mm": 2.0,
-    "tear_trough_mm": 1.2,
-    "lid_bag_mm": 0.8,
+    "tear_trough_mm": 0.9,
+    "lid_bag_mm": 0.3,
     "nasolabial_mm": 1.5,
     "nasolabial_end_mm": 0.3,
     "nasolabial_overhang_mm": 0.8,
