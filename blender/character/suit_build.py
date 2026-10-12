@@ -395,6 +395,36 @@ class Garment:
         for g, w in src[self.dl].items():
             dst[self.dl][g] = w
 
+    def smooth_weights(self, verts, radius, iters=2, keep=4):
+        """Spatial smoothing of the skin weights of `verts`: each becomes the
+        distance-weighted mean of the weights within `radius` (across seams
+        between grids, which the topology does not join), top `keep` bones,
+        normalised."""
+        if not verts:
+            return
+        kd = KDTree(len(verts))
+        for i, v in enumerate(verts):
+            kd.insert(v.co, i)
+        kd.balance()
+        dl = self.dl
+        for _ in range(iters):
+            cur = [dict(v[dl].items()) for v in verts]
+            new = []
+            for v in verts:
+                acc, tot = {}, 0.0
+                for _co, j, d in kd.find_range(v.co, radius):
+                    f = 1.0 - d / radius
+                    tot += f
+                    for g, w in cur[j].items():
+                        acc[g] = acc.get(g, 0.0) + w * f
+                top = sorted(acc.items(), key=lambda kv: -kv[1])[:keep]
+                s = sum(w for _, w in top) or 1.0
+                new.append({g: w / s for g, w in top if w > 1e-4})
+            for v, w in zip(verts, new):
+                v[dl].clear()
+                for g, x in w.items():
+                    v[dl][g] = x
+
     def finish(self, b, like, material=None):
         """Create the object next to `like` (same parent and collections),
         with an armature modifier, and register it for export."""

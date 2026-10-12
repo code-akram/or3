@@ -73,6 +73,7 @@ VIEWS = {
     "neck_top": ((0.0, -0.25, 2.4), (0.0, 0.0, 1.5), 0.45),            # from above: collar fall on the shoulders
     "armpit": ((-0.7, -0.8, 1.05), (-0.24, -0.02, 1.40), 0.32),       # the left scye from below the front
     "armpit_back": ((-0.7, 0.8, 1.05), (-0.24, 0.02, 1.40), 0.32),
+    "armpit_back_l": ((0.45, 1.0, 1.35), (0.21, 0.04, 1.40), 0.2),     # the sliver under the left sleeve, from behind
     "pocket": ((-0.5, -1.0, 1.1), (-0.12, -0.1, 1.03), 0.3),
     "pocket_x": ((-0.45, -1.0, 1.06), (-0.12, -0.12, 1.0), 0.13),     # extreme close-up of the flap
     "shoulder": ((-0.3, -1.0, 1.55), (-0.2, -0.05, 1.48), 0.35),

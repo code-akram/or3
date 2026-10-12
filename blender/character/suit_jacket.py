@@ -485,21 +485,54 @@ class Jacket:
             G.mark(tag, "buttonhole", (0.02 + 0.012, z - self.z_h), 0.024, 0.0)
         # vents: the top of each slit gets a bar tack, the flap edges a topstitch
         self.i_cb = i_cb
-        # weights: torso, blending toward the legs down the skirt
+        # weights: torso, blending toward the legs down the skirt. Each half
+        # follows its own leg (the left panel the left thigh, by column, so the
+        # overlapping fronts never mix), then the weights are smoothed over the
+        # grid (rows and columns): nearest-vertex picks alternated between the
+        # thigh and the pelvis and tore the hem into a zigzag on a raised leg
+        slw = self.J["skirt_leg_weight"]
+        if not isinstance(slw, dict):
+            slw = {"front": slw, "side": slw, "back": slw}
+        skirt = {}
         for k, row in enumerate(g.rows):
             z = row[0].co.z if k < len(self.rings) else self.z_nb
-            if z < self.z_hip:
-                f = self.J["skirt_leg_weight"] * smoothstep((self.z_hip - z) / (self.z_hip - self.z_h))
-                for v in row:
-                    wt = self.body.weights(v.co, sb.TORSO)
-                    wl = self.body.weights(v.co, sb.LEG["l"] | sb.LEG["r"] | {"pelvis"})
-                    v[G.dl].clear()
-                    for kk, x in wt.items():
-                        v[G.dl][G.gidx[kk]] = x * (1 - f)
-                    for kk, x in wl.items():
-                        v[G.dl][G.gidx[kk]] = v[G.dl].get(G.gidx[kk], 0.0) + x * f
-            else:
+            if z >= self.z_hip:
                 G.weight(row, sb.TORSO)
+                continue
+            ramp = smoothstep((self.z_hip - z) / (self.z_hip - self.z_h))
+            cy = self.rings[min(k, len(self.rings) - 1)]["cy"]
+            for i, v in enumerate(row):
+                a = math.atan2(v.co.y - cy, v.co.x)
+                sn, cs = math.sin(a), math.cos(a)
+                f = ramp * (max(0.0, -sn) ** 2 * slw["front"] + max(0.0, sn) ** 2 * slw["back"]
+                            + cs * cs * slw["side"])
+                leg = sb.LEG["l"] if i <= N // 2 else sb.LEG["r"]
+                wt = self.body.weights(v.co, sb.TORSO)
+                wl = self.body.weights(v.co, leg | {"pelvis"})
+                w = {kk: x * (1 - f) for kk, x in wt.items()}
+                for kk, x in wl.items():
+                    w[kk] = w.get(kk, 0.0) + x * f
+                skirt[(k, i)] = w
+        for _ in range(self.J.get("skirt_weight_smooth", 4)):
+            cur = dict(skirt)
+            for (k, i), w in cur.items():
+                acc, tot = {}, 0.0
+                for (dk, di, f) in ((0, 0, 2.0), (0, -1, 1.0), (0, 1, 1.0), (-1, 0, 1.0), (1, 0, 1.0)):
+                    nb = cur.get((k + dk, i + di))
+                    if nb is None:
+                        continue
+                    tot += f
+                    for kk, x in nb.items():
+                        acc[kk] = acc.get(kk, 0.0) + x * f
+                skirt[(k, i)] = {kk: x / tot for kk, x in acc.items()}
+        for (k, i), w in skirt.items():
+            top = sorted(w.items(), key=lambda kv: -kv[1])[:4]
+            s_ = sum(x for _, x in top) or 1.0
+            v = g.rows[k][i]
+            v[G.dl].clear()
+            for kk, x in top:
+                if x / s_ > 1e-4:
+                    v[G.dl][G.gidx[kk]] = x / s_
         return g
 
     def surface(self, row_k, s, left=True):
@@ -884,6 +917,45 @@ class Jacket:
         setattr(self, f"sleeve_axis_{side}", axis)
         setattr(self, f"sleeve_L_{side}", (t_pit, L))
 
+    def clear_armpits(self):
+        """The crease where the sleeve's back meets the block runs over the
+        posterior axillary fold: every jacket vertex in the armpit zone is
+        pushed clear of the skin (the sliver of skin seen through it from
+        behind), twice, smoothing the pushed ones in between."""
+        sh = self.J["shoulder"]
+        clear = sh.get("armpit_clear_m", 0.004)
+        tree = self.body.bvh()
+        z0, z1 = self.z_pit - 0.06, self.z_pit + 0.09
+        vs = [v for v in self.G.bm.verts
+              if z0 < v.co.z < z1 and self.x_pit_body - 0.06 < abs(v.co.x) < self.half_sh + 0.04]
+        moved = sb.clear_of_body(tree, vs, clear, reach=0.05)
+        moved += sb.clear_of_body(tree, vs, clear, reach=0.05)
+        return moved
+
+    def shoulder_weights(self):
+        """The block's shoulder cap encloses the deltoid out to the scye but
+        was weighted to the torso only, the sleeve head to the arm: raising
+        the arm pinched the seam and the deltoid came through. In the
+        shoulder zone every jacket vertex takes the nearest skin vertex's
+        weights over torso + that arm, then the weights are smoothed in
+        space across the scye (suit.md: no helper bones yet, Track F)."""
+        sh = self.J["shoulder"]
+        G = self.G
+        x0 = max(sh.get("weight_zone_x_frac", 0.6) * self.x_pit_body, self.x_n + sh.get("weight_zone_from_neck_m", 0.05))
+        z0 = self.z_pit - sh.get("weight_zone_below_pit_m", 0.05)
+        n = 0
+        for side, sign in (("l", 1), ("r", -1)):
+            vs = [v for v in G.bm.verts if v.co.z > z0 and v.co.x * sign > x0]
+            bones = sb.TORSO | sb.ARM[side]
+            for v in vs:
+                w = self.body.weights(v.co, bones)
+                v[G.dl].clear()
+                for k, x in w.items():
+                    v[G.dl][G.gidx[k]] = x
+            G.smooth_weights(vs, sh.get("weight_smooth_m", 0.03), iters=2)
+            n += len(vs)
+        return n
+
     # --- pockets -----------------------------------------------------------------------------
 
     def block_point(self, z, s, left=True):
@@ -1025,7 +1097,9 @@ def build(G, body, J, stature, z_button, supra, neck):
     jk.build_collar()
     vents = jk.build_vents()
     jk.build_sleeves()
+    jk.m["armpit_cleared"] = jk.clear_armpits()
     jk.build_pockets()
+    jk.m["shoulder_weighted_verts"] = jk.shoulder_weights()
     m = jk.measure()
     m["vents"] = vents
     return jk, m

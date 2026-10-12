@@ -47,13 +47,13 @@ DEFAULTS = {
                  "waist_front": 0.016, "waist_back": 0.013, "waist_side": 0.014,
                  "hip": 0.018, "flare": 0.005},
         "shoulder": {"over_body_m": 0.012, "back_neck_m": -0.022, "neck_point_drop_m": 0.012,
-                     "depth_top": 0.78, "clear_m": 0.010, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
+                     "depth_top": 0.78, "clear_m": 0.007, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
                      "neck_half_m": 0.072, "neck_ease_m": 0.016, "neck_curve_pow": 0.8,
                      "neck_clear_m": 0.005, "neck_band_lo_m": 0.0, "neck_band_hi_m": 0.006, "neck_lift_clear_m": 0.005, "neck_blend_frac": 0.12, "seam_below_band_m": 0.010, "gorge_cols": 6, "band_clear_m": 0.004,
                      "armpit_below_joint_m": 0.115, "bulge_pow": 0.7, "cap_below_joint_m": 0.02},
         "overlap_m": 0.02, "underlap_tuck_m": 0.003, "front_cut_m": 0.03,
         "quarter_cut_m": 0.035, "quarter_height_m": 0.10,
-        "skirt_leg_weight": 0.5,
+        "skirt_leg_weight": {"front": 0.85, "side": 0.5, "back": 0.3},   # leg share at the hem, by side
         # lapel: gorge_below_neck_m places the top ring at the front, the
         # gorge seam sits gorge_drop_m lower on the chest (the collar's front
         # end lies on the roll line between them); roll 16 mm, a rounded edge
@@ -74,7 +74,7 @@ DEFAULTS = {
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         "sleeve": {"columns": 28, "row_m": 0.016, "band_m": 0.012, "ease_m": 0.010,
                    "top_r_m": 0.066, "cuff_r_m": 0.046, "past_wrist_m": 0.005,
-                   "rope_m": 0.0035, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
+                   "rope_m": 0.006, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
                    "elbow_blend_m": 0.04, "uv_circ_m": 0.36},
         "pockets": {"flap_x0_m": 0.07, "flap_w_m": 0.16, "flap_h_m": 0.06,
                     "flap_below_button_m": 0.10,
