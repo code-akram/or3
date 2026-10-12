@@ -56,7 +56,7 @@ CARDS = {
     # One lock card per front fall (all its strands) under its sub-clump
     # cards, so a fall reads as a lock, not 2-3 thin strips.
     "front_lock": {"width_pct": 95, "pad_m": 0.002, "inset_m": 0.0015, "cells": [6, 7]},
-    "ear_margin_m": 0.004, "ear_lateral_m": 0.012,   # cards whose path crosses an ear are dropped
+    "ear_margin_m": 0.004, "ear_lateral_m": 0.035,   # cards whose path crosses an ear are dropped
     "layer_shade": {"under": 0.8, "mid": 0.82, "top": 1.0, "front": 0.9, "fly": 0.85},
     "root_dark": 0.35, "root_v": 0.3, "lock_sigma": 0.15,
     # Cards rooted within `near_m` of the (recessed) hairline: little root
@@ -558,7 +558,9 @@ def build(b, frame, ccfg, g):
         tris[layer] = tris.get(layer, 0) + t
 
     def through_ear(p, start=2):
-        C = p["C"][start:]
+        # The centreline and both card edges.
+        c0, hw0 = p["C"][start:], p["hw"][start:, None]
+        C = np.concatenate([c0, c0 + p["B"][start:] * hw0, c0 - p["B"][start:] * hw0])
         mg = cfg["ear_margin_m"]
         for ec, er in frame.ears:
             ec, er = np.array(ec), np.array(er)
@@ -572,7 +574,13 @@ def build(b, frame, ccfg, g):
                 return True
         return False
 
-    ear_dropped = 0
+    ear_dropped = {}
+
+    def drop_ear(p, layer, start=2):
+        if through_ear(p, start):
+            ear_dropped[layer] = ear_dropped.get(layer, 0) + 1
+            return True
+        return False
     # Front locks: all of a fall's strands, a dense cell, set a little in.
     fl = cfg["front_lock"]
     for pc in np.unique(prim[(kind == 2)]):
@@ -584,14 +592,15 @@ def build(b, frame, ccfg, g):
         p.update(members=members, kind="front", layer="front", hang=H[members].mean(0))
         count("front_lock", add_card(p, int(rng.choice(fl["cells"])), "front"))
     for p in unders:
+        if drop_ear(p, "under", max(1, int(len(p["C"]) * uc["start"]))):
+            continue
         # Start under the mass, not at the hairline (a dense dark strip there).
         count("under", add_card(p, 8 + int(rng.integers(2)), "under",
                                 path_from=max(1, int(len(p["C"]) * uc["start"]))))
     # Mid / top: a cell by density rank (sparse clumps sparse cells).
     ranks = np.argsort(np.argsort([len(p["members"]) for p in profs]))
     for p, r in zip(profs, ranks):
-        if p["kind"] != "front" and through_ear(p):
-            ear_dropped += 1
+        if p["kind"] != "front" and drop_ear(p, p["layer"]):
             continue
         cell = int(np.clip(r / max(len(profs) - 1, 1) * 8 + rng.integers(-1, 2), 0, 7))
         count(p["layer"], add_card(p, cell, p["layer"]))
@@ -610,7 +619,9 @@ def build(b, frame, ccfg, g):
         S = E[j:j + 1]
         p = {"C": E[j], "hang": H[j], "kind": "fly"}
         T, Nn, B, touch = frame_along(frame, E[j], cloth_gap, 0.02)
-        p.update(N=Nn, hw=np.full(m, fc["halfwidth_m"]))
+        p.update(N=Nn, B=B, hw=np.full(m, fc["halfwidth_m"]))
+        if drop_ear(p, "fly", s0):
+            continue
         count("fly", add_card(p, 10, "fly", path_from=s0, halfwidth_m=fc["halfwidth_m"]))
 
     springs = None
