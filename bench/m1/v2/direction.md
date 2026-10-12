@@ -3,7 +3,7 @@
 _Consultation (Fable, strategy only), 2026-10-12. Scope: Cycles hero renders plus the game GLB. No actor names anywhere; the face is ours._
 
 > **Orchestrator overrides (binding):**
-> - **No scars.** User ruling 2026-10-12 ("no scar"). Drop the brow-tail scar, its hairless brow gap, and the cheekbone nick from §3 and Track C. Keep the mole and every other asymmetry.
+> - **No scars and no distinguishing marks.** User ruling 2026-10-12 (NOTES decision log: "No scar or other distinguishing mark"). Drop the brow-tail scar, its hairless brow gap, the cheekbone nick **and the mole** from §3 and Track C. Keep the asymmetries, age markers and skin story; ordinary skin variation (faint freckles, capillaries, small blemishes) is fine, a single eye-catching mark is not.
 > - Track E: ship the base light rig as a callable script first (commit it on your branch early), before the set dressing; §7.
 > - Numbers here are starting points. Your eyes on the renders decide; note the deviations in your report.
 
@@ -226,7 +226,7 @@ Age 44–46. Build it from numbers, seeded, with mirroring off.
 - Left eye aperture 0.5 mm narrower.
 - Left ear 1 mm lower; the tops of both ears protrude 3 mm.
 - ~~Brow scar, cheek nick~~ (removed: user ruling, no scars).
-- One 1.5 mm mole, 20 mm below the right outer eye corner.
+- ~~Mole~~ (removed: no distinguishing marks).
 
 **Proportions:**
 - Eye spacing 0.46 × bizygomatic.

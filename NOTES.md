@@ -688,6 +688,12 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 
 ## Decision log
 
+### 2026-10-12 — m1 v2: painterly realism, all compute local (user)
+- **Target**: painterly realism. That means realistic anatomy, skin, hair and materials, with the painted neo-noir finish in the textures around the face, the light and the grade. The bar is a believable AAA hero in a Cycles close-up. The run ends only when the user reviews the hero renders. Brief and direction: `bench/m1/v2/{BRIEF,direction}.md`.
+- **Compute: everything runs on this machine.** Rented GPU (RunPod) was dropped because of cost, and freestyle.sh was dropped as too small, CPU-only and discouraging batch work. Slow jobs (bakes, cloth sims, final renders) run overnight.
+- **MetaHuman rejected**: Epic's terms don't allow raw assets in a public open-source repo, it needs a Windows GPU machine and Epic's cloud services, and it would be the one proprietary piece.
+- Hero geometry that only renders (strand grooms) lives in the `hero_only` collection, which the GLB export skips. The game asset carries cards and shells baked from the same grooms.
+
 ### 2026-10-12 — first footage run (cookies)
 - YouTube unblocked with the user's cookies. Four official uploads (two JW4 featurettes, the Sacré-Cœur "10 hours" loop, the IGN behind-the-scenes stair clip) went through the full pipeline.
 - Yield: **18.1 s QC-clean from 563 s (3.2 %)**, 8 shots, mostly fight motion plus one 3.7 s stair descent. The §8 locomotion targets aren't in these uploads, so m2 locomotion stays on 100STYLE / CMU. The next footage batch targets official **scene clips**.
