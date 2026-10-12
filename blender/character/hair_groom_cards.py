@@ -51,9 +51,9 @@ CARDS = {
     "segment_m": 0.022, "min_segments": 4, "max_segments": 14,
     "min_halfwidth_m": 0.0015, "width_pct": 92, "width_pad_m": 0.0018,
     "tip_width": 0.45, "curve": 0.3, "root_w": [0.25, 0.8], "root_w_m": [0.005, 0.025],
-    "under": {"split": 2, "inset_m": 0.003, "width": 1.1, "max_halfwidth_m": 0.02},
+    "under": {"split": 2, "inset_m": 0.003, "width": 1.1, "max_halfwidth_m": 0.02, "start": 0.2},
     "flyaways": {"count": 40, "start": 0.35, "halfwidth_m": 0.0012},
-    "layer_shade": {"under": 0.7, "mid": 0.82, "top": 1.0, "front": 0.9, "fly": 0.85},
+    "layer_shade": {"under": 0.8, "mid": 0.82, "top": 1.0, "front": 0.9, "fly": 0.85},
     "root_dark": 0.35, "root_v": 0.3, "lock_sigma": 0.15,
     # Cards rooted within `near_m` of the (recessed) hairline: little root
     # darkening, a sparse cell, a slower widening (no dark wedge on the skin).
@@ -514,6 +514,8 @@ def build(b, frame, ccfg, g):
         near = 1 - smoothstep(hl["near_m"][0], hl["near_m"][1], d_root)
         widen = 0.12 + (hl["widen"] - 0.12) * near
         rdark = cfg["root_dark"] + (hl["root_dark"] - cfg["root_dark"]) * near
+        if layer == "under":
+            rdark = 0.0  # beneath the mass: its roots never show
         if near > 0.5 and layer in ("mid", "top"):
             cell = int(rng.choice(hl["cells"]))
         rw0, rw1 = cfg["root_w"]
@@ -552,7 +554,9 @@ def build(b, frame, ccfg, g):
         tris[layer] = tris.get(layer, 0) + t
 
     for p in unders:
-        count("under", add_card(p, 8 + int(rng.integers(2)), "under"))
+        # Start under the mass, not at the hairline (a dense dark strip there).
+        count("under", add_card(p, 8 + int(rng.integers(2)), "under",
+                                path_from=max(1, int(len(p["C"]) * uc["start"]))))
     # Mid / top: a cell by density rank (sparse clumps sparse cells).
     ranks = np.argsort(np.argsort([len(p["members"]) for p in profs]))
     for p, r in zip(profs, ranks):
