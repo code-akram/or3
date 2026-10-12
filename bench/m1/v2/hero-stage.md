@@ -91,3 +91,70 @@ The shot list follows direction §5, with two substitutions: no "buttoning the j
 - The log of each pose (source, active correctives with their weights) goes to `stage.json` / `rig.json`.
 - `bench/m1/deform_hero.py` (Track F's wrapper) is now redundant: it applies the same runtime a second time, which is idempotent.
 - What broke with E's solver poses on the pre-F build (main2): in `ready`, the hands interpenetrate (a support hand wrapped around a closed hand needs contact, which pose data alone doesn't give), and the hands read as mittens or claws in every pose.
+
+## Runs (evidence)
+
+All under `data/build/hero/` in the main checkout. Builds come from `data/build/lookdev/`.
+
+| Run | Build | What changed / what it showed |
+|---|---|---|
+| `20261012T192008Z-it1` … `20261012T194137Z-it4` | pre-forms main | first set and rig passes: haze too thick (0.03 /m), flat brick behind portrait/profile (→ the set turns), cheat key washing the walls (→ flags), spill and far-end glow too strong, wall words facing the wall |
+| `20261012T200818Z-main2-preview` | `20261012T194340Z-heroE-main2` (main + track A forms freeze) | all nine shots + rest turntable (interrupted at tt135 by the load cap); `sheet.png` |
+| `20261012T203233Z-main2-flags` | same | light-linked key/fill/eye; portrait, sign, draw, profile |
+| `20261012T204204Z-main2-final-timing` | same | final portrait at `-t 3`: stopped after 35 min with the shot unfinished (to free the one Blender slot for the track F integration) |
+| **`20261012T212025Z-main3-F`** | **`20261012T211741Z-heroE-main3` (main ff03f62, track F merged)** | F's poses + runtime: portrait, draw, profile, hands, walk, stand turntable tt0/tt90 (beauty, clay, normal); `sheet.png` |
+
+## Render time per shot
+
+Measured at `-t 3` on a shared, loaded machine (load 9–50 on 16 cores), so the numbers are upper bounds.
+
+**Preview** (64 spp, adaptive 0.05, 50 % resolution = 960x540 / 576x1024, OIDN):
+
+| Shot | s | Shot | s |
+|---|---|---|---|
+| portrait | 105–119 | eye | 140 |
+| sign (poster) | 148–151 | bust | 126 |
+| profile | 102–144 | back | 123 |
+| draw | 106–129 | walk | 146–169 |
+| hands | 86–122 | turntable view (1080x1620 @ 50 %) | beauty 13–25, clay 14–21, normal 4–7 |
+
+- One preview set (9 shots, plus 8 views x 2 poses x 3 passes) is about 19 min of shots plus 12 min of turntable at `-t 3`.
+- Grading takes 0.2–0.8 s per image.
+- Building the set takes 0.1–0.2 s.
+
+**Final** (768 spp, adaptive 0.012, 100 %, OIDN): see "Final timing" below.
+
+## What the stage shows about the character (main ff03f62, run main3-F)
+
+For the owning tracks. The stage doesn't fix any of these.
+
+- **A (head, skin)**: the skin is waxy and peach. The build ships no subsurface on `skin_head` / `skin_hands` (the stage adds direction §2's values render-side, as reported), and the lips read orange. Under the 85 mm key the face planes are still broad.
+- **B (hair)**: the cards read as strips or ribbons in the portrait and the back ¾, with no fine strands at the silhouette under the magenta rim.
+- **C (beard, brows)**: the beard is a dark felt mass with a hard edge against the cheek, and the brows are dash strokes.
+- **D (suit)**:
+  - Collar and lapel "wings" stand above the shoulders, in rest pose too.
+  - The shoulders are boxy.
+  - There is a torn flap at the jacket's back hem.
+  - The wool reads brown-grey under the warm key (no sheen).
+  - Sleeves and trousers are tubes.
+  - New in the hands shot: a jagged, sawtooth black edge along the shirt cuff where it meets the sleeve.
+- **F (deformation)**: the runtime runs; the portrait's pose log shows `corr_arm_down_l 0.58, corr_arm_down_r 0.80, corr_elbow_l 0.33, corr_hip_fwd_r 0.11, …` active.
+  - `hero` with the left hand at the jacket button gives the hands shot a natural "hand on the garment" read.
+  - The hands still read as mittens or closed fists (no articulated fingers).
+  - In `high_ready` the clasped hands sit high on the chest and the stance is square, not bladed.
+
+## Verdicts
+
+- **Shared rig + turntable**: done, merged earlier (53bc1a8). The calibration cards read as intended.
+- **Alley set, haze, rain, signs**: done. It reads as a wet neon-noir alley with depth behind every shot.
+  - Limits:
+    - No rain motion blur.
+    - No water beads or wet hair.
+    - The alley's far end is a flat emissive plane.
+- **Grade**: done.
+  - The painterly A/B is subtle at preview resolution. It is masked off the character on purpose (§4).
+- **Shot list**: 9 shots + turntable, all render.
+  - §5's "buttoning / cuff" hand-on-garment shot is effectively covered by F's `hero` pose in the hands shot.
+- **Poses**: F's canonical poses plus the runtime are in every render. E's walk is kept.
+- **hero.sh**: writes PNGs, painterly A/B, the sheet and stage.json, including for an interrupted stage (`--regrade` re-grades).
+- **Final quality**: see "Final timing".
