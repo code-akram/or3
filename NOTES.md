@@ -174,12 +174,14 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 - Shading: banded Kajiya-Kay with shifted tangents. Alpha-to-coverage + 4× MSAA only for the fringe and beard edges. Fixed alphaTest in shadows.
 
 ### Budgets (initial, to calibrate)
-- LOD0: 40–60k tris (body ~15k, suit 15–20k, hair 8–12k, face/eyes ~5k). LOD1 50%, LOD2 20% (meshoptimizer).
+- **Quality over budget (user, 2026-10-12): "invest in the character."** The hero LOD0 may use **up to ~120k tris (hard cap 150k)**, with hair and beard up to ~35k. LOD1 and LOD2 (meshoptimizer) cover gameplay distance. Spend the density where it shows: face planes, hair, hands.
+  - Why it's affordable: one skinned hero mesh is cheap on the M4. In the Air run, 12,800 instanced bones took 3.1 ms of GPU time. The real costs are shading, hair alpha and overdraw, so measure those at m2.
+  - The original budget was LOD0 40–60k (body ~15k, suit 15–20k, hair 8–12k, face/eyes ~5k).
   - Spike-1 baseline: 50.2k tris (body 15.2k, suit 19.2k, hair 4.1k, teeth 7.1k, shoes 3.3k), 53 bones, 4 weights per vertex.
   - **Teeth fixed (m1 track A).** All six MPFB teeth variants are 7,120 tris, so the teeth are collapse-decimated to 899 tris (mean deviation 0.3 mm). The spec targets ≤ 500. The m1 baseline is **43,949 tris**.
-  - Spec cap is ≤ 50k tris (hard cap 60k). The bone plan is 86 of 90: 6 twist, 4 helper, 3 face, 8 jacket, 12 hair.
+  - The spec's cap of ≤ 50k tris (hard 60k) is superseded by the budget above. The body ≤ 10k target is dropped. The bone plan is 86 of 90: 6 twist, 4 helper, 3 face, 8 jacket, 12 hair.
 - 60–90 bones, 4 weights per vertex.
-- Textures 2048 (body, suit) and 1024 (hair), KTX2.
+- Textures: 2048 for body and suit, 1024 for hair, KTX2. The face may go to 4096 if that pays off. A 4k ASTC/BC7 texture with mips is about 21 MB, well inside the 1.5 GB tab budget.
 
 ### Identity in motion
 - The Wick walk, posture, suit adjusting.
@@ -672,6 +674,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
   - No automated face-similarity check: the user answers the likeness question at each review.
   - No tie spring bones: the tie is tucked under the waistcoat.
   - **The city has no recorded human voices** (announcements, talking machines).
+- **Character budget raised** (user): quality over triangles. Hero LOD0 up to ~120k (cap 150k), with the LOD chain for distance (§7 Budgets).
 - **m1 wave 1 merged**: the look-dev harness plus modular build (track A) and the look spec (track C). Wave 2 (suit, head plus proportions, hair plus beard) runs in parallel worktrees, leading to the direction checkpoint.
 - **Audio listening gate (spike 7), on the Air's speakers:**
   - Approved: dry steps, the alley IR (the 8.6 dB calibration stands), and clarity at low volume.
