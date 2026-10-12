@@ -49,13 +49,16 @@ DEFAULTS = {
     "cards": "clumps",         # game cards: "groom" (baked from this groom) or "clumps"
     "seed": 21,
     "guides": 520,
-    "strands": 24000,          # main strands (vellus and front falls extra)
+    "strands": 40000,          # main strands (vellus and front falls extra)
     "points": 24,
     "radius_m": [0.000045, 0.00002],   # root, tip
     "gap_m": 0.0012,           # strand clearance over the skin
     "layer_jitter_m": 0.004,   # guide stand-off jitter (layers stack)
     "knn": 4,                  # guides blended per strand
     "part_jitter_m": 0.002,    # the part line wanders this much (soft part)
+    "part_push": 0.25,         # comb push away from the part (hair_clumps uses clumps.part_push)
+    "part_width_m": 0.02,
+    "part_lift_m": 0.004,      # strands next to the part rise a little before they fall
     # Hairline: temples recede (two bays), the density ramps over the feather.
     "hairline": {"recess_m": 0.009, "recess_az_deg": 44, "recess_sigma_deg": 13,
                  "recess_above_ear_m": 0.025,
@@ -64,10 +67,12 @@ DEFAULTS = {
     # Volume lift (stand-off from the skull along the strand, Strand.lift):
     # front roots lift off the forehead, the crown lies flat, the occiput full.
     "lift": {"front_m": 0.010, "front_band_m": 0.035, "crown_m": 0.003, "side_m": 0.003,
-             "back_m": 0.008, "rise_m": 0.03, "hold_m": 0.05, "fall_m": 0.10, "keep": 0.5,
+             "back_m": 0.008, "rise_m": 0.05, "hold_m": 0.05, "fall_m": 0.10, "keep": 0.5,
              "jitter": 0.3},
-    "clump": {"primary": 36, "primary_factor": 0.6, "primary_shape": 0.3,
-              "secondary": 420, "secondary_factor": 0.4, "secondary_shape": 0.0,
+    # Clumping ramps in along the strand: `scalp` x the factor while it lies
+    # on the skull (combed hair lies smooth), full `ramp_m` past the hang point.
+    "clump": {"scalp": 0.2, "ramp_m": 0.06, "primary": 36, "primary_factor": 0.7, "primary_shape": 0.3,
+              "secondary": 420, "secondary_factor": 0.6, "secondary_shape": 0.0,
               "stray": 0.10, "tip_spread": 0.0},
     "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18], "jitter": 0.4},
     "noise": {"distance_m": 0.0015, "scale": 40.0, "shape": 0.3},
@@ -82,17 +87,17 @@ DEFAULTS = {
         {"side": -1, "count": 3, "az0_deg": 30, "az_step_deg": 6.0, "el_deg": 24,
          "comb_side": 0.2, "comb_fwd": 0.05, "comb_down": 0.9, "fall_after_m": 0.025,
          "tip_above_lips_m": 0.03, "tip_jitter_m": 0.02, "hug": 0.15, "clear_m": 0.005,
-         "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 70,
-         "factor": 0.75},
-        {"side": 1, "count": 1, "az0_deg": 14, "az_step_deg": 0.0, "el_deg": 30,
-         "comb_side": 0.15, "comb_fwd": 0.25, "comb_down": 0.8, "fall_after_m": 0.02,
-         "tip_above_lips_m": 0.085, "tip_jitter_m": 0.0, "hug": 0.3, "clear_m": 0.003,
-         "flare_after_m": 1.0, "flare": 0.0, "max_len_m": 0.12, "strands": 25,
+         "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 180,
+         "factor": 0.85},
+        {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 30,
+         "comb_side": 0.6, "comb_fwd": 0.2, "comb_down": 0.7, "fall_after_m": 0.03,
+         "tip_above_lips_m": 0.075, "tip_jitter_m": 0.0, "hug": 0.4, "clear_m": 0.002,
+         "flare_after_m": 1.0, "flare": 0.0, "max_len_m": 0.13, "strands": 50,
          "factor": 0.8}],
-    "shader": {"model": "HUANG", "melanin": 0.95, "redness": 0.55,
+    "shader": {"model": "HUANG", "melanin": 0.95, "redness": 0.3,
                "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
                "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.03, "light_melanin": 0.85},
-    "scalp_tint": {"offset_m": 0.0004, "color": "#2a1f19", "feather_m": 0.012},
+    "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
 }
 
 DOWN = Vector((0.0, 0.0, -1.0))
@@ -224,8 +229,9 @@ def comb_dir(surf, ccfg, p, nrm, rng, side=None):
     c = surf.c
     dx = p[0] - surf.part_x
     on_top = nrm[2] > 0.5 and p[1] < c.y + 0.02
-    push = (math.copysign(ccfg["part_push"], dx if side is None or side == 0 else side)
-            * math.exp(-abs(dx) / ccfg["part_width_m"])) if on_top else 0.0
+    gc = surf.cfg
+    push = (math.copysign(gc["part_push"], dx if side is None or side == 0 else side)
+            * math.exp(-abs(dx) / gc["part_width_m"])) if on_top else 0.0
     drop = ccfg["comb_drop"] + ccfg["side_drop"] * smoothstep(0.4, 0.8, abs(nrm[0]))
     return Vector((push + rng.uniform(-0.08, 0.08), 1.0, -drop))
 
@@ -241,6 +247,8 @@ def lift_profile(surf, gcfg, p, nrm, rng):
     back = smoothstep(c.y, c.y + 0.05, p[1]) * (1 - top)
     side = 1 - max(top, back)
     amp = max(L["front_m"] * front, L["crown_m"] * top + L["side_m"] * side + L["back_m"] * back)
+    if nrm[2] > 0.5 and p[1] < c.y + 0.02:
+        amp += surf.cfg["part_lift_m"] * math.exp(-abs(p[0] - surf.part_x) / 0.012)
     amp *= 1 - L["jitter"] * rng.random()
     return (amp, L["rise_m"], L["hold_m"], L["fall_m"], L["keep"])
 
@@ -492,9 +500,16 @@ def groom_nodes(gcfg):
     noise.inputs["Cumulative Offset"].default_value = False
     c1 = group("Clump Hair Curves", Shape=cc["primary_shape"], Seed=seed + 1)
     c1.inputs["Tip Spread"].default_value = cc["tip_spread"]
-    L.new(scaled("clump_w", cc["primary_factor"]), c1.inputs["Factor"])
+    def clump_factor(k):
+        m = N.new("ShaderNodeMath")
+        m.operation = "MULTIPLY"
+        L.new(scaled("clump_w", k), m.inputs[0])
+        L.new(attr("clump_ramp").outputs["Attribute"], m.inputs[1])
+        return m.outputs[0]
+
+    L.new(clump_factor(cc["primary_factor"]), c1.inputs["Factor"])
     c2 = group("Clump Hair Curves", Shape=cc["secondary_shape"], Seed=seed + 2)
-    L.new(scaled("clump_w", cc["secondary_factor"]), c2.inputs["Factor"])
+    L.new(clump_factor(cc["secondary_factor"]), c2.inputs["Factor"])
     L.new(attr("sub_guide_index", "INT").outputs["Attribute"], c2.inputs["Guide Index"])
     frizz = group("Frizz Hair Curves", Distance=fz["distance_m"], Shape=fz["shape"], Seed=seed + 3)
     fly = group("Hair Curves Noise", Distance=fw["distance_m"], Scale=fw["scale"],
@@ -558,7 +573,7 @@ def scalp_tint(b, frame, keep, surf, gcfg):
     fade = bm.verts.layers.float_color.new("fade")
     for v in bm.verts:
         d = surf.d_eff(tuple(v.co))
-        a = smoothstep(0.0, st["feather_m"], d)
+        a = st["alpha"] * smoothstep(st["fade_m"][0], st["fade_m"][1], d)
         v[fade] = (a, a, a, 1.0)
     mat = bpy.data.materials.new("hair_groom_scalp")
     nt = mat.node_tree
@@ -718,6 +733,11 @@ def build(b, frame, ccfg, gcfg_in):
     radius = np.concatenate([rad, vrad]).astype(np.float32)
     ra = cv.attributes.get("radius") or cv.attributes.new("radius", "FLOAT", "POINT")
     ra.data.foreach_set("value", radius)
+    # Clump ramp per point: low while on the skull, full past the hang point.
+    ramp = cc["scalp"] + (1 - cc["scalp"]) * np.clip(H / cc["ramp_m"], 0, 1) ** 1.5
+    ramp[kind == 2] = np.clip(H[kind == 2] / 0.03, 0, 1)
+    cr = cv.attributes.new("clump_ramp", "FLOAT", "POINT")
+    cr.data.foreach_set("value", np.concatenate([ramp.ravel(), np.zeros(nv * 4)]).astype(np.float32))
 
     def curve_attr(name, dtype, values):
         a = cv.attributes.new(name, dtype, "CURVE")

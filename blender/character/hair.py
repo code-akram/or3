@@ -42,9 +42,12 @@ def post(b):
             g = hair_groom.build(b, frame, cfg["clumps"], groom)
             if g["cfg"].get("cards", "groom") == "groom":
                 from . import hair_groom_cards
-                hair_groom_cards.build(b, frame, cfg["clumps"], g)
+                cards = hair_groom_cards.build(b, frame, cfg["clumps"], g)
             else:
-                hair_clumps.build(b, frame, cfg["clumps"])
+                cards = hair_clumps.build(b, frame, cfg["clumps"])
+            # The kept .blend renders the groom (hero stage); the cards stay
+            # in the GLB (the exporter ignores render visibility).
+            cards.hide_render = True
         else:
             hair_clumps.build(b, frame, cfg["clumps"])
     if cfg.get("beard"):

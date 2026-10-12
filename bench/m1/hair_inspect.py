@@ -1,11 +1,13 @@
 """Hair inspection renders of one look-dev run: the head at 1024² from several
-views, under the studio rig or the neon-noir hero rig, from the GLB (the game
-cards) or from the kept .blend (the hero strand groom in `hero_only`, Cycles).
-For eyes only; adds nothing to metrics.json.
+views, under the look-dev studio rig or the shared hero / turntable rigs
+(blender/hero/rig.py, Track E), from the GLB (the game cards) or from the kept
+.blend (the hero strand groom in `hero_only`, Cycles). For eyes only; adds
+nothing to metrics.json.
 
     blender -b -t 4 --factory-startup --python bench/m1/hair_inspect.py -- \
-        RUN_DIR [--out DIR] [--res 1024] [--source glb|blend] [--rig studio|neon] \
-        [--engine eevee|cycles] [--samples N] [--views a,b,c] [--tag NAME]
+        RUN_DIR [--out DIR] [--res 1024] [--source glb|blend] \
+        [--rig studio|hero|turntable] [--engine eevee|cycles] [--samples N] \
+        [--views a,b,c] [--tag NAME]
 
 --source blend needs RUN_DIR/character.blend (KEEP_BLEND=1): the card hair is
 hidden and the groom shown. Writes <out>/<tag><view>.png and
@@ -25,7 +27,9 @@ import sys
 
 import bpy
 from mathutils import Vector
-from mathutils.bvhtree import BVHTree
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))), "blender"))
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 
@@ -155,49 +159,25 @@ def studio(scene):
         look_at(ob, aim)
 
 
-def neon(scene, head):
-    """The direction's base hero rig (direction.md §5), placed round the head:
-    amber key camera-left and up, magenta strip rim behind-right, teal
-    kicker behind-left, a faint cool fill. Ratios 1 / 0.7 / 0.4 / 0.08."""
-    world = scene.world or bpy.data.worlds.new("neon")
-    scene.world = world
-    world.use_nodes = True
-    world.node_tree.nodes["Background"].inputs[0].default_value = (0.004, 0.004, 0.006, 1)
-    k = float(os.environ.get("NEON_KEY_W", "140"))
-
-    def light(name, d, dist, energy, color, sx, sy):
-        ld = bpy.data.lights.new(name, "AREA")
-        ld.shape = "RECTANGLE"
-        ld.size, ld.size_y = sx, sy
-        ld.energy, ld.color = energy, color
-        ob = bpy.data.objects.new(name, ld)
-        scene.collection.objects.link(ob)
-        ob.location = head + Vector(d).normalized() * dist
-        look_at(ob, head)
-
-    def at(az, el):
-        az, el = math.radians(az), math.radians(el)
-        return (math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el))
-
-    light("key", at(-40, 25), 1.5, k, (1.0, 0.66, 0.38), 0.8, 0.8)
-    light("rim_magenta", at(135, 10), 1.3, 0.7 * k * 1.6, (1.0, 0.18, 0.55), 0.3, 1.5)
-    light("kick_teal", at(-140, 15), 1.3, 0.4 * k * 1.6, (0.1, 0.8, 0.9), 0.3, 1.2)
-    light("fill", at(30, -10), 2.0, 0.08 * k * 2, (0.7, 0.8, 1.0), 2.0, 2.0)
-
-
 def main():
     arm = load()
     scene = bpy.context.scene
     a = anchors(arm)
-    if RIG == "neon":
-        neon(scene, a["head"] + Vector((0, 0, 0.02)))
+    rig = ch = None
+    if RIG in ("hero", "turntable"):
+        from hero import rig
+        ch = rig._character_from_scene()
     else:
         studio(scene)
     scene.view_settings.view_transform = "AgX"
     scene.view_settings.look = "None"
     scene.view_settings.exposure = float(os.environ.get("LOOKDEV_EXPOSURE", "-2.5"))
     r = scene.render
-    if ENGINE == "cycles":
+    if rig is not None:
+        rig.cycles("final", (RES, RES), SAMPLES)
+        scene.cycles_curves.shape = "THICK"
+        scene.cycles_curves.subdivisions = 2
+    elif ENGINE == "cycles":
         r.engine = "CYCLES"
         scene.cycles.device = "CPU"
         scene.cycles.samples = SAMPLES
@@ -230,6 +210,21 @@ def main():
                                         math.sin(el_r))) * dist
         look_at(cam, target)
         scene.camera = cam
+        if rig is not None:
+            for col in ("hero_rig", "tt_rig", "tt_cyc", "hero_ground"):
+                rig.collection(col)
+            camd = {"obj": cam, "subject": ch.aim("eyes")}
+            vs = scene.view_settings
+            if RIG == "hero":
+                rig.world()
+                rig.hero_rig(ch, camd)
+                rig.void_floor()
+                vs.exposure, vs.look = rig.HERO_EXPOSURE, rig.HERO_LOOK
+            else:
+                rig.world((0.05, 0.05, 0.05), 1.0)
+                rig.turntable_rig(ch, camd)
+                rig.cyclorama(cam.location, ch.aim("body"))
+                vs.exposure, vs.look = rig.TT_EXPOSURE, "None"
         r.filepath = os.path.join(OUT, TAG + name + ".png")
         bpy.ops.render.render(write_still=True)
     names = VIEWS
