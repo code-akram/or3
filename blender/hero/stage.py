@@ -3,7 +3,7 @@ turntable for one character build (bench/m1/hero.sh drives it).
 
     blender -b -t 16 --factory-startup --python-exit-code 1 --python blender/hero/stage.py -- \\
         --in RUN/character.blend --out DIR [--quality preview|final|draft] \\
-        [--shots portrait,sign,...|all|none] [--turntable] [--set alley|void]
+        [--shots portrait,sign,...|all|none] [--turntable] [--set alley|void] [--crop close|LIST]
 
 Per hero shot: pose, camera, hero rig (+ shot overrides), haze behind the
 subject, rain in the view volume; renders a scene-linear multilayer EXR
@@ -25,9 +25,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.dirname(HERE) not in sys.path:
     sys.path.insert(0, os.path.dirname(HERE))
 
-from hero import poses, rig, sets, shots  # noqa: E402
+from hero import poses, rig, sets, shots, wet  # noqa: E402
 
-TRANSIENT = ("hero_rig", "tt_rig", "tt_cyc", "hero_ground", "hero_haze", "hero_cams", "set_rain", "cal_cards")
+TRANSIENT = ("hero_rig", "tt_rig", "tt_cyc", "hero_ground", "hero_haze", "hero_cams", "set_rain", "cal_cards",
+             "hero_wet")
 
 
 def clear_transient():
@@ -35,12 +36,55 @@ def clear_transient():
         rig.collection(name)
 
 
-def render_shot(ch, name, spec, quality, out_dir, set_kind):
+def render_crop(ch, name, spec, cam, out_dir, size=0.5):
+    """Close-up evidence: the same shot at 100 % resolution, cropped to
+    `size` of the frame around the near eye (head shots) or the camera's
+    focus target. Writes exr/<name>_crop.exr; returns its record."""
+    from bpy_extras.object_utils import world_to_camera_view
+    sc = bpy.context.scene
+    r = sc.render
+    aim = rig._parse_cam(spec["cam"])[3]
+    if aim in ("eyes", "head"):
+        pt = ch.aim("eyes")
+    elif aim == "cuff_feet":
+        pt = ch.bone_head("hand_l")
+    else:
+        pt = cam["aim"]
+    v = world_to_camera_view(sc, cam["obj"], pt)
+    cx = min(max(v.x, size / 2), 1 - size / 2)
+    cy = min(max(v.y, size / 2), 1 - size / 2)
+    pct = r.resolution_percentage
+    r.resolution_percentage = 100
+    r.use_border, r.use_crop_to_border = True, True
+    r.border_min_x, r.border_max_x = cx - size / 2, cx + size / 2
+    r.border_min_y, r.border_max_y = cy - size / 2, cy + size / 2
+    path = os.path.join(out_dir, "exr", name + "_crop.exr")
+    r.filepath = path
+    t = time.perf_counter()
+    try:
+        bpy.ops.render.render(write_still=True)
+    finally:
+        r.use_border = r.use_crop_to_border = False
+        r.resolution_percentage = pct
+    secs = round(time.perf_counter() - t, 1)
+    w, h = round(r.resolution_x * size), round(r.resolution_y * size)
+    print(f"[stage] {name}_crop: {secs} s ({w}x{h} at 100 %)", flush=True)
+    return {"shot": name + "_crop", "seconds": secs, "crop_of": name, "res": [w, h], "pct": 100,
+            "samples": sc.cycles.samples}
+
+
+def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
     clear_transient()
+    wet.restore(ch)
     ch.pose_log = poses.apply(ch.arm, spec["pose"])
     res = spec["res"]
     settings = rig.cycles(quality, res)
     cam = rig.camera(ch, spec["cam"])
+    # wet look (render side): hair tips in every rain shot, beads on the
+    # shoulders in the close-ups, eyes to camera (or `gaze` deg off it)
+    wet_hair = wet.hair_tips(ch, 1.0 if spec.get("rain") else 0.0)
+    n_beads = wet.beads(ch, per_side=spec["beads"]) if spec.get("beads") else 0
+    eyes = wet.gaze(ch, cam["obj"].location, off_deg=spec["gaze"]) if spec.get("gaze") is not None else None
     cam["obj"].data.shift_x = spec.get("shift", 0.0)
     cam["obj"].data.shift_y = spec.get("shift_y", 0.0)
     if set_kind == "alley":
@@ -73,15 +117,23 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind):
     secs = round(time.perf_counter() - t, 1)
     print(f"[stage] {name}: {secs} s ({settings['samples']} spp, {res[0]}x{res[1]} @ {settings['pct']} %)",
           flush=True)
-    return {"shot": name, "seconds": secs, "exposure": rig.HERO_EXPOSURE + spec.get("ev", 0.0),
+    extra = []
+    if crop:
+        c = render_crop(ch, name, spec, cam, out_dir)
+        c["exposure"] = rig.HERO_EXPOSURE + spec.get("ev", 0.0)
+        extra.append(c)
+    return [{"shot": name, "seconds": secs, "exposure": rig.HERO_EXPOSURE + spec.get("ev", 0.0),
             "cam": spec["cam"], "pose": spec["pose"], "pose_log": ch.pose_log, "rain": n_rain,
-            "haze": spec.get("haze", 0.0), **settings}
+            "beads": n_beads, "wet_hair": bool(spec.get("rain")) and wet_hair, "eyes_turned_deg": eyes,
+            "haze": spec.get("haze", 0.0), **settings}] + extra
 
 
 def render_turntable(ch, quality, out_dir, views, poses_, passes, recs=None, save=None):
     tdir = os.path.join(out_dir, "turntable")
     os.makedirs(tdir, exist_ok=True)
-    clear_transient()   # drops the last shot's rain (its collection is transient)
+    clear_transient()   # drops the last shot's rain and beads (transient collections)
+    wet.restore(ch)
+    wet.hair_tips(ch, 0.0)
     hidden = [(o, o.hide_render) for o in bpy.data.objects
               if any(c.name == "set_alley" for c in o.users_collection)]
     for o, _ in hidden:
@@ -155,6 +207,9 @@ def main(argv):
     ap.add_argument("--tt-poses", default=",".join(shots.TT_POSES))
     ap.add_argument("--tt-passes", default=",".join(shots.TT_PASSES))
     ap.add_argument("--set", dest="set_kind", choices=["alley", "void"], default="alley")
+    ap.add_argument("--crop", default="none",
+                    help="shots that also get a 100 %% crop (half the frame each way) around the eye or "
+                         "focus point: a list, 'close' (shots.CLOSE) or 'none'")
     ap.add_argument("--skin-sss", choices=["auto", "off"], default="auto",
                     help="auto: fill in Cycles SSS when the build's skin has none (render-side)")
     a = ap.parse_args(argv)
@@ -174,8 +229,9 @@ def main(argv):
         t = time.perf_counter()
         sets.alley()
         rec["set_build_s"] = round(time.perf_counter() - t, 2)
+    crops = shots.CLOSE if a.crop == "close" else ([] if a.crop == "none" else a.crop.split(","))
     for n in names:
-        rec["shots"].append(render_shot(ch, n, shots.SHOTS[n], a.quality, out, a.set_kind))
+        rec["shots"] += render_shot(ch, n, shots.SHOTS[n], a.quality, out, a.set_kind, crop=n in crops)
         with open(os.path.join(out, "stage.json"), "w") as f:
             json.dump(rec, f, indent=1)
     if a.turntable:

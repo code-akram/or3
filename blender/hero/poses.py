@@ -47,17 +47,27 @@ def _sfx(s):
 
 
 class Poser:
-    def __init__(self, arm):
+    def __init__(self, arm, reset=True):
+        """reset=False keeps the current pose (e.g. a deform_poses pose) and
+        works on top of it."""
         self.arm = arm
         self.pb = arm.pose.bones
         self.log = []
+        mats = {p.name: p.matrix.copy() for p in self.pb}
         for p in self.pb:
             p.rotation_mode = "QUATERNION"
-            p.rotation_quaternion = (1, 0, 0, 0)
-            p.location = (0, 0, 0)
-            p.scale = (1, 1, 1)
+            if reset:
+                p.rotation_quaternion = (1, 0, 0, 0)
+                p.location = (0, 0, 0)
+                p.scale = (1, 1, 1)
         self.update()
-        self.rest = {p.name: p.matrix.copy() for p in self.pb}
+        if not reset:
+            for p in self.pb:          # parents first: re-seat any converted rotation
+                if p.matrix.to_quaternion().rotation_difference(mats[p.name].to_quaternion()).angle > 1e-4 or \
+                        (p.matrix.translation - mats[p.name].translation).length > 1e-5:
+                    p.matrix = mats[p.name]
+                    self.update()
+        self.rest = {p.name: p.bone.matrix_local.copy() for p in self.pb}
 
     # ---------------------------------------------------------------- basics
     def update(self):
@@ -388,6 +398,23 @@ def pose_ready_low(p):
     p.look(yaw=-6.0, pitch=-4.0)
 
 
+def cuff_arms(p):
+    """Adjusting the cuff (direction §5 shot 5), on top of F's hero legs,
+    torso and head: the left forearm across the front of the waist, back of
+    the hand to the camera; the right hand pinches the left shirt cuff."""
+    # upper arm down by the side, elbow ~90 deg, forearm level across the front
+    p.reach(+1, Vector((0.06, -0.255, 1.15)), pole=(0.6, 0.3, -1.0))
+    p.hand(+1, fingers=(-1.0, -0.25, -0.12), thumb=(0.0, 0.1, 1.0))
+    p.curl(+1, base=(18, 24, 30, 36), thumb=(6, 10, 10))
+    wl = p.head("hand_l")
+    f = (wl - p.head("lowerarm_l")).normalized()
+    cuff = wl - f * 0.035
+    fr = Vector((0.55, -0.25, -0.8)).normalized()          # right hand: fingers left and down
+    p.reach(-1, cuff - fr * 0.085 + Vector((0.0, -0.015, 0.02)), pole=(-0.7, 0.4, -1.0))
+    p.hand(-1, fingers=(-fr.x, fr.y, fr.z), thumb=(0.0, -1.0, 0.2))
+    p.curl(-1, base=(42, 52, 62, 68), seg=(1.0, 1.2, 0.7), spread=0.0, thumb=(10, 22, 20))
+
+
 def pose_stand_profile(p):
     """The hero stand, head straight ahead and chin 3 deg down (profile shot)."""
     pose_stand(p, look=(0.0, 3.0, 0.0))
@@ -397,6 +424,8 @@ def pose_stand_profile(p):
 # hero stand and the ready stances; E's own solver versions stay available as
 # `*_e` (and for the walk, which F only has as a deformation test pose).
 F_POSES = {"stand": "hero", "ready": "high_ready", "ready_low": "low_ready"}
+# F's pose for the body, E's solver on top for the arms
+HYBRID = {"cuff": ("hero", "cuff_arms")}
 
 POSES = {"rest": pose_rest, "stand_e": pose_stand, "stand_profile_e": pose_stand_profile,
          "walk": pose_walk, "ready_e": pose_ready, "ready_low_e": pose_ready_low}
@@ -432,7 +461,7 @@ def _f_spec(name):
 
 def names():
     dp = _dp()
-    out = list(POSES) + [n for n in list(F_POSES) + ["stand_profile"] if n not in POSES]
+    out = list(POSES) + [n for n in list(F_POSES) + list(HYBRID) + ["stand_profile"] if n not in POSES]
     if dp is not None:
         out += [n for n in dp.POSES if n not in out] + ["f:" + n for n in dp.POSES]
     return out
@@ -480,6 +509,16 @@ def deform(arm):
 def apply(arm, name):
     """Pose the armature (F's canonical spec or E's solver), then run F's
     deformation runtime; returns the log (source, missing bones, notes)."""
+    if name in HYBRID and _dp() is not None:
+        base, arms = HYBRID[name]
+        _dp().apply_pose(arm, base)
+        bpy.context.view_layer.update()
+        p = Poser(arm, reset=False)
+        globals()[arms](p)
+        p.log.insert(0, f"pose {name}: deform_poses {base} + hero/poses.py {arms}")
+        log = p.log
+        log.append(deform(arm))
+        return log
     spec = _f_spec(name)
     if spec is not None:
         _dp().apply_pose(arm, spec)

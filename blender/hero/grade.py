@@ -39,6 +39,9 @@ GRADE = {
     "vignette_ev": -0.3,
     "grain": 0.02,
     "saturation": 1.04,
+    # white point: the colour of a `wb_kelvin` blackbody is mapped to white
+    # (None = the render's 6,500 K white). Shot-independent; see hero-stage.md.
+    "wb_kelvin": None,
     "paint_size": 5, "paint_sharpness": 0.4, "paint_eccentricity": 1.2, "paint_uniformity": 3,
 }
 
@@ -177,6 +180,17 @@ def build(exr_path, paint, g=GRADE):
         nt.links.new(x, ld.inputs["Image"])
         x = ld.outputs["Image"]
 
+    if g.get("wb_kelvin"):
+        wb = _new(nt, "CompositorNodeColorBalance")
+        _menu(wb, "Type", "White Point")
+        _set(wb, "Factor", 1.0)
+        temps = [i for i in wb.inputs if "Temperature" in i.name]
+        temps[0].default_value = g["wb_kelvin"]          # input white
+        if len(temps) > 1:
+            temps[1].default_value = 6500.0              # output white
+        nt.links.new(x, wb.inputs["Image"])
+        x = wb.outputs["Image"]
+
     cb = _new(nt, "CompositorNodeColorBalance")
     _menu(cb, "Type", "Offset/Power/Slope (ASC-CDL)")
     _set(cb, "Factor", 1.0)
@@ -236,8 +250,8 @@ def build(exr_path, paint, g=GRADE):
     return sc
 
 
-def grade(exr_path, out_png, paint=0.0, ev=0.0):
-    sc = build(exr_path, paint)
+def grade(exr_path, out_png, paint=0.0, ev=0.0, g=GRADE):
+    sc = build(exr_path, paint, g)
     sc.view_settings.exposure = ev
     sc.render.image_settings.file_format = "PNG"
     sc.render.image_settings.color_mode = "RGB"
@@ -261,7 +275,11 @@ def main(argv):
     ap.add_argument("--ev", type=float, action="append", default=None,
                     help="exposure per EXR (or one value for all); default from stage.json")
     ap.add_argument("--paint", type=float, default=0.6)
+    ap.add_argument("--wb", type=float, default=None, help="white point in K (overrides GRADE wb_kelvin; 0 = off)")
+    ap.add_argument("--suffix", default="", help="appended to the output names (grade A/Bs)")
     a = ap.parse_args(argv)
+    if a.wb is not None:
+        GRADE["wb_kelvin"] = a.wb or None
     os.makedirs(a.out, exist_ok=True)
     meta = {}
     sj = os.path.join(a.out, "stage.json")
@@ -272,8 +290,11 @@ def main(argv):
     for i, exr in enumerate(a.exr):
         name = os.path.splitext(os.path.basename(exr))[0]
         ev = (a.ev[i] if a.ev and len(a.ev) > 1 else a.ev[0]) if a.ev else meta.get(name, {}).get("exposure", 0.0)
-        s1 = grade(exr, os.path.join(a.out, f"{name}.png"), 0.0, ev)
-        s2 = grade(exr, os.path.join(a.out, f"{name}_paint.png"), a.paint, ev) if a.paint else None
+        crop = name.endswith("_crop")        # a 100 % crop: no vignette, no paint A/B
+        g = dict(GRADE, vignette_ev=0.0) if crop else GRADE
+        s1 = grade(exr, os.path.join(a.out, f"{name}{a.suffix}.png"), 0.0, ev, g)
+        s2 = (grade(exr, os.path.join(a.out, f"{name}{a.suffix}_paint.png"), a.paint, ev, g)
+              if a.paint and not crop else None)
         res.append({"shot": name, "exposure": ev, "grade_s": s1, "paint_s": s2})
         print(f"[grade] {name}: {s1} s, paint {s2} s", flush=True)
     with open(os.path.join(a.out, "grade.json"), "w") as f:
