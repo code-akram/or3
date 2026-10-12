@@ -61,7 +61,7 @@ A third-person gun-fu RPG shooter in the browser. One character, inspired by Joh
 - Available: Rust/cargo (stable + a nightly for WASM threads), Node 24, Python 3.14 (system), uv, ffmpeg, yt-dlp.
 - Installed 2026-10-12: Blender 5.2.2 LTS, OpenVINO 2026.4 and onnxruntime-cpu 1.29 (native libraries only; Python bindings come from uv envs).
 - Headless Chromium is available through Playwright (`~/.cache/ms-playwright`), with WebGPU on SwiftShader. Use it for correctness checks only.
-- Research codebases run in **uv-managed Python envs at the version their lockfile requires**: 3.10, or 3.11 for the GVHMR fork. Never use the system Python for them. The 3.11 change is pending user confirmation.
+- Research codebases run in **uv-managed Python envs at the version their lockfile requires**: 3.10, or 3.11 for the GVHMR fork. Never use the system Python for them. The 3.11 fork is confirmed and pinned (2026-10-12).
 - The machine is a **Hetzner** host: both its IPv4 and IPv6 addresses are in datacenter ranges (AS24940). This affects YouTube (§8).
 
 ### Play client
@@ -192,7 +192,7 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 **Footage source:** official studio-uploaded scene clips, trailers and behind-the-scenes featurettes, fetched with `yt-dlp` into `private/`. Full-film scenes are not used.
 - **YouTube** answers this machine with "confirm you're not a bot" whatever the client, IP family or PO token, because of the datacenter IP. Fetching needs the user's exported cookies at `private/youtube-cookies.txt` (mode 600), run through `pipeline/video-to-motion/fetch-youtube.sh`. yt-dlp warns that the account can be banned, so use a secondary account.
 - **Lionsgate UK/US TikTok** downloads without auth, but gives vertical re-edits (576–960 px) with captions. Use it only as a fallback.
-- **The behind-the-scenes Sacré-Cœur stair clip is an IGN exclusive.** It's studio-supplied but not studio-uploaded, so whether it counts as "official" is pending the user's ruling.
+- **Studio-supplied featurettes hosted by press outlets count as official** (ruling 2026-10-12). Example: the behind-the-scenes Sacré-Cœur stair clip, an IGN exclusive. Same rules as all footage: `private/` only, never committed.
 
 `yt-dlp` → shot split from the **union of TransNetV2 and PySceneDetect** cuts (TransNetV2 alone missed a hard cut) → filter out:
 - shots < 1 s
@@ -236,7 +236,7 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 - **Video data never enters git.** Only derived motion on our own skeleton.
 
 ### Extraction targets (priority, from research)
-1. **JW4** Sacré-Cœur stairs: the **climb and walk** wide shots only, because the tumble is unusable (spike 3). Plus its **behind-the-scenes stair clip** (cleanest framing; an IGN exclusive, pending the "official" ruling).
+1. **JW4** Sacré-Cœur stairs: the **climb and walk** wide shots only, because the tumble is unusable (spike 3). Plus its **behind-the-scenes stair clip** (cleanest framing; IGN-hosted, accepted 2026-10-12).
 2. **JW4** Paris duel / street walks, Paris Metro meeting (idle, suit adjust), Osaka Continental (walks, turns, draws).
 3. **JW4** top-down apartment oner (shooting while moving, reloads; check GVHMR's camera assumption).
 4. **JW4** Arc de Triomphe (hood slides, hops; night and occlusion make it hard, so cleanest shots only).
@@ -464,6 +464,7 @@ Target total ~11–12 ms, including 5–6 ms scene shading.
      - ViTPose: Apache-2.0.
      - GVHMR fork: ZJU non-commercial (its `pyproject` "MIT" classifier is wrong).
      - Steam Audio SDK binaries.
+9. **Exception: motion derived through SMPL/SMPL-X** (GVHMR on film footage) ships under **CC BY-NC 4.0**, not CC BY 4.0, as a documented exception (decided 2026-10-12, §17 q6). It stays separate from the CC BY 4.0 motion (100STYLE, CMU, Kimodo fill) so the rest of the project stays freely reusable. The audit policy (`licences.json`) gets a scoped entry for it when the first such clip ships.
 
 ## 15. Benchmark ladder
 
@@ -503,21 +504,21 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 
 1. ~~Audio route~~ **Resolved 2026-10-11**: programmatic fetch + ffmpeg/Python synthesis by Claude (§12). Still open: whether field recordings (home foley, Shinjuku ambience) are added later as an optional upgrade.
 2. Story development (after world).
-3. Provenance manifest format. **Draft adopted 2026-10-12, pending user approval**:
+3. ~~Provenance manifest format~~ **Adopted 2026-10-12** as the working format (it evolves as needed; changes go in the Decision log):
    - One `provenance/<domain>.jsonl` per domain (`audio`, `mesh`, `data`), validated against `record.schema.json`.
    - A licence policy in `licences.json` with allow, note and deny lists.
    - A stdlib `audit.py` with `--check-files` and `--release` modes. It fails on duplicate ids, disallowed licences and rejected inputs.
    - `audit_makehuman.py` checks MakeHuman file headers.
 4. Whether Kimodo's licence text and the PARC raw-mocap provenance hold up.
-5. Approval of the repo layout proposed in §6 (at the `m0` gate). The spikes built the layout as proposed, plus `core/build-web.sh`, `bench/server.mjs` and `pipeline/{audio,video-to-motion}/`.
-6. **Licensing of motion derived through SMPL/SMPL-X.**
+5. ~~Repo layout~~ **Adopted 2026-10-12** as a living convention (where new things go), not a freeze. The spikes built it as proposed, plus `core/build-web.sh`, `bench/server.mjs` and `pipeline/{audio,video-to-motion}/`. Changes go in the Decision log.
+6. ~~Licensing of motion derived through SMPL/SMPL-X~~ **Resolved 2026-10-12: non-commercial exception** (see §14 rule 9). Background:
    - The SMPL-X model licence allows "non-commercial … artistic projects".
    - It forbids making derivatives of the Model & Software available to third parties without Max Planck's written permission.
    - It is silent on motion estimated with the model.
    - Our CC BY 4.0 asset licence allows commercial reuse downstream, which conflicts with that.
-   - Resolve before any Wick-derived motion ships. Either email smpl@max-planck-innovation.de to confirm that retargeted rotations on our own skeleton are not a derivative, or ship GVHMR-derived motion under a non-commercial licence as a documented exception.
-7. Whether **Public Domain Mark** items (e.g. radio aporee) are accepted with a note, or rejected. `licences.json` currently lists them under "note".
-8. **m2 frame-time definition** (proposed in spike 4):
+   - Options were: email smpl@max-planck-innovation.de, or ship GVHMR-derived motion under a non-commercial licence as a documented exception. The user chose the exception.
+7. ~~Public Domain Mark items~~ **Resolved 2026-10-12: accepted with a note** (each record needs a `licence_note`; credit the recordist anyway). `licences.json` keeps them under "note".
+8. **m2 frame-time definition** (proposed in spike 4; **used provisionally** until the user decides):
    - "p95 ≤ 16.6 ms" applies to the rAF interval.
    - "median ≤ 12 ms" applies to max(CPU frame p50, GPU pass p50).
    - Measure after 5 min warm-up, for at least 20 min.
@@ -542,7 +543,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 |---|---|---|---|
 | 1 | MPFB2 headless | ✅ pass | – |
 | 2 | Render test | ✅ pass | – |
-| 3 | GVHMR on CPU | 🟡 done except footage | User: YouTube cookie export; IGN ruling |
+| 3 | GVHMR on CPU | 🟡 done except footage | User: YouTube cookie export |
 | 4 | Browser skeleton | 🟡 done except Air run | User: 20–30 min Air telemetry session |
 | 5 | PLATEAU chunk | ✅ pass | – |
 | 6 | Steam Audio IR | ✅ pass | User: headphone check of `alley-01-binaural.wav` |
@@ -629,6 +630,15 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 ---
 
 ## Decision log
+
+### 2026-10-12 — m0 gate rulings (user)
+- **GVHMR**: Python 3.11 + `ryanrudes/gvhmr` fork accepted, pinned.
+- **Footage**: studio-supplied featurettes hosted by press outlets (e.g. IGN) count as official. The IGN Sacré-Cœur behind-the-scenes clip is added to the fetch list.
+- **Public Domain Mark** audio: accepted with a note.
+- **Repo layout and provenance format**: adopted as living conventions, not frozen. Changes are logged here.
+- **SMPL-derived motion**: ships under a non-commercial exception (CC BY-NC 4.0), §14 rule 9.
+- **m2 frame-time definition**: used provisionally; user to review.
+- SMPL password rotation: done by the user.
 
 ### 2026-10-12 — Phase 0 executed (autonomous run)
 - All seven spikes ran as parallel agents in git worktrees and were merged to `main`. Spike 3 got a follow-up agent to find root causes and finish it.

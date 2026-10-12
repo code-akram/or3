@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fetch official, studio-uploaded John Wick clips into private/footage/<id>/ (gitignored).
-# Footage never enters git (NOTES.md §8, §14). Only official studio channels are listed here.
+# Fetch official John Wick clips (studio-uploaded, or studio-supplied and press-hosted) into private/footage/<id>/ (gitignored).
+# Footage never enters git (NOTES.md §8, §14). Only official sources are listed here.
 #
 # Usage: pipeline/video-to-motion/fetch-footage.sh [ID ...]
 #   With no arguments, fetches every candidate below.
@@ -33,6 +33,8 @@ candidates=(
   "yt-ohieMx5bSM8|https://www.youtube.com/watch?v=ohieMx5bSM8|Lionsgate Movies (YouTube)|JW4 Special Feature 'Osaka Continental'|full"
   "yt-3oIxZLUKYtI|https://www.youtube.com/watch?v=3oIxZLUKYtI|Lionsgate Movies (YouTube)|JW4 Special Feature 'New Challenges'|full"
   "yt-r7a4g-65SzA|https://www.youtube.com/watch?v=r7a4g-65SzA|Lionsgate Movies (YouTube)|John Wick Falling Down the Stairs of Sacre Coeur for 10 Hours|*0-180"
+  # Studio-supplied featurettes hosted by press outlets count as official (user ruling 2026-10-12).
+  "yt-fdNkGq4kroQ|https://www.youtube.com/watch?v=fdNkGq4kroQ|IGN (YouTube, Lionsgate-supplied exclusive)|JW4 behind the scenes: Sacre-Coeur stairs|full"
 )
 
 want=("$@")
