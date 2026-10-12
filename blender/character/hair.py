@@ -22,9 +22,12 @@ def post(b):
     cfg = b.cfg["hair"]
     if not (cfg.get("clumps") or cfg.get("beard")):
         return
-    clothes = [c.rsplit(".", 1)[0] for c in b.cfg["suit"]["clothes"]]
+    # Clothes as staged: the stock garments, or the suit track's tailored
+    # parts ("<human>.suit_<part>_export"), which exist once suit.post ran.
+    clothes = [c.rsplit(".", 1)[0] for c in b.cfg["suit"]["clothes"]] + [".suit_"]
     body = next(o for o in b.meshes() if o.vertex_groups.get("scalp"))
     colliders = [body] + [o for o in b.meshes() if any(c in o.name for c in clothes)]
+    b.notes["hair_colliders"] = sorted(o.name for o in colliders)
     frame = HeadFrame(b, colliders)
     b.notes["head_frame"] = frame.summary()
     if cfg.get("clumps"):
