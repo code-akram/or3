@@ -65,6 +65,10 @@ VIEWS = {
     "knot": ((0.0, -1.0, 1.52), (0.0, -0.1, 1.50), 0.20),
     "gorge": ((-0.35, -1.0, 1.52), (-0.09, -0.1, 1.47), 0.22),
     "notch": ((-0.22, -1.0, 1.52), (-0.08, -0.14, 1.47), 0.12),     # the notch at the dropped gorge
+    "notch_r": ((-0.25, -1.0, 1.56), (-0.08, -0.13, 1.50), 0.13),   # the notch at the v3 gorge, wearer's right
+    "notch_l": ((0.25, -1.0, 1.56), (0.08, -0.13, 1.50), 0.13),     # and left
+    "cpoint_r": ((-0.2, -1.0, 1.62), (-0.11, -0.08, 1.55), 0.10),   # the right collar point and wing, front
+    "vest_top_r": ((-0.25, -1.0, 1.53), (-0.05, -0.13, 1.50), 0.05),  # the waistcoat's edge beside the right lapel
     "lapel_edge": ((-0.9, -0.6, 1.45), (-0.07, -0.11, 1.40), 0.14),   # lapel edge thickness, raking
     "closeup_h": ((-0.63, -1.36, 1.58), (0.0, 0.0, 1.50), 0.42),   # the harness close-up's azimuth (25°), collar framing
     "collar_back": ((0.25, 1.0, 1.75), (0.0, 0.0, 1.52), 0.3),
@@ -83,9 +87,12 @@ VIEWS = {
     "shoulder_side": ((-1.2, 0.0, 1.42), (-0.25, 0.0, 1.42), 0.36),       # sleeve pitch, roped head in profile
     "shoulder_back": ((0.3, 1.0, 1.55), (0.2, 0.05, 1.48), 0.35),
     "v_bottom": ((-0.5, -0.9, 1.22), (0, -0.1, 1.2), 0.18),
+    "waist_r": ((-0.35, -1.0, 1.16), (-0.13, -0.12, 1.14), 0.12),      # the right front at the button row, outboard
     "cuff": ((0.75, -0.75, 1.25), (0.52, -0.22, 1.14), 0.25),
     "cuff_x": ((0.86, -0.10, 1.20), (0.51, -0.15, 1.14), 0.12),       # extreme close-up of the cuff buttons
     "elbow": ((0.2, -1.0, 1.3), (0.42, -0.1, 1.24), 0.3),             # the inner elbow (left arm)
+    "elbow_side": ((1.2, -0.3, 1.25), (0.42, -0.08, 1.22), 0.35),     # the left sleeve in profile
+    "legs_back": ((0.3, 2.2, 0.62), (0.0, 0.0, 0.55), 0.9),           # both knees from behind
     "seat": ((0.0, 1.6, 0.95), (0.0, 0.0, 0.92), 0.6),
     "knee_back": ((0.2, 1.4, 0.55), (0.1, 0.0, 0.5), 0.5),
     "hem": ((0.6, -0.9, 0.25), (0.1, 0, 0.12), 0.45),

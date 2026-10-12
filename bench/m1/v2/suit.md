@@ -2,6 +2,175 @@
 
 Goal (BRIEF, direction.md defect 7): turn the grey, boxy costume into a sharp, close-cut near-black three-piece that reads as black wool under the neon-noir hero light and the turntable. Everything is still built on the body by script; the GLB stays game-ready and the Cycles-only detail goes into the kept `.blend` after the export.
 
+The round-2 section comes first. Sections 1–9 after it are round 1 as reported on `suitD-v2c`; where they disagree, round 2 wins.
+
+## Round 2: v3 (from the review of v2c)
+
+The review of `suit_final/turntable_tt0.png` and `hero_bust.png` (v2c, merged at a5ea570) listed five items, in this order:
+
+1. the shoulders and upper arms read as football padding
+2. the waistcoat is invisible
+3. the collar ends stand up beside the neck like straps
+4. the button crease (try a front dart)
+5. folds at the elbow crook and the back of the knee should read as folds, not only as shading
+
+The final run is **`20261012T232535Z-suitD-v3b`**, built from 01101ce on main 7d82def (Track B hair round 3 and Track C facial hair are in).
+
+### R2.1 What changed, and the files touched
+
+- **Natural shoulder** (`suit_jacket.py`, `suit.py` DEFAULTS `jacket.shoulder`).
+  - In v2c the shoulder point was placed past the A-pose deltoids, with the line held level from the neck and then dropping, so it read square. The point now comes from the acromion: the place where the body's top line turns down more steeply than 40° (`point_from: "acromion"`), plus 1.2 cm.
+  - The line runs straight from the neck point (`slope_ease: "linear"`) and is lifted 2 cm clear above the point so it doesn't cut the trapezius (`clear_above_point_m`).
+  - The deltoid belongs to the sleeve head, which covers it with ease.
+  - Result: the shoulder half-width is 25.7 cm (29.2 cm in v2c, 3.5 cm in per side). The line falls 3.2 cm from the neck point to the shoulder point, about 10°.
+- **Slimmer sleeve** (`suit.py` `jacket.sleeve`).
+  - It tapers from the bicep to the cuff: top radius 6.6 → 5.8 cm, cuff 4.6 → 4.4 cm, ease 10 → 8 mm.
+  - The measured mean radius at the bicep is 6.2 cm (6.7 in v2c), about 39 cm round instead of 42; the forearm is about 4.8 cm.
+- **Waistcoat that reads** (`suit_inner.py`, `suit.py` `waistcoat` and `materials.vest`, `suit_textures.py`, `suit_hero.py`).
+  - The V's bottom is raised: the top button sits 17 cm above the jacket's button (13 cm in v2c; measured 15.8 cm once the V is lofted). That puts the closed front and 2–3 of its 5 buttons above the jacket's buttoning point.
+  - The V's top half-width is 5 cm (7.5 cm in v2c), narrower than the jacket's opening (7.2 cm). A band of waistcoat now shows between each lapel and the shirt, up to the collar; at 7.5 cm both edges hid under the lapels.
+  - The waistcoat has its own cloth, a finer, harder-finished worsted than the jacket: roughness 0.52 (jacket 0.68), sheen 0.55 at roughness 0.28 (jacket 0.35 at 0.4), specular 0.3 (jacket 0.15), and an albedo a shade lighter, (0.015, 0.016, 0.021). It has its own 1024 px atlas (`vest_px`) instead of sharing the trousers' atlas, and the hero-only twill bump is applied to it too.
+  - **White specks** beside each lapel (found in `suitD-v3a`). Once the V narrowed, collar-band faces of the shirt sat in front of the waistcoat's edge. The fix has two parts:
+    - A new `tuck_under_vest` samples every shirt and tie face near the V (corners, edge midpoints and centre), casts front-on rays at the waistcoat, and moves the face back 1.5 mm behind it. It runs two passes and moved 95 vertices.
+    - The waistcoat's front clears the shirt by 4.5 mm (it was 3 mm). That is more than its 2.5 mm edge lip; at 3 mm the lip's edge sat up to 0.7 mm behind the shirt front.
+  - Check: `/tmp/suitwork/speck.py` casts front-on rays over x ±2–8 cm, z 1.40–1.56 and finds 0 points where the shirt is in front of the waistcoat.
+- **Collar ends lie down** (`suit_neck.py`, `suit.py` `jacket.lapel` and `jacket.collar`).
+  - The gorge drop is gone: `gorge_drop_m` 0.045 → 0. With the gorge dropped 4.5 cm, the collar's front end ran from the notch down the roll line, so it stood beside the neck as a strap. The drop had been added for the lapel wings at the shoulders, and the wings came from the old square shoulder line, which is gone now.
+  - The collar's fold is lowered by 2.5 cm in front of the neck point (`drop_m` 0.012 → 0.025, `drop_frac` 0.2 → 0.3), so the ends lie onto the lapel.
+  - `end_relax` (2 passes) smooths single-point teeth along the notch and the outer edge, then puts each point back outside the layers beneath.
+  - The collar's self-intersection total falls from 112 to 75.
+- **Front dart and the button crease** (`suit_jacket.py` `front_dart`, `levels`). The crease had two causes:
+  - **A 1 mm sliver row.** A regular ring row at z_b + 0.011 sat beside the extra row at z_b + 0.012, and its shading drew a hard line across the whole jacket at the button. `levels()` now drops any regular row within 4 mm of an extra row.
+  - **The waist dip.** The fronts followed the body's waist dip, about 8 mm deep at x ±6 cm.
+    - `front_dart` bridges the dip panel by panel at fixed x (5 mm steps). Per x, it takes the cloth's depth over the rows from 4 cm below to 10 cm above the button, then takes the upper hull over z, capped at 8 mm.
+    - It then smooths outward only, along z and across x, and fades the move out on the side of the body. It moved 116 vertices.
+    - The dart line is marked from the flap pocket to under the chest (x 10 cm, up to 15 cm above the button).
+    - A first version worked per column. The columns drift about 2 cm in x and the centre wanders 5 mm per row, so it made a ridge at the button rows.
+  - The front profile at x 6 cm is now smooth: y −0.1553 at z 1.109 to −0.1609 at z 1.209, with no dip at the button.
+- **Modelled folds** (new `suit_folds.py`; `suit.py` calls it after the drape).
+  - These are parametric crescent folds displaced along the merged vertex normals, so they are in the geometry and show in the GLB too:
+    - **Elbow crook:** 5 mm amplitude, 5 cm wavelength, a Gaussian fall-off of 5 cm along the arm, a 1.2 cm crescent bend, crook side only (cos^1.5 about the bisector).
+    - **Back of the knee:** 4 mm, 4.5 cm wavelength, 4.5 cm fall-off, a 1 cm bend.
+  - Inward moves are clipped against the body.
+  - The rows got denser so they can carry the folds: sleeve rows 1.6 → 1.1 cm (at 1.6 cm the 5 cm folds aliased), trouser knee rows 2.5 → 1.2 cm. The suit budgets went up to match (below).
+  - Result: jacket 892 vertices moved, max 4.96 mm, 6 clipped; trousers 308 moved, max 3.44 mm.
+  - The cloth-sim normal-map folds of round 1 are kept underneath. Both drape gates pass: the jacket's p99 strain is 0.092 and its fold RMS 1.44 mm; the trousers' p99 strain is 0.109 and their fold RMS 0.96 mm.
+- **Budgets** (`suit.py` `budgets`): jacket 14000 → 16000 and trousers 4000 → 5000, for the denser sleeve and knee rows. The suit is 32283 tris (29541 in v2c).
+- **Views** (`bench/m1/suit_views.py`): new close-ups `notch_r`, `notch_l`, `cpoint_r`, `vest_top_r`, `waist_r`, `elbow_side`, `legs_back`.
+
+Files: `blender/character/suit.py`, `suit_jacket.py`, `suit_neck.py`, `suit_inner.py`, `suit_textures.py`, `suit_hero.py`, the new `suit_folds.py`, and `bench/m1/suit_views.py`.
+
+**Shared files: none edited in round 2.**
+
+### R2.2 Measurements (`suitD-v3b`, direction config)
+
+| | v2c | v3b |
+|---|---|---|
+| jacket shoulder half-width | 29.19 cm | 25.70 cm |
+| jacket shoulder width − body bideltoid (56.0 cm) | +2.4 cm | −4.6 cm (the sleeve head covers the deltoid) |
+| shoulder line, neck point → shoulder point | level, then dropping | straight, 3.2 cm fall (about 10°) |
+| sleeve top / cuff radius, ease | 6.6 / 4.6 cm, 10 mm | 5.8 / 4.4 cm, 8 mm |
+| sleeve mean radius at the bicep | 6.7 cm | 6.2 cm |
+| jacket chest width | 43.66 cm | 43.18 cm |
+| waist suppression | 0.726 | 0.7345 |
+| gorge | z 1.4818, 3.2 cm below the suprasternale | z 1.5268, 1.3 cm above it |
+| waistcoat V bottom, top button above the jacket button | 13 cm (setting) | z 1.3081, 15.8 cm (measured); 5 buttons |
+| waistcoat V top half-width | 7.5 cm | 5.0 cm |
+| front dart | none | 116 vertices, ≤ 8 mm |
+| modelled folds | none | elbow 892 vertices (max 4.96 mm), knee back 308 (max 3.44 mm) |
+| suit tris (GLB) | 29541 | 32283: jacket 15011, shirt 2199, waistcoat 2999, buttons 2130, tie 432, shoes 4824, trousers 4688 |
+| character total | 129537 tris, 81 bones | 121351 tris (≤ 150k), 83 bones (≤ 90), ≤ 4 weights per vertex, 0 glTF errors |
+| shirt:wool median luminance, neon (bust / body) | 47.2 / 50.0 | 39.25 / 36.88 |
+| shirt:wool median luminance, studio (bust / body) | 27.7 / 24.0 | 26.72 / 22.82 (target ≥ 20) |
+
+The character's total went down, even though the suit went up by 2.7k, because main's hair and facial hair changed underneath (Tracks B and C).
+
+The luminance ratio fell under neon because the waistcoat band now fills part of the V where v2c showed shirt, and the waistcoat's sheen lifts the wool's median. It is still well above 20 : 1.
+
+**Guards on `suitD-v3b`:**
+
+- `suit_check`: PASS
+- `suit_collar`: PASS. Skin 0 px. Self-intersection: shirt 42, jacket 30, tie 3, total 75 ≤ 120 (v2c 112).
+- `suit_pose_test`: arms_up 94, kick 50, crouch 871, stress 1096 (v2c 94, 51, 837, 1078).
+- Track F's `deform_test`: rest 0, knee_up 7, arm_raise 4, head_turn 3, walk 3 pokes (v2c 0, 8, 4, 3, 2).
+  - The largest is still body > jacket, from the body remnants that `hide_body` keeps under the cloth (Track F issue 3, §3 below). In arm_raise it is now 45.8 mm (30.6 in v2c), at upperarm_twist weights.
+  - None of them shows in the beauty tiles of `deform-suitD/sheet_*.png`.
+
+### R2.3 Verdicts
+
+| item | verdict | evidence (in `suitD-v3b`) |
+|---|---|---|
+| 1. Shoulders and upper arms read as football padding | **Fixed.** The shoulder line slopes from the neck straight to a point just past the shoulder's edge, and the sleeve tapers from a slimmer bicep to the cuff. In the turntable the silhouette reads lean rather than padded. The figure's own deltoids are broad (bideltoid 56 cm at 1.85 m), so in the A-pose the shoulders still look broad. That width is the body's, under a sleeve head with 8 mm of ease; it is not the jacket's. | `suit_ba/tt0_final.png`, `suit_ba/tt0.png`, `suit_ba/tt180.png`, `suit_ba/hero_bust_final.png` |
+| 2. The waistcoat is invisible | **Fixed in the front views; partly in the 3/4 hero bust.** In the front studio and neon close-ups, the waistcoat's edges run inside the lapels and 3 buttons show above the jacket's button. In the Cycles hero bust, the shirt now narrows into a dark V with its edge and a button glint above the jacket's button, but much of it sits in the lapels' shadow. The sheen difference is real in the material but subtle on screen: an EEVEE A/B of the waistcoat's cloth against the jacket's (`vmat1`) showed no visible change, because the band is in shadow. I kept the material anyway, since it is the correct cloth and shows where the key reaches the band. | `suit_ba/waistcoat_studio.png`, `suit_ba/waistcoat_neon.png`, `suit_ba/hero_bust_final.png`, `suit_v3/vest_top_r.png` |
+| 3. Collar ends stand up beside the neck like straps | **The straps are fixed; jagged steps remain at the collar's edge.** The ends are short and lie down onto the lapel with a notch in the neon front, the clay front and the Cycles turntable; the long upright straps of v2c are gone. In the clay close-ups (`neck_front`, `torso`), the collar's outer edge beside the neck still shows small jagged steps. In the turntable they read only as a small dark tab at each side of the neck. A cleaner edge there is the next collar job. | `suit_ba/collar_neon.png`, `suit_ba/collar_clay.png`, `suit_v3/notch_r.png`, `suit_v3/notch_l.png` |
+| 4. The button crease | **Fixed.** The hard line across the jacket was a 1 mm sliver row; the waist dip is bridged by the front dart. The clay torso has no line across at the button. A faint horizontal line from the baked button-pull normals remains at the right front, just under the button. It is visible only in the waist close-up, and minor. | `suit_ba/crease_clay.png`, `suit_v3_clay/waist_r.png` |
+| 5. Folds at the elbow crook and the back of the knee | **Elbow: fixed. Knee: partly fixed.** At the elbow, crescent folds read at the crook in studio and clay as modelled geometry rather than shading, and as soft folds at bust distance. In the studio close-up, a small pucker sits at the centre of the crook where the crescents meet. At the knee, the folds read clearly in clay and as a soft band of folds in the studio render; at full distance they are soft shading. Their amplitude was held at 4 mm to keep the trousers clean. | `suit_ba/elbow.png`, `suit_ba/elbow_clay.png`, `suit_ba/knee_back.png`, `suit_ba/knee_back_clay.png` |
+
+### R2.4 Deviations
+
+- **Shoulder width.** "About 1–1.5 cm past the deltoid" is read as past the shoulder's edge (the acromion), where a tailor sets the sleeve seam. The v2c shoulder was already 1.2 cm per side past the measured bideltoid and read as padding: in the A-pose the deltoid's widest point sits low on the arm, so a seam out there squares the shoulder. Now the seam is 1.2 cm past the acromion, the jacket's shoulder width is 4.6 cm under the bideltoid, and the sleeve head carries the deltoid.
+- **Gorge.** It is no longer dropped. It sits at the top ring, 1.3 cm above the suprasternale (v2c: 3.2 cm below). With the natural shoulder there are no lapel wings to hide, and the drop was what stood the collar ends up.
+- **The waistcoat's V and cloth.** The V bottom is at 17 cm above the jacket's button and the V top at a 5 cm half-width, chosen for visibility. Raising it further to 20 cm (`va`, `vb`) made more shirt-in-front specks. The waistcoat now has its own cloth and a 1024 px atlas: the GLB gains one texture set.
+- **Folds.** They are modelled in the geometry, not taken from the sim. Displacing the mesh by the sim's fold field (`d2`) gave one dent at the crook, not a row of folds. The sim's normal-map folds are kept as the soft layer under the modelled ones.
+- **Budgets.** Jacket 16000 and trousers 5000 (14000 and 4000 in round 1). The character is at 121k tris against the 150k budget.
+
+### R2.5 Evidence (`data/build/lookdev/`)
+
+- `20261012T225641Z-suitD-v3a`: the first round-2 build. It had white specks at the waistcoat edge beside each lapel. It was superseded before its Cycles finals.
+- **`20261012T232535Z-suitD-v3b`**: final. Built with `THREADS=3 KEEP_BLEND=1 bench/m1/lookdev.sh --config bench/m1/variants/direction.json suitD-v3b` from 01101ce on main 7d82def.
+
+Inside `suitD-v3b`:
+
+| dir | what |
+|---|---|
+| `suit_ba/` | before/after pairs, left = v2c, right = v3b.<br>Cycles 256 samples: `tt0_final.png`, `hero_bust_final.png`.<br>Cycles preview: `tt0.png`, `tt180.png`, `hero_bust.png`.<br>Waistcoat: `waistcoat_neon.png`, `waistcoat_studio.png`.<br>Collar: `collar_neon.png`, `collar_clay.png`.<br>Button crease: `crease_clay.png`.<br>Folds: `elbow.png`, `elbow_clay.png`, `knee_back.png`, `knee_back_clay.png`.<br>The v2c halves are rendered into `suit_ba/v2c/`. |
+| `suit_final/` | Cycles at 256 samples: `hero_bust.png`, `turntable_tt0.png` |
+| `suit_hero/` | Cycles preview: hero bust, full, back, hands; turntable at 0°, 45°, 180°, 270° |
+| `suit_v3/`, `suit_v3_neon/`, `suit_v3_clay/` | EEVEE studio, neon and clay close-ups: torso, neck front, both notches, collar point, waistcoat top, V bottom, waist, elbow, elbow side, legs back, bust, front |
+| `suit_lum/`, `suit_lum_studio/` | shirt:wool luminance (`lum.json`) |
+| `suit_check/`, `suit_collar/`, `suit_pose/` | the suit guards |
+| `deform-suitD/` | Track F's `deform_test` (rest, knee_up, arm_raise, head_turn, walk) |
+
+### R2.6 Iteration log (run → change → verdict)
+
+All scratch runs are under `/tmp/suitwork/`. They are no-head-refine builds with the drape off unless noted. The collar isect is `suit_collar`'s gated self-intersection count (the limit is 120).
+
+| run | change | verdict |
+|---|---|---|
+| body0 | v2c jacket with `hide_body` off | reference: where the body's shoulder, acromion and deltoid sit under the cloth |
+| sh1 | shoulder point from the acromion (+1.2 cm), straight slope from the neck; sleeve 5.8 / 4.4 cm, 8 mm ease | 3.5 cm narrower per side, a natural slope and a lean sleeve; the straight line cut into the trapezius near the neck |
+| sh2 | sh1 + the line held 2 cm clear above the point | clean over the trapezius; kept |
+| c0 | the new shoulder with the round-1 collar | the straps still stand beside the neck (isect 100) |
+| c1 | gorge drop 4.5 → 2 cm | shorter straps, still standing, with a jagged notch (98) |
+| c2 | c1 + the collar's fold lowered 2.5 cm in front of the neck point (`drop_frac` 0.3) | the ends fold over and start to lie down (96) |
+| c3 | c2 + collar fall at the side 4.2 → 5.2 cm | no better (96); dropped |
+| c4 | c2 with gorge drop 0.8 cm | the ends still stand a little beside the neck (102) |
+| c5 | c2 with gorge drop 0 | the ends are short and lie on the lapel with a notch, but have single-point teeth along the notch (81); kept |
+| r1 | all round-2 defaults so far: c5 + `end_relax` 2 (the teeth), the waistcoat V at 17 cm | teeth smoothed (isect 80); the waistcoat's edges hid under the lapels |
+| r2 | waistcoat V top 7.5 → 5 cm half-width | a band of waistcoat between the lapel and the shirt (72) |
+| r3 | front dart at fixed x (after a per-column version made a ridge at the button rows) | the waist dip is gone from the front profile; a hard line still crossed the jacket at the button (72) |
+| r4 | no regular ring row within 4 mm of the extra rows | the line is gone: it was a 1 mm sliver row (72) |
+| d1 | r4 with the drape on | the sim's normal-map folds, as soft as in v2c |
+| d2 | the mesh displaced by the sim's low-passed fold field at the elbow and knee back | one dent at the crook, not folds; reverted |
+| d3 | modelled crescent folds (`suit_folds`), sleeve rows 1.1 cm, knee rows 1.2 cm | folds read at the crook in clay and studio, and behind the knee in clay; kept |
+| `suitD-v3a` | the official build of the above | white specks at the waistcoat edge beside each lapel; the waistcoat weak in the hero bust |
+| vmat1 | the waistcoat's own cloth (smoother, brighter sheen) A/B in EEVEE | no visible change (the band is in the lapels' shadow); the material kept |
+| va, vb | V bottom 20 cm, V top 4 and 5 cm | more white specks; back to 17 cm and 5 cm |
+| vt–vt4 | tucking the shirt and tie behind the waistcoat: vertices only; clearance 3 → 4.5 mm only; then face-sampled rays (corners, edge midpoints, centre; 2 passes) with 4.5 mm clearance | the first two left specks (they are face interiors, not vertices); the face-sampled tuck with 4.5 mm gives 0 specks in `speck.py`; collar isect 72 |
+| `suitD-v3b` | final (01101ce on main 7d82def) | see R2.2–R2.3 |
+
+### R2.7 Branch
+
+`worktree-agent-a7cee946dd031f936` contains main 7d82def and adds three commits:
+
+- 8f5790d: the round-2 suit changes
+- 01101ce: the tuck under the waistcoat and the 4.5 mm clearance
+- the report commit, which changes only this file
+
+`suitD-v3b` was built from 01101ce.
+
+## Round 1: v2 (suitD-v2c)
+
 ## 1. What changed
 
 ### Jacket cut (`suit_jacket.py`, `suit_neck.py`, `suit_build.py`, `suit.py` DEFAULTS)

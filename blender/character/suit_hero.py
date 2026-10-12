@@ -22,7 +22,7 @@ import math
 DEFAULTS = {
     "enabled": True,
     "twill": {"period_m": 0.0006, "strength": 0.4, "distance_m": 0.0002, "angle_deg": 45.0,
-              "yarn": 0.35, "materials": ["suit_wool_a", "suit_wool", "suit_wool_b"]},
+              "yarn": 0.35, "materials": ["suit_wool_a", "suit_wool", "suit_wool_b", "suit_vest"]},
     "shirt": {"material": "suit_shirt", "sss": 0.15, "radius": [1.0, 0.85, 0.7], "scale_m": 0.0015},
 }
 

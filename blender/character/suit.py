@@ -25,7 +25,8 @@ from mathutils import Vector
 
 from . import budgets, config
 from . import suit_build as sb
-from . import suit_drape, suit_hero, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures, suit_trousers
+from . import (suit_drape, suit_folds, suit_hero, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes,
+               suit_textures, suit_trousers)
 
 DEFAULTS = {
     "tailor": True,             # False: stock shell, as in spike 1
@@ -51,30 +52,52 @@ DEFAULTS = {
                      "depth_top": 0.78, "clear_m": 0.007, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
                      "neck_half_m": 0.072, "neck_ease_m": 0.016, "neck_curve_pow": 0.8,
                      "neck_clear_m": 0.005, "neck_band_lo_m": 0.0, "neck_band_hi_m": 0.006, "neck_lift_clear_m": 0.005, "neck_blend_frac": 0.12, "seam_below_band_m": 0.010, "gorge_cols": 6, "band_clear_m": 0.004,
-                     "armpit_below_joint_m": 0.115, "bulge_pow": 0.7, "cap_below_joint_m": 0.02},
+                     "armpit_below_joint_m": 0.115, "bulge_pow": 0.7, "cap_below_joint_m": 0.02,
+                     # natural shoulder: the point 1.2 cm past the shoulder's edge
+                     # (where the top line turns down steeper than 40 deg), at
+                     # the body's height there + clear_m, the line straight from
+                     # the neck (lifted over the trapezius); the deltoid is the
+                     # sleeve head's. "deltoid" put the point past the A-pose
+                     # deltoids, 3.5 cm further out and square (football padding)
+                     "point_from": "acromion", "acromion_deg": 40, "point_probe_m": [0.012, 0.006, 0.0],
+                     "slope_ease": "linear", "clear_above_point_m": 0.02},
         "overlap_m": 0.02, "underlap_tuck_m": 0.003, "front_cut_m": 0.03,
+        # front dart (suit_jacket.front_dart): the fronts bridge the body's
+        # waist dip round the button (it creased across at the button) and
+        # the dart line is marked from the flap pocket to under the chest
+        "front_dart": {"enabled": True, "below_button_m": 0.04, "above_button_m": 0.10, "max_m": 0.008,
+                       "smooth": 2, "mark": True, "x_m": 0.10, "mark_above_button_m": 0.15},
         "quarter_cut_m": 0.035, "quarter_height_m": 0.10,
         "skirt_leg_weight": {"front": 0.85, "side": 0.5, "back": 0.3},   # leg share at the hem, by side
         # lapel: gorge_below_neck_m places the top ring at the front, the
         # gorge seam sits gorge_drop_m lower on the chest (the collar's front
         # end lies on the roll line between them); roll 16 mm, a rounded edge
-        # edge_m thick, the edge stitch stitch_in_m in from it
+        # edge_m thick, the edge stitch stitch_in_m in from it. A dropped
+        # gorge (0.045) stood the collar ends up beside the neck as straps;
+        # with the natural shoulder the undropped gorge has no lapel wings
+        # (the wings came from the old square shoulder line)
         "lapel": {"width_m": 0.080, "width_pow": 2.2, "swing_u": 0.10,
-                  "gorge_below_neck_m": 0.032, "gorge_drop_m": 0.045, "stitch_in_m": 0.006,
+                  "gorge_below_neck_m": 0.032, "gorge_drop_m": 0.0, "stitch_in_m": 0.006,
                   "roll_m": 0.016, "edge_m": 0.0035,
                   "tip_rise_m": 0.010, "rise_h_m": 0.05, "tip_lift_m": 0.0, "min_row_m": 0.006},
         # collar (suit_neck): the fold sits reveal_* under the shirt band's top;
         # the front end lies on the lapel's top edge to the notch, then turns
-        # up at notch_deg to the collar point
+        # up at notch_deg to the collar point; in front of the neck point
+        # (drop_frac of the way round) the fold lowers by drop_m so the ends
+        # lie down onto the lapel; end_relax smooths the ends' fall
         "collar": {"reveal_back_m": 0.014, "reveal_side_m": 0.014, "stand_min_m": 0.006,
                    "shirt_clear_m": 0.003, "body_clear_m": 0.012, "thickness_m": 0.004,
                    "fall_back_m": 0.040, "fall_side_m": 0.042, "seam_cover_m": 0.008,
-                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.2, "drop_m": 0.012,
+                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.3, "drop_m": 0.025, "end_relax": 2,
                    "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015},
         "vents": "double", "vent_height_m": 0.20, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
-        "sleeve": {"columns": 28, "row_m": 0.016, "band_m": 0.012, "ease_m": 0.010,
-                   "top_r_m": 0.066, "cuff_r_m": 0.046, "past_wrist_m": 0.005,
+        # sleeve: tapers from the bicep (top_r, at the armpit) to the cuff,
+        # never closer than ease_m to the arm (0.066 / 0.046 / 0.010 read as
+        # thick tubes: 12 cm over a 30 cm bicep); rows 1.1 cm apart carry the
+        # modelled crook folds (suit_folds, 5 cm wavelength; 1.6 cm aliased them)
+        "sleeve": {"columns": 28, "row_m": 0.011, "band_m": 0.012, "ease_m": 0.008,
+                   "top_r_m": 0.058, "cuff_r_m": 0.044, "past_wrist_m": 0.005,
                    "rope_m": 0.006, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
                    "elbow_blend_m": 0.04, "uv_circ_m": 0.36},
         "pockets": {"flap_x0_m": 0.07, "flap_w_m": 0.16, "flap_h_m": 0.06,
@@ -84,8 +107,14 @@ DEFAULTS = {
     },
     "waistcoat": {
         "offset_m": 0.008,
-        "top_button_above_jacket_button_m": 0.13,
-        "neck_point_x_m": 0.075,
+        # the V's bottom: halfway up the jacket's V, so the closed front with
+        # 2-3 buttons shows above the jacket's button and the edges inside
+        # the lapels (0.13: a sliver, black on black)
+        "top_button_above_jacket_button_m": 0.17,
+        # the V's top half width: narrower than the jacket's opening (0.072),
+        # so a band of waistcoat shows between the lapel and the shirt up to
+        # the collar (0.075 hid both edges under the lapels)
+        "neck_point_x_m": 0.05,
         "cover_waistband_m": 0.025,
         "point_drop_m": 0.05,
         "back_panel_m": 0.12,
@@ -124,7 +153,8 @@ DEFAULTS = {
                  # scales the eased thigh where the cut starts (the body governs there)
                  "knee_flat_m": 0.21, "opening_flat_m": 0.19, "thigh_cut": 0.9,
                  "inner_gap_m": 0.0015, "crotch_close": 0.5, "seat_last_above_m": 0.03,
-                 "row_seat_m": 0.022, "row_knee_m": 0.025, "row_leg_m": 0.04, "row_break_m": 0.02,
+                 # knee rows 1.2 cm: the modelled folds at the back of the knee (suit_folds)
+                 "row_seat_m": 0.022, "row_knee_m": 0.012, "row_leg_m": 0.04, "row_break_m": 0.02,
                  "break_zone_m": 0.20, "bridge_iters": 1,
                  # quarter break: back hem at the heel counter, front on the vamp
                  "back_hem_m": 0.035, "hem_slant_m": 0.02, "hem_slant_max_m": 0.08, "hem_curve": 2.5,
@@ -196,6 +226,11 @@ DEFAULTS = {
         # out of the rim); roughness and albedo also vary per pixel (surface).
         "wool": {"albedo": [0.013, 0.014, 0.019], "rough": 0.68, "sheen": 0.35, "sheen_rough": 0.4,
                  "sheen_tint": [0.72, 0.8, 1.0], "spec": 0.15},
+        # waistcoat: a finer, harder-finished worsted than the jacket, so it
+        # reads inside the jacket's V (black on black otherwise): smoother,
+        # a tighter and brighter sheen, a little more specular
+        "vest": {"albedo": [0.015, 0.016, 0.021], "rough": 0.52, "sheen": 0.55, "sheen_rough": 0.28,
+                 "sheen_tint": [0.75, 0.82, 1.0], "spec": 0.3},
         "shirt": {"albedo": 0.72, "rough": 0.5, "sheen": 0.2, "sheen_rough": 0.5, "spec": 0.4},
         "silk": {"albedo": 0.015, "rough": 0.45, "sheen": 0.15, "sheen_rough": 0.35, "spec": 0.45,
                  "aniso": 0.3},
@@ -210,10 +245,11 @@ DEFAULTS = {
     "surface": {"seed": 5, "rough_noise": 0.03, "albedo_noise": 0.008, "cavity": 0.35,
                 "fold_ao": 0.55, "ao_in_albedo": 0.35, "kuwahara": 1,
                 "panel_rough": {"suit_jacket:2": -0.10, "suit_jacket:3": -0.05}},
-    "textures": {"enabled": True, "wool_px": 2048, "shirt_px": 1024, "tie_px": 512,
+    "textures": {"enabled": True, "wool_px": 2048, "vest_px": 1024, "shirt_px": 1024, "tie_px": 512,
                  "shoe_px": 1024, "seed": 3, "slope": 1.0},
-    "budgets": {"jacket": 14000, "tie": 900, "waistcoat": 3000, "shirt": 2200,
-                "trousers": 4000, "shoes": 5000},
+    # jacket and trousers raised (14000 / 4000) for the denser sleeve and knee rows
+    "budgets": {"jacket": 16000, "tie": 900, "waistcoat": 3000, "shirt": 2200,
+                "trousers": 5000, "shoes": 5000},
     "hide_body": True,
     "hide_margin_m": 0.03,
     "hide_ray_m": 0.06,
@@ -353,6 +389,18 @@ def post(b):
         extra = {"button": [(Vector((0.0, y_b, jk.z_b)), Vector((0, -1, 0)))]}
         fobs, m["drape"] = suit_drape.run(b, D, garments, body_ob, cols, extra)
         folds = {f.garment.name: f for f in fobs.values()}
+
+    # modelled folds in the geometry (suit_folds), after the drape so the sim
+    # sees the clean surface: the elbow crook and the back of the knee
+    Fo = config.merge(suit_folds.DEFAULTS, o.get("folds") or {})
+    if Fo["enabled"]:
+        import numpy as np
+        TJ = suit_jacket.TAG
+        body_f = max((x for x in b.meshes() if "body" in x.vertex_groups), key=lambda x: len(x.data.vertices))
+        m["folds"] = suit_folds.apply(Fo, arm, body_f, [
+            (jacket, "elbow", lambda co, tag: (np.isin(tag, [TJ["sleeve_l"], TJ["sleeve_r"]]) if tag is not None
+                                               else np.zeros(len(co), bool))),
+            (trousers, "knee_back", lambda co, tag: np.ones(len(co), bool))])
 
     debug_tags = None
     if os.environ.get("SUIT_DEBUG_TAGS"):   # diagnosis: colour the jacket's panels

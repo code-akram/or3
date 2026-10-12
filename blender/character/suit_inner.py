@@ -396,8 +396,10 @@ class Inner:
 
         def half(z):
             return (self.w_vest(z), min(jk.w_v(z) + margin, 0.13))
+        # clear 4.5 mm, more than the 2.5 mm lip turned under at the V's edge
+        # (at 3 mm the lip's edge sat up to 0.7 mm behind the shirt front)
         fronts = self.front_panel(G, "front", rows, half, off, W["columns"] // 2, lip=0.0025, tag=1,
-                                  hem=self.vest_hem, clear=(inner_tree, 0.003), marks=True)
+                                  hem=self.vest_hem, clear=(inner_tree, 0.0045), marks=True)
         for g in fronts:
             for row in g.rows:
                 G.weight(row, sb.TORSO)
@@ -429,13 +431,53 @@ class Inner:
         bg.fill(G.uv, G.tag, 2)
         for row in bg.rows:
             G.weight(row, sb.TORSO)
-        self.vest = G.finish(self.b, self.like, self.mats["wool"])
+        self.vest = G.finish(self.b, self.like, self.mats.get("vest", self.mats["wool"]))
         self.marks[self.vest.name] = G.marks
         self.m["waistcoat"] = {"v_bottom_z": round(self.z_v, 4), "neck_point_z": round(self.z_vn, 4),
                                "side_hem_z": round(self.z_side, 4), "point_z": round(self.z_point, 4),
                                "bottom_below_waistband_m": round(self.waistband - self.z_side, 4),
                                "top_button_above_jacket_button_m": round(self.z_v - 0.012 - jk.z_b, 4)}
         return self.vest
+
+    def tuck_under_vest(self, gap=0.0015, reach=0.03):
+        """Shirt and tie faces in front of the waistcoat move back behind it.
+        The vest clears the shirt at its own vertices only, and its edge lip
+        turns under 2.5 mm, so where the V's edge crosses the steep base of
+        the collar band a shirt face showed through as a white speck beside
+        each lapel. Each face is sampled (corners, edge midpoints, centre)
+        with front-on rays (the vest covers the front, so a face's own
+        normal does not matter); its vertices move back by the largest
+        shortfall. Two passes (a move can expose a neighbour)."""
+        vt = sb.bvh_of([self.vest])
+        fwd = Vector((0.0, 1.0, 0.0))
+        moved = set()
+        for _ in range(2):
+            for ob in (self.shirt, self.tie):
+                me = ob.data
+                mw, mi = ob.matrix_world, ob.matrix_world.inverted()
+                co = [mw @ v.co for v in me.vertices]
+                need = {}
+                for f in me.polygons:
+                    pts = [co[i] for i in f.vertices]
+                    c = sum(pts, Vector()) / len(pts)
+                    if abs(c.x) > 0.16 or not (self.z_point - 0.01 < c.z < self.z_vn + 0.03):
+                        continue
+                    samples = pts + [(pts[k] + pts[(k + 1) % len(pts)]) * 0.5 for k in range(len(pts))] + [c]
+                    short = 0.0
+                    for q in samples:
+                        hit = vt.ray_cast(Vector((q.x, q.y - reach, q.z)), fwd, 2 * reach)
+                        if hit[0] is not None:
+                            short = max(short, hit[0].y + gap - q.y)
+                    if short > 1e-5:
+                        for i in f.vertices:
+                            need[i] = max(need.get(i, 0.0), short)
+                for i, d in need.items():
+                    p = co[i]
+                    me.vertices[i].co = mi @ Vector((p.x, p.y + d, p.z))
+                    moved.add((ob.name, i))
+                me.update()
+        self.m["tucked_under_vest"] = len(moved)
+        return len(moved)
 
     # --- buttons -----------------------------------------------------------------------------
 
@@ -491,6 +533,7 @@ def build(b, body, o, arm, jk, jacket, like, waistband, mats, part, neck):
     shirt = inr.build_shirt()
     tie = inr.build_tie()
     vest = inr.build_vest()
+    inr.tuck_under_vest()
     buttons = inr.build_buttons()
     return {"vest": vest, "shirt": shirt, "tie": tie, "buttons": buttons, "measure": inr.m,
             "marks": inr.marks}
