@@ -35,6 +35,27 @@ candidates=(
   "yt-r7a4g-65SzA|https://www.youtube.com/watch?v=r7a4g-65SzA|Lionsgate Movies (YouTube)|John Wick Falling Down the Stairs of Sacre Coeur for 10 Hours|*0-180"
   # Studio-supplied featurettes hosted by press outlets count as official (user ruling 2026-10-12).
   "yt-fdNkGq4kroQ|https://www.youtube.com/watch?v=fdNkGq4kroQ|IGN (YouTube, Lionsgate-supplied exclusive)|JW4 behind the scenes: Sacre-Coeur stairs|full"
+  # Batch 2 (2026-10-12, bench/m1/footage-batch-2.md). Lionsgate Movies uploads no JW4 scene clips; its
+  # JW2/JW3/Ballerina clips, trailers and training featurettes are below.
+  "yt-qEVUtrk8_B4|https://www.youtube.com/watch?v=qEVUtrk8_B4|Lionsgate Movies (YouTube)|JW4 Official Trailer (Sacre-Coeur climb, Osaka, Arc de Triomphe shots)|full"
+  "yt-Mioo2uqCSG0|https://www.youtube.com/watch?v=Mioo2uqCSG0|Lionsgate Movies (YouTube)|JW3 Official Clip 'Taxi' (NYC, injured run)|full"
+  "yt-y7pLCd7BgZA|https://www.youtube.com/watch?v=y7pLCd7BgZA|Lionsgate Movies (YouTube)|JW2 Official Clip 'Suited Up' (suit fitting, suit adjust)|full"
+  "yt-5O2SZVS26Dg|https://www.youtube.com/watch?v=5O2SZVS26Dg|Lionsgate Movies (YouTube)|Ballerina Official Clip 'Baba Yaga' (Wick clip)|full"
+  "yt-4r5_5eOmxzA|https://www.youtube.com/watch?v=4r5_5eOmxzA|Lionsgate Movies (YouTube)|JW2 Official Featurette 'Training' (range, reloads)|full"
+  "yt-MW0mu_TPua4|https://www.youtube.com/watch?v=MW0mu_TPua4|Lionsgate Movies (YouTube)|JW3 Official BTS 'Training for John Wick'|full"
+  "yt-YO3cBrcDiT0|https://www.youtube.com/watch?v=YO3cBrcDiT0|Lionsgate Movies (YouTube)|JW3 Official BTS 'Art of Action'|full"
+  # Movieclips (Fandango): the studio's licensed scene-clip channel, where the official JW4 scene clips
+  # live. Treated as studio-supplied scene clips under the 2026-10-12 ruling; drop this block if the user
+  # rules otherwise.
+  "yt-hrq7sSV3dkA|https://www.youtube.com/watch?v=hrq7sSV3dkA|Movieclips (YouTube, licensed)|JW4 'Stairway Team-Up Fight Scene' (Sacre-Coeur stairs)|full"
+  "yt-Xw70HfHVfWQ|https://www.youtube.com/watch?v=Xw70HfHVfWQ|Movieclips (YouTube, licensed)|JW4 'The Duel With Pistols Scene' (Paris duel walk)|full"
+  "yt-oa7BjVtvA7w|https://www.youtube.com/watch?v=oa7BjVtvA7w|Movieclips (YouTube, licensed)|JW4 'Paris Street Fight Scene'|full"
+  "yt-jUIZdspS32E|https://www.youtube.com/watch?v=jUIZdspS32E|Movieclips (YouTube, licensed)|JW4 'Paint It Black Fight Scene'|full"
+  "yt-Lqii8YkcCDI|https://www.youtube.com/watch?v=Lqii8YkcCDI|Movieclips (YouTube, licensed)|JW4 'Paris Car Chase Scene' (Arc de Triomphe)|full"
+  "yt-SyEU1pN1Uj0|https://www.youtube.com/watch?v=SyEU1pN1Uj0|Movieclips (YouTube, licensed)|JW4 'John Wick vs. Caine Scene'|full"
+  "yt-Sw4pvbkQ-jk|https://www.youtube.com/watch?v=Sw4pvbkQ-jk|Movieclips (YouTube, licensed)|JW3 'Horse Stable Fight Scene' (2/12)|full"
+  "yt-v00zKyXbfD4|https://www.youtube.com/watch?v=v00zKyXbfD4|Movieclips (YouTube, licensed)|JW3 'Throwing Knives Scene' (1/12)|full"
+  "yt-L-zzxADqlu8|https://www.youtube.com/watch?v=L-zzxADqlu8|Movieclips (YouTube, licensed)|JW3 'Long Live the King Scene' (5/12)|full"
 )
 
 want=("$@")

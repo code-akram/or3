@@ -32,10 +32,12 @@ def loadavg() -> list[str]:
     return Path("/proc/loadavg").read_text().split()[:3]
 
 
-def stitch_protagonist(track_history, W, H, max_gap=24, max_center_dist=0.75, max_size_ratio=2.0, seed=None):
+def stitch_protagonist(track_history, W, H, max_gap=24, max_center_dist=0.75, max_size_ratio=2.0, seed=None,
+                       exclude=()):
     """Protagonist = a chain of non-overlapping tracker fragments, seeded by the largest area-sum track
     and extended both ways with the fragment whose boundary box best continues the chain. ``seed`` overrides
-    the seed track id (manual protagonist pick when the largest track is a foreground extra or crew member).
+    the seed track id (manual pick, or protagonist_id.py's appearance pick). Fragments in ``exclude``
+    (appearance says: someone else) are never joined.
 
     BoT-SORT fragments one person into many IDs through fast motion, blur and darkness (falls, fights);
     GVHMR's default keeps only the single top ID and linearly interpolates the rest. This is the cheap,
@@ -69,7 +71,7 @@ def stitch_protagonist(track_history, W, H, max_gap=24, max_center_dist=0.75, ma
         lo, hi = min(frame_box), max(frame_box)
         best = None
         for k, v in frags.items():
-            if k in chain:
+            if k in chain or k in exclude:
                 continue
             s, e = min(v), max(v)
             if s > hi - 2:  # extends forward
@@ -119,8 +121,13 @@ def main() -> None:
                     help="protagonist = chain of tracker fragments stitched by box continuity (default: GVHMR's top track)")
     ap.add_argument("--seed-id", type=int, default=None,
                     help="with --stitch: seed the protagonist chain on this track id; with --reuse yolo, reselects from the saved track history")
+    ap.add_argument("--auto-id", action="store_true",
+                    help="with --stitch --reuse yolo: seed and exclusions from OUT/protagonist.json (protagonist_id.py score)")
     ap.add_argument("--set", action="append", default=[], help="extra Hydra override, e.g. detector.conf=0.25")
     ap.add_argument("--stop-after", default="", help="stop after this stage (e.g. yolo)")
+    ap.add_argument("--vitpose-probe", type=int, default=0, metavar="N",
+                    help="ViTPose on N evenly spaced frames of the selected track only; writes OUT/vitpose-probe.json "
+                         "(mean body-joint confidence, a cheap pre-GVHMR visibility check) and stops")
     a = ap.parse_args()
 
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS"):
@@ -188,15 +195,25 @@ def main() -> None:
 
     # 1) YOLO + BoT-SORT tracking, top track by area-sum = protagonist.
     th_path = Path(paths.bbx).with_name("track_history.pt")
+    exclude: list[int] = []
+    if a.auto_id:
+        pj = out / "protagonist.json"
+        if not pj.exists():
+            sys.exit(f"--auto-id: {pj} missing (run protagonist_id.py embed + score first)")
+        pick = json.loads(pj.read_text())
+        if pick["seed"] is None:
+            sys.exit("--auto-id: no protagonist track in this shot")
+        a.seed_id, exclude = int(pick["seed"]), [int(k) for k in pick.get("exclude", [])]
     if "yolo" in reuse and a.seed_id is not None and th_path.exists():
         t = time.perf_counter()
-        chain, frame_box = stitch_protagonist(torch.load(th_path, weights_only=False), W, H, seed=a.seed_id)
+        chain, frame_box = stitch_protagonist(torch.load(th_path, weights_only=False), W, H, seed=a.seed_id,
+                                              exclude=exclude)
         bbx_xyxy = interpolate_track(frame_box, L)
         bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()
         torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
         record("yolo_track", 0.0, L)
-        timings["yolo_track"].update({"reselected": True, "seed_id": a.seed_id, "stitch": True,
-                                      "chain": [int(c) for c in chain],
+        timings["yolo_track"].update({"reselected": True, "seed_id": a.seed_id, "auto_id": a.auto_id,
+                                      "exclude": exclude, "stitch": True, "chain": [int(c) for c in chain],
                                       "selected_frame_coverage": round(len(frame_box) / L, 3),
                                       "select_s": round(time.perf_counter() - t, 3)})
     elif "yolo" in reuse and Path(paths.bbx).exists():
@@ -248,6 +265,19 @@ def main() -> None:
     t = time.perf_counter()
     imgs, bbx_ds = get_batch(cfg.video_path, bbx_xys, img_ds=0.5)
     record("decode_crop", time.perf_counter() - t, L)
+
+    if a.vitpose_probe:
+        idx = torch.from_numpy(np.linspace(0, L - 1, min(a.vitpose_probe, L)).round().astype(np.int64)).unique()
+        t = time.perf_counter()
+        vp = make_pose2d(cfg.pose2d.name, **_ctor_kwargs(cfg.pose2d))
+        with amp("vitpose"):
+            kp = vp.extract(imgs[idx], bbx_ds[idx])
+        conf = kp[:, 5:, 2].float()  # body joints (COCO 5-16), as motion_qc.py / footage_run.py
+        (out / "vitpose-probe.json").write_text(json.dumps({
+            "frames": len(idx), "mean_conf": round(float(conf.mean()), 3),
+            "seed_id": a.seed_id, "s": round(time.perf_counter() - t, 2)}, indent=1))
+        (out / "timings.json").write_text(json.dumps({"stages": timings}, indent=1))
+        return
 
     # 3) ViTPose-H 2D keypoints
     if "vitpose" in reuse and Path(paths.vitpose).exists():
