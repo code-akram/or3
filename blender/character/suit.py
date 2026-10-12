@@ -206,7 +206,8 @@ DEFAULTS = {
     # per-pixel wool surface (suit_textures.surface_maps): fibre noise in
     # roughness and albedo, cavity and fold occlusion, Kuwahara r (painterly
     # albedo, direction.md §4), roughness offsets per "<part>:<panel tag>"
-    "surface": {"seed": 5, "rough_noise": 0.06, "albedo_noise": 0.015, "cavity": 0.35,
+    # (rough_noise 0.06 read as stains on the lapel and gorge close-ups)
+    "surface": {"seed": 5, "rough_noise": 0.03, "albedo_noise": 0.008, "cavity": 0.35,
                 "fold_ao": 0.55, "ao_in_albedo": 0.35, "kuwahara": 1,
                 "panel_rough": {"suit_jacket:2": -0.10, "suit_jacket:3": -0.05}},
     "textures": {"enabled": True, "wool_px": 2048, "shirt_px": 1024, "tie_px": 512,
