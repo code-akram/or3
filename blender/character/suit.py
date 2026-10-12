@@ -4,11 +4,12 @@ add() fits the stock CC0 garments (the suits01 shell for its trousers, the
 shoes placeholder) and keeps a copy of the unmasked body. post() works on the
 staged export meshes, in rest pose:
 
-    split the stock shell, keep the trousers, drop the rest
+    split the stock shell, drop it (its trousers only when trousers.build is false)
     jacket   suit_jacket: block, lapels, collar, vents, sleeves, pockets
     inner    suit_inner: waistcoat, shirt front + collar + cuffs, tie + knot
     buttons  low-poly discs (jacket front, cuffs, waistcoat)
-    trousers stock shell tailored: break, taper, creases
+    trousers suit_trousers: built on the body (flat front, slim straight leg,
+             quarter break, creases); fallback: the stock shell tailored
     textures suit_textures: atlas UVs, baked-by-script normal maps, materials
     budgets, hide covered body polygons, measurements -> stats.json["suit"]
 
@@ -24,7 +25,7 @@ from mathutils import Vector
 
 from . import budgets, config
 from . import suit_build as sb
-from . import suit_drape, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures
+from . import suit_drape, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures, suit_trousers
 
 DEFAULTS = {
     "tailor": True,             # False: stock shell, as in spike 1
@@ -111,7 +112,31 @@ DEFAULTS = {
             "knot_top_above_band_m": 0.002, "knot_taper": 0.42, "knot_full": 0.10,
             "knot_wrap_m": 0.0015, "blade_top_w_m": 0.021,
             "blade_w_m": 0.078, "blade_full_at_m": 0.44, "dimple_m": 0.005},
-    "trousers": {"back_hem_m": 0.035, "break_from_z": 0.45, "crease_depth_m": 0.0025,
+    # trousers (suit_trousers): built on the body; build false = the stock
+    # suits01 shell tailored (suit_ops.tailor_trousers: back_hem_m, the last four keys)
+    "trousers": {"build": True,
+                 "waist_to_stature": 0.627,   # waistband top (natural rise, under the waistcoat)
+                 "waistband_m": 0.035, "crotch_drop_m": 0.02, "canvas_limit_m": 0.02,
+                 # radial allowances over the body (metres)
+                 "ease": {"waist": 0.004, "front": 0.004, "hip": 0.0045, "seat": 0.0065,
+                          "thigh_front": 0.008, "thigh_back": 0.012},
+                 # the cut: flat widths (half the leg's circumference); thigh_cut
+                 # scales the eased thigh where the cut starts (the body governs there)
+                 "knee_flat_m": 0.21, "opening_flat_m": 0.19, "thigh_cut": 0.9,
+                 "inner_gap_m": 0.0015, "crotch_close": 0.5, "seat_last_above_m": 0.03,
+                 "row_seat_m": 0.022, "row_knee_m": 0.025, "row_leg_m": 0.04, "row_break_m": 0.02,
+                 "break_zone_m": 0.20, "bridge_iters": 1,
+                 # quarter break: back hem at the heel counter, front on the vamp
+                 "back_hem_m": 0.035, "hem_slant_m": 0.02, "hem_slant_max_m": 0.08, "hem_curve": 2.5,
+                 "vamp_rest_m": 0.0015, "slant_fade_m": 0.15, "heel_clear_m": 0.004,
+                 "break_m": 0.004, "break_h_m": 0.03, "shoe_clear_m": 0.003,
+                 "crease_m": 0.0015, "back_crease_from_m": 0.80,
+                 "tuck_gap_m": 0.003, "tuck_body_min_m": 0.004,
+                 "fly_w_m": 0.035, "fly_end_above_crotch_m": 0.06,
+                 "pocket_drop_m": 0.17, "pocket_in_m": 0.04,
+                 "back_pocket_below_m": 0.06, "back_pocket_w_m": 0.13,
+                 # the stock shell's tailoring (build: false)
+                 "break_from_z": 0.45, "crease_depth_m": 0.0025,
                  "opening_half_m": 0.095, "taper_from_z": 0.50},
     "shoes": {
         # black calf cap-toe derbies on a parametric last (suit_shoes.py)
@@ -251,12 +276,20 @@ def post(b):
     m["body_bideltoid_m"] = r(suit_jacket.body_bideltoid(body))
 
     parts = suit_ops.split_shell(b, shell, PART)
-    trousers = parts["trousers"]
+    T = o["trousers"]
+    # the stock trousers stay as the placement reference (parent, collections)
+    # until the built ones exist; renamed so the built ones get the part name
+    trousers = stock = parts["trousers"]
+    if T["build"]:
+        stock.name = stock.data.name = PART.format("stocktrousers")
     for k in ("jacket", "shirt", "tie", "knot"):
         suit_ops.drop(b, parts[k])
     for x in parts["buttons"]:
         suit_ops.drop(b, x)
-    waistband = max(v.co.z for v in trousers.data.vertices)
+    if T["build"]:
+        waistband = suit_trousers.waistband_z(stature, T)
+    else:
+        waistband = max(v.co.z for v in trousers.data.vertices)
     m["waistband_top_z"] = r(waistband)
     m["waistband_to_stature"] = r(waistband / stature)
     z_b = o["button_stance"] * stature
@@ -277,13 +310,19 @@ def post(b):
     m.update(inner["measure"])
     vest, shirt, tie, buttons = inner["vest"], inner["shirt"], inner["tie"], inner["buttons"]
 
-    m["trousers"], tmarks = suit_ops.tailor_trousers(trousers, o["trousers"])
-    trousers.data.materials.clear()
-    trousers.data.materials.append(mats["wool"])
-    if o["shoes"]["build"]:
+    if o["shoes"]["build"]:   # before the trousers: the hem rests on them
         if shoes is not None:
             suit_ops.drop(b, shoes)
-        shoes, m["shoes"] = suit_shoes.build(b, body, o["shoes"], arm, trousers, mats, PART)
+        shoes, m["shoes"] = suit_shoes.build(b, body, o["shoes"], arm, stock, mats, PART)
+    if T["build"]:
+        outer = [(jacket, jk.z_h), (vest, min(v.co.z for v in vest.data.vertices))]
+        trousers, m["trousers"], tmarks = suit_trousers.build(b, body, T, arm, stock, mats, PART,
+                                                              stature, shoes=shoes, outer=outer)
+        suit_ops.drop(b, stock)
+    else:
+        m["trousers"], tmarks = suit_ops.tailor_trousers(trousers, T)
+        trousers.data.materials.clear()
+        trousers.data.materials.append(mats["wool"])
     body.free()
     bpy.data.meshes.remove(src_me)
     b.suit_src = None
