@@ -109,6 +109,12 @@ def region(b, frame, cfg, rng):
         p = mw @ v.co
         d, k = inside_dist(p, {e.group: e.weight for e in v.groups}, groups, cheek, neck,
                            back_y, moustache_top, nose)
+        # the mouth interior (skin behind the lips, facing back or up) is out
+        nrm = (mw.to_3x3() @ v.normal)
+        if (abs(p.x - frame.center.x) < frame.lips_max.x - frame.center.x
+                and frame.lips_min.z - 0.006 < p.z < frame.lips_max.z
+                and p.y > frame.lips_min.y + cfg["mouth_depth_m"] and nrm.y > -0.2):
+            d = -1.0
         if d > -1:
             d += wob * (math.sin(p.z * 160 + ph[0]) + math.sin(p.y * 110 + ph[1])
                         + math.sin((p.x + p.z) * 260 + ph[2]) + 0.6 * math.sin((p.y - p.x) * 530 + ph[0])) / 3.6
@@ -118,23 +124,27 @@ def region(b, frame, cfg, rng):
     on_lips = set(v.index for v in body.data.vertices
                   if any(e.group == lips_i and e.weight > cfg["lips_w"] for e in v.groups))
     keep = set(i for i, d in dist.items() if d > -margins[which[i]] and i not in on_lips)
+    # The top band of the upper lip joins the patch with no roots, so the
+    # game shells can carry the moustache hairs that hang over the lip edge.
+    lip_band = set(i for i in on_lips
+                   if (mw @ body.data.vertices[i].co).z > frame.lips_max.z - cfg["lip_band_m"])
+    for i in lip_band:
+        dist[i], which[i] = 0.02, 3
+    keep |= lip_band
     obj, bm = hair_mesh.shell_from_body(b, body, keep, "Human.beard_export")
     idx = bm.verts.layers.int.get("src")
     depth = {v: dist[v[idx]] for v in bm.verts}
     line = {v: which[v[idx]] for v in bm.verts}
+    bare = {v: v[idx] in lip_band for v in bm.verts}
     hair_mesh.smooth_boundary(bm, frame.skin_bvh, cfg["edge_smooth_iters"])
     bm.normal_update()
     lips_pts = [mw @ body.data.vertices[i].co for i in on_lips]
-    return obj, bm, depth, line, margins, lips_pts, (cheek, neck, back_y)
+    return obj, bm, depth, line, margins, lips_pts, (cheek, neck, back_y), bare
 
 
-def fields(bm, frame, cfg, depth, line, margins, lips_pts):
+def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
     """Per patch vertex: beard density, stubble density, length, comb, grey
     share, neck weight."""
-    kd = KDTree(len(lips_pts))
-    for i, p in enumerate(lips_pts):
-        kd.insert(p, i)
-    kd.balance()
     mouth_z = frame.lips_min.z            # bottom of the lower lip
     slit_z = (frame.lips_min.z + frame.lips_max.z) / 2  # the mouth line
     upper_lip_z = frame.lips_max.z
@@ -163,12 +173,11 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts):
         else:
             dens = fd["line_density"] * smoothstep(-fout, 0, d)
             lenf = fd["line_length"]
-        out["density"][v] = dens
+        out["density"][v] = 0.0 if bare[v] else dens
         # Stubble: a band from just inside the line to the patch edge.
         m = margins[which]
         st = smoothstep(-m, -m * 0.35, d) * (1 - smoothstep(fd["stubble_in_m"], fd["stubble_in_m"] * 2, d))
-        out["stubble"][v] = st
-        lip_d = kd.find(p)[2] if lips_pts else 1.0
+        out["stubble"][v] = 0.0 if bare[v] else st
         near_chin = math.exp(-((p - chin).length / ln["chin_radius_m"]) ** 2)
         near_soul = math.exp(-((p - soul).length / ln["soul_radius_m"]) ** 2)
         below = smoothstep(mouth_z + 0.004, mouth_z - 0.02, p.z)
@@ -247,8 +256,8 @@ def build(b, frame, cfg):
     rng_py = __import__("random").Random(cfg["seed"])
     rng = np.random.default_rng(cfg["seed"])
     beard_groom.refit_for(b, frame)
-    obj, bm, depth, line, margins, lips_pts, lines = region(b, frame, cfg, rng_py)
-    fl = fields(bm, frame, cfg, depth, line, margins, lips_pts)
+    obj, bm, depth, line, margins, lips_pts, lines, bare = region(b, frame, cfg, rng_py)
+    fl = fields(bm, frame, cfg, depth, line, margins, lips_pts, bare)
     co, nrm, tris, F = beard_groom.patch_arrays(bm, fl)
     g = cfg["groom"]
     # Beard roots.
@@ -275,8 +284,8 @@ def build(b, frame, cfg):
 
     # Tone: per-strand melanin / redness; grey share from the field.
     tone = cfg["tone"]
-    mel, red, rgb = tones(len(pos), tone, rng, f["grey"])
-    smel, sred, srgb = tones(sm, tone, rng, sf["grey"])
+    mel, red = tones(len(pos), tone, rng, f["grey"])
+    smel, sred = tones(sm, tone, rng, sf["grey"])
 
     # Hero curves: beard and stubble, split by bone (head / neck_01).
     hero = cfg["hero"]
@@ -376,6 +385,9 @@ def build(b, frame, cfg):
 
 
 def tones(m, tone, rng, grey_share):
+    """Per-strand melanin and redness: the base near-black brown, a share of
+    warm brown strands, and grey strands with probability grey_share (per
+    strand, from the grey field)."""
     mel = np.clip(tone["melanin"] + rng.normal(0, tone["sigma"], m), 0, 1)
     red = np.clip(tone["redness"] + rng.normal(0, tone["sigma"] * 0.5, m), 0, 1)
     warm = rng.random(m) < tone["warm_share"]
@@ -384,7 +396,7 @@ def tones(m, tone, rng, grey_share):
     grey = rng.random(m) < grey_share
     mel[grey] = np.clip(tone["grey"][0] + rng.normal(0, 0.05, grey.sum()), 0, 1)
     red[grey] = tone["grey"][1]
-    return mel, red, None
+    return mel, red
 
 
 def tone_rgb(mel, red, rng, tone):

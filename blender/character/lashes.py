@@ -246,8 +246,11 @@ def build(b, frame, cfg):
         ly = np.full(200, y0 + pad + 1.0)
         canvas.lines(np.stack([lx[:-1], ly[:-1]], 1), np.stack([lx[1:], ly[1:]], 1),
                      np.full(199, cfg["lash_line_px"]), np.tile(col * 0.5, (199, 1)))
-    # hero curves: all lashes in one object, clumped
+    # hero curves: all lashes in one object, kept out of the skin (a hooded
+    # upper lid would otherwise swallow the upturned tips), clumped
     P = np.concatenate(all_pts)
+    k = cfg["points"]
+    beard_groom.collide(P, frame.skin_bvh, np.concatenate([[0.0], np.full(k - 1, cfg["gap_m"])]))
     o = beard_groom.make_curves("lashes_hero", P, np.concatenate(all_rad),
                                 {"melanin": np.concatenate(all_mel), "redness": np.concatenate(all_red),
                                  "clump": np.full(len(P), cfg["clump"]), "frizz": np.zeros(len(P))}, mat)

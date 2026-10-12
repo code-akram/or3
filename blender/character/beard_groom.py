@@ -25,7 +25,6 @@ strands back (`strands`) and paints shells and cards from them.
 Everything is numpy over (n, k, 3) point arrays; one rng per groom.
 """
 
-import math
 import os
 
 import bpy
