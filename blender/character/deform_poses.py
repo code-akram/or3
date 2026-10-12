@@ -95,7 +95,7 @@ ARMS_DOWN = {"upperarm_l": [["abduct", -36], ["flex", 4], ["twist", 5]],
              "hand_l": [["flex", 5]]}
 
 POSES = {
-    "rest": {"bones": {}},
+    "rest": {"bones": {}, "view": 25, "closeups": ["chest", "torso_front", "neck", "shoulder_l", "skirt_l", "hip_front_l"]},
     # 1. Relaxed stand, arms down, fingers soft.
     "relaxed": {
         "bones": sym({**ARMS_DOWN, **RELAXED_HAND}, {
@@ -127,14 +127,14 @@ POSES = {
             "thigh_l": [["flex", 10]], "calf_l": [["flex", 16]], "foot_l": [["flex", 6]],
             "thigh_r": [["flex", 8]], "calf_r": [["flex", 14]], "foot_r": [["flex", 6]],
             "clavicle_l": [["flex", 8]], "clavicle_r": [["flex", 8]],
-            "upperarm_r": [["ik", {"to": "spine_03", "offset": [-0.01, -0.42, -0.30], "pole": [-0.5, 0.3, -1]}]],
+            "upperarm_r": [["ik", {"to": "spine_03", "offset": [-0.01, -0.42, -0.12], "pole": [-0.5, 0.3, -1]}]],
             "hand_r": [["flex", -10], ["twist", -60], ["abduct", 10]],
-            "upperarm_l": [["ik", {"to": "spine_03", "offset": [-0.01, -0.40, -0.31], "pole": [0.5, 0.3, -1]}]],
+            "upperarm_l": [["ik", {"to": "spine_03", "offset": [-0.01, -0.40, -0.13], "pole": [0.5, 0.3, -1]}]],
             "hand_l": [["flex", 10], ["twist", -40]],
         },
         "ground": True,
         "view": 30,
-        "closeups": ["shoulder_l", "shoulder_r", "elbow_r", "wrist_r", "hand_r", "armpit_r", "neck"],
+        "closeups": ["chest", "torso_front", "shoulder_l", "shoulder_r", "elbow_r", "wrist_r", "hand_r", "armpit_r", "neck"],
     },
     # 4. Raised knee (the left), arms relaxed: the jacket-skirt test.
     "knee_up": {
@@ -142,7 +142,7 @@ POSES = {
             "thigh_l": [["flex", 90]], "calf_l": [["flex", 90]], "foot_l": [["flex", 0]],
         }),
         "view": 35,
-        "closeups": ["skirt_l", "hip_front_l", "hip_back_l", "knee_l", "trouser_l"],
+        "closeups": ["skirt_profile_l", "skirt_top_l", "skirt_l", "hip_front_l", "hip_back_l", "knee_l", "trouser_l"],
     },
     # 5. Arm raise: the left abducted to 95 deg with a natural clavicle shrug;
     #    the right flexed forward to 95 deg (shoulder flexion test).
@@ -173,7 +173,7 @@ POSES = {
         },
         "ground": True,
         "view": 45,
-        "closeups": ["hip_front_l", "hip_back_l", "knee_l", "skirt_l", "skirt_back", "trouser_l"],
+        "closeups": ["torso_front", "skirt_profile_l", "hip_front_l", "hip_back_l", "knee_l", "skirt_l", "skirt_back", "trouser_l"],
     },
     # 7. Hero pose (direction.md §2 Track F): weight on the left leg, pelvis
     #    tilted 4 deg (free right hip drops), shoulders 5 deg back, head turned
@@ -198,7 +198,7 @@ POSES = {
         },
         "ground": True,
         "view": 30,
-        "closeups": ["shoulder_l", "elbow_l", "hand_l", "hand_r", "neck", "hip_l", "skirt_r"],
+        "closeups": ["torso_front", "shoulder_l", "elbow_l", "hand_l", "hand_r", "neck", "hip_l", "skirt_r"],
     },
     # 8. High-ready pistol stance, elbows in: gun close to the chest, muzzle forward.
     "high_ready": {
@@ -208,14 +208,14 @@ POSES = {
             "neck_01": [["flex", 2]], "head": [["flex", 4], ["turn", -4]],
             "thigh_l": [["flex", 12]], "calf_l": [["flex", 18]], "foot_l": [["flex", 6]],
             "thigh_r": [["flex", -4]], "calf_r": [["flex", 10]],
-            "upperarm_r": [["ik", {"to": "spine_03", "offset": [-0.02, -0.33, -0.02], "pole": [-0.15, 0.2, -1]}]],
+            "upperarm_r": [["ik", {"to": "spine_03", "offset": [-0.02, -0.36, 0.12], "pole": [-0.15, 0.2, -1]}]],
             "hand_r": [["flex", -20], ["twist", -70]],
-            "upperarm_l": [["ik", {"to": "spine_03", "offset": [-0.015, -0.31, -0.035], "pole": [0.15, 0.2, -1]}]],
+            "upperarm_l": [["ik", {"to": "spine_03", "offset": [-0.015, -0.34, 0.105], "pole": [0.15, 0.2, -1]}]],
             "hand_l": [["flex", 10], ["twist", -50]],
         },
         "ground": True,
         "view": 35,
-        "closeups": ["elbow_r", "elbow_l", "armpit_r", "wrist_r", "hand_r", "neck", "shoulder_l"],
+        "closeups": ["chest", "torso_front", "elbow_r", "elbow_l", "armpit_r", "wrist_r", "hand_r", "neck", "shoulder_l"],
     },
     # 9. Head turned 30 deg (collar test) and tilted, arms relaxed.
     "head_turn": {

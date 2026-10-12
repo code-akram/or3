@@ -56,15 +56,28 @@ DEFAULTS = {
     # garments: name fragments -> Gaussian sigma (m) of the spatial weight smoothing
     "garments": {"suit_jacket": 0.025, "suit_shirt": 0.015, "suit_waistcoat": 0.015,
                  "suit_trousers": 0.02, "suit_tie": 0.01, "suit_buttons": 0.0},
-    "skirt": {"meshes": ["suit_jacket"], "top_above_hip_m": 0.09, "ramp_m": 0.08,
+    "skirt": {"meshes": ["suit_jacket"], "top_above_hip_m": 0.01, "ramp_m": 0.10,
               "front_band_m": 0.02,
               # per sector: gains for thigh flexion (+ forward, - back) and abduction
-              "gains": {"front": {"flex+": 0.95, "flex-": 0.35, "abd+": 0.5, "abd-": 0.2},
+              "gains": {"front": {"flex+": 1.08, "flex-": 0.35, "abd+": 0.5, "abd-": 0.2},
                         "side": {"flex+": 0.45, "flex-": 0.45, "abd+": 0.85, "abd-": 0.2},
                         "back": {"flex+": 0.0, "flex-": 0.85, "abd+": 0.45, "abd-": 0.2}}},
     # torso garments whose chest/back core ignores the arms (fraction of the
     # shoulder joint's |x|: full trunk inside the first, none past the second)
     "arm_free": {"meshes": ["suit_jacket", "suit_waistcoat", "suit_shirt"], "x_ramp": [0.5, 0.85]},
+    "keep_neck_m": [0.07, 0.12],   # no garment smoothing within the first radius of the neck bone
+    # tuck: hidden inner layers sink a little under the layer that covers
+    # them (ray along the normal hits it within cover_m), ramped in over
+    # margin_m from the visible edge; ends rest-pose z-fighting and the
+    # small LBS poke-through between nearly coincident layers.
+    "tuck": {"cover_m": 0.05, "margin_m": 0.03, "pierce_m": 0.012, "skip_neck_m": [0.10, 0.14],
+             "depth_m": {"body": 0.006, "suit_shirt": 0.004, "suit_trousers": 0.003,
+                         "suit_waistcoat": 0.002, "suit_tie": 0.002},
+             "outer": {"body": ["suit_shirt", "suit_waistcoat", "suit_jacket", "suit_trousers"],
+                       "suit_shirt": ["suit_waistcoat", "suit_jacket", "suit_trousers"],
+                       "suit_trousers": ["suit_jacket", "suit_waistcoat"],
+                       "suit_waistcoat": ["suit_jacket"],
+                       "suit_tie": ["suit_waistcoat", "suit_jacket"]}},
     "max_influences": 4,
 }
 
@@ -357,7 +370,13 @@ def spatial_smooth(W, co, sigma, iters=2):
     return Neighbours(co, sigma).smooth(W, iters)
 
 
-def arm_free_core(W, co, G, sides, inner=0.5, outer=0.85):
+def _dist_to_segment(co, a, b):
+    d = b - a
+    t = np.clip((co - a) @ d / d.dot(d), 0.0, 1.0)
+    return np.linalg.norm(co - (a + t[:, None] * d), axis=1)
+
+
+def arm_free_core(W, co, G, sides, inner=0.5, outer=0.85, core=True):
     """Torso garments: no arm influence on the chest/back core (lapels,
     collar, front panels follow the trunk, not the arm). Arm weights inside
     |x| < inner * shoulder x go to the clavicle, ramped out to outer."""
@@ -376,9 +395,19 @@ def arm_free_core(W, co, G, sides, inner=0.5, outer=0.85):
         f = 1.0 - smoothstep(inner * xs, outer * xs, x)
         f = np.where(x > -0.05, f, 1.0)
         f = np.where(co[:, 2] > sh[2] - 0.35, f, 0.0)
+        # shoulder cap: cloth above the joint and medial of the shoulder point
+        # rides on the clavicle (a point above the pivot would swing outward
+        # through the outer layer when the arm comes down)
+        cap = smoothstep(sh[2] + 0.01, sh[2] + 0.05, co[:, 2]) * (1 - smoothstep(xs - 0.01, xs + 0.02, x))
+        f = np.maximum(f, cap) if core else cap
         moved = W[:, arm] * f[:, None]
         W[:, arm] -= moved
-        W[:, jc] += moved.sum(1)
+        m = moved.sum(1)
+        js = G.col("spine_03")
+        k = np.clip(x / (inner * xs), 0.0, 1.0) if js is not None else np.ones_like(x)
+        W[:, jc] += m * k
+        if js is not None:
+            W[:, js] += m * (1 - k)
         n += int((moved.sum(1) > 1e-4).sum())
     return n
 
@@ -439,10 +468,20 @@ def remap_mesh(o, arm, names, cfg, garment_sigma=None, skirt=False):
     info = {"verts": len(co)}
     sides = _sides(arm)
     if garment_sigma:
+        W0 = W.copy()
         W = spatial_smooth(W, co, garment_sigma)
+        # collar zone keeps its authored weights (the neck frame orders the
+        # collar layers; smoothing would mix head/neck into the shirt band)
+        kz = cfg["keep_neck_m"]
+        if G.col("neck_01") is not None and kz:
+            r = _dist_to_segment(co, G.head("neck_01"), G.tail("neck_01"))
+            f = smoothstep(kz[0], kz[1], r)[:, None]
+            W = W0 * (1 - f) + W * f
         info["smooth_sigma_m"] = garment_sigma
         if any(k in o.name for k in cfg["arm_free"]["meshes"]):
             info["arm_free"] = arm_free_core(W, co, G, sides, *cfg["arm_free"]["x_ramp"])
+    if garment_sigma is None:  # the body: shoulder cap only (it is hidden under the shirt)
+        info["shoulder_cap"] = arm_free_core(W, co, G, sides, *cfg["arm_free"]["x_ramp"], core=False)
     for s in sides:
         info[f"deltoid_{s}"] = half_joint(W, co, G, [f"clavicle_{s}", "spine_03", "spine_02"],
                                           f"upperarm_{s}", f"deltoid_helper_{s}", cfg["deltoid"]["radius_m"])
@@ -464,6 +503,78 @@ def remap_mesh(o, arm, names, cfg, garment_sigma=None, skirt=False):
     return info
 
 
+def _find(b, frag):
+    if frag == "body":
+        return next((o for o in b.meshes() if o.name == "Human_export"), None)
+    return next((o for o in b.meshes() if frag in o.name), None)
+
+
+def tuck(b, cfg):
+    """Sink hidden inner-layer vertices under their cover (rest pose)."""
+    from mathutils.bvhtree import BVHTree
+    c = cfg["tuck"]
+    out = {}
+    for inner, outers in c["outer"].items():
+        o = _find(b, inner)
+        if o is None:
+            continue
+        bvhs = []
+        for f in outers:
+            g = _find(b, f)
+            if g is not None:
+                bvhs.append(BVHTree.FromObject(g, bpy.context.evaluated_depsgraph_get(), deform=False))
+        if not bvhs:
+            continue
+        me = o.data
+        co = np.empty(len(me.vertices) * 3)
+        me.vertices.foreach_get("co", co)
+        co = co.reshape(-1, 3)
+        nrm = np.empty(len(me.vertices) * 3)
+        me.vertex_normals.foreach_get("vector", nrm)
+        nrm = nrm.reshape(-1, 3)
+        cov = np.zeros(len(co), dtype=bool)
+        pierce = np.zeros(len(co))  # already through the cover at rest: depth to sink
+        for i in range(len(co)):
+            p, n = Vector(co[i]), Vector(nrm[i])
+            for t in bvhs:
+                if t.ray_cast(p + n * 0.0005, n, c["cover_m"])[0] is not None:
+                    cov[i] = True
+                    break
+            else:
+                if inner == "body":  # never dent visible skin
+                    continue
+                # just outside a layer that should cover it: the cover is right
+                # below along -n and faces the same way
+                for t in bvhs:
+                    loc, fn, _, dist = t.ray_cast(p, -n, c["pierce_m"])
+                    if loc is not None and fn.dot(n) > 0.5:
+                        cov[i] = True
+                        pierce[i] = dist
+                        break
+        vis = np.nonzero(~cov)[0]
+        if len(vis) == 0 or not cov.any():
+            continue
+        kd = KDTree(len(vis))
+        for k, i in enumerate(vis):
+            kd.insert(co[i], k)
+        kd.balance()
+        d = np.array([kd.find(co[i])[2] if cov[i] else 0.0 for i in range(len(co))])
+        f = smoothstep(c["margin_m"] * 0.4, c["margin_m"], d) * cov
+        depth = c["depth_m"][inner]
+        f = np.where(pierce > 0, 1.0, f)
+        # the collar zone is ordered by the suit's neck frame: leave it
+        B = b.armature().data.bones
+        if "neck_01" in B and c.get("skip_neck_m"):
+            r = _dist_to_segment(co, np.array(B["neck_01"].head_local), np.array(B["neck_01"].tail_local))
+            f = f * smoothstep(c["skip_neck_m"][0], c["skip_neck_m"][1], r)
+        co2 = co - nrm * (f * (depth + pierce))[:, None]
+        me.vertices.foreach_set("co", co2.ravel())
+        me.update()
+        out[o.name] = {"covered": int(cov.sum()), "tucked": int((f > 0.99).sum()), "depth_mm": depth * 1000,
+                       "pierced_at_rest": int((pierce > 0).sum())}
+    return out
+
+
 def run(b, cfg):
     arm = b.armature()
     skirt_meshes = [o for o in b.meshes() if any(k in o.name for k in cfg["skirt"]["meshes"])]
@@ -482,6 +593,8 @@ def run(b, cfg):
                 continue  # shoes and anything unknown keep their weights
         out["meshes"][o.name] = remap_mesh(o, arm, names, cfg, garment_sigma=sigma,
                                            skirt=o in skirt_meshes)
+    if cfg.get("tuck"):
+        out["tuck"] = tuck(b, cfg)
     R = {"version": 1, "doc": "blender/character/deform_runtime.py", "space": "glTF model, bind pose",
          "helpers": rules(arm, made, cfg), "morphs": []}
     return R, out

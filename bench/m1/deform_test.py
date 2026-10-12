@@ -54,6 +54,7 @@ ap.add_argument("--full-res", type=int, default=640)
 ap.add_argument("--no-render", action="store_true")
 ap.add_argument("--no-skin", action="store_true", help="skip the skin-only close-ups")
 ap.add_argument("--light", choices=["studio", "neon"], default="studio")
+ap.add_argument("--no-morphs", action="store_true", help="helpers only, corrective weights 0")
 ap.add_argument("--cover-m", type=float, default=0.05)
 ap.add_argument("--tol-m", type=float, default=0.0015)
 A = ap.parse_args(argv)
@@ -91,6 +92,10 @@ JOINTS = {
     "knee_l": ("calf_l", (0.0, 0.0, 0.0), 60, 5, 0.36),
     "skirt_l": ("thigh_l", (0.0, 0.0, -0.12), 50, 5, 0.62),
     "skirt_back": ("pelvis", (0.0, 0.0, -0.18), 180, 5, 0.70),
+    "skirt_profile_l": ("thigh_l", (0.0, -0.05, -0.05), 90, 0, 0.75),
+    "skirt_top_l": ("thigh_l", (0.0, -0.10, 0.0), 25, 40, 0.6),
+    "torso_front": ("spine_02", (0.0, -0.1, 0.0), 10, 5, 0.6),
+    "chest": ("spine_03", (0.0, -0.12, 0.06), 15, 10, 0.40),
     "trouser_l": ("calf_l", (0.0, 0.0, 0.15), 70, 0, 0.70),
 }
 
@@ -292,8 +297,28 @@ def dominant_bones(o, idx, k=3):
     return sorted(tally.items(), key=lambda kv: -kv[1])[:k]
 
 
+def crossings(bvh, a, b):
+    """Number of surface crossings on the segment a -> b, and the distance
+    from the last one to b."""
+    d = b - a
+    L = d.length
+    if L < 1e-6:
+        return 0, 0.0
+    d = d / L
+    n, t, last = 0, 0.0, 0.0
+    while t < L:
+        hit = bvh.ray_cast(a + d * t, d, L - t)
+        if hit[0] is None:
+            break
+        t += hit[3] + 1e-4
+        n += 1
+        last = t
+    return n, L - last
+
+
 class Poke:
-    def __init__(self, meshes):
+    def __init__(self, meshes, arm=None):
+        self.arm = arm
         self.by = {}
         for o in meshes:
             p = part(o)
@@ -303,18 +328,31 @@ class Poke:
         self.bfaces = {k: boundary_faces(o) for k, o in self.by.items()}
         self.cover = {}
 
-    def _side(self, inner_co, outer_co, outer_tris, bfaces, inner_nrm=None):
+    def _side(self, inner_co, outer_co, outer_tris, bfaces, inner_nrm=None, key=None):
         """Per inner vertex: 1 outside the outer surface by > tol, -1 inside,
-        0 not judged (nothing within cover_m, or an open-edge face). With
-        inner_nrm (rest pass), "inside" also needs the ray along the inner
-        normal to hit the outer layer within cover_m (it is really under it)."""
+        0 not judged (nothing within cover_m, or an open-edge face).
+
+        Rest pass (inner_nrm given): "inside" also needs the ray along the
+        inner normal to hit the outer layer within cover_m (it is really
+        under it); the covering face is remembered. Pose pass (key given): a
+        hit only counts on the same part of the outer layer, i.e. a face whose
+        rest centroid is within 4 cm of the remembered one, so a sleeve that
+        comes close to the chest is not read as the chest poking through it."""
         bvh = BVHTree.FromPolygons([tuple(v) for v in outer_co], outer_tris, all_triangles=False)
         out = np.zeros(len(inner_co), dtype=np.int8)
         depth = np.zeros(len(inner_co))
+        face = np.full(len(inner_co), -1, dtype=np.int64)
+        if key is not None:
+            rf = self.face[key]
+            cen = self.centroids[key.split(">")[1]]
         for i, p in enumerate(inner_co):
+            if key is not None and rf[i] < 0:
+                continue
             pv = Vector(p)
             hit = bvh.find_nearest(pv, A.cover_m)
             if hit[0] is None or hit[2] in bfaces:
+                continue
+            if key is not None and np.linalg.norm(cen[hit[2]] - cen[rf[i]]) > 0.04:
                 continue
             s = (pv - hit[0]).dot(hit[1])
             if s > A.tol_m:
@@ -325,24 +363,75 @@ class Poke:
                     if bvh.ray_cast(pv + n * 0.0005, n, A.cover_m)[0] is None:
                         continue
                 out[i] = -1
-        return out, depth
+                face[i] = hit[2]
+        return out, depth, face
+
+    def _anchor_setup(self, inner, co):
+        """Per inner vertex: its dominant bone and the rest point on that
+        bone's axis nearest to it (an interior anchor that moves with it)."""
+        o = self.by[inner]
+        B = self.arm.data.bones
+        names = {g.index: g.name for g in o.vertex_groups}
+        bone, pt = [], np.zeros((len(co), 3))
+        for v in o.data.vertices:
+            g = max((g for g in v.groups if names[g.group] in B), key=lambda g: g.weight, default=None)
+            n = names[g.group] if g else None
+            bone.append(n)
+            if n:
+                h, t = np.array(B[n].head_local), np.array(B[n].tail_local)
+                d = t - h
+                u = np.clip((co[v.index] - h) @ d / d.dot(d), 0, 1)
+                pt[v.index] = h + u * d
+        return bone, pt
+
+    def _anchors(self, inner):
+        bone, pt = self.anch[inner]
+        out = np.zeros_like(pt)
+        mats = {}
+        for i, n in enumerate(bone):
+            if n is None:
+                continue
+            if n not in mats:
+                mats[n] = np.array(self.arm.pose.bones[n].matrix @ self.arm.data.bones[n].matrix_local.inverted())
+            M = mats[n]
+            out[i] = M[:3, :3] @ pt[i] + M[:3, 3]
+        return out
 
     def measure(self, dg, rest=False):
         cos = {k: evaluated(o, dg) for k, o in self.by.items()}
+        if rest:
+            self.face = {}
+            self.centroids = {k: np.array([cos[k][0][list(t)].mean(0) for t in cos[k][1]]) for k in cos}
+            self.anch = {k: self._anchor_setup(k, cos[k][0]) for k in {i for i, _ in self.pairs}}
         res = {}
+        bvhs = {k: BVHTree.FromPolygons([tuple(v) for v in cos[k][0]], cos[k][1], all_triangles=False)
+                for k in {o for _, o in self.pairs}}
+        anchors = {k: self._anchors(k) for k in {i for i, _ in self.pairs}}
         for inner, outer in self.pairs:
-            side, depth = self._side(cos[inner][0], cos[outer][0], cos[outer][1], self.bfaces[outer],
-                                     cos[inner][2] if rest else None)
             key = f"{inner}>{outer}"
+            side, depth, face = self._side(cos[inner][0], cos[outer][0], cos[outer][1], self.bfaces[outer],
+                                           cos[inner][2] if rest else None, None if rest else key)
+            # crossing test: the segment from the interior anchor to the vertex
+            # crosses the outer layer (inner vertex pushed through it)
+            cand = np.nonzero(self.cover[key] if not rest else side == -1)[0]
+            cross = np.zeros(len(side), dtype=np.int16)
+            cdep = np.zeros(len(side))
+            for i in cand:
+                n, dd = crossings(bvhs[outer], Vector(anchors[inner][i]), Vector(cos[inner][0][i]))
+                cross[i], cdep[i] = n, dd
             if rest:
-                self.cover[key] = side == -1
-                res[key] = {"covered": int((side == -1).sum()), "outside_at_rest": int((side == 1).sum())}
+                self.cover[key] = (side == -1) & (cross == 0)
+                self.face[key] = np.where(self.cover[key], face, -1)
+                res[key] = {"covered": int(self.cover[key].sum()), "outside_at_rest": int((side == 1).sum())}
                 continue
-            mask = self.cover[key] & (side == 1)
+            through = (cross % 2 == 1) & (cdep > A.tol_m)
+            depth = np.where(through & (cdep > depth), cdep, depth)
+            mask = self.cover[key] & ((side == 1) | through)
             idx = np.nonzero(mask)[0]
             res[key] = {"poke": int(len(idx)),
                         "max_mm": round(float(depth[idx].max() * 1000), 1) if len(idx) else 0.0,
-                        "bones": dominant_bones(self.by[inner], idx[:4000]) if len(idx) else []}
+                        "bones": dominant_bones(self.by[inner], idx[:4000]) if len(idx) else [],
+                        "at": [round(float(x), 3) for x in cos[inner][0][idx].mean(0)] if len(idx) else []}
         return res
 
 
@@ -370,10 +459,10 @@ def main():
     rt = drt.Runtime(arm, meshes, rules) if rules else None
     os.makedirs(A.out_dir, exist_ok=True)
     poses = [p for p in A.poses.split(",") if p] or [p for p in dp.POSES]
-    poke = Poke(meshes)
+    poke = Poke(meshes, arm)
     dp.reset(arm)
     if rt:
-        rt.apply(rig)
+        rt.apply(rig, morphs=not A.no_morphs)
     dg = bpy.context.evaluated_depsgraph_get()
     rest = poke.measure(dg, rest=True)
     report = {"glb": A.glb, "blend": A.blend, "rules": rp, "rest": rest, "poses": {}}
@@ -386,7 +475,7 @@ def main():
     for pname in poses:
         spec = dp.POSES[pname]
         dp.apply_pose(arm, spec, rig)
-        drv = rt.apply(rig) if rt else {}
+        drv = rt.apply(rig, morphs=not A.no_morphs) if rt else {}
         dg = bpy.context.evaluated_depsgraph_get()
         dg.update()
         pk = poke.measure(dg) if pname != "rest" else {}
