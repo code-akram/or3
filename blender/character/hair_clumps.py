@@ -1,27 +1,32 @@
-"""Long swept-back hair as clump meshes, generated from scripted guide curves.
+"""Collar-length swept-back hair as clump meshes, generated from scripted
+guide curves.
 
 1. Roots: a Fibonacci spread of directions from the cranium centre, ray-cast
    onto the body's MPFB `scalp` faces (so they follow head edits).
 2. Guides: each root is marched in 1 cm steps by deterministic rules: comb
    back from the hairline (away from an off-centre part), slide along the
-   head, then fall under gravity once behind the crown or below the ears.
-   Every step is pushed out of the colliders (body + clothes) by the clump's
-   half-thickness plus a gap, so nothing clips the scalp or the collar.
-   A strand stops at the variant's tip height (shoulder line or collar).
+   head, pass *behind* the ears (ear ellipsoids), then fall under gravity
+   once behind the skull. Every step is pushed out of the colliders (body +
+   clothes) by the clump's half-thickness plus a gap, so nothing clips the
+   scalp or the collar. A strand stops at the variant's tip height.
 3. Layers, inside out:
    - a scalp cap shell (the scalp faces pushed out a few mm, edge tapered
-     into the skin) with a dark strand texture, so no skin shows through;
+     into the skin). Its UV v is the depth from the hairline, and it carries
+     a feather texture: fine short hairs whose density ramps up over the
+     first ~1.5 cm, so skin shows through gradually (no cap outline);
    - an under layer of few, wide, flattened opaque tubes (hair_mesh.tube):
      the mass, darker, mostly in shadow;
-   - a top layer of many narrow curved cards (hair_mesh.card) with an
-     alpha-tested strand texture: the visible hair;
-   - hairline cards rooted on the cap's front edge (a soft hairline), a few
-     front-fall cards that break the helmet silhouette on one side of the
-     face, and thin flyaway cards leaving top cards part-way down.
+   - a top layer of many narrow, twisted, curved cards (hair_mesh.card) with
+     an alpha-tested lock-atlas texture: the visible piecey locks;
+   - hairline cards rooted one ring inside the cap's front edge, front-fall
+     cards on both sides (asymmetric) that frame the face, and thin flyaway
+     cards leaving top cards part-way down.
 
-All of it is one mesh, `hair`, skinned 100 % to the head bone, with two
-materials (opaque-cored tubes and cap; alpha cards). UV0.v runs root -> tip
-for the runtime Kajiya-Kay tangent; UV1 = (per-clump random, side sign).
+All of it is one mesh, `hair`, with two materials (opaque-cored tubes and
+cap; alpha cards). Per-vertex colour `lock` (COLOR_0) carries per-lock value,
+depth (under-layer darker) and root shading. UV0.v runs root -> tip for the
+runtime Kajiya-Kay tangent; UV1 = (per-clump random, side sign). Skinning:
+100 % head, then hair_springs rebinds the hanging part to spring chains.
 Seeded RNG: the same config builds the same mesh.
 """
 
@@ -30,8 +35,9 @@ import random
 
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
+from mathutils.kdtree import KDTree
 
-from . import hair_mesh
+from . import hair_mesh, hair_springs
 
 DOWN = Vector((0.0, 0.0, -1.0))
 
@@ -109,14 +115,17 @@ def tangent(v, nrm):
 
 
 class Strand:
-    def __init__(self, root, nrm, comb, tip_z, max_len, gravity, off, layer, front_fall=False):
+    def __init__(self, root, nrm, comb, tip_z, max_len, gravity, off, layer, front_fall=0):
         self.root, self.nrm, self.comb = root, nrm, comb.normalized()
         self.tip_z, self.max_len, self.gravity, self.off = tip_z, max_len, gravity, off
         self.layer = layer  # {"radius_m", "aspect", "hang_widen", ...} of its layer
-        self.front_fall = front_fall
+        self.front_fall = front_fall  # 0, or the side (+-1) of a front-fall card
+        self.lay = 0.0  # extra lift within the layer (0 .. layer_jitter)
+        self.wave = (0.0, 0.0, 0.1)  # (amplitude, phase, period_m) of the hanging wave
+        self.hug = 0.0  # pull toward the skin when hanging clear of it (front falls)
 
 
-def march(frame, s, step, turn):
+def march(frame, s, step, turn, ear_margin):
     """Guide polyline for one strand (list of Vectors), root buried in the scalp."""
     d = tangent(s.comb, s.nrm)
     # Start under the skin a little upstream, so the open root ring lies
@@ -127,9 +136,26 @@ def march(frame, s, step, turn):
     while length < s.max_len:
         w = s.gravity(p, length)
         des = (s.comb * (1 - w) + DOWN * w).normalized()
+        ear = None if s.front_fall else frame.near_ear(p)
+        if ear is not None and p.y < ear[0].y + ear[1].y + 0.004:
+            # Above an ear and not yet behind it: keep going back, so the
+            # strand tucks behind the ear instead of draping over it.
+            des = (des + Vector((0.0, 1.0, -0.15))).normalized()
+        if w > 0.3 and s.wave[0] > 0:
+            # Hanging: a slow lateral wave, so the lengths are not a curtain
+            # of parallel verticals (period and phase per strand).
+            amp, ph, per = s.wave
+            radial = Vector((p.x - frame.center.x, p.y - frame.center.y, 0.0))
+            if radial.length > 1e-6:
+                side_v = DOWN.cross(radial.normalized())
+                des = (des + side_v * (amp * w * math.sin(ph + 2 * math.pi * length / per))).normalized()
         loc, nrm, sd = frame.signed(p)
         if loc is not None and sd < s.off + 0.006 and des.dot(nrm) < 0:
             des = tangent(des, nrm)
+        elif loc is not None and s.hug > 0 and sd > s.off + 0.003:
+            # Front falls drape against the temple and cheek rather than
+            # hanging in the air in front of the face.
+            des = (des - nrm * s.hug).normalized()
         d = d.lerp(des, turn).normalized()
         q = p + d * step
         for _ in range(3):
@@ -141,6 +167,8 @@ def march(frame, s, step, turn):
         loc, nrm, sd = frame.signed(q)
         if loc is not None and sd < s.off:
             q = q + nrm * (s.off - sd)
+        if not s.front_fall:
+            q = frame.ear_push(q, s.off + ear_margin)
         d = (q - p).normalized()
         length += (q - p).length
         pts.append(q)
@@ -148,6 +176,26 @@ def march(frame, s, step, turn):
         if p.z <= s.tip_z and length > 0.05:
             break
     return pts
+
+
+def cap_uvs(bm, uv, uv2, c, cap):
+    """Cap UVs: u = arc length round the head / u_span (wraps), v = depth
+    from the cap's open boundary / v_span, clamped just under 1. The cap's
+    "edge" texture puts a feather band of fine short hairs at low v and the
+    opaque strand core at high v, so the hairline is a density ramp."""
+    edge = [v for v in bm.verts if v.is_boundary]
+    kd = KDTree(len(edge))
+    for i, v in enumerate(edge):
+        kd.insert(v.co, i)
+    kd.balance()
+    for f in bm.faces:
+        for loop in f.loops:
+            p = loop.vert.co
+            u = math.atan2(p.x - c.x, -(p.y - c.y)) * cap["radius_m"] / cap["u_span_m"]
+            _, _, d = kd.find(p)
+            loop[uv].uv = (u, min(d / cap["v_span_m"], 0.998))
+            loop[uv2].uv = (0.5, 0.0)
+    return kd
 
 
 def build(b, frame, cfg):
@@ -161,10 +209,15 @@ def build(b, frame, cfg):
     scalp_keep = growth_region(frame, cfg)
     bvh = region_bvh(frame, scalp_keep)
     part_x = c.x + cfg["part_x_m"]
+    ear_back_y = frame.ears_max.y + 0.004
+    wv = cfg["wave"]
 
     def main_gravity(p, s):
         behind = smoothstep(c.y - 0.01, c.y + 0.06, p.y)
         low = smoothstep(frame.ears_min.z, frame.ears_min.z - 0.05, p.z)
+        ear = frame.near_ear(p)
+        if ear is not None and p.y < ear_back_y:
+            behind = 0.0  # hold the sweep until the strand is behind the ear
         return max(behind, low) * cfg["gravity"]
 
     # Two layers from interleaved root spreads: a few wide, flat clumps that
@@ -173,6 +226,7 @@ def build(b, frame, cfg):
     # width, flatness and lift off the skin.
     top = {k: cfg[k] for k in ("clumps", "radius_m", "aspect", "aspect_tip", "hang_widen",
                                "sides", "lift_m", "tip_m", "card", "curve")}
+    top["shade"] = cfg["shade_top"]
     layers = [dict(cfg["under"], name="under"), dict(top, name="top")]
     strands = []
     for layer in layers:
@@ -181,24 +235,30 @@ def build(b, frame, cfg):
         for root, nrm in cast_roots(frame, bvh, layer["clumps"]):
             dx = root.x - part_x
             on_top = nrm.z > 0.5 and root.y < c.y + 0.02
-            push = math.copysign(cfg["part_push"], dx) * math.exp(-abs(dx) / 0.025) if on_top else 0.0
-            # Side roots sweep back and down over the top of the ear.
+            push = math.copysign(cfg["part_push"], dx) * math.exp(-abs(dx) / cfg["part_width_m"]) if on_top else 0.0
+            # Side roots sweep back and a little down over the top of the ear.
             drop = cfg["comb_drop"] + cfg["side_drop"] * smoothstep(0.4, 0.8, abs(nrm.x))
             comb = Vector((push + rng.uniform(-0.08, 0.08), 1.0, -drop))
             tip = tip_base + layer["tip_m"] + rng.uniform(-1, 1) * length["jitter_m"]
-            lay = rng.uniform(0, cfg["layer_jitter_m"])
-            strands.append(Strand(root, nrm, comb, tip, cfg["max_len_m"], main_gravity,
-                                  off + lay, layer))
+            lay = rng.uniform(0, cfg["layer_jitter_m"]) * (1.0 if layer.get("card") else 0.5)
+            s = Strand(root, nrm, comb, tip, cfg["max_len_m"], main_gravity, off + lay, layer)
+            s.lay = lay / max(cfg["layer_jitter_m"], 1e-6)
+            s.wave = (wv["amp"] * rng.uniform(0.5, 1.0), rng.uniform(0, 6.3),
+                      wv["period_m"] * rng.uniform(0.8, 1.25))
+            strands.append(s)
 
-    ff = cfg.get("front_fall")
-    if ff:
+    ffs = cfg.get("front_fall") or []
+    if isinstance(ffs, dict):
+        ffs = [ffs]
+    for ff in ffs:
         side = ff["side"]
         tip = frame.lips_max.z + ff["tip_above_lips_m"]
         fl = dict(top, name="front", radius_m=top["radius_m"] * ff["radius_scale"],
-                  aspect=ff["aspect"], hang_widen=0.0)
-        off = (0.0 if fl.get("card") else fl["radius_m"] / fl["aspect"]) + gap + top["lift_m"]
+                  aspect=ff["aspect"], hang_widen=0.0, curve=ff["curve"], shade=ff["shade"],
+                  segment_m=ff["segment_m"])
+        off = (0.0 if fl.get("card") else fl["radius_m"] / fl["aspect"]) + gap + top["lift_m"] * 0.5
 
-        def fall_gravity(p, s):
+        def fall_gravity(p, s, ff=ff):
             return smoothstep(0.0, ff["fall_after_m"], s) * 0.95
 
         for i in range(ff["count"]):
@@ -212,9 +272,13 @@ def build(b, frame, cfg):
                 nrm = -nrm
             comb = Vector((side * (ff["comb_side"] + rng.uniform(-0.15, 0.15)), -ff["comb_fwd"],
                            -ff["comb_down"]))
-            strands.append(Strand(loc, nrm, comb, tip + rng.uniform(-0.015, 0.015),
-                                  ff["max_len_m"] * rng.uniform(0.85, 1.0), fall_gravity,
-                                  off + 0.002 * i, fl, True))
+            s = Strand(loc, nrm, comb, tip + rng.uniform(-0.015, 0.015),
+                       ff["max_len_m"] * rng.uniform(0.85, 1.0), fall_gravity,
+                       off + 0.0015 * i, fl, side)
+            s.lay = 0.6
+            s.hug = ff["hug"]
+            s.wave = (wv["amp"] * 0.5, rng.uniform(0, 6.3), wv["period_m"])
+            strands.append(s)
 
     obj, bm = hair_mesh.shell_from_body(b, frame.body, scalp_keep, "Human.hair_export")
     cap = cfg["cap"]
@@ -223,29 +287,25 @@ def build(b, frame, cfg):
     cap_tris = sum(len(f.verts) - 2 for f in bm.faces)
     uv = bm.loops.layers.uv.verify()
     uv2 = bm.loops.layers.uv.new("strand")
+    col = bm.verts.layers.float_color.new("lock")
+    hang_l = bm.verts.layers.float.new("hang_s")   # metres past the hang-start point
+    sector_l = bm.verts.layers.int.new("sector")   # hair_springs sector id
     u_span = cfg["u_span_m"]
-    # Cap: strands running from the crown down the meridians, sampled from the
-    # opaque core of the texture (between the clumps it reads as hair). Its
-    # outer rings sample the strand-tip band instead, so the hairline is
-    # alpha-ragged rather than the cap's clean outline.
-    rings = len(cap["edge_v"])
-    ring = hair_mesh.edge_rings(bm, rings)
-    for f in bm.faces:
-        for loop in f.loops:
-            p = loop.vert.co
-            u = math.atan2(p.x - c.x, -(p.y - c.y)) * 0.09 / u_span
-            r = ring[loop.vert]
-            loop[uv].uv = (u, cap["edge_v"][r] if r < rings else cap["v"])
+    edge_kd = cap_uvs(bm, uv, uv2, c, cap)
     for f in bm.faces:
         f.material_index = 0
+    for v in bm.verts:
+        v[col] = (cap["shade"], cap["shade"], cap["shade"], 1.0)
 
-    # Hairline cards: rooted on the cap's front boundary (forehead and
-    # temples) and combed back with the rest. Their strands start staggered,
-    # so the hairline is a soft density edge instead of the cap's outline.
+    # Hairline cards: rooted a ring or two inside the cap's front boundary
+    # (forehead and temples), so the cap's feather band of fine hairs lies in
+    # front of them, and combed back with the rest. Their roots start narrow,
+    # so the hairline is a density ramp instead of a row of card roots.
     hl = cfg.get("hairline")
     if hl:
         bm.normal_update()
-        edge = [v for v in bm.verts if v.is_boundary and v.co.y < c.y - hl["behind_center_m"]
+        ring = hair_mesh.edge_rings(bm, hl["ring"] + 1)
+        edge = [v for v in bm.verts if ring[v] == hl["ring"] and v.co.y < c.y - hl["behind_center_m"]
                 and v.co.z > frame.ear_z + hl["above_ear_m"]]
         edge.sort(key=lambda v: math.atan2(v.co.x - c.x, -(v.co.y - c.y)))
         hlay = dict(top, name="hairline", radius_m=top["radius_m"] * hl["width_scale"],
@@ -255,14 +315,32 @@ def build(b, frame, cfg):
             nrm = v.normal.copy()
             dx = v.co.x - part_x
             drop = cfg["comb_drop"] + cfg["side_drop"] * smoothstep(0.4, 0.8, abs(nrm.x))
-            comb = Vector((math.copysign(cfg["part_push"], dx) * math.exp(-abs(dx) / 0.025)
+            comb = Vector((math.copysign(cfg["part_push"], dx) * math.exp(-abs(dx) / cfg["part_width_m"])
                            + rng.uniform(-0.06, 0.06), 1.0, -drop))
             tip = tip_base + top["tip_m"] + rng.uniform(-1, 1) * length["jitter_m"]
-            strands.append(Strand(v.co.copy(), nrm, comb, tip, cfg["max_len_m"], main_gravity,
-                                  gap + top["lift_m"] * 0.5, hlay))
+            s = Strand(v.co.copy(), nrm, comb, tip, cfg["max_len_m"], main_gravity,
+                       gap + top["lift_m"] * 0.5, hlay)
+            s.lay = 0.5
+            s.wave = (wv["amp"] * rng.uniform(0.5, 1.0), rng.uniform(0, 6.3),
+                      wv["period_m"] * rng.uniform(0.8, 1.25))
+            strands.append(s)
 
     dl = bm.verts.layers.deform.verify()
     weights = {obj.vertex_groups["head"].index: 1.0}
+    shade_cfg = cfg["shade"]
+    tex_variants = cfg["texture_card"].get("variants", 1)
+
+    def shader(layer, lay, nseg):
+        """Per-vertex colour writer for one clump: per-lock value (lognormal),
+        depth (lifted cards lighter, buried darker) and a dark root."""
+        base = (layer["shade"] * rng.lognormvariate(0, shade_cfg["lock_sigma"])
+                * (1 - shade_cfg["depth"] + shade_cfg["depth"] * lay))
+
+        def on_vert(v, t):
+            s = base * (shade_cfg["root"] + (1 - shade_cfg["root"]) * smoothstep(0.0, shade_cfg["root_v"], t))
+            s = min(max(s, 0.2), 1.0)
+            v[col] = (s, s, s, 1.0)
+        return on_vert
 
     tris = 0
     lengths = []
@@ -270,11 +348,13 @@ def build(b, frame, cfg):
     seg = cfg["segment_m"]
     counts = {}
     guides = []
+    ear_margin = cfg["ear_margin_m"]
     for s in strands:
         L = s.layer
         counts[L["name"]] = counts.get(L["name"], 0) + 1
-        guide = march(frame, s, cfg["step_m"], cfg["turn"])
-        nseg = min(max(round(sum((b_ - a).length for a, b_ in zip(guide, guide[1:])) / seg),
+        guide = march(frame, s, cfg["step_m"], cfg["turn"], ear_margin)
+        seg_m = L.get("segment_m", seg)
+        nseg = min(max(round(sum((b_ - a).length for a, b_ in zip(guide, guide[1:])) / seg_m),
                        cfg["min_segments"]), cfg["max_segments"])
         path, total = hair_mesh.resample(guide, nseg)
         lengths.append(total)
@@ -289,6 +369,24 @@ def build(b, frame, cfg):
             touching = nrm is not None and sd < 2.5 * off
             normals.append(nrm if touching else radial)
             free.append(0.0 if touching else 1.0)
+        # Where the strand starts to hang: clear of the colliders, or past
+        # the skull (below ear level, behind the head). From there on it
+        # belongs to a spring chain (hair_springs); before, to the head.
+        arc = [0.0]
+        for a, b_ in zip(path, path[1:]):
+            arc.append(arc[-1] + (b_ - a).length)
+        hang_i = nseg
+        sp = cfg["springs"] or {"hang_below_ear_m": 0.01, "front_hang_m": 0.02}
+        for i, p in enumerate(path):
+            if s.front_fall:
+                hang = arc[i] >= sp["front_hang_m"]
+            else:
+                hang = free[i] > 0.5 or (p.z < frame.ear_z + sp["hang_below_ear_m"] and p.y > c.y)
+            if hang:
+                hang_i = i
+                break
+        hang_s = [max(arc[i] - arc[hang_i], 0.0) for i in range(nseg + 1)]
+        sector = hair_springs.sector_id(frame, path[hang_i], s.front_fall)
         # Hanging free, clumps fan out a little so the mass reads as a sheet.
         for _ in range(2):
             free = [free[0]] + [(x + y + z) / 3 for x, y, z in zip(free, free[1:], free[2:])] + [free[-1]]
@@ -302,12 +400,25 @@ def build(b, frame, cfg):
         aspect = (lambda t, a=L["aspect"], m=L["aspect_tip"]: a * (1 + (m - 1) * t * t))
         side = 1.0 if s.root.x >= c.x else -1.0
         circ = 2 * math.pi * math.sqrt((rc ** 2 + (rc / L["aspect"]) ** 2) / 2)
+        shade = shader(L, s.lay, nseg)
+
+        def on_vert(v, t, shade=shade, hang_s=hang_s, n=nseg, sector=sector):
+            shade(v, t)
+            v[hang_l] = hang_s[round(t * n)]
+            v[sector_l] = sector
+
         # The under layer is solid (opaque-core texture); everything above it
         # uses the sparse strand texture, so each clump is a bundle of
         # separate hairs with the darker mass showing between them.
         if L.get("card"):
-            # Hairline cards start narrow, so their roots don't show as notches.
-            root_w = 0.25 if L["name"] == "hairline" else 0.6
+            # Cards start narrow near the hairline (hairline cards, and top
+            # cards rooted within reach of the cap's edge), so their roots
+            # don't show as dark notches in the feather band.
+            d_edge = edge_kd.find(s.root)[2]
+            root_w = hl["root_w"] + (0.6 - hl["root_w"]) * smoothstep(0.004, 0.025, d_edge)
+            if L["name"] == "hairline":
+                root_w = hl["root_w"]
+            tw = 0.0 if s.front_fall else rng.uniform(-1, 1) * cfg["twist"]
 
             def halfwidth(t, rc=rc, k=cfg["taper_power"], free=free, n=nseg, hwid=L["hang_widen"],
                           root_w=root_w):
@@ -315,30 +426,37 @@ def build(b, frame, cfg):
                 return (rc * widen * (root_w + (1 - root_w) * smoothstep(0.0, 0.12, t))
                         * (1 - 0.7 * t ** k) + 0.0008)
 
+            k = rng.randrange(tex_variants)
             tris += hair_mesh.card(bm, uv, uv2, dl, weights, path, lambda k: normals[k],
                                    halfwidth, (rng.random(), side), curve=L["curve"],
-                                   mat_index=1)
+                                   mat_index=1, twist=lambda t, tw=tw: tw * t,
+                                   u_range=(k / tex_variants, (k + 1) / tex_variants),
+                                   on_vert=on_vert)
         else:
-            mi = 0 if L["name"] == "under" else 1
+            # Under tubes: material 2, the "tip" texture (opaque core, strand
+            # tips past core_v), so their ends feather instead of ending flat.
             tris += hair_mesh.tube(bm, uv, uv2, dl, weights, path, lambda k: normals[k],
                                    radius, aspect, L["sides"], (rng.random(), side),
-                                   u0=rng.random(), u_span=circ / u_span, mat_index=mi)
+                                   u0=rng.random(), u_span=circ / u_span, mat_index=2,
+                                   on_vert=on_vert)
         if L["name"] in ("top", "hairline"):
-            guides.append((path, normals))
+            guides.append((path, normals, hang_s, sector, s.lay))
 
     # Flyaways: thin loose strands that leave a top clump part-way down and
     # drift off the mass, so the silhouette is not a clean shell.
     fw = cfg.get("flyaways")
     fly_tris = 0
     for _ in range(fw["count"] if fw else 0):
-        path, normals = guides[rng.randrange(len(guides))]
+        path, normals, hang_s, sector, lay = guides[rng.randrange(len(guides))]
         n = len(path) - 1
         i0 = rng.randint(max(1, int(n * fw["start"][0])), max(1, int(n * fw["start"][1])))
         p0 = path[i0]
         out = normals[i0].normalized()
+        if out.z > fw["max_up"]:
+            continue  # on the crown it would stand straight up
         drift = fw["drift_m"] * rng.uniform(0.4, 1.0)
         L = fw["length_m"] * rng.uniform(0.5, 1.0)
-        pts, acc, ph = [p0 - out * 0.001], 0.0, rng.uniform(0, 6.3)
+        pts, hs, acc, ph = [p0 - out * 0.001], [hang_s[i0]], 0.0, rng.uniform(0, 6.3)
         j = i0
         while acc < L and j < n:
             d = path[j + 1] - path[j]
@@ -348,20 +466,42 @@ def build(b, frame, cfg):
             wave = math.sin(ph + k * 5.0) * fw["wave_m"]
             side_v = d.cross(out).normalized() if d.length > 1e-6 else Vector((1, 0, 0))
             pts.append(path[j] + out * (drift * k * k) + side_v * wave * k)
+            hs.append(hang_s[j])
         if len(pts) < 3:
             continue
-        fpath, _ = hair_mesh.resample(pts, min(max(len(pts) - 1, 3), 8))
+        nf = min(max(len(pts) - 1, 3), 8)
+        fpath, _ = hair_mesh.resample(pts, nf)
         r0 = fw["radius_m"] * rng.uniform(0.7, 1.2)
+        shade = shader(dict(shade=fw["shade"]), 1.0, nf)
+
+        def on_fly(v, t, shade=shade, hs=hs, sector=sector):
+            shade(v, t)
+            v[hang_l] = hs[min(int(t * (len(hs) - 1) + 0.5), len(hs) - 1)]
+            v[sector_l] = sector
+
+        k = rng.randrange(tex_variants)
         fly_tris += hair_mesh.card(bm, uv, uv2, dl, weights, fpath, lambda k, o=out: o,
                                    lambda t, r0=r0: r0 * (1 - 0.5 * t), (rng.random(), 0.0),
-                                   curve=0.15, v_map=lambda t: 0.3 + 0.7 * t, mat_index=1)
+                                   curve=0.15, v_map=lambda t: 0.3 + 0.7 * t, mat_index=1,
+                                   u_range=(k / tex_variants, (k + 1) / tex_variants),
+                                   on_vert=on_fly)
+
+    springs = None
+    if cfg.get("springs"):
+        springs = hair_springs.bind(b, obj, bm, dl, hang_l, sector_l, cfg["springs"])
+    bm.verts.layers.float.remove(hang_l)
+    bm.verts.layers.int.remove(sector_l)
 
     mats = [hair_mesh.material("hair", cfg["texture"]["color"], cfg["roughness"],
-                               hair_mesh.strand_image("hair_mass", cfg["texture"], "tip"),
-                               cfg["specular"]),
+                               hair_mesh.strand_image("hair_mass", cfg["texture_cap"], "edge"),
+                               cfg["specular"], vertex_color="lock", anisotropy=cfg["anisotropy"]),
             hair_mesh.material("hair_cards", cfg["texture_card"]["color"], cfg["roughness"],
                                hair_mesh.strand_image("hair_cards", cfg["texture_card"], "card"),
-                               cfg["specular"], wrap=False)]
+                               cfg["specular"], wrap=False, vertex_color="lock",
+                               anisotropy=cfg["anisotropy"]),
+            hair_mesh.material("hair_under", cfg["texture"]["color"], cfg["roughness"],
+                               hair_mesh.strand_image("hair_under", cfg["texture"], "tip"),
+                               cfg["specular"], vertex_color="lock", anisotropy=cfg["anisotropy"])]
     hair_mesh.finish(b, obj, bm, mats)
     b.cutouts.append("hair_export")
     tips.sort()
@@ -383,5 +523,6 @@ def build(b, frame, cfg):
         "length_m_min_max": [round(min(lengths), 3), round(max(lengths), 3)],
         "width_eye_level_m": round(width, 4),
         "width_to_skull": round(width / skull, 3) if skull else None,
+        "springs": springs,
     }
     return obj

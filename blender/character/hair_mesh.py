@@ -45,19 +45,50 @@ def strand_image(name, cfg, kind):
     # Low-frequency value bands across u, so clumps (which see different u
     # ranges) differ a little in value.
     val *= 1 + cfg["band_amp"] * np.sin(2 * np.pi * (xs / w) + rng.uniform(0, 6.3))
-    for _ in range(cfg["strands"]):
+    # Card atlas: `variants` lock patterns side by side across u, each with
+    # its own value level and its own 1-3 sub-locks (strands cluster round
+    # the lock centres, leaving see-through gaps), so a card reads as a few
+    # thin piecey locks and neighbouring cards differ. The caller picks a
+    # variant by u range (card(..., u_range)).
+    variants = cfg.get("variants", 1) if kind == "card" else 1
+    wv = w / variants
+    lock_specs = []
+    if kind == "card" and "locks" in cfg:
+        for k in range(variants):
+            n_locks = int(rng.integers(cfg["locks"][0], cfg["locks"][1] + 1))
+            level = rng.lognormal(0, cfg.get("variant_sigma", 0.0))
+            val[:, int(k * wv):int((k + 1) * wv)] *= level
+            locks = []
+            for j in range(n_locks):
+                cx = (k + 0.15 + 0.7 * (j + rng.uniform(0.3, 0.7)) / n_locks) * wv
+                locks.append((cx, rng.uniform(*cfg["tip_v"]), rng.uniform(0, cfg["root_v"])))
+            lock_specs.append(locks)
+    # With locks, `strands` is per lock (so a 3-lock variant has 3 x as many).
+    n_strands = (sum(len(locks) for locks in lock_specs) * cfg["strands"] if lock_specs
+                 else cfg["strands"] * variants)
+    for i in range(n_strands):
         cx = rng.uniform(0, w)
         hw = rng.uniform(*cfg["width_px"]) / 2
         v = rng.lognormal(0, cfg["value_sigma"])
         amp, per, ph = rng.uniform(0, cfg["wave_px"]), rng.uniform(0.3, 1.0) * h, rng.uniform(0, 6.3)
         slope = 0.0
         if kind == "card":
+            k = i % variants
+            if lock_specs:
+                lcx, ltip, lroot = lock_specs[k][rng.integers(len(lock_specs[k]))]
+                cx = lcx + rng.normal(0, cfg["lock_spread_px"])
+                cx = min(max(cx, k * wv + 1), (k + 1) * wv - 2)
+                y0 = int(h * (lroot + rng.uniform(0, 0.08)))
+                # Feathered lock end: the longest strands reach the lock's tip.
+                y1 = int(h * min(1.0, ltip - abs(rng.normal(0, cfg["tip_sigma_v"]))))
+            else:
+                y0 = int(h * rng.uniform(0, cfg["root_v"]))
+                y1 = int(h * rng.uniform(*cfg["tip_v"]))
             # Fewer and shorter strands toward the card's edges: no outline.
-            e = abs(2 * cx / w - 1)
+            e = abs(2 * (cx - k * wv) / wv - 1)
             if rng.random() < e ** cfg["edge_pow"]:
                 continue
-            y0 = int(h * rng.uniform(0, cfg["root_v"]))
-            y1 = int(h * rng.uniform(*cfg["tip_v"]) * (1 - cfg["edge_short"] * e * e))
+            y1 = int(y1 * (1 - cfg["edge_short"] * e * e))
             slope = rng.normal(0, cfg.get("slant", 0.0))
         elif kind == "tip":
             y0, y1 = 0, int(h * rng.uniform(*cfg["tip_v"]))
@@ -87,7 +118,7 @@ def strand_image(name, cfg, kind):
         # outer (v = 0 side) end of a beard hair.
         n = y1 - y0
         if kind in ("tip", "card"):
-            cov *= np.clip((y1 - yy) / (0.06 * h), 0.25, 1)
+            cov *= np.clip((y1 - yy) / (cfg.get("tip_taper_v", 0.06) * h), 0.25, 1)
         else:
             cov *= np.clip((yy - y0) / (0.35 * n), 0.2, 1)
         sl = (slice(y0, y1), slice(None))
@@ -115,10 +146,16 @@ def strand_image(name, cfg, kind):
     return img
 
 
-def material(name, hex_srgb, roughness, image=None, specular=0.5, wrap=True):
+def material(name, hex_srgb, roughness, image=None, specular=0.5, wrap=True,
+             vertex_color=None, anisotropy=0.0):
     """Look-dev material. The runtime hair shader (banded Kajiya-Kay) is a
     TSL concern; this only has to read in the loop renders and carry the
-    strand texture (base colour + alpha, exported as MASK) into the GLB."""
+    strand texture (base colour + alpha, exported as MASK) into the GLB.
+    vertex_color: name of a colour attribute multiplied into the base colour
+    (per-lock value variation; exported as COLOR_0). anisotropy > 0 stretches
+    the highlight across the fibres: the tangent is the UV map's u axis, so
+    a quarter-turn rotation puts the lobe along v (root -> tip); exported as
+    KHR_materials_anisotropy constants, which the runtime shader ignores."""
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
@@ -127,13 +164,36 @@ def material(name, hex_srgb, roughness, image=None, specular=0.5, wrap=True):
     bsdf.inputs["Base Color"].default_value = (*rgb, 1.0)
     bsdf.inputs["Roughness"].default_value = roughness
     bsdf.inputs["Specular IOR Level"].default_value = specular
+    color_out = None
     if image is not None:
         tex = nt.nodes.new("ShaderNodeTexImage")
         tex.image = image
         tex.extension = "REPEAT" if wrap else "EXTEND"
-        nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        color_out = tex.outputs["Color"]
         # export.fix_alpha routes this through ROUND -> glTF alphaMode MASK.
         nt.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+    if vertex_color:
+        attr = nt.nodes.new("ShaderNodeVertexColor")
+        attr.layer_name = vertex_color
+        if color_out is not None:
+            mix = nt.nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.blend_type = "MULTIPLY"
+            mix.inputs["Factor"].default_value = 1.0
+            nt.links.new(color_out, mix.inputs[6])
+            nt.links.new(attr.outputs["Color"], mix.inputs[7])
+            color_out = mix.outputs[2]
+        else:
+            color_out = attr.outputs["Color"]
+    if color_out is not None:
+        nt.links.new(color_out, bsdf.inputs["Base Color"])
+    if anisotropy > 0:
+        bsdf.inputs["Anisotropic"].default_value = anisotropy
+        bsdf.inputs["Anisotropic Rotation"].default_value = 0.25
+        tan = nt.nodes.new("ShaderNodeTangent")
+        tan.direction_type = "UV_MAP"
+        tan.uv_map = "UVMap"
+        nt.links.new(tan.outputs["Tangent"], bsdf.inputs["Tangent"])
     return mat
 
 
@@ -248,14 +308,17 @@ def finish(b, obj, bm, mats):
 
 
 def card(bm, uv, uv2, dl, weights, path, outward, halfwidth, tag, curve=0.3,
-         v_map=None, mat_index=0):
+         v_map=None, mat_index=0, twist=None, u_range=(0.0, 1.0), on_vert=None):
     """Hair card along path: a strip three vertices wide (left, centre lifted
     by curve x half-width along the outward normal, right), so it has a soft
     rounded profile rather than a flat plank. Rendered double-sided with the
     alpha-tested "card" strand texture, whose strands thin out toward both
     edges and end at different lengths, so the card reads as a lock of hair
-    with no hard outline. UV0: u across (0 .. 1), v root -> tip (v_map(t)
-    overrides). UV1: tag. Returns the number of triangles added."""
+    with no hard outline. UV0: u across u_range (one atlas variant), v root
+    -> tip (v_map(t) overrides). UV1: tag. twist(t): rotation of the card
+    about its own axis (radians), so locks turn and catch light differently.
+    on_vert(vert, t) runs for every new vertex (per-vertex attributes).
+    Returns the number of triangles added."""
     vmap = v_map or (lambda t: t)
     n = len(path) - 1
     rows, prev_nrm = [], None
@@ -272,16 +335,24 @@ def card(bm, uv, uv2, dl, weights, path, outward, halfwidth, tag, curve=0.3,
             nrm = (nrm - tan * tan.dot(nrm)).normalized()
         prev_nrm = nrm
         bi = tan.cross(nrm)
+        if twist is not None:
+            a = twist(t)
+            ca, sa = math.cos(a), math.sin(a)
+            nrm, bi = nrm * ca + bi * sa, bi * ca - nrm * sa
         hw = halfwidth(t)
         row = [bm.verts.new(p - bi * hw), bm.verts.new(p + nrm * (hw * curve)),
                bm.verts.new(p + bi * hw)]
         for v in row:
             for g, w in weights.items():
                 v[dl][g] = w
+            if on_vert:
+                on_vert(v, t)
         rows.append((row, vmap(t)))
     tris = 0
+    ua0, ua1 = u_range
+    um = (ua0 + ua1) / 2
     for (r0, v0), (r1, v1) in zip(rows, rows[1:]):
-        for a, c, ua, uc in ((0, 1, 0.0, 0.5), (1, 2, 0.5, 1.0)):
+        for a, c, ua, uc in ((0, 1, ua0, um), (1, 2, um, ua1)):
             # (left, right) then along: face normal = +outward.
             f = bm.faces.new((r0[a], r0[c], r1[c], r1[a]))
             f.material_index = mat_index
@@ -310,7 +381,7 @@ def resample(pts, n):
 
 
 def tube(bm, uv, uv2, dl, weights, path, outward, radius, aspect, sides, tag,
-         u0=0.0, u_span=1.0, v_map=None, mat_index=0):
+         u0=0.0, u_span=1.0, v_map=None, mat_index=0, on_vert=None):
     """Tapered, flattened tube along path (closed to a point at the tip,
     open at the root, which is buried in the cap). outward(i) gives the
     surface normal the tube's flat side lies against; radius(t) the
@@ -339,18 +410,19 @@ def tube(bm, uv, uv2, dl, weights, path, outward, radius, aspect, sides, tag,
         bi = tan.cross(nrm)
         if i == n:
             rings.append([bm.verts.new(p)])
-            continue
-        hw = radius(t)
-        ht = hw / asp(t)
-        ring = []
-        for k in range(sides):
-            a = 2 * math.pi * k / sides
-            ring.append(bm.verts.new(p + bi * (math.cos(a) * hw) + nrm * (math.sin(a) * ht)))
-        rings.append(ring)
-    for ring in rings:
-        for v in ring:
+        else:
+            hw = radius(t)
+            ht = hw / asp(t)
+            ring = []
+            for k in range(sides):
+                a = 2 * math.pi * k / sides
+                ring.append(bm.verts.new(p + bi * (math.cos(a) * hw) + nrm * (math.sin(a) * ht)))
+            rings.append(ring)
+        for v in rings[-1]:
             for g, w in weights.items():
                 v[dl][g] = w
+            if on_vert:
+                on_vert(v, t)
     tris = 0
     for i in range(n):
         r0, r1 = rings[i], rings[i + 1]
