@@ -4,9 +4,10 @@ for the build, a second for the views (the views script resets the scene).
 
     blender -b -t 4 --factory-startup --python bench/m1/suit_dev.py -- \
         --out DIR [--config bench/m1/variants/direction.json] [--override '{"suit": {...}}'] \
-        [--views torso,lapel] [--wire] [--hide hair] [--no-render] [--hair]
+        [--views torso,lapel] [--wire] [--hide hair] [--no-render] [--hair] [--check]
 
-Writes DIR/character.glb, DIR/character.stats.json, DIR/<view>.png.
+Writes DIR/character.glb, DIR/character.stats.json, DIR/<view>.png; --check runs
+suit_check.py (silhouette holes, open armhole seams) into DIR/check/.
 """
 
 import argparse
@@ -30,11 +31,12 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--out", required=True)
 ap.add_argument("--config", default=os.path.join(HERE, "variants", "direction.json"))
 ap.add_argument("--override", default="{}")
-ap.add_argument("--views", default="torso,torso34,lapel,side,back,shoulder")
+ap.add_argument("--views", default="torso,torso34,lapel,gorge,notch,knot,shoulder,shoulder_back,collar_back,side,back")
 ap.add_argument("--wire", action="store_true")
 ap.add_argument("--hide", default="")
 ap.add_argument("--no-render", action="store_true")
 ap.add_argument("--hair", action="store_true", help="build the hair and beard too")
+ap.add_argument("--check", action="store_true", help="run suit_check.py (holes, open seams) on the GLB")
 ap.add_argument("--res", type=int, default=600)
 A = ap.parse_args(argv)
 
@@ -98,6 +100,14 @@ if not A.no_render:
     if r.returncode:
         print(r.stdout[-3000:], r.stderr[-3000:])
     print(f"[suit_dev] views in {A.out} ({time.perf_counter() - t0:.1f} s total)")
+
+if A.check:
+    r = subprocess.run([bpy.app.binary_path, "-b", "-t", "4", "--factory-startup", "--python",
+                        os.path.join(HERE, "suit_check.py"), "--", "--glb", glb,
+                        "--out-dir", os.path.join(A.out, "check")], capture_output=True, text=True)
+    print("\n".join(l for l in r.stdout.splitlines() if l.startswith("[suit_check]")))
+    if r.returncode:
+        print(f"[suit_dev] suit_check FAILED (see {os.path.join(A.out, 'check', 'check.json')})")
 
 if os.environ.get("SUIT_TANGENT_CHECK"):
     sys.path.insert(0, "/tmp")

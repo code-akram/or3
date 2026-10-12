@@ -39,25 +39,26 @@ DEFAULTS = {
         "ease": {"chest": 0.024, "back": 0.014, "side": 0.020,
                  "waist_front": 0.016, "waist_back": 0.013, "waist_side": 0.014,
                  "hip": 0.018, "flare": 0.010},
-        "shoulder": {"over_body_m": 0.012, "back_neck_m": -0.042, "neck_point_drop_m": 0.012,
-                     "slope_m": 0.030,
+        "shoulder": {"over_body_m": 0.012, "back_neck_m": -0.022, "neck_point_drop_m": 0.012,
+                     "depth_top": 0.78, "clear_m": 0.010, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
                      "neck_half_m": 0.072, "neck_ease_m": 0.016, "neck_curve_pow": 0.8,
-                     "armpit_below_joint_m": 0.095, "bulge_pow": 0.7, "cap_below_joint_m": 0.02},
+                     "armpit_below_joint_m": 0.115, "bulge_pow": 0.7, "cap_below_joint_m": 0.02},
         "overlap_m": 0.02, "underlap_tuck_m": 0.003, "front_cut_m": 0.03,
         "quarter_cut_m": 0.025, "quarter_height_m": 0.12,
         "skirt_leg_weight": 0.5,
         "lapel": {"width_m": 0.080, "width_pow": 2.2, "swing_u": 0.10,
                   "gorge_below_neck_m": 0.032, "roll_m": 0.012, "edge_m": 0.003,
-                  "tip_rise_m": 0.028},
-        "collar": {"stand_front_m": 0.028, "stand_back_m": 0.032, "lean_in_m": 0.004,
-                   "fall_front_m": 0.048, "fall_back_m": 0.044, "end_frac": 0.10,
-                   "end_columns": 4, "gorge_seam_m": 0.034, "point_m": 0.036,
-                   "point_angle_deg": -12},
+                  "tip_rise_m": 0.026, "rise_frac": 0.30, "tip_lift_m": 0.002},
+        "collar": {"stand_front_m": 0.028, "stand_back_m": 0.032, "lean_in_m": 0.002,
+                   "fall_front_m": 0.048, "fall_back_m": 0.044, "end_frac": 0.12,
+                   "end_columns": 4, "gorge_seam_m": 0.034, "point_m": 0.032,
+                   "notch_deg": 65, "point_back_m": 0.012, "stand_end_m": 0.004},
         "vents": "double", "vent_height_m": 0.24, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         "sleeve": {"columns": 28, "row_m": 0.016, "band_m": 0.012, "ease_m": 0.010,
                    "top_r_m": 0.066, "cuff_r_m": 0.046, "past_wrist_m": 0.005,
-                   "rope_m": 0.0035, "head_rows": 7, "seam_out_m": 0.0025, "elbow_blend_m": 0.04, "uv_circ_m": 0.36},
+                   "rope_m": 0.0035, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
+                   "elbow_blend_m": 0.04, "uv_circ_m": 0.36},
         "pockets": {"flap_x0_m": 0.07, "flap_w_m": 0.16, "flap_h_m": 0.06,
                     "flap_below_button_m": 0.075,
                     "welt": {"from_roll_m": 0.095, "w_m": 0.105, "h_m": 0.024,
@@ -75,13 +76,13 @@ DEFAULTS = {
         "columns": 48, "row_m": 0.015,
     },
     "shirt": {"offset_m": 0.005, "front_margin_m": 0.03,
-              "collar": {"base_above_supra_m": 0.002, "back_rise_m": 0.038, "gap_m": 0.005,
+              "collar": {"base_above_supra_m": 0.002, "back_rise_m": 0.055, "gap_m": 0.005,
                          "stand_front_m": 0.032, "stand_m": 0.038, "leaf_m": 0.016,
-                         "point_m": 0.070, "spread_deg": 28, "columns": 64,
-                         "gap_frac": 0.035, "point_frac": 0.085, "hidden_from_frac": 0.15},
+                         "point_m": 0.070, "spread_deg": 28, "columns": 64, "lay_m": 0.006,
+                         "gap_frac": 0.025, "point_frac": 0.085, "hidden_from_frac": 0.15},
               "placket_w_m": 0.035, "cuff_reveal_m": 0.013, "cuff_inside_m": 0.02},
-    "tie": {"knot_w_m": 0.040, "knot_h_m": 0.046, "knot_d_m": 0.024, "knot_skew_m": 0.003,
-            "knot_top_above_base_m": 0.038, "blade_top_w_m": 0.032,
+    "tie": {"knot_w_m": 0.038, "knot_h_m": 0.044, "knot_d_m": 0.017, "knot_skew_m": 0.003,
+            "knot_tilt_m": 0.003, "knot_top_above_base_m": 0.031, "blade_top_w_m": 0.025,
             "blade_w_m": 0.078, "blade_full_at_m": 0.44, "dimple_m": 0.005},
     "trousers": {"back_hem_m": 0.035, "break_from_z": 0.45, "crease_depth_m": 0.0025,
                  "opening_half_m": 0.095, "taper_from_z": 0.50},
@@ -102,7 +103,7 @@ DEFAULTS = {
         # Sheen Weight is ignored, so the strength goes in the tint).
         "wool": [0.028, 0.70, 0.08],
         "shirt": [0.75, 0.55, 0.0],
-        "silk": [0.02, 0.35, 0.15],
+        "silk": [0.02, 0.48, 0.10],
         "button": [0.015, 0.3, 0.0],
         "leather": [0.012, 0.28, 0.0],   # polished black calf
         "sole": [0.02, 0.65, 0.0],
@@ -128,6 +129,15 @@ def add(b):
         b.mpfb.add_mhclo(b.basemesh, "clothes", fname, "Clothes")
     if opts(b)["tailor"]:
         b.suit_src = capture_body(b.basemesh)
+        # the shell's delete mask was cut for the stock collar and cuffs (it
+        # removed the neck up to the stock collar's top, a see-through sliver
+        # above our shirt band from the side); the built garments decide what
+        # the body hides (hide_body). The shoes' mask stays.
+        b.suit_masks_dropped = []
+        for m in list(b.basemesh.modifiers):
+            if m.type == "MASK" and m.name.startswith("Delete.") and "shoe" not in m.name.lower():
+                b.suit_masks_dropped.append(m.name)
+                b.basemesh.modifiers.remove(m)
 
 
 def capture_body(ob):
@@ -183,6 +193,7 @@ def post(b):
     G = sb.Garment(PART.format("jacket"), arm, body)
     jk, jm = suit_jacket.build(G, body, o["jacket"], stature, z_b, supra)
     jacket = G.finish(b, trousers, mats["wool"])
+    jm["finish"] = G.stats
     jm["shoulder_over_body_m"] = r(2 * jk.half_sh - m["body_bideltoid_m"])
     m["jacket"] = jm
 
@@ -227,6 +238,7 @@ def post(b):
     garments = [x for x in (jacket, trousers, shirt, tie, vest, shoes) if x is not None]
     if o["hide_body"]:
         m["body_hide"] = hide_body(b, o, garments)
+        m["body_hide"]["stock_masks_dropped"] = getattr(b, "suit_masks_dropped", [])
     m["tris"] = {x.name: budgets.tris(x) for x in b.meshes()}
     b.notes["suit"] = m
 
@@ -255,7 +267,10 @@ def hide_body(b, o, occluders):
     visible = []
     covered = set()
     for v in bm.verts:
-        if suit_ops.dominant(v, dl, names, bones) == "head":
+        # the head is never touched; neither is the neck, where the layered
+        # collars make the cover test fragile (a hollow neck shows as a sliver
+        # of background between the shirt band and the jacket collar)
+        if suit_ops.dominant(v, dl, names, bones) in ("head", "neck_01"):
             visible.append(v)
             continue
         n = v.normal
