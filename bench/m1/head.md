@@ -183,3 +183,44 @@ Between variants, face IoU front / profile is: A–B 0.885 / 0.924, A–C 0.942 
 3. **Leave the plane read to the painted texture and normal bake.** The spec's plan, §0.
 
 Option 1 plus 3 is the strongest. Choose after the user picks a variant.
+
+## 8. Face C fidelity push (2026-10-12)
+
+**Why.** With C chosen (§7, plus the collar hair and the shell beard), the hero was still a 15k-tri MPFB head wearing the stock `young_caucasian_male` texture: soft planes, stubble specks and a nose-to-ear seam in the skin, pink lips, flat eyes, mitten hands. The brief: crisper planar form, fine skin detail, a generated 4k skin, hero eyes and hands, inside ~120k tris, **with the face kept original** (archetype only; nobody in particular).
+
+**What changed** (new build stage `head_refine`, after `suit_post` and `hair_post`, before `rig_post`; `blender/character/head_refine.py`, `skin_tex.py`, `eyes_hq.py`, configured under `head.refine`):
+
+1. **Topology.** The staged body (head + neck + hands after the suit hides the rest, 7,587 quads) is grid-subdivided once over the face and hands only (scalp, ears and neck stay coarse; border 5-gons are triangulated so the glTF exporter never emits a zero-area sliver). UVs and skin weights are interpolated. 7,587 → 25,769 faces; body 15,174 → 51,662 tris. MPFB proxies bind by base-mesh vertex index, so this has to happen after staging: the beard and hair sampled the low-res surface and still sit on it (verified in the close-ups after rebasing onto the facial-hair merge).
+2. **Crisper planes.** The §4 plane groups are re-fitted on the dense mesh (`refine.replanarise` 1.0 × the variant's blends, plateau edge `plane_sharp` 3.0, eyes and lips excluded); max move 3.9 mm. Sharper candidates (1.4 × / sharp 4, and softer subdivision 0.3 + 1.2 × / sharp 4) were rendered side by side with the default and were indistinguishable in the key-only strip (face IoU 0.9996–1.0), so the default stays.
+3. **Nose tamed.** C's hump and drooping tip were the caricature. `nose-hump-incr` 0.45, `nose-point-down` 0.1, `nose_length` 0.3, `nose-trans-forward` 0.15, `mouth-laugh-lines-in` 0.4 (`direction.json`, `face-c.json`). New guard in `head_measure`: dorsal hump over the nasion–pronasale chord ≤ 2.5 mm (was 2.99, now 2.18) and projection/length 0.60 ± 0.10 (0.54). A hookier candidate at 2.41 mm was rejected by eye.
+4. **Sculpt** (along the normal, mm): knuckle bumps at MCP/PIP/DIP with a crease distal of each (2.0), extensor tendons (0.9), nail plates (0.35), lid margin thickness (0.4). Knuckles read in a cavity render and the hand close-up; they're still subtle in beauty light (see weaknesses).
+5. **UV re-pack.** The MakeHuman face island is 0.35 × 0.67 of a shared body map, so a 4k map would waste most of its texels. Head islands (face, scalp, ears, neck) are re-packed into map 0 (face at ~1.49 × scale, i.e. about 2k px tall at 4k) and the hand islands into map 1 (2.66 ×); material slot 0 = head, 1 = hands.
+6. **Generated skin** (`skin_tex.py`). Cycles emission bakes of position, normal, tangent, coverage, masks (lips, nails, ears, scalp, beard zone) and six 3D noise fields into texture space, plus an AO bake with hair and clothes hidden; then numpy synthesis in the face frame (origin = eye midpoint, scale = IPD / 61.6 mm): a height field (pores from Voronoi F1, grain, three forehead lines, glabella, four crow's feet, two under-eye lines, nasolabial, lip creases, neck rings) → tangent-space normal via the bump dual basis and a cavity map; albedo = measured MPFB tone (`#c4a996`) with flush, mottle, specks, socket and orbit-roof shadow, painted plane shading, baked AO at 0.4, natural vermilion lips (`#93655b` at 0.55), the beard-zone shadow and stubble darkening computed from the beard track's own `hair_beard.landmarks / inside_dist` rules so the shell edge sits on a shadow; roughness from the same zones. Hands: knuckle and flexion creases, palm lines, cuticles. Output: albedo (sRGB), ORM (AO / roughness / metallic, "glTF Material Output" group), normal; 4096² head, 2048² hands; packed into the GLB. One Principled material per slot, no SSS (export-friendly).
+7. **Eyes** (`eyes_hq.py`). The MPFB low-poly eyes are replaced by fitted spheres (r 14.96 mm, 48 × 36 with a 2.2 mm corneal bulge) and a 1024² procedural iris / sclera (fibres, collarette, crypts, limbal ring; veins and a red halo at the corners; per-pixel roughness, coat for the wet line). 6,912 tris, armature-skinned like the originals.
+8. **Harness.** `detail_strip.png` (eye, nose profile, mouth, hand back, palm), `skin_*` / `eyes_*` map dumps, `refine.*` metrics, nose guards in the spec row; `STRIP_PARTS` hides the shell brows in the face strip; the read test finds the new eyes.
+
+**Numbers** (fast loop = 2k bakes; final = `direction.json` at 4k):
+
+| | before `fc-base` | after `fc-r7` (2k) | after `fc-final` (4k) |
+|---|---|---|---|
+| tris total / body | 61,945 / 15,174 (card beard) | 114,471 / 51,662 | 114,475 / 51,662 |
+| nose hump mm / proj ratio | 2.99 / — | 2.18 / 0.54 | 2.18 / 0.54 |
+| read40 eye band (≥ 0.75) | 0.795 (look-dev skin) | 0.768 (generated skin) | 0.766 |
+| spec out of band | 0 | 0 | 0 |
+| GLB | 12.4 MB | 24.8 MB | 53.4 MB |
+| build in Blender | 7.7 s | 39.9 s (refine 31.9) | 154 s (refine 145, of which skin 142) |
+
+Budget: 114.5k of the ~120k target (cap 150k): body 51.7k, hair 21.2k, beard 14.0k, suit 15.0k, eyes 6.7k, brows 1.6k, rest 4.3k.
+
+**Runs** (`data/build/lookdev/`): before `20261012T104802Z-fc-base`; iterations `fc-r1…r7`, `fc-tame-a/b` (nose), `fc-planes-a/b` (plane sharpness), `fc-hands-a`; final loop `20261012T113706Z-fc-final`; after the rebase onto the scalp-hair pass 2 merge, `20261012T114636Z-fc-r8-rebased` (115.6k tris, 65 bones with the hair springs; face strip unchanged, dressed close-up checked); Cycles sign-off pair `20261012T113957Z-fc-final-signoff` (refine on) and `20261012T114348Z-fc-before-signoff` (`head.refine: null`, same everything else: 71.5k tris, stock skin and eyes). Compare the two `closeup.png`: before is a pale, flat face with painted eyes; after has planes, tone, sockets and wet eyes.
+
+**Likeness check.** No photo references, no real names anywhere in the prompts, code or configs; the face is C's parameter set only. The archetype (weathered, hard, quiet, 50s) is carried by age, planes, sockets and skin wear, not by any individual's features.
+
+**Weaknesses, honest.**
+- **Knuckles and tendons are subtle in beauty light.** 2 mm bumps on a 51k body read in cavity and in the hand close-up, not at game distance; the hand normal map does most of the work. A stronger push distorts the straight-finger silhouette.
+- **Pores are at the edge of the 4k texel size** (0.08 mm height, ~0.5 mm pitch, 2 px). They read as grain, not as pores, at the close-up distance.
+- **The nasolabial fold is still geometry-led** (MPFB `mouth-laugh-lines-in` 0.4); in flat light it reads harder than the painted one.
+- **GLB doubles in size** with the 4k PNG maps; KTX2/basis compression is a runtime-side task.
+- **Eyes:** the sclera is a painted colour; there is no refraction, the corneal bulge plus coat is the whole wet read. Lashes are still the MPFB cards.
+- **Validator:** one `ACCESSOR_VECTOR3_NON_UNIT` tangent on `Human.beard_export` (three coincident shell vertices with the same UV at the philtrum). It is present with `head.refine: null` too (`fc-before-signoff`), so it comes from the shell beard meeting the tamed nose / philtrum (`moustache_height_m` / `nose_clear_m`), not from the dense body; the facial-hair track's `fh-final` runs on the untamed nose had 0. Harmless at runtime (one zero tangent on one shell); for the beard track to fix.
+- The `read40` eye-band score fell from 0.795 to 0.768 because the generated skin replaces the neutral look-dev skin in the test; it still passes.
