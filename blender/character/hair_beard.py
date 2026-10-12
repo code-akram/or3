@@ -131,6 +131,14 @@ def region(b, frame, cfg, rng):
     lips_i = groups[0]
     on_lips = set(v.index for v in body.data.vertices
                   if any(e.group == lips_i and e.weight > cfg["lips_w"] for e in v.groups))
+    # The lower lip's bottom band of lip-group skin, under the lip's curl and
+    # facing forward again, is skin outside the painted vermilion: it takes
+    # roots, or a bare strip shows between the lip and the beard.
+    r3 = mw.to_3x3()
+    low_band = set(i for i in on_lips
+                   if (mw @ body.data.vertices[i].co).z < frame.lips_min.z + cfg["lower_lip_root_m"]
+                   and (r3 @ body.data.vertices[i].normal).normalized().y < -0.3)
+    on_lips -= low_band
     keep = set(i for i, d in dist.items() if d > -margins[which[i]] and i not in on_lips)
     # The top band of the upper lip joins the patch with no roots, so the
     # game shells can carry the moustache hairs that hang over the lip edge.
@@ -372,7 +380,15 @@ def build(b, frame, cfg):
         return beard_bake.build_cards(bmx, uv, uv2, dl, gb, centres, rolls, weights_of, cd, "beard", rng)
 
 
-    stats = beard_bake.build_shells(b, obj, bm, canopy, project, [gb, gs], sh, "beard",
+    # The baked stubble: a texel is several times a stubble hair's width, so
+    # every hair drawn would read as a bold dark speck; keep a share of them.
+    keep_s = np.random.default_rng(cfg["seed"] + 101).random(len(gs["pts"])) < sh["stubble_keep"]
+    gs_bake = {key: val[keep_s] for key, val in gs.items()}
+    # Likewise the beard: a drawn hair is about 3x a real one's width at the
+    # atlas resolution, so all of them together read as a solid dark mass.
+    keep_b = np.random.default_rng(cfg["seed"] + 102).random(len(gb["pts"])) < sh["beard_keep"]
+    gb_bake = {key: val[keep_b] for key, val in gb.items()}
+    stats = beard_bake.build_shells(b, obj, bm, canopy, project, [gb_bake, gs_bake], sh, "beard",
                                     extra=extra if cd.get("count") else None)
     b.facial_refit.add("mesh", obj)
     b.cutouts.append("beard_export")

@@ -129,9 +129,14 @@ def camera(ch, name, spec):
 
 
 def set_mode(mode):
+    # only the hero hair strands (curves) toggle; other hero_only parts (the
+    # hero skin and eyes) stay on in both modes, so the comparison is the hair
     hero = bpy.data.collections.get("hero_only")
     if hero is not None:
-        hero.hide_render = mode != "hero"
+        hero.hide_render = False
+        for o in hero.all_objects:
+            if o.type == "CURVES":
+                o.hide_render = mode != "hero"
     for o in bpy.data.objects:
         if o.type == "MESH" and any(p in o.name for p in GAME_PARTS):
             o.hide_render = mode == "hero"

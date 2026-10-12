@@ -230,7 +230,11 @@ def build_shells(b, obj, bm, canopy, project, grooms, cfg, name, extra=None):
             bb = np.concatenate(b_all) + [x0, y0]
             tk = ts[k]
             shade = shade_cfg["root"] + (1 - shade_cfg["root"]) * min(tk / shade_cfg["full_at"], 1.0) ** 0.7
-            canvas.lines(a, bb, np.concatenate(r_all), np.concatenate(c_all) * shade)
+            col = np.concatenate(c_all) * shade * cfg.get("albedo_gain", 1.0)
+            # lifted warm strands go orange: pull the colour toward its value
+            lum = (col @ np.array([0.2126, 0.7152, 0.0722]))[:, None]
+            col = lum + (col - lum) * cfg.get("saturation", 1.0)
+            canvas.lines(a, bb, np.concatenate(r_all), col)
     rgb = np.concatenate([gr["rgb"] for gr in grooms])
     fill = (rgb.mean(0) * shade_cfg["root"]).astype(np.float32)
     img = make_image(name + "_atlas", canvas.rgba(fill))
@@ -244,6 +248,9 @@ def build_shells(b, obj, bm, canopy, project, grooms, cfg, name, extra=None):
         card_stats, card_mat = extra(bm, uv, uv2, dl)
         mats.append(card_mat)
     hair_mesh.finish(b, obj, bm, mats)
+    # Stacked alpha layers self-shadow into a near-black mass in a path
+    # tracer; a real-time engine's shadow map can't resolve that either.
+    obj.visible_shadow = cfg.get("cast_shadow", True)
     # skin point under every shell vertex (cards: their root), for the refit
     me = obj.data
     att = me.attributes.new("fh_root", "FLOAT_VECTOR", "POINT")

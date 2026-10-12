@@ -218,6 +218,7 @@ DEFAULTS = {
             "lips_w": 0.5,             # body vertices over this `lips` weight are vermilion: no roots
             "fade_m": 0.010,           # skin_tex.beard_depth: the skin's stubble shadow ramp past the margin
             "lip_band_m": 0.004,       # top band of the upper lip in the shell patch (no roots): moustache overhang
+            "lower_lip_root_m": 0.003,  # lip-group skin this far over the lower lip's bottom, facing forward: roots
             "mouth_depth_m": 0.008,    # skin this far behind the lip front, inside the corners, facing back: mouth
             # Patch reaches this far past each line (cheek, neck, back,
             # moustache top): the stubble band.
@@ -273,7 +274,11 @@ DEFAULTS = {
                        "atlas_cols": 2, "tile": [1024, 512], "px_per_m": 3000.0,
                        "radius_scale": 1.0, "min_radius_px": 0.45,
                        "canopy_radius_m": 0.005, "canopy_pct": 80, "canopy_floor_m": 0.0006,
-                       "shade": {"root": 0.6, "full_at": 0.8},
+                       "shade": {"root": 0.8, "full_at": 0.8},
+                       # baked hairs are about 3x real width at this resolution: draw a
+                       # share, lighter, and keep the stacked layers from self-shadowing
+                       "albedo_gain": 1.6, "saturation": 0.8, "cast_shadow": False,
+                       "stubble_keep": 0.35, "beard_keep": 0.6,
                        "uv": {"max_angle_deg": 120, "pad": 0.02, "origin_back_m": 0.0,
                               "origin_up_m": 0.0},
                        "roughness": 0.6, "specular": 0.25},
@@ -327,7 +332,8 @@ DEFAULTS = {
                        "atlas_cols": 2, "tile": [512, 192], "px_per_m": 6000.0,
                        "radius_scale": 1.3, "min_radius_px": 0.5,
                        "canopy_radius_m": 0.003, "canopy_pct": 85, "canopy_floor_m": 0.0005,
-                       "shade": {"root": 0.6, "full_at": 0.7},
+                       "shade": {"root": 0.7, "full_at": 0.7},
+                       "albedo_gain": 1.25, "cast_shadow": False,
                        "roughness": 0.6, "specular": 0.25},
             "cards": {"per_side": 20, "spacing_m": 0.0025, "clump_radius_m": 0.0015,
                       "min_members": 3, "min_len_m": 0.004, "segments": 2,
@@ -344,9 +350,9 @@ DEFAULTS = {
         # null keeps the MPFB lashes.
         "lashes": {
             "seed": 17, "proxy": "eyelashes", "drop_proxy": True, "bins": 14, "points": 7,
-            "margin_step_m": 0.0005, "margin_min_open_m": 0.0015, "margin_in_m": 0.0003,
-            "upper": {"count": 165, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.0085, 0.006],
-                      "curl_deg": 55, "forward": 0.8, "splay_deg": 6, "fan_deg": 25,
+            "margin_step_m": 0.0005, "margin_min_open_m": 0.0006, "margin_in_m": 0.0003,
+            "upper": {"count": 165, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.009, 0.0075],
+                      "curl_deg": 55, "forward": 0.8, "splay_deg": 6, "fan_deg": 40,
                       "row_jitter_m": 0.00025, "strip_cols": 8, "strip_forward_scale": 0.6},
             "lower": {"count": 80, "length_m": [0.0018, 0.0032, 0.0045, 0.0042, 0.003],
                       "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
