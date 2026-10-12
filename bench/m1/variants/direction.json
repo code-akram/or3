@@ -91,7 +91,10 @@
    }
   },
   "refine": {
-   "replanarise": 0.0
+   "replanarise": 0.0,
+   "skin": {
+    "base": "#b8927b"
+   }
   }
  },
  "hair": {
