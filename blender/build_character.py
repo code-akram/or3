@@ -86,8 +86,8 @@ def main():
     b.step("stage_for_export", export.stage)
     b.step("bake_targets", export.bake_targets)
     b.step("head_post", head.post)
-    b.step("hair_post", hair.post)
     b.step("suit_post", suit.post)
+    b.step("hair_post", hair.post)  # after the suit, so hair collides with the final collar
     b.step("rig_post", rig.post)
     b.step("budgets", budgets.apply)
     b.step("fix_alpha", export.fix_alpha)

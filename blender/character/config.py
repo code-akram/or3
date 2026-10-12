@@ -46,19 +46,30 @@ DEFAULTS = {
         # MPFB card hair (spike-1 placeholder); null = generated hair only.
         "asset": None,
         # Generated clump hair (hair_clumps.py). Default variant: shoulder.
+        # Hero budget (user, 2026-10-12): hair + beard up to ~35k tris.
         "clumps": {
             "seed": 7,
-            "clumps": 68,             # main clumps (roots spread over the scalp)
+            # Top layer (the visible hair): many curved alpha-tested cards.
+            "card": True,             # False: flattened tubes like the under layer
+            "curve": 0.25,            # card centre lift, x half-width (rounded profile)
+            "clumps": 320,            # top-layer cards (roots spread over the scalp)
             "length": {"f": 0.85,     # tip height: neck_01 joint (0) -> shoulder joints (1)
-                       "jitter_m": 0.02},
+                       "jitter_m": 0.025},
             "max_len_m": 0.55,
-            "radius_m": 0.022,        # clump half-width at full size
-            "radius_jitter": 0.2,
-            "hang_widen": 0.5,        # extra half-width where a clump hangs free
-            "taper_power": 1.6,       # half-width ~ 1 - t^k: holds width, tapers late
-            "aspect": 3.6,            # half-width / half-thickness
+            "radius_m": 0.0095,       # clump / card half-width at full size
+            "radius_jitter": 0.35,
+            "hang_widen": 0.35,       # extra half-width where a clump hangs free
+            "taper_power": 1.3,       # half-width ~ 1 - t^k
+            "aspect": 4.5,            # half-width / half-thickness at the root
+            "aspect_tip": 1.8,        # x flatter at the tip (thin blade ends)
+            "sides": 4,
+            "lift_m": 0.003,          # sits this much over the under layer
+            "tip_m": 0.0,             # tip height offset vs the variant's target
+            # Under layer (the mass): fewer, wide, flat, solid clumps hugging the scalp.
+            "under": {"clumps": 36, "radius_m": 0.02, "aspect": 4.0, "aspect_tip": 1.5,
+                      "hang_widen": 0.6, "sides": 6, "lift_m": 0.0, "tip_m": -0.015},
             "gap_m": 0.0015,          # clearance over skin and clothes
-            "layer_jitter_m": 0.002,
+            "layer_jitter_m": 0.007,
             "part_x_m": 0.012,        # part, off-centre to the character's left
             "part_push": 0.35,
             "comb_drop": 0.15,
@@ -66,20 +77,46 @@ DEFAULTS = {
             "gravity": 0.95,
             "step_m": 0.01,
             "turn": 0.6,
-            "segment_m": 0.035,
+            "segment_m": 0.03,
             "min_segments": 5,
-            "max_segments": 12,
-            "sides": 6,
-            "front_fall": {"side": -1, "count": 2, "az0_deg": 35, "az_step_deg": 9,
+            "max_segments": 16,
+            "front_fall": {"side": -1, "count": 7, "az0_deg": 31, "az_step_deg": 2.5,
                            "el_deg": 22, "comb_side": 0.5, "comb_fwd": 0.0, "comb_down": 0.9,
                            "fall_after_m": 0.02, "tip_above_lips_m": 0.035,
-                           "radius_scale": 0.85,
+                           "radius_scale": 0.8, "aspect": 4.0,
                            "max_len_m": 0.22},
+            # Cards rooted on the cap's front edge, for a soft hairline.
+            "hairline": {"count": 60, "behind_center_m": 0.0, "above_ear_m": -0.01,
+                         "width_scale": 0.8},
+            # Loose strands leaving top clumps part-way down (silhouette breakup).
+            "flyaways": {"count": 80, "start": [0.08, 0.7], "length_m": 0.16,
+                         "drift_m": 0.025, "wave_m": 0.006, "radius_m": 0.003},
             "region": {"temple_front_m": 0.045, "temple_above_ear_m": 0.0,
                        "nape_above_neck_m": 0.04},
-            "cap": {"offset_m": 0.0025, "edge_taper": [0.2, 0.5, 0.8], "edge_smooth_iters": 6},
-            "color": "#1d1915",
-            "roughness": 0.5,
+            "cap": {"offset_m": 0.0025, "edge_taper": [0.2, 0.5, 0.8], "edge_smooth_iters": 6,
+                    "v": 0.3,                        # texture v inside (opaque core)
+                    "edge_v": [0.7, 0.66, 0.62]},     # outer rings: slightly ragged hairline
+            "u_span_m": 0.05,         # strand texture width in metres around a clump
+            # Generated "tip" strand textures (hair_mesh.strand_image): the
+            # under layer and cap use an opaque core; the top layer, front
+            # strands and flyaways only the strands (alpha-tested).
+            "texture": {"seed": 3, "size": [256, 512], "strands": 260,
+                        "width_px": [1.2, 2.6], "wave_px": 1.5, "value_sigma": 0.3,
+                        "base_value": 0.42, "band_amp": 0.15,  # darker: the mass is in shadow
+                        "tip_v": [0.72, 0.99],  # where each strand ends (v = 1 is the tip)
+                        "core_v": 0.62,         # opaque below this
+                        "color": "#1d1915"},
+            # Card strands: ~0.14 mm/px across a 1.8 cm card, so 2.5-5 px is
+            # 0.35-0.7 mm (stylised locks that survive at game distance).
+            "texture_card": {"seed": 4, "size": [128, 512], "strands": 75,
+                             "width_px": [2.5, 5.0], "wave_px": 2.0, "value_sigma": 0.3,
+                             "base_value": 0.6, "band_amp": 0.1,
+                             "edge_pow": 1.6,      # strand density falls off toward the edges
+                             "edge_short": 0.5,    # and edge strands end sooner
+                             "root_v": 0.12, "tip_v": [0.6, 0.99],  # staggered starts
+                             "color": "#1d1915"},
+            "roughness": 0.8,
+            "specular": 0.12,
         },
         # Beard shell + jaw tufts (hair_beard.py).
         "beard": {
@@ -91,15 +128,48 @@ DEFAULTS = {
             "cheek_dip_m": 0.02,       # cheek line sag under the cheekbone
             "throat_back_m": 0.05,     # neckline end behind the chin front
             "under_chin_m": 0.008,     # neckline end below the chin (clears the shirt collar)
-            "thickness_m": 0.005,
-            "chin_extra_m": 0.003,
-            "edge_taper": [0.15, 0.45, 0.8],
+            "margin_m": 0.02,          # shell reaches this far past the lines (stubble feather band)
+            "line_wobble_m": 0.004,    # low-frequency irregularity of the beard lines
+            # Lip line: depth <= (distance from the lips - gap) x scale, so the
+            # moustache and lower-lip hair thin out toward the lips.
+            "lip_feather": {"gap_m": 0.003, "scale": 2.5},
+            "thickness": {"cheek_m": 0.003, "jaw_m": 0.0045,   # off the skin
+                          "chin_extra_m": 0.003, "chin_radius_m": 0.035,
+                          "fade_m": 0.012,                    # 0 at -margin -> full at +fade
+                          "floor_m": 0.0004},
             "edge_smooth_iters": 6,
-            "tufts": 24,
-            "tuft_len_m": 0.008,
-            "tuft_radius_m": 0.0035,
-            "color": "#201a15",
-            "roughness": 0.6,
+            "uv": {"u_span_m": 0.04, "v_span_m": 0.065, "radius_m": 0.09},
+            # Generated "edge" strand texture (hair_mesh.strand_image).
+            "texture": {"seed": 5, "size": [512, 512], "strands": 2600,
+                        "width_px": [1.5, 3.0], "wave_px": 2.0, "value_sigma": 0.35,
+                        "base_value": 0.55, "band_amp": 0.08,
+                        "len_px": [50, 120],  # 0.127 mm/px in v: hairs 6-15 mm
+                        "slant": 0.15,
+                        "edge_share": 0.55,   # share of hairs that start in the feather band
+                        "edge_v": 0.43,       # feather band: depth -margin .. +~0.8 cm
+                        "ramp_pow": 1.0,      # band hair density ~ depth^k: sparse stubble outside
+                        "stub": 0.3,          # outermost hairs are this x len_px (stubble)
+                        "solid_jitter_v": 0.05,  # uneven start of the solid part
+                        "color": "#17110d"},
+            # Tufts over the whole beard (hero budget: dense).
+            # Tufts are small alpha cards (hair_mesh.card), 4 tris each.
+            "tuft": {"count": 520, "min_depth_m": 0.004, "moustache_min_depth_m": 0.006,
+                     "lip_clear_m": 0.006,  # no tuft roots this close to a lip vertex
+                     "under_jaw_nz": 0.4,   # no tufts where the shell faces down more than this
+                     "cloth_clear_m": 0.003,  # no tuft point this close to the clothes
+                     "len_m": 0.008, "halfwidth_m": 0.0018,
+                     "lift": 0.22,          # how far tufts stand off the shell
+                     "sink_m": 0.003,       # root buried in the shell
+                     "chin_weight": 2.0,    # extra density near the chin
+                     "chin_len": 0.15},     # extra length near the chin
+            "texture_card": {"seed": 9, "size": [64, 128], "strands": 24,
+                             "width_px": [3.0, 5.0], "wave_px": 1.0, "value_sigma": 0.3,
+                             "base_value": 0.6, "band_amp": 0.05, "slant": 0.08,
+                             "edge_pow": 1.4, "edge_short": 0.4,
+                             "root_v": 0.35, "tip_v": [0.55, 1.0],
+                             "color": "#17110d"},
+            "roughness": 0.8,
+            "specular": 0.25,
         },
     },
     "suit": {
