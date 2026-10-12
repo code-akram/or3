@@ -40,9 +40,13 @@ Licence check (asked in the prompt): `/usr/share/blender/5.2/datafiles/assets/LI
 - **Springs**: hang distance and sector per card vertex from the clump's strands → `hair_springs.bind` (unchanged). Pose test `hair_springtest.py` passes (masses swing, no tearing).
 - The card object is `hide_render` in the kept .blend (the hero stage renders the groom); the exporter ignores render visibility, so the GLB keeps it.
 
-## Numbers (final run `data/build/lookdev/20261012T213651Z-hairB-final2`, `bench/m1/variants/direction.json` with the head refine)
+## Numbers
 
-| | Baseline (m1 sign-off) | first v2 (`hairB-final`) | **v2 after review (`hairB-final2`)** |
+**Round 3 (`data/build/lookdev/20261012T224832Z-hairB-final3`, `bench/m1/variants/direction.json`, refine on):** hair 20,816 tris (485 cards: 67 under, 176 mid, 176 top, 12 front + 4 front-lock, 40 fly; 14 dropped by the ear test); LOD0 118,667; validator 0 errors / 15 warnings; 83 bones, ≤ 4 weights; width / skull **1.249**; side break 63 / 120 mm widest band, **36 / 36 mm at temple level**; tips p50 1.582 m; cap edge p50 0.55 / 1.25 mm; hair verts > 0.5 mm under skin 8.1 %; groom 5,655 strays (nape strays), 361 secondary clumps; hair_post 45 s at load ~11; read40 0.65 (the refine stage, as before).
+
+Rounds 1–2 (`bench/m1/variants/direction.json`, refine on):
+
+| | Baseline (m1 sign-off) | first v2 (`hairB-final`) | v2 round 2 (`hairB-final2`) |
 |---|---|---|---|
 | Hair tris | 27,548 | 23,432 | **21,088** (under 2,668, mid 7,900, top 8,200, front 232, fly 1,272, cap 816) |
 | Cards | – | 541 | **484** (72 under, 180 mid, 180 top, 12 front, 40 fly) |
@@ -93,23 +97,43 @@ Runs under `data/build/lookdev/` (main checkout). Hero = Track E rig (`blender/h
 | `213223Z-hairB-v7` | under cards start 20 % along the clump, no root darkening, shade 0.8 | The slab gone: the dense under cells' near-black roots were showing through the gaps at the temple. Accepted. |
 | `213651Z-hairB-final2` | full build (refine on) | evidence below |
 
+**Round 3** (after the merge to main 2949bf7; rebased with C's strand beard and D's suit in, so the hair is judged beside the real beard). Colour measured on the renders with `.scratch/sample.py` (mean sRGB of a hair-only rectangle and of its brightest 10 %).
+
+| Run | Change | Verdict |
+|---|---|---|
+| `213651Z-hairB-final2` (before) | melanin 0.95, redness 0.3 | Turntable az 40, mass behind the ear: highlights #917868 (sat 0.28, r/b 1.38): auburn, red-orange in the light. |
+| `220839Z-hairB-col1` | melanin 0.985, redness 0.12, light strands 0.93 (were 0.8), lock jitter 0.012, vellus 0.9 | Base #1f1b19, highlights #4f4946 (sat 0.12, r/b 1.14): near-black brown with cool, desaturated highlights; same value as the strand beard. Hero rig: near-black, the rims carry the light colour. |
+| `222205Z-hairB-col2` | lift: the side amount only where the scalp faces sideways (`|n.x|` 0.3 → 0.7), forward-facing roots get the front lift; 25 % extra strays low at the back; one lock card per front fall | Measured cause of the tuft: the old `side = 1 − max(top, back)` gave the front hairline above the temples the full 36 mm side lift, so a ridge stood off the forehead and caught the top light. Fixed; width 1.34 → 1.25 with the temple break kept (36 / 36 mm). Front falls read as locks in the cards. |
+| `223046Z`–`224559Z` (col3–col6) | flyaway part weight 1.5 → 0.6; card ear test: card edges, not just the centreline, in an ear box out 35 mm, on **every** layer | The strip across the right ear survived the centreline test on mid/top cards; hiding the card material removed it, and the box test with per-layer counts found it was an **under** card (5 under, 5 top and 4 mid dropped). Gone at ECU. |
+| `224832Z-hairB-final3` | full build (refine on) | evidence below |
+
 ## Evidence
 
-All under `data/build/lookdev/20261012T213651Z-hairB-final2/evidence/` (Cycles, hero rig = Track E `blender/hero/rig.py`). **Before**: `data/build/m1-signoff/closeup.png` (m1 cards) and `data/build/lookdev/20261012T203924Z-hairB-final/evidence/{groom,cards}/hero_portrait.png` (first v2, the one reviewed).
+Round 3 (current), all under `data/build/lookdev/20261012T224832Z-hairB-final3/evidence/` (Cycles; hero rig = Track E `blender/hero/rig.py`):
 
-| Shot | Groom (hero, Cycles) | Cards (GLB) |
+| Shot | Groom (hero) | Cards (GLB) |
 |---|---|---|
 | Hero portrait 1000², hero light | `groom/hero_portrait.png` | `cards/hero_portrait.png` |
-| Turntable ¾ right (az −40), head | `groom/turntable_az-40_el2_lens85_aimhead_frame0.5.png` | `cards/turntable_az-40_…png` |
-| Turntable ¾ left (az +40), head | `groom/turntable_az40_el2_lens85_aimhead_frame0.5.png` | `cards/turntable_az40_…png` |
-| Turntable back ¾ (az 150) | `groom/turntable_az150_el5_lens85_aimhead_frame0.6.png` | `cards/turntable_az150_…png` |
-| ECU hairline left / right / nape, hero light | `ecu/blend_sheet.png` | `ecu/glb_sheet.png` |
+| Turntable ¾ right (az −40) / ¾ left (az +40) / back ¾ (az 150), head framing | `groom/turntable_az*.png` | `cards/turntable_az*.png` |
+| ECU hairline left / right / nape / part, hero light | `ecu/blend_sheet.png` | `ecu/glb_sheet.png` |
 
-Spring test: `data/build/lookdev/20261012T213651Z-hairB-final2/hair/spring_*.png`.
+Colour on final3 (turntable, back ¾ mass): groom **#1d1917**, brightest 10 % #2b2623 (sat 0.18); cards #1d1916, brightest #3a332f. Target base #1d1915.
+
+Before: round 2 `data/build/lookdev/20261012T213651Z-hairB-final2/evidence/` (the auburn turntable the review cites), round 1 `…20261012T203924Z-hairB-final/evidence/`, m1 `data/build/m1-signoff/closeup.png`.
 
 ## Verdict per defect
 
-Brief defects (streaky glassy card hair) and the round-2 review points, judged on the final2 renders under both rigs:
+**Round 3 review points** (final3, both rigs, beside C's strand beard):
+
+| Point | Verdict |
+|---|---|
+| 1. Colour: auburn-brown with red-orange highlights under the turntable | **Fixed.** Mass #1d1917 (target #1d1915), highlights #2b2623–#4f4946, saturation 0.12–0.18, slight warm tint only. Near-black under the hero rig (the coloured rims are the rig's lights). Groom and cards match each other and the beard's value. |
+| 2a. Pale fuzzy tuft at the front crown | **Mostly fixed.** The cause was the side lift landing on the forward-facing front hairline (a 36 mm ridge off the forehead); now front-lift only. A small soft highlight still sits on the crown under the turntable's top light at az −40: specular on combed hair, no longer a fuzzy ridge. |
+| 2b. Nape gap showing the shirt collar | **Improved, not gone.** Turntable back ¾: no collar visible through the hair (groom and cards). The 165° nape ECU under the hero rig still shows a small light patch of collar between locks in both versions. |
+| 3a. Card front falls / brow lock as 2–3 thin strips | **Fixed.** A lock card per fall (all its strands, dense cell, 1.5 mm in) under the strips: the three right falls and the brow lock read as locks with loose strands at ECU. |
+| 3b. Card across the right ear | **Fixed.** It was an under card. Every card layer is now tested on its edges against the ear box; 14 cards dropped. |
+
+Round 2: brief defects (streaky glassy card hair) and the round-2 review points, judged on the final2 renders under both rigs:
 
 | Defect | Verdict |
 |---|---|
@@ -126,11 +150,10 @@ Brief defects (streaky glassy card hair) and the round-2 review points, judged o
 ## Deviations from direction §2 Track B (numbers are starting points; my eyes decided)
 
 - **40,000 strands, not 18–24k.** At 24k × 0.045 mm the crown and the sides showed scalp and the mass read thin at 1k (g1); the prompt allowed 40–100k. Render cost is fine (~2 min per 560² view at 3 threads).
-- **Melanin redness 0.3, not 0.55.** Blender's melanin split at 0.55 gives more pheomelanin than eumelanin: the white studio rim lit the hair ginger (g1). At 0.3 it holds near-black brown under both rigs.
+- **Melanin 0.985, redness 0.12, not 0.95 / 0.55.** Blender's melanin split at 0.55 gives more pheomelanin than eumelanin: the white rim lit the hair ginger (g1); at 0.95 / 0.3 the turntable still read auburn (round-3 review). At 0.985 / 0.12 it reads near-black brown with cool highlights under both rigs.
 - **Huang has no coat or radial roughness inputs** (those are Chiang parameters), so they are not set.
 - **Clump factors 0.85 / 0.8, not 0.6 / 0.4**, but ramped along the strand (0.2 × on the skull): at the spec factors the locks did not separate (the review's "one dark sheet"); at full factor on the scalp the hairline went to comb teeth (g2).
-- **Light strands 10 %** (melanin 0.8) instead of 3 %, plus up to −0.04 melanin per lock, for the third value the review asked for.
-- **Width / skull 1.344**: the side lift that gives the 30 mm temple break puts the eye-level width at the 1.35 limit; there is no headroom for more volume.
+- **Light strands 10 %** (melanin 0.93) instead of 3 %, plus up to −0.012 melanin per lock: the value variation stays, but they no longer read auburn.
 - Game albedo is realistic (strand value × AO), not "lock blocks with a 2-tone ramp" (§4): the painterly treatment belongs to the runtime shader, and the atlas keeps the data it needs.
 
 ## Shared-file edits
@@ -148,9 +171,8 @@ Brief defects (streaky glassy card hair) and the round-2 review points, judged o
 ## Known limits / next
 
 - The cards' hairline at ECU is still alpha-tested strokes; the runtime needs alpha-to-coverage there (spec §3.3). The groom hairline is the reference.
-- In the cards, the front falls and the brow lock are thin strips, and one thin card still crosses the top of the right ear at ECU.
-- A pale fuzzy tuft at the front crown (flyaways weighted to the part) catches the turntable's top light.
+- A small patch of shirt collar shows between the nape locks at the 165° ECU (hero rig), both versions.
+- The `hair_fit.py` collar-zone figure now counts only 54 verts: a single low card vertex moved the "lowest 8 cm" window, so that line is not comparable with round 2.
 - Card ends over the collar read as separate dark blades at 2×; the groom ends are soft.
-- A small gap between the hair halves at the centre back shows the shirt collar at the 165° nape ECU (groom and cards).
 - The groom is rigid with the head bone; with a large head turn the hanging lengths will cut the collar. Hair dynamics for the hero poses are out of scope.
 - The cap texture tiles one 6 cm window of the front hairline round the whole head.
