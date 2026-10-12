@@ -175,6 +175,7 @@ DEFAULTS = {
             "depth_tol_m": 0.015,      # skin within this y of the proxy (the face front only)
             "core": 0.5,               # |dz|/hh below this is full density
             "tail_start": 0.45, "tail_thin": 1.0,  # the tail thins to 1 - tail_thin
+            "tail_narrow": 0.45,       # band half-height x (1 - this x along)
             "head_boost": 0.2,         # denser inner third
             "length_m": 0.005, "tail_shorter": 0.3,
             "up_inner": 0.9, "down_tail": 0.25,    # comb: up near the nose, down at the tail

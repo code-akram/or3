@@ -127,7 +127,6 @@ def build(b, frame, cfg):
     bm.normal_update()
 
     mouth_z = frame.lips_min.z
-    mouth_top = frame.lips_max.z
     corner_x = frame.lips_max.x
     c = frame.center
     chin = Vector((c.x, frame.chin_y, frame.chin_z))

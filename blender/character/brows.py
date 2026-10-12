@@ -12,7 +12,6 @@ outward then slightly down along the tail, with a per-hair drift for the
 slightly unruly look. The proxy is then dropped from the export.
 """
 
-import math
 
 import bpy
 from mathutils import Vector
@@ -102,12 +101,13 @@ def build(b, frame, cfg):
         if not (x0 - ext <= p.x <= x1 + ext):
             continue
         y, zc, hh = _sample(spine, p.x)
-        hh = hh * hh_scale + cfg["thickness_add_m"]
-        if abs(p.y - y) > cfg["depth_tol_m"] or abs(p.z - zc) > hh + margin:
-            continue
         # along: 0 at the inner end (nose), 1 at the tail
         inner, outer = (x1, x0) if side < 0 else (x0, x1)
-        along = (p.x - inner) / (outer - inner)
+        along = min(max((p.x - inner) / (outer - inner), 0.0), 1.0)
+        # the band narrows toward the tail (the proxy's tail is a wide flap)
+        hh = (hh * hh_scale + cfg["thickness_add_m"]) * (1 - cfg["tail_narrow"] * along)
+        if abs(p.y - y) > cfg["depth_tol_m"] or abs(p.z - zc) > hh + margin:
+            continue
         info[v.index] = (side, (p.z - zc) / hh, along, hh)
     obj, bm = hair_mesh.shell_from_body(b, body, set(info), "Human.brows_export")
     idx = bm.verts.layers.int.get("src")
