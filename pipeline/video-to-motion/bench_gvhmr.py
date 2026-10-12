@@ -32,9 +32,10 @@ def loadavg() -> list[str]:
     return Path("/proc/loadavg").read_text().split()[:3]
 
 
-def stitch_protagonist(track_history, W, H, max_gap=24, max_center_dist=0.75, max_size_ratio=2.0):
+def stitch_protagonist(track_history, W, H, max_gap=24, max_center_dist=0.75, max_size_ratio=2.0, seed=None):
     """Protagonist = a chain of non-overlapping tracker fragments, seeded by the largest area-sum track
-    and extended both ways with the fragment whose boundary box best continues the chain.
+    and extended both ways with the fragment whose boundary box best continues the chain. ``seed`` overrides
+    the seed track id (manual protagonist pick when the largest track is a foreground extra or crew member).
 
     BoT-SORT fragments one person into many IDs through fast motion, blur and darkness (falls, fights);
     GVHMR's default keeps only the single top ID and linearly interpolates the rest. This is the cheap,
@@ -52,7 +53,10 @@ def stitch_protagonist(track_history, W, H, max_gap=24, max_center_dist=0.75, ma
         return max(b[2] - b[0], 1.0) * max(b[3] - b[1], 1.0)
 
     score = {k: sum(area(b) for b in v.values()) / (W * H) for k, v in frags.items()}
-    seed = max(score, key=score.get)
+    if seed is None:
+        seed = max(score, key=score.get)
+    elif seed not in frags:
+        raise RuntimeError(f"seed track {seed} not in tracks {sorted(frags)}")
     chain, frame_box = [seed], dict(frags[seed])
 
     def joinable(b_from, b_to, gap):
@@ -113,6 +117,8 @@ def main() -> None:
     ap.add_argument("--reuse", default="", help="comma list of stages whose cached output to reuse")
     ap.add_argument("--stitch", action="store_true",
                     help="protagonist = chain of tracker fragments stitched by box continuity (default: GVHMR's top track)")
+    ap.add_argument("--seed-id", type=int, default=None,
+                    help="with --stitch: seed the protagonist chain on this track id; with --reuse yolo, reselects from the saved track history")
     ap.add_argument("--set", action="append", default=[], help="extra Hydra override, e.g. detector.conf=0.25")
     ap.add_argument("--stop-after", default="", help="stop after this stage (e.g. yolo)")
     a = ap.parse_args()
@@ -181,7 +187,19 @@ def main() -> None:
     paths = cfg.paths
 
     # 1) YOLO + BoT-SORT tracking, top track by area-sum = protagonist.
-    if "yolo" in reuse and Path(paths.bbx).exists():
+    th_path = Path(paths.bbx).with_name("track_history.pt")
+    if "yolo" in reuse and a.seed_id is not None and th_path.exists():
+        t = time.perf_counter()
+        chain, frame_box = stitch_protagonist(torch.load(th_path, weights_only=False), W, H, seed=a.seed_id)
+        bbx_xyxy = interpolate_track(frame_box, L)
+        bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()
+        torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
+        record("yolo_track", 0.0, L)
+        timings["yolo_track"].update({"reselected": True, "seed_id": a.seed_id, "stitch": True,
+                                      "chain": [int(c) for c in chain],
+                                      "selected_frame_coverage": round(len(frame_box) / L, 3),
+                                      "select_s": round(time.perf_counter() - t, 3)})
+    elif "yolo" in reuse and Path(paths.bbx).exists():
         bbx_xys = torch.load(paths.bbx, weights_only=False)["bbx_xys"]
     else:
         # ultralytics' select_device() calls torch.set_num_threads(NUM_THREADS) with NUM_THREADS =
@@ -204,7 +222,7 @@ def main() -> None:
         top_cov = len(id_to_frame_ids[id_sorted[0]]) / L if id_sorted else 0.0
         t = time.perf_counter()
         if a.stitch:
-            chain, frame_box = stitch_protagonist(track_history, W, H)
+            chain, frame_box = stitch_protagonist(track_history, W, H, seed=a.seed_id)
             bbx_xyxy = interpolate_track(frame_box, L)
             cov = len(frame_box) / L
         else:

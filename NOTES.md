@@ -202,7 +202,7 @@ private/       (gitignored) footage, SMPL, weights, commercial material
 - protagonist track coverage < 90 %
 - ViTPose mean confidence < 0.7
 
-→ YOLO + ByteTrack → protagonist ID (face + body embeddings, seeded with reference crops) → **GVHMR** (SimpleVO, or static camera via `-s`; bf16 / OpenVINO) → cleanup:
+→ YOLO + ByteTrack → protagonist ID (face + body embeddings, seeded with reference crops; **not built yet**: GVHMR's default "largest track" picked the wrong person in ~43 % of multi-person shots in the first footage run, so `bench_gvhmr.py --seed-id` reseeds by hand for now) → **GVHMR** (SimpleVO, or static camera via `-s`; bf16 / OpenVINO) → cleanup:
 - One Euro / Butterworth smoothing
 - foot-contact lock
 - floor clamp
@@ -493,7 +493,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 | Neon-rain look over budget on the Air | 🔴 | Phase 0 Air run: the skeleton scene uses 3.1 ms of the 12 ms budget (GPU p50), so the plumbing leaves about 9 ms for shading, but the art stack itself is unmeasured. Measure at `m4`. Dynamic resolution, half-res passes, baked spill. |
 | No authentic Shinjuku audio under open licences | 🟠 | Programmatic pipeline (§12): real Tokyo CC0/CC-BY recordings + ffmpeg synthesis + PLATEAU-baked acoustics, with a user listening gate. Field recording as an optional upgrade. |
 | GVHMR CPU throughput / quality on film footage | 🟠 | **Measured**: 17.8 h per 60 min with bf16 (4 × 4), ~11–12 h with the accuracy trade. Clean walks look plausible (8.7 px reprojection error). Shot filtering, bf16, 100STYLE/CMU carry core locomotion. |
-| Detector failure on night and action shots means a low usable yield | 🔴 | Filter by track coverage and confidence. Take falls and stunts from mocap. Prioritise clean day or BTS footage. |
+| Detector failure on night and action shots means a low usable yield | 🔴 | **Measured 2026-10-12**: 3.2 % of featurette footage came out QC-clean (18.1 s from 563 s); losses are mostly non-Wick content, low ViTPose confidence on cut-off or blurred bodies, and night luma. Use official scene clips for the §8 targets, build the embedding protagonist ID, take falls and stunts from mocap. |
 | Third-party GVHMR fork | 🟡 | Pinned commit + `--frozen` lockfile + a source bundle in `private/src/`. Upstream plus CPU patches is the fallback. |
 | ~~MPFB2 headless untested~~ | ✅ | **Retired 2026-10-12**: verified in spike 1. |
 | WASM threads depend on nightly + build-std | 🟠 | Pin a dated nightly in `core/build-web.sh` and bump it deliberately. The stable fallback is single-threaded WASM with the sim on the main thread. |
@@ -547,7 +547,7 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 |---|---|---|---|
 | 1 | MPFB2 headless | ✅ pass | – |
 | 2 | Render test | ✅ pass | – |
-| 3 | GVHMR on CPU | 🟡 done except footage | User: YouTube cookie export |
+| 3 | GVHMR on CPU | ✅ pass | Footage run 2026-10-12: 18.1 s QC-clean from 563 s of featurettes (3.2 %); next batch should use official scene clips |
 | 4 | Browser skeleton | ✅ pass (Air 2026-10-12) | Optional: full-screen `dpr=2` run |
 | 5 | PLATEAU chunk | ✅ pass | – |
 | 6 | Steam Audio IR | ✅ pass | User: headphone check of `alley-01-binaural.wav` |
@@ -634,6 +634,12 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 ---
 
 ## Decision log
+
+### 2026-10-12 — first footage run (cookies)
+- YouTube unblocked with the user's cookies. Four official uploads (two JW4 featurettes, the Sacré-Cœur "10 hours" loop, the IGN behind-the-scenes stair clip) went through the full pipeline.
+- Yield: **18.1 s QC-clean from 563 s (3.2 %)**, 8 shots, mostly fight motion plus one 3.7 s stair descent. The §8 locomotion targets aren't in these uploads, so m2 locomotion stays on 100STYLE / CMU. The next footage batch targets official **scene clips**.
+- Protagonist ID is the bottleneck. Hand-picked track seeds (`--seed-id`) work for now; the embedding-based ID (§8) comes before any larger batch.
+- Spike 3 is closed as pass. Details: `bench/m0/spike-3-gvhmr.md` › Footage run.
 
 ### 2026-10-12 — m0 gate rulings (user)
 - **GVHMR**: Python 3.11 + `ryanrudes/gvhmr` fork accepted, pinned.

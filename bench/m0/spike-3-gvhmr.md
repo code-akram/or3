@@ -5,9 +5,10 @@ The box was shared with other spikes. **Every timing in the first part uses 4 th
 The idle 8/16-thread numbers, the foot-lock rewrite and the YouTube root cause are in **Follow-up (completion)** at the end;
 where they replace a first-pass number, the first-pass text says so.
 
-**Status after the follow-up: partial.** Everything that can run on this machine is done and measured. The one remaining
-blocker is footage: YouTube refuses this machine's datacenter IP, so the Lionsgate Movies featurettes need one user step
-(export cookies, `scp`, run `fetch-youtube.sh`).
+**Status: pass (2026-10-12, after the footage run).** The cookies unblocked YouTube, and the full pipeline ran on four official
+1080p uploads, including the IGN behind-the-scenes stair clip. Result: **18.1 s of QC-clean Wick motion from 563 s of footage (3.2 %)**,
+mostly fight motion; the featurettes don't contain the §8 locomotion targets. See **Footage run (cookies)** at the end.
+The status from the earlier follow-up (partial, blocked on cookies) is superseded.
 
 ## Summary
 
@@ -641,3 +642,119 @@ private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/foot_lock_t
 ```
 
 All outputs (`private/motion/*`, `private/work/*`, footage, logs) stay under `private/`, which is gitignored.
+
+## Footage run (cookies), 2026-10-12
+
+The user exported YouTube cookies; `fetch-youtube.sh` fetched all four `yt-*` entries at 1920×1080, 23.976 fps, with no `info.json` and a cookie-free `meta.txt` (checked). Everything derived from them is under `private/`.
+
+| Clip | Source | Length |
+|---|---|---|
+| `yt-ohieMx5bSM8` | Lionsgate Movies, JW4 special feature "Osaka Continental" | 89 s |
+| `yt-3oIxZLUKYtI` | Lionsgate Movies, JW4 special feature "New Challenges" | 174 s |
+| `yt-r7a4g-65SzA` | Lionsgate Movies, "Falling Down the Stairs of Sacré-Cœur for 10 Hours", first 180 s | 180 s |
+| `yt-fdNkGq4kroQ` | IGN, Lionsgate-supplied JW4 behind-the-scenes Sacré-Cœur stairs (ruled official 2026-10-12) | 120 s |
+
+### Pipeline as run
+
+1. **Shot split.** `shots.py` (TransNetV2 + PySceneDetect), then the new `shot_filter.py`:
+   - union of both cut lists (cuts within 3 frames count once);
+   - frames TransNetV2 leaves out of every scene (dissolves) trimmed off;
+   - stage-1 filters: ≥ 1 s, median luma ≥ 15, median Laplacian variance ≥ 15 at 960 px width;
+   - one contact sheet per clip (4 frames per surviving shot).
+2. **Content review (protagonist ID).** Each stage-1 shot labelled from the sheets: Wick locomotion, Wick action, Wick close-up, other people, interview, crew, vehicle, set, duplicate. This stands in for the face/body-embedding step, which is not built yet.
+3. **YOLO stage.** 141 stage-1 shots cut with `cut-shot.sh`, then `run-bench.sh … --stitch --stop-after yolo`, 4 × 4 threads. Filters: stitched protagonist coverage ≥ 90 %, median box height ≥ 256 px (source pixels).
+4. **Track check.** Boxes drawn on the selected track for every shot headed to GVHMR. **The largest-area seed picked the wrong person in about 12 of 28 shots**: foreground crew, camera operators, extras or the opponent. New `bench_gvhmr.py --seed-id N` reseeds the stitched chain on a hand-picked track and reselects from the saved `track_history.pt` with no YOLO rerun. 12 shots were reseeded. 3 shots whose identity could not be confirmed were dropped.
+5. **GVHMR.** 20 shots, bf16 ViTPose + HMR2, 4 × 4 threads, `--reuse yolo`. Then `motion_qc.py` (One Euro, foot lock v2, floor clamp, npz/BVH export).
+6. **Yield.** `footage_run.py summary`. ViTPose mean body-joint confidence ≥ 0.7. QC-clean means:
+   - median reprojection error ≤ 5 % of subject height;
+   - cleaned mean |jerk| ≤ 150 m/s³;
+   - ≤ 2 % of frames with a joint above 1000 °/s.
+
+### Usable yield
+
+Each column counts the shots still alive after that filter.
+
+| Clip | Shots | ≥ 1 s | luma ≥ 15 | blur | Wick content | coverage ≥ 90 % | subject ≥ 256 px | GVHMR'd | ViTPose ≥ 0.7 | QC-clean | **Clean seconds** |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Osaka Continental feature | 50 | 44 | 32 | 32 | 2 | 1 | 0 | 0 | 0 | 0 | **0** |
+| New Challenges feature | 124 | 75 | 63 | 63 | 20 | 15 | 15 | 15 | 5 | 4 | **8.1** |
+| Sacré-Cœur 10 h loop (180 s) | 29 | 28 | 19 | 19 | 4 | 1 | 1 | 1 | 1 | 1 | **1.9** |
+| IGN BTS stairs | 83 | 53 | 27 | 27 | 13 | 4 | 4 | 4 | 3 | 3 | **8.1** |
+| **Total** | 286 | 200 | 141 | 141 | 39 | 21 | 20 | 20 | 9 | 8 | **18.1 s** |
+
+**18.1 s of QC-clean Wick motion from 563 s of footage (3.2 %).** The Wick-content column already includes the track-check reseeding and drops. The 8 clean shots:
+
+| Shot | Content | Seconds | ViTPose | Reprojection (px / % of height) | Jerk clean (m/s³) | Contact slide after IK (cm/s) |
+|---|---|---|---|---|---|---|
+| New Challenges #45 | Osaka museum fight (vs Chidi), full body | 2.9 | 0.86 | 12.8 / 1.7 % | 63 | 7.2 |
+| New Challenges #48 | museum fight | 2.1 | 0.70 | 16.4 / 2.8 % | 125 | 5.3 |
+| New Challenges #50 | museum fight | 1.7 | 0.78 | 17.1 / 2.8 % | 95 | 4.4 |
+| New Challenges #75 | Osaka garden fight, low stance | 1.4 | 0.75 | 27.6 / 4.2 % | 111 | 1.9 |
+| Sacré-Cœur loop #1 | walk toward the car, Montmartre standoff | 1.9 | 0.89 | 12.8 / 1.6 % | 11 | 1.6 |
+| IGN BTS #1 | stair descent with prop, on set | 3.7 | 0.81 | 12.5 / 1.9 % | 64 | 5.1 |
+| IGN BTS #39 | stair fight and fall | 2.3 | 0.71 | 29.0 / 4.7 % | 83 | 5.2 |
+| IGN BTS #52 | stair fight | 2.0 | 0.83 | 11.2 / 1.7 % | 50 | 5.7 |
+
+The 2D overlays track Wick in all eight, and the world-frame stick figures are plausible. The outputs are in `private/motion/fr-<shot>/` (npz + BVH) and `private/work/vis/fr-<shot>/`.
+
+### Where the footage goes (stage-1 survivors by content)
+
+| Clip | Wick loco / action / close | Interview | Other people | Crew / BTS crowd | Set, no person | Vehicle | Duplicate | Unsure |
+|---|---|---|---|---|---|---|---|---|
+| Osaka Continental | 2 / 0 / 0 | 4 | 4 | 7 | 14 | 0 | 0 | 1 |
+| New Challenges | 0 / 20 / 2 | 7 | 13 | 8 | 4 | 7 | 0 | 2 |
+| Sacré-Cœur loop | 2 / 2 / 1 | 0 | 0 | 0 | 0 | 0 | 14 | 0 |
+| IGN BTS | 1 / 12 / 0 | 8 | 3 | 3 | 0 | 0 | 0 | 0 |
+
+### Findings
+
+- **The NOTES §8 targets are not in these uploads.**
+  - The Osaka Continental feature is about set design: no clean Wick walk, turn or draw. Its only two Wick walks are occluded or tiny (#38 is 255 px).
+  - The "10 hours" video loops two tumble shots plus the standoff. 14 of 19 surviving shots are repeats, and the climb / walk wides are not in it.
+  - The IGN clip is fight rehearsal and takes, crowded with crew. It gave one clean stair descent (3.7 s).
+  - Most of the clean yield is fight motion, which matters for m3 stance and identity, not m2 locomotion.
+- **Main losses, in order:**
+  1. Content: 102 of 141 stage-1 shots are not Wick at all.
+  2. ViTPose confidence: 11 of 20 GVHMR'd shots score 0.50–0.69. These are medium shots with legs cut off or occluded and fast blurred strikes.
+  3. Luma: 59 shots (night footage).
+  4. Coverage: 18 Wick shots, mostly fights where the tracker fragments.
+  5. One shot failed QC on jitter and spikes: New Challenges #49, a fast strike, 1306 m/s³ after cleanup.
+- **The protagonist-ID gap is real.** The default "largest area-sum track" is wrong in about 43 % of multi-person shots. Before scaling to more footage, build the §8 face/body-embedding ID (seeded with reference crops) so `--seed-id` no longer needs a human or agent to read contact sheets.
+- **No person detected at all** in 18 stage-1 shots: set inserts, and the Sacré-Cœur tumble wide (#5 and its repeats), consistent with the first pass.
+- **Throughput matched the idle bench.**
+  - Per process at 4 × 4 threads (1080p): ViTPose 1.00, HMR2 0.51, SimpleVO 0.03 and YOLO 0.64 s per 30 fps frame, so about 2.2 s per frame per process, or about 0.55 s per frame aggregate. The bench's 17.8 h per 60 min is 0.59.
+  - Wall clock: shot split 1 min, YOLO on 141 shots 27 min, GVHMR + QC on 20 shots 11 min.
+- **Blur filter:** global Laplacian variance barely fires (7 of 286 shots). It measures scene detail, not subject blur. Subject blur shows up later, as low ViTPose confidence.
+
+### Next for footage (recommendation)
+
+- Fetch Lionsgate's **official scene clips** for the §8 targets instead of featurettes, for example the JW4 Sacré-Cœur climb and Osaka walk scene uploads. The channel is reachable with the cookies now, so this is listing plus `fetch-footage.sh` entries.
+- Build the embedding-based protagonist ID before the next batch.
+- m2 locomotion still rests on 100STYLE / CMU, as planned. The film yield goes to m3 identity: stance, fight transitions, stair descent.
+
+### Reproduce (footage run)
+
+```bash
+pipeline/video-to-motion/fetch-youtube.sh
+for id in yt-ohieMx5bSM8 yt-3oIxZLUKYtI yt-r7a4g-65SzA yt-fdNkGq4kroQ; do
+  OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/shots.py \
+    private/footage/$id/source.mp4 private/work/shots/$id --threads 4
+  private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/shot_filter.py \
+    private/footage/$id/source.mp4 private/work/shots/$id
+done
+# cut every stage-1 shot (cut-shot.sh), then per shot:
+THREADS=4 pipeline/video-to-motion/run-bench.sh private/footage/clips/<shot>.mp4 fr-<shot> --fresh --stitch --stop-after yolo
+# manual seeds where the track check shows the wrong person:
+THREADS=4 pipeline/video-to-motion/run-bench.sh private/footage/clips/<shot>.mp4 fr-<shot> --stitch --reuse yolo --seed-id N --stop-after yolo
+private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/footage_run.py select \
+  --clips yt-ohieMx5bSM8 yt-3oIxZLUKYtI yt-r7a4g-65SzA yt-fdNkGq4kroQ --content private/work/footage-run/content.json \
+  --out private/work/footage-run/sel.json > private/work/footage-run/gvhmr-list.txt
+# per listed shot: GVHMR (bf16, reused track) + QC, 4 processes x 4 threads
+THREADS=4 pipeline/video-to-motion/run-bench.sh private/footage/clips/<shot>.mp4 fr-<shot> --stitch --bf16 vitpose,hmr2 --reuse yolo
+OMP_NUM_THREADS=4 GVHMR_CHECKPOINTS=private/models/gvhmr private/src/gvhmr-rudes/.venv/bin/python -I \
+  pipeline/video-to-motion/motion_qc.py private/work/runs/fr-<shot> --motion-out private/motion/fr-<shot> --vis-out private/work/vis/fr-<shot>
+private/src/gvhmr-rudes/.venv/bin/python -I pipeline/video-to-motion/footage_run.py summary \
+  --sel private/work/footage-run/sel.json --out private/work/footage-run/yield.json
+```
+
+The per-shot runners (`yolo-stage.sh`, `gvhmr-stage.sh`), the content labels and the seeds are in `private/work/footage-run/`. The labels and seeds describe film shots, so they stay private.
