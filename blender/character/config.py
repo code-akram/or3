@@ -199,7 +199,7 @@ DEFAULTS = {
         "beard": {
             "seed": 11,
             # Region (landmark lines in profile; see hair_beard.landmarks).
-            "sideburn_back_m": 0.004,  # behind the front of the ear
+            "sideburn_back_m": -0.004,  # behind the front of the ear (- = in front)
             "sideburn_up_m": -0.004,   # cheek line start above ear centre
             "corner_back_m": 0.022,    # cheek line end: behind the lip front
             "moustache_m": 0.010,      # cheek line end above the upper lip
@@ -210,6 +210,7 @@ DEFAULTS = {
             "under_chin_m": 0.018,     # neckline end below the chin
             "moustache_height_m": 0.012,  # moustache top over the upper lip
             "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare
+            "lips_w": 0.5,             # body vertices over this `lips` weight are vermilion: no roots
             # Patch reaches this far past each line (cheek, neck, back,
             # moustache top): the stubble band.
             "margin_m": 0.014, "neck_margin_m": 0.03, "back_margin_m": 0.006,
@@ -224,18 +225,20 @@ DEFAULTS = {
             "edge_smooth_iters": 6,
             # Hair length by zone (direction §2 C: cheeks 6-8, jaw 9-11,
             # chin 12-15, soul patch 10, moustache 8-10 over the lip by 2 mm).
-            "length": {"cheek_m": 0.0075, "jaw_m": 0.0105, "chin_extra_m": 0.0045,
-                       "chin_radius_m": 0.03, "soul_m": 0.010, "soul_radius_m": 0.008,
+            "length": {"cheek_m": 0.0075, "jaw_m": 0.0105, "chin_extra_m": 0.0055,
+                       "chin_radius_m": 0.03, "soul_m": 0.010, "soul_radius_m": 0.010,
                        "moustache_m": 0.0095, "lip_overlap_m": 0.002, "neck_m": 0.009},
-            "comb": {"cheek_back": 0.3, "chin_forward": 0.3, "under_jaw_back": 0.6,
+            "comb": {"cheek_back": 0.3, "chin_forward": 0.3, "soul_forward": 0.8, "under_jaw_back": 0.6,
                      "moustache_down": 1.0, "moustache_side": 0.6, "philtrum_x_m": 0.006,
                      "smooth_iters": 3},
             # Strand growth (beard_groom.grow): exit angle over the skin
             # relaxing to the tip angle, yaw / curl spread, curly share.
             "groom": {"per_cm2": 200, "points": 8, "root_sink_m": 0.0005,
                       "elev0": 38, "elev1": 4, "elev1_under": 0, "elev_sigma": 10,
+                      "elev_chin": 12,  # extra exit angle at the chin (bulk, profile)
+                      "elev_soul": 25,  # ... under the lower lip (the hairs fill the sulcus)
                       "elev0_moustache": 22, "elev1_moustache": -25,
-                      "yaw_sigma": 15, "curl_sigma": 12, "curl_share": 0.25,
+                      "yaw_sigma": 25, "curl_sigma": 12, "curl_share": 0.25,
                       "curl_radius_m": [0.008, 0.015], "curl_lift": 0.15,
                       "len_min": 0.7, "bend_pow": 1.0,
                       "gap_m": [0.0002, 0.0004],  # clearance over the skin, root -> tip
@@ -245,11 +248,11 @@ DEFAULTS = {
                         "elev0": 35, "elev1": 20, "frizz": 0.3, "radius_scale": 0.8},
             # Tone: melanin / redness per strand (hero), with the game
             # palette interpolated by melanin (swatches, sRGB).
-            "tone": {"melanin": 0.9, "redness": 0.6, "sigma": 0.04,
-                     "warm_share": 0.12, "warm": [0.72, 0.75],
+            "tone": {"melanin": 0.965, "redness": 0.5, "sigma": 0.025,
+                     "warm_share": 0.12, "warm": [0.86, 0.7],
                      "grey_share": 0.025, "grey_extra": 0.05, "grey": [0.2, 0.15],
-                     "swatches": [[0.2, "#a29d96"], [0.72, "#6a4a32"], [0.9, "#3a2a1f"],
-                                  [1.0, "#251a13"]],
+                     "swatches": [[0.2, "#a29d96"], [0.86, "#5a3e2a"], [0.965, "#2e221a"],
+                                  [1.0, "#201812"]],
                      "value_sigma": 0.3},
             "hero": {"radius_m": [0.00004, 0.00007], "tip_radius": 0.35,
                      "material": {"roughness": 0.32, "radial_roughness": 0.35, "coat": 0.1,
@@ -278,35 +281,73 @@ DEFAULTS = {
                       "radius_scale": 1.0, "min_radius_px": 0.6, "root_shade": 0.55,
                       "roughness": 0.6, "specular": 0.25},
         },
-        # Eyebrows as shells (brows.py), replacing the MPFB eyebrow proxy.
+        # Eyebrows: strand groom (hero) + shells and edge cards baked from it
+        # (brows.py). Direction §2 C: 500-700 strands per side, 6-9 mm,
+        # lying at ~80 deg to the normal, 8 mm tall at the head, 4 at the tail.
         "brows": {
             "seed": 13,
             "proxy": "eyebrow",        # the fitted MPFB proxy used as the landmark, then dropped
             "bins": 10,                # spine samples along each brow
-            "thickness_scale": 1.0, "thickness_add_m": 0.001,  # band half-height vs the proxy
-            "thickness_range_m": [0.0025, 0.0045],  # proxy half-height clamp before scale/add
-            "margin_m": 0.0025,        # feather past the band
+            "half_height_m": [0.004, 0.002],  # band half-height at the head .. tail
+            "centre_up_m": 0.0005,     # band centre over the proxy's spine
+            "margin_m": 0.002,         # feather past the band
             "end_extend_m": 0.003,     # patch beyond the proxy's ends
             "depth_tol_m": 0.015,      # skin within this y of the proxy (the face front only)
-            "core": 0.5,               # |dz|/hh below this is full density
-            "tail_start": 0.45, "tail_thin": 1.0,  # the tail thins to 1 - tail_thin
-            "tail_narrow": 0.45,       # band half-height x (1 - this x along)
-            "head_boost": 0.2,         # denser inner third
-            "length_m": 0.005, "tail_shorter": 0.3,
-            "up_inner": 0.9, "down_tail": 0.25,    # comb: up near the nose, down at the tail
-            "edge_turn": 0.5,          # upper-edge hairs turn down, lower-edge up (x dz)
+            "core": 0.45,              # |dz|/hh below this is full density
+            "tail_start": 0.55, "tail_thin": 0.85,  # the tail thins to 1 - tail_thin
+            "head_feather": 0.1,       # the head starts at half density, full after this
+            "length_m": [0.006, 0.008, 0.0085, 0.006],  # at along 0, 0.35, 0.7, 1
+            # comb by thirds (x outward, z up), blended
+            "thirds": {"inner_up": 1.4, "inner_out": 0.6, "mid_up": 0.12, "tail_up": -0.35},
+            "edge_turn": 0.45,         # upper-edge hairs turn down, lower-edge up (x dz)
             "smooth_iters": 2,
-            "base_tris": 160,
-            "shells": {
-                "layers": 10, "atlas_cols": 2, "tile": [512, 128],
-                "lean": 1.5,
-                "texture": {"spacing_px": 2.6, "density": 1.0, "radius_px": 1.1, "taper": 0.6,
-                            "short_thin": 0.6, "elongate": 2.2,
-                            "len_min": 0.5, "value_sigma": 0.5, "base_value": 0.9,
-                            "root_shade": 0.6, "drift_px": 4.0, "comb_drift_px": 8.0,
-                            "color": "#2a1d14"},
-                "roughness": 0.75, "specular": 0.2,
-            },
+            "groom": {"per_cm2": 230, "points": 6, "root_sink_m": 0.0003,
+                      "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
+                      "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4},
+            "tone": {"melanin": 0.97, "redness": 0.45, "sigma": 0.02,
+                     "swatches": [[0.2, "#a29d96"], [0.86, "#5a3e2a"], [0.97, "#2b2019"],
+                                  [1.0, "#201812"]],
+                     "redness_ref": 0.45, "value_sigma": 0.25},
+            "hero": {"radius_m": [0.00003, 0.00005], "tip_radius": 0.3,
+                     "material": {"roughness": 0.3, "radial_roughness": 0.35, "coat": 0.1,
+                                  "root_dark": 0.04},
+                     "clump": {"shape": 0.3, "tip_spread": 0.0003, "guide_distance_m": 0.0018},
+                     "frizz": {"distance_m": 0.0004, "shape": 0.6}},
+            "base_tris": 0,            # (unused; shells.base_tris)
+            "shells": {"layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
+                       "atlas_cols": 2, "tile": [512, 192], "px_per_m": 6000.0,
+                       "radius_scale": 1.3, "min_radius_px": 0.5,
+                       "canopy_radius_m": 0.003, "canopy_pct": 85, "canopy_floor_m": 0.0005,
+                       "shade": {"root": 0.6, "full_at": 0.7},
+                       "roughness": 0.6, "specular": 0.25},
+            "cards": {"per_side": 20, "spacing_m": 0.0025, "clump_radius_m": 0.0015,
+                      "min_members": 3, "min_len_m": 0.004, "segments": 2,
+                      "edge_dz": 0.55, "tail_from": 0.75,
+                      "tip_extend": 0.08, "width_scale": 1.3, "taper": 0.5,
+                      "min_halfwidth_m": 0.0005, "max_halfwidth_m": 0.0015,
+                      "roll_deg": 10, "roll_sigma_deg": 10,
+                      "cell": [32, 96], "atlas_px": [1024, 256], "px_per_m": 12000.0,
+                      "radius_scale": 1.2, "min_radius_px": 0.6, "root_shade": 0.6,
+                      "roughness": 0.6, "specular": 0.25},
+        },
+        # Eyelashes: strand groom (hero) + two baked strips per eye (lashes.py);
+        # the MPFB eyelash proxy is the landmark and is dropped (drop_proxy).
+        # null keeps the MPFB lashes.
+        "lashes": {
+            "seed": 17, "proxy": "eyelashes", "drop_proxy": True, "bins": 14, "points": 7,
+            "upper": {"count": 165, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.0085, 0.006],
+                      "curl_deg": 75, "forward": 0.55, "splay_deg": 6, "fan_deg": 25,
+                      "row_jitter_m": 0.00025, "strip_cols": 8},
+            "lower": {"count": 80, "length_m": [0.002, 0.0045, 0.0058, 0.0055, 0.004],
+                      "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
+                      "row_jitter_m": 0.0002, "strip_cols": 6},
+            "melanin": 0.99, "redness": 0.3, "clump": 0.55,
+            "hero": {"radius_m": [0.00003, 0.00004], "tip_radius": 0.25,
+                     "material": {"roughness": 0.25, "radial_roughness": 0.3, "coat": 0.1,
+                                  "root_dark": 0.0},
+                     "clump": {"shape": 0.5, "tip_spread": 0.0001, "guide_distance_m": 0.0012}},
+            "atlas": [512, 512], "strip_radius_px": 1.6, "lash_line_px": 1.5,
+            "color": "#1a1410",
         },
     },
     "suit": {

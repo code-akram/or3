@@ -1,20 +1,21 @@
-"""Facial-hair evidence renders (m1 v2 track C) from a kept build .blend.
+"""Facial-hair evidence renders (m1 v2 track C), under the shared hero and
+turntable rigs (blender/hero/rig.py), from a kept build .blend.
 
-    blender -b RUN/character.blend -t 4 --python bench/m1/v2/facial_hair_render.py -- \
-        --out DIR [--engine cycles|eevee] [--samples N] [--res PX] \
-        [--views bust,profile,moustache,cheek,chin,brow,eye] [--rig studio|neon|both] \
-        [--mode hero|game|both]
+    blender -b -t 4 --factory-startup --python-exit-code 1 \
+        --python bench/m1/v2/facial_hair_render.py -- --in RUN/character.blend --out DIR \
+        [--light hero|turntable|both] [--mode hero|game|both] \
+        [--views bust,profile,front,moustache,cheek,chin,jaw,brow,eye] \
+        [--res PX] [--samples N] [--engine cycles|eevee]
 
-hero: the strand grooms in the `hero_only` collection, game shells/cards
-hidden. game: the GLB geometry (shells, cards), strands hidden. Cameras are
-placed off body landmarks (lips, chin, brows, eyes), so they follow the head.
-The studio rig matches the look-dev loop (key/fill/rim, AgX, -2.5 EV); the
-neon rig is the direction §5 base rig (amber key camera-left, magenta rim
-behind-right, teal kicker behind-left, cool fill, eye light).
-Writes DIR/<mode>_<rig>_<view>.png and DIR/sheet_<mode>_<rig>.png (ffmpeg).
+mode hero: the strand grooms in `hero_only`, the game shells/cards hidden.
+mode game: the GLB geometry (shells, cards), the strands hidden. Cameras
+are placed off body landmarks (lips, chin, eyes, the beard's cheek line from
+the build stats), so they follow the head. Close-ups are ~0.05-0.1 mm/px.
+Writes DIR/<mode>_<light>_<view>.png and DIR/sheet_<mode>_<light>.png.
 """
 
 import argparse
+import json
 import math
 import os
 import subprocess
@@ -23,23 +24,23 @@ import sys
 import bpy
 from mathutils import Vector
 
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.join(REPO, "blender"))
+from hero import rig  # noqa: E402
+
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 ap = argparse.ArgumentParser()
+ap.add_argument("--in", dest="inp", required=True)
 ap.add_argument("--out", required=True)
-ap.add_argument("--engine", default="cycles", choices=["cycles", "eevee"])
-ap.add_argument("--samples", type=int, default=64)
-ap.add_argument("--res", type=int, default=768)
-ap.add_argument("--views", default="bust,profile,moustache,cheek,chin,brow,eye")
-ap.add_argument("--rig", default="studio", choices=["studio", "neon", "both"])
+ap.add_argument("--light", default="hero", choices=["hero", "turntable", "both"])
 ap.add_argument("--mode", default="hero", choices=["hero", "game", "both"])
-ap.add_argument("--exposure", type=float, default=float(os.environ.get("LOOKDEV_EXPOSURE", "-2.5")))
+ap.add_argument("--views", default="bust,profile,moustache,cheek,chin,brow,eye")
+ap.add_argument("--res", type=int, default=768)
+ap.add_argument("--samples", type=int, default=64)
+ap.add_argument("--engine", default="cycles", choices=["cycles", "eevee"])
 A = ap.parse_args(argv)
 
 GAME_PARTS = ("beard_export", "brows_export", "eyelash")
-
-
-def look_at(ob, target):
-    ob.rotation_euler = (target - ob.location).to_track_quat("-Z", "Y").to_euler()
 
 
 def group_pts(obj, name, w=0.5):
@@ -55,139 +56,71 @@ def bbox(pts):
             Vector([max(p[i] for p in pts) for i in range(3)]))
 
 
-def surface_point(body, origin_xy_dir, z, x_side):
-    """Point on the skin hit by a ray from outside at height z, coming in
-    horizontally along -dir (dir: unit vector pointing out of the face)."""
+def ray_to_skin(body, start, direction):
     dg = bpy.context.evaluated_depsgraph_get()
     ev = body.evaluated_get(dg)
     mw = ev.matrix_world
     inv = mw.inverted()
-    start = Vector((x_side, 0, z)) + origin_xy_dir * 0.5
-    ok, loc, _, _ = ev.ray_cast(inv @ start, (inv.to_3x3() @ -origin_xy_dir).normalized())
-    return mw @ loc if ok else start - origin_xy_dir * 0.5
+    ok, loc, _, _ = ev.ray_cast(inv @ start, (inv.to_3x3() @ direction).normalized())
+    return mw @ loc if ok else None
 
 
-def landmarks():
-    body = next(o for o in bpy.data.objects if o.type == "MESH" and o.vertex_groups.get("scalp")
-                and not o.hide_render)
-    arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
-    hb = arm.data.bones["head"]
-    head = arm.matrix_world @ ((hb.head_local + hb.tail_local) * 0.5)
-    lips_lo, lips_hi = bbox(group_pts(body, "lips", 0.3))
-    eyes = next((o for o in bpy.data.objects if o.type == "MESH" and ("eyes_hq" in o.name or "low-poly" in o.name)), None)
-    lm = {"head": head, "lips_top": Vector(((lips_lo.x + lips_hi.x) / 2, lips_lo.y, lips_hi.z)),
-          "lips_lo": lips_lo, "lips_hi": lips_hi}
-    if eyes is not None:
-        ep = [eyes.matrix_world @ v.co for v in eyes.data.vertices]
-        left = [p for p in ep if p.x > 0]
-        lm["eye_l"] = sum(left, Vector()) / len(left)
+def landmarks(ch):
+    body = next(o for o in ch.objs if o.type == "MESH" and o.vertex_groups.get("scalp"))
+    lo, hi = bbox(group_pts(body, "lips", 0.3))
+    el, er = ch.eyes()
     hp = group_pts(body, "head")
-    front = [p for p in hp if abs(p.x) < 0.02 and p.y < lips_hi.y + 0.03]
-    chin_z = min(p.z for p in front)
-    lm["chin"] = Vector((0, min(p.y for p in front if p.z < lips_lo.z), chin_z))
-    lm["body"] = body
+    front = [p for p in hp if abs(p.x) < 0.02 and p.y < hi.y + 0.03]
+    chin = Vector((0, min(p.y for p in front if p.z < lo.z), min(p.z for p in front)))
+    lm = {"body": body, "lips_top": Vector(((lo.x + hi.x) / 2, lo.y, hi.z)), "lips_lo": lo,
+          "lips_hi": hi, "eye_l": el, "chin": chin, "eyes": (el + er) / 2}
+    # the beard's cheek line (profile y, z) from the build stats
+    stats = os.path.join(os.path.dirname(os.path.abspath(A.inp)), "character.stats.json")
+    cl = None
+    if os.path.isfile(stats):
+        with open(stats) as f:
+            cl = json.load(f).get("beard", {}).get("cheek_line_yz")
+    if cl:
+        y, z = cl[1]
+    else:
+        y, z = (lo.y + 0.05, (hi.z + el.z) / 2)
+    hit = ray_to_skin(body, Vector((0.3, y, z)), Vector((-1, 0, 0)))
+    lm["cheek"] = hit if hit is not None else Vector((0.06, y, z))
     return lm
 
 
-def setup_render():
-    scene = bpy.context.scene
-    r = scene.render
-    r.resolution_x = r.resolution_y = A.res
-    r.resolution_percentage = 100
-    r.image_settings.file_format = "PNG"
-    r.film_transparent = False
-    scene.view_settings.view_transform = "AgX"
-    scene.view_settings.look = "None"
-    scene.view_settings.exposure = A.exposure
-    if A.engine == "cycles":
-        r.engine = "CYCLES"
-        c = scene.cycles
-        c.device = "CPU"
-        c.samples = A.samples
-        c.use_adaptive_sampling = True
-        c.use_denoising = True
-        c.denoiser = "OPENIMAGEDENOISE"
-        c.max_bounces = 8
-        c.transparent_max_bounces = 32
-        scene.cycles_curves.shape = "THICK"
-        scene.cycles_curves.subdivisions = 2
-    else:
-        r.engine = "BLENDER_EEVEE"
-        scene.eevee.taa_render_samples = max(A.samples, 32)
-    world = scene.world or bpy.data.worlds.new("w")
-    scene.world = world
-    world.use_nodes = True
-    world.node_tree.nodes["Background"].inputs[0].default_value = (0.045, 0.045, 0.05, 1)
-
-
-def clear_lights():
-    for o in list(bpy.data.objects):
-        if o.type in ("LIGHT", "CAMERA") or o.name.startswith("fh_"):
-            bpy.data.objects.remove(o, do_unlink=True)
-
-
-def area(name, loc, energy, size, color, aim, size_y=None):
-    ld = bpy.data.lights.new(name, "AREA")
-    ld.energy, ld.color = energy, color
-    if size_y is None:
-        ld.size = size
-    else:
-        ld.shape = "RECTANGLE"
-        ld.size, ld.size_y = size, size_y
-    ob = bpy.data.objects.new(name, ld)
-    bpy.context.scene.collection.objects.link(ob)
-    ob.location = loc
-    look_at(ob, aim)
-    return ob
-
-
-def studio(lm):
-    floor = 0.0
-    aim = Vector((0, 0, floor + 1.1))
-    area("fh_key", Vector((-2.2, -2.6, 2.8)), 900, 1.5, (1.0, 0.96, 0.9), aim)
-    area("fh_fill", Vector((2.6, -2.0, 1.4)), 250, 2.0, (0.85, 0.9, 1.0), aim)
-    area("fh_rim", Vector((0.8, 2.8, 2.6)), 700, 1.0, (1, 1, 1), aim)
-
-
-def neon(lm, cam_dir):
-    """direction §5 base rig, positioned relative to the camera azimuth."""
-    h = lm["head"]
-    az = math.atan2(cam_dir.x, -cam_dir.y)
-
-    def at(az_off_deg, elev_deg, dist):
-        a = az + math.radians(az_off_deg)
-        e = math.radians(elev_deg)
-        return h + Vector((math.sin(a) * math.cos(e), -math.cos(a) * math.cos(e), math.sin(e))) * dist
-    k = 120.0  # key energy (W) at 1.5 m
-    area("fh_key", at(-40, 25, 1.5), k, 0.8, (1.0, 0.72, 0.42), h)
-    area("fh_rim_magenta", at(150, 10, 1.4), k * 0.7 * 2.5, 0.3, (1.0, 0.18, 0.55), h, size_y=1.5)
-    area("fh_kick_teal", at(-145, 15, 1.4), k * 0.4 * 2.5, 0.4, (0.1, 0.8, 0.9), h, size_y=1.0)
-    area("fh_fill", at(60, -10, 2.0), k * 0.08 * 2.0, 2.0, (0.6, 0.7, 1.0), h)
-    area("fh_eye", at(0, 0, 1.2), k * 0.12, 0.1, (1, 1, 1), h)
-
-
-def view_specs(lm):
-    h = lm["head"]
-    lt = lm["lips_top"]
-    chin = lm["chin"]
-    # name: (azimuth deg, frame height m, target)
-    eye = lm.get("eye_l", h)
-    specs = {
-        "bust": (25, 0.42, h + Vector((0, 0, -0.06))),
-        "front": (0, 0.30, h + Vector((0, 0, -0.05))),
-        "profile": (90, 0.30, h + Vector((0, 0, -0.05))),
-        "moustache": (20, 0.055, lt + Vector((0, 0.0, -0.002))),
-        "chin": (90, 0.08, chin + Vector((0, 0.02, 0.01))),
-        "brow": (15, 0.07, eye + Vector((0, 0, 0.018))),
-        "eye": (20, 0.05, eye + Vector((0, 0, 0.004))),
+def views(lm):
+    """name: (azimuth deg, elevation deg, lens, frame height m, aim)."""
+    eyes = lm["eyes"]
+    return {
+        "bust": (25, 3, 85, 0.40, eyes + Vector((0, 0.02, -0.07))),
+        "front": (0, 0, 85, 0.28, eyes + Vector((0, 0.02, -0.06))),
+        "profile": (90, 0, 100, 0.30, eyes + Vector((0, 0.03, -0.06))),
+        "moustache": (18, 2, 100, 0.055, lm["lips_top"] + Vector((0, 0.0, -0.002))),
+        "cheek": (65, 5, 100, 0.07, lm["cheek"]),
+        "chin": (90, -5, 100, 0.08, lm["chin"] + Vector((0, 0.025, -0.005))),
+        "jaw": (45, -15, 100, 0.10, lm["chin"] + Vector((0.03, 0.035, 0.01))),
+        "brow": (12, 3, 100, 0.07, lm["eye_l"] + Vector((-0.01, 0, 0.016))),
+        "eye": (15, 2, 135, 0.045, lm["eye_l"] + Vector((0, 0, 0.003))),
     }
-    # cheek line: the skin on the character's left side between the mouth
-    # corner and the ear, at cheekbone-low height
-    z = (lm["lips_hi"].z + eye.z) / 2 - 0.005
-    d = Vector((math.sin(math.radians(60)), -math.cos(math.radians(60)), 0))
-    cp = surface_point(lm["body"], d, z, 0.0)
-    specs["cheek"] = (60, 0.08, cp)
-    return specs
+
+
+def camera(ch, name, spec):
+    az, el, lens, frame_h, aim = spec
+    a, e = math.radians(az), math.radians(el)
+    dist = lens / 24.0 * frame_h
+    loc = aim + (Vector((math.sin(a), -math.cos(a), 0)) * math.cos(e) + Vector((0, 0, 1)) * math.sin(e)) * dist
+    cd = bpy.data.cameras.new("fh_cam_" + name)
+    cd.lens = lens
+    cd.sensor_fit = "VERTICAL"
+    cd.sensor_width, cd.sensor_height = 36.0, 24.0
+    cd.clip_start, cd.clip_end = 0.01, 200.0
+    cam = bpy.data.objects.new(cd.name, cd)
+    rig.collection("hero_cams", clear=False).objects.link(cam)
+    cam.location = loc
+    rig.look_at(cam, aim)
+    bpy.context.scene.camera = cam
+    return {"obj": cam, "subject": ch.aim("eyes"), "aim": aim}
 
 
 def set_mode(mode):
@@ -197,56 +130,61 @@ def set_mode(mode):
     for o in bpy.data.objects:
         if o.type == "MESH" and any(p in o.name for p in GAME_PARTS):
             o.hide_render = mode == "hero"
-    # MPFB lashes / brows proxies are always game geometry
-    return hero is not None
+
+
+def sheet(files, out):
+    n = len(files)
+    cols = min(n, 4)
+    half = A.res // 2
+    inputs = sum((["-i", f] for f in files), [])
+    filt = "".join(f"[{i}:v]scale={half}:{half}[v{i}];" for i in range(n))
+    layout = "|".join(f"{(i % cols) * half}_{(i // cols) * half}" for i in range(n))
+    filt += "".join(f"[v{i}]" for i in range(n)) + f"xstack=inputs={n}:layout={layout}:fill=black"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", filt, out], check=True)
 
 
 def main():
     os.makedirs(A.out, exist_ok=True)
-    setup_render()
-    lm = landmarks()
-    specs = view_specs(lm)
-    views = [v for v in A.views.split(",") if v in specs]
+    ch = rig.load_character(A.inp)
+    lm = landmarks(ch)
+    vs = views(lm)
+    names = [v for v in A.views.split(",") if v in vs]
     modes = ["hero", "game"] if A.mode == "both" else [A.mode]
-    rigs = ["studio", "neon"] if A.rig == "both" else [A.rig]
-    scene = bpy.context.scene
+    lights = ["hero", "turntable"] if A.light == "both" else [A.light]
     for mode in modes:
         set_mode(mode)
-        for rig in rigs:
+        for light in lights:
             files = []
-            for v in views:
-                clear_lights()
-                az, fh, target = specs[v]
-                a = math.radians(az)
-                axis = Vector((math.sin(a), -math.cos(a), 0.0))
-                cd = bpy.data.cameras.new("fh_cam")
-                cd.lens = 85.0 if fh > 0.2 else 100.0
-                cd.clip_start = 0.01
-                dist = (fh * 0.5) / math.tan(math.atan(cd.sensor_width * 0.5 / cd.lens))
-                cam = bpy.data.objects.new("fh_cam", cd)
-                scene.collection.objects.link(cam)
-                cam.location = target + axis * dist
-                look_at(cam, target)
-                scene.camera = cam
-                if rig == "studio":
-                    studio(lm)
+            for v in names:
+                for c in ("hero_rig", "tt_rig", "tt_cyc", "hero_ground", "hero_cams"):
+                    rig.collection(c)
+                cam = camera(ch, v, vs[v])
+                if light == "hero":
+                    rig.world()
+                    rig.hero_rig(ch, cam)
+                    rig.void_floor()
+                    exposure, look = rig.HERO_EXPOSURE, rig.HERO_LOOK
                 else:
-                    neon(lm, axis)
-                path = os.path.join(A.out, f"{mode}_{rig}_{v}.png")
-                scene.render.filepath = path
-                bpy.ops.render.render(write_still=True)
+                    rig.world((0.05, 0.05, 0.05), 1.0)
+                    rig.turntable_rig(ch, cam)
+                    rig.cyclorama(cam["obj"].location, ch.aim("body"))
+                    exposure, look = rig.TT_EXPOSURE, "None"
+                rig.cycles("final", (A.res, A.res), A.samples)
+                sc = bpy.context.scene
+                sc.cycles.adaptive_threshold = 0.03
+                sc.cycles_curves.shape = "THICK"
+                sc.cycles_curves.subdivisions = 3
+                if A.engine == "eevee":
+                    sc.render.engine = "BLENDER_EEVEE"
+                    sc.eevee.taa_render_samples = max(A.samples, 32)
+                sc.view_settings.exposure = exposure
+                sc.view_settings.look = look
+                path = os.path.join(A.out, f"{mode}_{light}_{v}.png")
+                secs = rig.render(path)
                 files.append(path)
-                print("fh_render", path, f"{fh / A.res * 1000:.3f} mm/px", flush=True)
+                print(f"fh_render {path} {vs[v][3] / A.res * 1000:.3f} mm/px {secs:.1f} s", flush=True)
             if len(files) > 1:
-                n = len(files)
-                cols = min(n, 4)
-                half = A.res // 2
-                inputs = sum((["-i", f] for f in files), [])
-                filt = "".join(f"[{i}:v]scale={half}:{half}[v{i}];" for i in range(n))
-                layout = "|".join(f"{(i % cols) * half}_{(i // cols) * half}" for i in range(n))
-                filt += "".join(f"[v{i}]" for i in range(n)) + f"xstack=inputs={n}:layout={layout}:fill=black"
-                subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", filt,
-                                os.path.join(A.out, f"sheet_{mode}_{rig}.png")], check=True)
+                sheet(files, os.path.join(A.out, f"sheet_{mode}_{light}.png"))
 
 
 main()

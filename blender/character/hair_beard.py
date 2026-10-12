@@ -111,12 +111,12 @@ def region(b, frame, cfg, rng):
                            back_y, moustache_top, nose)
         if d > -1:
             d += wob * (math.sin(p.z * 160 + ph[0]) + math.sin(p.y * 110 + ph[1])
-                        + math.sin((p.x + p.z) * 260 + ph[2])) / 3
+                        + math.sin((p.x + p.z) * 260 + ph[2]) + 0.6 * math.sin((p.y - p.x) * 530 + ph[0])) / 3.6
         dist[v.index] = d
         which[v.index] = k
     lips_i = groups[0]
     on_lips = set(v.index for v in body.data.vertices
-                  if any(e.group == lips_i and e.weight > 0.02 for e in v.groups))
+                  if any(e.group == lips_i and e.weight > cfg["lips_w"] for e in v.groups))
     keep = set(i for i, d in dist.items() if d > -margins[which[i]] and i not in on_lips)
     obj, bm = hair_mesh.shell_from_body(b, body, keep, "Human.beard_export")
     idx = bm.verts.layers.int.get("src")
@@ -135,7 +135,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts):
     for i, p in enumerate(lips_pts):
         kd.insert(p, i)
     kd.balance()
-    mouth_z = frame.lips_min.z
+    mouth_z = frame.lips_min.z            # bottom of the lower lip
+    slit_z = (frame.lips_min.z + frame.lips_max.z) / 2  # the mouth line
     upper_lip_z = frame.lips_max.z
     corner_x = frame.lips_max.x
     c = frame.center
@@ -146,7 +147,7 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts):
     head_g = frame.body.vertex_groups["head"].index
     neck_g = frame.body.vertex_groups["neck_01"].index
     out = {k: {} for k in ("density", "stubble", "length_m", "comb", "grey", "neckw",
-                           "moustache", "under", "chin")}
+                           "moustache", "under", "chin", "soul")}
     down = Vector((0, 0, -1))
     for v in bm.verts:
         d, which = depth[v], line[v]
@@ -171,7 +172,7 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts):
         near_chin = math.exp(-((p - chin).length / ln["chin_radius_m"]) ** 2)
         near_soul = math.exp(-((p - soul).length / ln["soul_radius_m"]) ** 2)
         below = smoothstep(mouth_z + 0.004, mouth_z - 0.02, p.z)
-        moustache = p.z > mouth_z - 0.002 and abs(p.x - c.x) < corner_x - c.x + 0.010
+        moustache = p.z > slit_z and abs(p.x - c.x) < corner_x - c.x + 0.010
         under = v.normal.z < -0.35
         if moustache:
             L = ln["moustache_m"]
@@ -196,7 +197,7 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts):
         elif p.z > mouth_z:
             g = down + Vector((0, cb["cheek_back"], 0))
         else:
-            fwd = near_chin * cb["chin_forward"]
+            fwd = near_chin * cb["chin_forward"] + near_soul * cb["soul_forward"]
             g = down + Vector((0, -fwd, 0)) + Vector((side * 0.15 * (1 - near_chin), 0, 0))
         out["comb"][v] = facial_hair.tangent(v, g.normalized())
         side_burn = smoothstep(frame.lips_min.y + 0.05, frame.ears_min.y, p.y) * smoothstep(mouth_z, frame.ear_z, p.z)
@@ -207,6 +208,7 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts):
         out["moustache"][v] = 1.0 if moustache else 0.0
         out["under"][v] = 1.0 if under else 0.0
         out["chin"][v] = near_chin
+        out["soul"][v] = near_soul
     facial_hair.smooth_field(bm, out["comb"], cb["smooth_iters"])
     for v in bm.verts:
         cm = out["comb"][v]
@@ -222,7 +224,9 @@ def grow_beard(roots, n, f, g, rng, frame):
     deg = math.radians
     must = f["moustache"] > 0.5
     under = f["under"] > 0.5
-    e0 = np.where(must, deg(g["elev0_moustache"]), deg(g["elev0"])) + rng.normal(0, deg(g["elev_sigma"]), m)
+    e0 = np.where(must, deg(g["elev0_moustache"]),
+                  deg(g["elev0"]) + deg(g["elev_chin"]) * f["chin"] + deg(g["elev_soul"]) * f["soul"])
+    e0 = e0 + rng.normal(0, deg(g["elev_sigma"]), m)
     e1 = np.where(must, deg(g["elev1_moustache"]), np.where(under, deg(g["elev1_under"]), deg(g["elev1"])))
     e1 = e1 + rng.normal(0, deg(g["elev_sigma"]), m)
     yaw = rng.normal(0, deg(g["yaw_sigma"]), m)
