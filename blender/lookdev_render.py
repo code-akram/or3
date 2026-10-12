@@ -57,6 +57,12 @@ READ_HEAD_PX = 40
 READ_K = 8
 READ_RES = 384
 READ_AZ = -40.0  # the key-light side (the key is front-right of the character)
+# Read-test thresholds on scene-linear luminance (calibrated 2026-10-12,
+# bench/m1/head.md "Bolder pass"): the stock MPFB head scores 0.71, the
+# checkpoint variants 0.76-0.81, so >= 0.75 means "a deliberate brow shadow".
+# The spec's 25 % beard contrast in display terms is ~0.47 linear.
+READ_EYE_MIN = 0.75
+READ_BEARD_MIN = 0.47
 # Face strip (hair hidden): azimuths (key-side ¾ is negative), rendered once
 # with the full studio rig and once key-only, so plane breaks show as shadow.
 STRIP_VIEWS = (("front", 0.0), ("q_key", -35.0), ("q_shadow", 35.0), ("profile", -90.0))
@@ -87,6 +93,9 @@ def parse_args():
     ap.add_argument("--skin", choices=["lookdev", "asset"], default="lookdev",
                     help="lookdev: neutral render-side skin; asset: the shipped MPFB material")
     ap.add_argument("--no-face-strip", action="store_true")
+    ap.add_argument("--facet", type=float, default=0.0, metavar="DEG",
+                    help="add a third face-strip row, key only, with the body shaded "
+                         "smooth-by-angle at DEG (a planarity test; not what ships)")
     ap.add_argument("--calibrate", action="store_true",
                     help="render grey cards under the studio rig, write calibration.json, exit")
     return ap.parse_args(argv)
@@ -471,8 +480,9 @@ def _mean_in(lum, box):
 
 
 def read_test(out, meshes, lights, head_mid, spec):
-    """look-spec §2.2: eye band >= 15 % darker than the cheek, beard >= 25 %
-    different from the skin, at a 40 px tall head under the key light only."""
+    """look-spec §2.2 read test at a 40 px tall head under the key light only:
+    eye band darker than the cheek (>= READ_EYE_MIN) and beard contrast
+    against the skin (>= READ_BEARD_MIN), both in scene-linear luminance."""
     eyes = next((o for o in meshes if "low-poly" in o.name), None)
     if eyes is None or not spec.get("menton_z"):
         return {"skipped": "no eye mesh or no spec landmarks (menton)"}
@@ -544,7 +554,7 @@ def read_test(out, meshes, lights, head_mid, spec):
         "cheek_lum": round(lc, 5), "cheek_px": nc,
         "eye_band_darker": round(1.0 - le / lc, 4) if lc > 0 else None,
     }
-    res["eye_band_ok"] = res["eye_band_darker"] is not None and res["eye_band_darker"] >= 0.15
+    res["eye_band_ok"] = res["eye_band_darker"] is not None and res["eye_band_darker"] >= READ_EYE_MIN
     beard = next((o for o in meshes if "beard" in o.name.lower()), None)
     if beard is None:
         res["beard"] = "skipped: no beard mesh"
@@ -555,7 +565,7 @@ def read_test(out, meshes, lights, head_mid, spec):
         lb, nb = _mean_in(small, boxes["beard"])
         res.update({"beard_lum": round(lb, 5), "beard_px": nb,
                     "beard_contrast": round(abs(lb - lc) / lc, 4) if lc > 0 else None})
-        res["beard_ok"] = res["beard_contrast"] is not None and res["beard_contrast"] >= 0.25
+        res["beard_ok"] = res["beard_contrast"] is not None and res["beard_contrast"] >= READ_BEARD_MIN
     res["boxes_px"] = {n: [round(c, 1) for c in b] for n, b in boxes.items()}
     # 40 px image for eyeballing (nearest-upscaled x4) with the sample boxes
     # outlined (eye band red, cheek cyan, beard yellow); drop the full render.
@@ -671,9 +681,17 @@ def face_strip(out, meshes, lights, head, floor):
     target.z -= 0.035
     secs, paths = 0.0, []
     lit = [(l, l.hide_render) for l in lights]
-    for row in ("studio", "key"):
+    rows = ["studio", "key"] + (["facet"] if ARGS.facet else [])
+    for row in rows:
         for l in lights:
-            l.hide_render = row == "key" and l.name != "key"
+            l.hide_render = row != "studio" and l.name != "key"
+        if row == "facet":
+            body = next(o for o in meshes if part_name(o) == "body")
+            bpy.context.view_layer.objects.active = body
+            for o in bpy.context.selected_objects:
+                o.select_set(False)
+            body.select_set(True)
+            bpy.ops.object.shade_smooth_by_angle(angle=math.radians(ARGS.facet))
         for name, az in STRIP_VIEWS:
             a = math.radians(az)
             axis = Vector((math.sin(a), -math.cos(a), 0.0))
@@ -694,12 +712,13 @@ def face_strip(out, meshes, lights, head, floor):
         o.hide_render = hid
     n = len(STRIP_VIEWS)
     inputs = [x for p in paths for x in ("-i", p)]
-    fc = (";".join(f"{''.join(f'[{r * n + i}]' for i in range(n))}hstack={n}[r{r}]" for r in range(2))
-          + ";[r0][r1]vstack=2")
+    nr = len(rows)
+    fc = (";".join(f"{''.join(f'[{r * n + i}]' for i in range(n))}hstack={n}[r{r}]" for r in range(nr))
+          + ";" + "".join(f"[r{r}]" for r in range(nr)) + f"vstack={nr}")
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *inputs, "-filter_complex", fc,
                     os.path.join(out, "face_strip.png")], check=True)
     return {"render_s": round(secs, 3), "views": [v for v, _ in STRIP_VIEWS],
-            "rows": ["studio", "key only"], "parts": sorted({part_name(o) for o in keep})}
+            "rows": rows, "facet_deg": ARGS.facet or None, "parts": sorted({part_name(o) for o in keep})}
 
 
 # ---------------------------------------------------------------- main

@@ -1,13 +1,5 @@
 {
-  "$comment": "Face variant A, lean and angular: high cheek break, hollow cheeks, narrow end of the jaw range. look-spec §6; parameters only (§2.4).",
-  "head": {
-    "targets": {"head-fat-decr": 0.6, "lr-cheek-volume-decr": 0.5, "lr-cheek-bones-incr": 0.5,
-                "chin-height-incr": 0.1, "lr-eye-scale-decr": 0.3, "nose-point-width-decr": 0.3,
-                "nose-hump-incr": 0.2},
-    "edits": {"brow_depth": 0.9, "brow_angle": 0.6, "brow_flatten": 0.7, "socket_depth": 0.5,
-              "lid_hood": 0.5, "dorsum_crease": 0.8, "cheek_height": 0.7, "cheek_plane_break": 1.0,
-              "submalar_hollow": 0.9, "jaw_width": 0.3, "jaw_angle": 0.5, "chin_width": 0.2,
-              "chin_projection": 0.4, "forehead_slope": 0.4},
-    "planes": {"forehead": 0.6, "jaw_side": 0.8, "chin_front": 0.7}
-  }
+  "$comment": "Face variant A, lean and angular (bolder pass): late-40s age, gaunt diamond head with high wide cheekbones, deep sub-malar hollows, hard mid-width jaw, projecting chin, straight nose, thin lips, thin neck. look-spec \u00a76; parameters only (\u00a72.4).",
+  "body": {"macros": {"age": 0.68}},
+  "head": {"targets": {"head-fat-decr": 1.0, "head-diamond": 0.6, "lr-cheek-volume-decr": 1.0, "lr-cheek-bones-incr": 1.0, "forehead-temple-decr": 0.4, "mouth-upperlip-volume-decr": 0.6, "mouth-lowerlip-volume-decr": 0.4, "lr-eye-scale-decr": 0.3, "nose-hump-decr": 0.3, "nose-point-width-decr": 0.4, "chin-prominent-incr": 0.5, "chin-prognathism-incr": 0.4, "chin-bones-incr": 0.5, "mouth-laugh-lines-in": 0.6, "neck-scale-horiz-decr": 0.55, "head-back-scale-depth-incr": 0.4}, "edits": {"brow_depth": 0.9, "brow_angle": 0.6, "brow_flatten": 1.0, "socket_depth": 0.8, "lid_hood": 0.6, "dorsum_crease": 1.0, "cheek_height": 1.0, "cheek_plane_break": 1.0, "submalar_hollow": 1.0, "jaw_width": 0.6, "jaw_angle": 0.8, "chin_projection": 0.6, "forehead_slope": 0.6}, "planes": {"forehead": 0.8, "jaw_side": 1.0, "chin_front": 0.9}}
 }

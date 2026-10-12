@@ -60,6 +60,18 @@ CONTROLS = (
     "chin_width", "chin_projection", "lip_thickness", "forehead_slope",
 )
 
+# Full-scale amplitude per control (mm, or degrees for the two angle
+# controls). Widened about 2x over look-spec §2.3 on 2026-10-12: at the spec
+# ranges every variant stayed within ~7 mm of the stock head and the three
+# variants were indistinguishable from it in the face strips (bench/m1/head.md
+# "Bolder pass").
+RANGES = {
+    "brow_depth": 14.0, "brow_angle": 10.0, "socket_depth": 7.0, "lid_hood": 3.5,
+    "nose_length": 8.0, "nose_bridge_width": 3.5, "cheek_height": 7.0,
+    "submalar_hollow": 9.0, "jaw_width": 11.0, "jaw_angle": 10.0, "chin_width": 8.0,
+    "chin_projection": 8.0, "lip_thickness": 3.0, "forehead_slope": 8.0,
+}
+
 # Controls that act through the planarisation pass: control -> plane groups.
 PLANE_CONTROLS = {
     "brow_flatten": ("brow_front", "brow_under"),
@@ -138,35 +150,37 @@ def displacement(fr, ctl, lips_w):
     v = lambda k: float(ctl.get(k, 0.0))  # noqa: E731
     sx = np.tanh(fr.x / 0.004)  # signed, smooth through the midline
 
-    w = fr.region("brow")
-    d[:, Y] -= v("brow_depth") * 8 * mm * w                       # forward = -Y
-    d[:, Z] += v("brow_angle") * math.tan(math.radians(6)) * (fr.u - 0.025) * w
+    # The shelf ends at the temple: fade the projection out past the orbit's
+    # outer rim, or the brow end sticks out of the ¾ silhouette.
+    w = fr.region("brow") * np.clip((0.058 - fr.u) / 0.016, 0.0, 1.0)
+    d[:, Y] -= v("brow_depth") * RANGES["brow_depth"] * mm * w                       # forward = -Y
+    d[:, Z] += v("brow_angle") * math.tan(math.radians(RANGES["brow_angle"])) * (fr.u - 0.025) * w
     w = fr.region("socket")
-    d[:, Y] += v("socket_depth") * 4 * mm * w                     # recess = +Y
+    d[:, Y] += v("socket_depth") * RANGES["socket_depth"] * mm * w                     # recess = +Y
     w = fr.region("lid")
-    d[:, Z] -= v("lid_hood") * 2 * mm * w
+    d[:, Z] -= v("lid_hood") * RANGES["lid_hood"] * mm * w
     w = fr.region("nose")
     t = np.clip(-fr.h / 0.045, 0.0, 1.0)
-    d[:, Z] -= v("nose_length") * 5 * mm * w * t
+    d[:, Z] -= v("nose_length") * RANGES["nose_length"] * mm * w * t
     w = fr.region("bridge")
-    d[:, X] += v("nose_bridge_width") * 2 * mm * w * sx
+    d[:, X] += v("nose_bridge_width") * RANGES["nose_bridge_width"] * mm * w * sx
     w = fr.region("malar")
-    d[:, Z] += v("cheek_height") * 4 * mm * w
+    d[:, Z] += v("cheek_height") * RANGES["cheek_height"] * mm * w
     w = fr.region("submalar")
-    k = v("submalar_hollow") * 4 * mm * w
+    k = v("submalar_hollow") * RANGES["submalar_hollow"] * mm * w
     d[:, X] -= k * 0.45 * fr.side
     d[:, Y] += k * 0.89
     w = fr.region("gonial")
-    d[:, X] += v("jaw_width") * 6 * mm * w * fr.side
-    k = v("jaw_angle") * 5 * mm * w
+    d[:, X] += v("jaw_width") * RANGES["jaw_width"] * mm * w * fr.side
+    k = v("jaw_angle") * RANGES["jaw_angle"] * mm * w
     d[:, Y] += k * 0.707
     d[:, Z] += k * 0.707
     w = fr.region("chin")
-    d[:, X] += v("chin_width") * 4 * mm * w * np.tanh(fr.x / 0.006)
-    d[:, Y] -= v("chin_projection") * 4 * mm * w
-    d[:, Y] -= v("lip_thickness") * 1.5 * mm * lips_w
+    d[:, X] += v("chin_width") * RANGES["chin_width"] * mm * w * np.tanh(fr.x / 0.006)
+    d[:, Y] -= v("chin_projection") * RANGES["chin_projection"] * mm * w
+    d[:, Y] -= v("lip_thickness") * RANGES["lip_thickness"] * mm * lips_w
     w = fr.region("forehead") * (fr.h > 0.03)
-    d[:, Y] += v("forehead_slope") * math.tan(math.radians(5)) * np.clip(fr.h - 0.035, 0, None) * w
+    d[:, Y] += v("forehead_slope") * math.tan(math.radians(RANGES["forehead_slope"])) * np.clip(fr.h - 0.035, 0, None) * w
     return d * fr.s
 
 
