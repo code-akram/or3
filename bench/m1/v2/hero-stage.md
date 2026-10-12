@@ -82,3 +82,12 @@ The shot list follows direction §5, with two substitutions: no "buttoning the j
   - Vignette −0.3 EV.
   - Grain 2 %, multiplicative.
   - Grading one image takes 0.2–0.8 s, so `hero.sh --regrade RUN` re-tunes the grade without re-rendering.
+
+### Poses (`poses.py`) and Track F's runtime
+
+- `stand`, `ready` and `ready_low` are Track F's canonical `hero`, `high_ready` and `low_ready` (`blender/character/deform_poses.POSES`). `stand_profile` is F's `hero` with the head straight ahead and the chin 2–3° down. Every other deform_poses name works too, as does `f:<name>` for one shadowed by an E pose (`f:walk`).
+- E's own solver poses stay available as `stand_e`, `ready_e`, `ready_low_e` and `walk`. F only has a walk as a deformation test pose, so the hero `walk` (¾ mid-stride, heel contact, push-off foot) is still E's.
+- **Every pose runs F's deformation runtime afterwards** (`poses.deform`, called by `poses.apply`, which `rig.pose` and `stage.py` both use). It sets the helper bones (twist split, deltoid and hip helpers, jacket-skirt follow) and the corrective shape keys from the armature's `deform_rules` property, or from `character.rig.json` next to the .blend. Shape keys that are not correctives keep their values; the reference runtime zeroes every key it doesn't drive. Builds from before F merged carry no rules, and the pose log says "no rules (helpers at bind)".
+- The log of each pose (source, active correctives with their weights) goes to `stage.json` / `rig.json`.
+- `bench/m1/deform_hero.py` (Track F's wrapper) is now redundant: it applies the same runtime a second time, which is idempotent.
+- What broke with E's solver poses on the pre-F build (main2): in `ready`, the hands interpenetrate (a support hand wrapped around a closed hand needs contact, which pose data alone doesn't give), and the hands read as mittens or claws in every pose.

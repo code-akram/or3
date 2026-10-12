@@ -26,7 +26,10 @@ POSES maps a name to a function(Poser). The log lists what each pose did and
 any bone it could not find; nothing here edits the mesh or the weights.
 """
 
+import copy
+import json
 import math
+import os
 
 import bpy
 from mathutils import Matrix, Quaternion, Vector
@@ -390,13 +393,108 @@ def pose_stand_profile(p):
     pose_stand(p, look=(0.0, 3.0, 0.0))
 
 
-POSES = {"rest": pose_rest, "stand": pose_stand, "stand_profile": pose_stand_profile,
-         "walk": pose_walk, "ready": pose_ready, "ready_low": pose_ready_low}
+# Track F's canonical poses (blender/character/deform_poses.py) drive the
+# hero stand and the ready stances; E's own solver versions stay available as
+# `*_e` (and for the walk, which F only has as a deformation test pose).
+F_POSES = {"stand": "hero", "ready": "high_ready", "ready_low": "low_ready"}
+
+POSES = {"rest": pose_rest, "stand_e": pose_stand, "stand_profile_e": pose_stand_profile,
+         "walk": pose_walk, "ready_e": pose_ready, "ready_low_e": pose_ready_low}
+
+
+def _dp():
+    try:
+        from character import deform_poses
+        return deform_poses
+    except ImportError:
+        return None
+
+
+def _f_spec(name):
+    """The deform_poses spec behind a stage pose name, or None."""
+    dp = _dp()
+    if dp is None:
+        return None
+    if name == "stand_profile":
+        # the hero pose, head straight ahead and chin a little down (profile shot)
+        spec = copy.deepcopy(dp.POSES["hero"])
+        spec["bones"]["neck_01"] = [["flex", 1.5]]
+        spec["bones"]["head"] = [["flex", 2.0]]
+        return spec
+    if name in F_POSES:
+        return dp.POSES[F_POSES[name]]
+    if name.startswith("f:") and name[2:] in dp.POSES:
+        return dp.POSES[name[2:]]
+    if name not in POSES and name in dp.POSES:
+        return dp.POSES[name]
+    return None
+
+
+def names():
+    dp = _dp()
+    out = list(POSES) + [n for n in list(F_POSES) + ["stand_profile"] if n not in POSES]
+    if dp is not None:
+        out += [n for n in dp.POSES if n not in out] + ["f:" + n for n in dp.POSES]
+    return out
+
+
+def _rules(arm):
+    if "deform_rules" in arm:
+        return json.loads(arm["deform_rules"])
+    if bpy.data.filepath:
+        p = os.path.join(os.path.dirname(bpy.data.filepath), "character.rig.json")
+        if os.path.exists(p):
+            with open(p) as f:
+                return json.load(f)
+    return None
+
+
+def _meshes(arm):
+    return [o for o in bpy.data.objects if o.type == "MESH" and (
+        o.parent == arm or any(m.type == "ARMATURE" and m.object == arm for m in o.modifiers))]
+
+
+def deform(arm):
+    """Track F's runtime after the pose: helper bones (twist split, deltoid and
+    hip helpers, skirt follow) and corrective shape keys, exactly as the game
+    drives them. Shape keys that are not correctives keep their values (the
+    reference runtime zeroes every key it does not drive)."""
+    R = _rules(arm)
+    if not R:
+        return "deform runtime: no rules in this build (helpers at bind)"
+    from character import deform_runtime as drt
+    meshes = _meshes(arm)
+    keep = {(o.name, kb.name): kb.value for o in meshes if o.data.shape_keys
+            for kb in o.data.shape_keys.key_blocks[1:]}
+    w = drt.Runtime(arm, meshes, R).apply()
+    for o in meshes:
+        if o.data.shape_keys:
+            for kb in o.data.shape_keys.key_blocks[1:]:
+                if kb.name not in w and (o.name, kb.name) in keep:
+                    kb.value = keep[(o.name, kb.name)]
+    bpy.context.view_layer.update()
+    on = ", ".join(f"{k} {v:.2f}" for k, v in sorted(w.items()) if v > 0.01)
+    return f"deform runtime: {len(R.get('helpers', []))} helpers, correctives: {on or 'none active'}"
 
 
 def apply(arm, name):
-    """Pose the armature; returns the log (missing bones, notes)."""
-    p = Poser(arm)
-    POSES[name](p)
-    p.log.append(f"pose {name}: ok")
-    return p.log
+    """Pose the armature (F's canonical spec or E's solver), then run F's
+    deformation runtime; returns the log (source, missing bones, notes)."""
+    spec = _f_spec(name)
+    if spec is not None:
+        _dp().apply_pose(arm, spec)
+        bpy.context.view_layer.update()
+        src = "hero, head straight" if name == "stand_profile" else (F_POSES.get(name) or name.removeprefix("f:"))
+        log = [f"pose {name}: deform_poses {src}"]
+    else:
+        if name not in POSES:
+            raise KeyError(f"unknown pose {name!r}; known: {', '.join(names())}")
+        dp = _dp()
+        if dp is not None:
+            dp.reset(arm)
+        p = Poser(arm)
+        POSES[name](p)
+        p.log.append(f"pose {name}: ok (hero/poses.py)")
+        log = p.log
+    log.append(deform(arm))
+    return log

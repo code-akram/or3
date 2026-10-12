@@ -20,15 +20,24 @@ CLI (renders a kept character.blend, or a GLB, under one or both rigs):
 
     blender -b -t 4 --factory-startup --python-exit-code 1 \\
         --python blender/hero/rig.py -- --in RUN/character.blend --out DIR \\
-        [--light hero|turntable|both] [--cam portrait,bust,tt0,...] \\
-        [--pose rest|stand|walk|ready] [--quality preview|final|draft] \\
+        [--light hero|turntable|both] [--cam "portrait;bust;tt0;az=30,el=5,..."] \\
+        [--pose rest|stand|walk|ready|...] [--quality preview|final|draft] \\
         [--passes beauty,clay,normal] [--haze] [--res WxH] [--samples N]
 
 Cameras: the presets in CAMERAS (lens mm, azimuth deg, elevation deg or
 camera height, aim point, frame height m), `tt<deg>` (turntable, 50 mm full
 body at that azimuth; tt = all 8 at 45 deg steps), or a custom spec
 `az=30,el=5,lens=85,aim=head,frame=0.45`. Azimuth 0 is in front of the
-character; positive shows its LEFT side.
+character; positive shows its LEFT side. Separate cameras with ';' (a comma
+list of presets also works, but a list containing a custom spec must use ';';
+a single custom spec is always one camera).
+
+Poses: `stand` / `ready` / `ready_low` are Track F's canonical `hero` /
+`high_ready` / `low_ready` (blender/character/deform_poses.py), every
+deform_poses name works too (`f:<name>` for one shadowed by an E pose), and
+E's solver versions are `stand_e` / `ready_e` / `ready_low_e` / `walk`. Every
+pose runs F's deformation runtime afterwards (helper bones + correctives from
+the armature's deform_rules or character.rig.json; poses.deform).
 
 Writes DIR/<light>_<cam>[_<pass>].png and DIR/rig.json (settings, per-frame
 render seconds, pose log). Import it from Python too:
@@ -680,8 +689,9 @@ def parse_args(argv):
     ap.add_argument("--in", dest="inp", required=True, help="character.blend or .glb")
     ap.add_argument("--out", required=True)
     ap.add_argument("--light", choices=["hero", "turntable", "both"], default="both")
-    ap.add_argument("--cam", default="", help="comma list; default portrait,bust (hero), tt (turntable)")
-    ap.add_argument("--pose", choices=sorted(poses.POSES), default="rest")
+    ap.add_argument("--cam", default="", help="cameras separated by ';' (or a comma list of presets); "
+                    "default portrait;bust (hero), tt (turntable)")
+    ap.add_argument("--pose", choices=poses.names(), default="rest")
     ap.add_argument("--quality", choices=sorted(QUALITY), default="preview")
     ap.add_argument("--samples", type=int, default=0)
     ap.add_argument("--res", default="", help="WxH (default 1920x1080; turntable 1080x1620)")
@@ -696,7 +706,10 @@ def parse_args(argv):
 def _cams(arg, light):
     if arg:
         out = []
-        for c in arg.split(";") if ";" in arg else arg.split(","):
+        # ';' separates cameras. Without one, a spec with '=' is ONE custom
+        # camera (its fields are comma-separated); otherwise a comma list of presets.
+        parts = arg.split(";") if ";" in arg else ([arg] if "=" in arg else arg.split(","))
+        for c in (c.strip() for c in parts if c.strip()):
             out += [f"tt{a}" for a in range(0, 360, 45)] if c == "tt" else [c]
         return out
     return ["portrait", "bust"] if light == "hero" else [f"tt{a}" for a in range(0, 360, 45)]
