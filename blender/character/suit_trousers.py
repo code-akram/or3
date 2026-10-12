@@ -937,7 +937,10 @@ class Trousers:
                 cols = V[k][C_CF:C_CB + 1]
                 u0 = arcs[k][C_CF]
                 wg.add_shared_row(cols, [(us * (arcs[k][i] - u0), V[k][i].co.z) for i in range(C_CF, C_CB + 1)])
-            flip = (side == "r")
+            # rows run waist -> hem and the left columns run front -> back, so the
+            # unflipped quads face into the leg; the mirrored right side is the
+            # other way round. Faces point out of the leg on both sides.
+            flip = (side == "l")
 
             for g, tag, c0 in ((fg, TAG[f"front_{side}"], 0), (bg, TAG[f"back_{side}"], C_SIDE),
                                (wg, TAG[f"band_{side}"], C_CF)):

@@ -460,14 +460,17 @@ def trouser_pins(arm):
     """Trousers hang from the waistband and the top of the seat; the legs
     follow the skinned shape softly (a free leg swung by the knee and hip
     bend stretched against the shoe), the hem firmly (it rests on the shoe
-    and moves with the foot); the knee back and the break stay soft."""
+    and moves with the foot: fully pinned over the modelled break, which
+    lies within the collision distance of the shoe; soft there, the shoe
+    pushes it into a crumpled ring and fails the strain gate); the knee back
+    and the crotch stay soft."""
     import numpy as np
     z_hip = (arm.matrix_world @ arm.data.bones["pelvis"].head_local).z
 
     def fn(co, tag):
         pin = _smooth((co[:, 2] - (z_hip - 0.10)) / 0.08)
         leg = 0.12
-        hem = 0.6 * _smooth((0.10 - co[:, 2]) / 0.05)
+        hem = _smooth((0.20 - co[:, 2]) / 0.08)
         pin = np.maximum(pin, np.maximum(leg, hem))
         stiff = np.full(len(co), 0.6)
         return pin, np.zeros(len(co)), stiff
