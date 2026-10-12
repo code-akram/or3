@@ -148,6 +148,8 @@ class Character:
             return self.bone_head("spine_03") + Vector((0, -0.05, 0.08))
         if what == "body":
             return Vector((0, 0, 0.98))
+        if what in ("hand_l", "hand_r"):
+            return self.bone_head(what) * 0.6 + self.bone_head("middle_01" + what[-2:]) * 0.4
         if what == "hands":
             return (self.bone_head("hand_l") + self.bone_head("hand_r")) * 0.5 + Vector((0, 0, -0.25))
         if what == "feet":
@@ -252,7 +254,10 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0):
     spec.update(lights or {})
     subject = subject if subject is not None else cam["subject"]
     made = {}
-    for name, (colour, ratio, size, az, el, dist) in spec.items():
+    for name, val in spec.items():
+        if val is None:
+            continue
+        colour, ratio, size, az, el, dist = val
         if ratio <= 0:
             continue
         if dist is None:  # eye light: just above the lens, aimed at the eyes
@@ -484,6 +489,7 @@ def cycles(quality="preview", res=(1920, 1080), samples=None, threads=0):
     sc.view_settings.view_transform = "AgX"
     sc.view_settings.look = "None"
     sc.display_settings.display_device = "sRGB"
+    r.image_settings.media_type = "IMAGE"
     r.image_settings.file_format = "PNG"
     r.image_settings.color_mode = "RGB"
     r.image_settings.color_depth = "8"
@@ -493,6 +499,7 @@ def cycles(quality="preview", res=(1920, 1080), samples=None, threads=0):
 def render(path, fmt="PNG"):
     sc = bpy.context.scene
     r = sc.render
+    r.image_settings.media_type = "IMAGE"
     if fmt == "EXR":
         r.image_settings.file_format = "OPEN_EXR"
         r.image_settings.color_mode = "RGBA"
