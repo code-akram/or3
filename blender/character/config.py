@@ -307,22 +307,24 @@ DEFAULTS = {
             "select_m": 0.006,         # patch selection beyond the feather (density 0 there)
             "end_extend_m": 0.004,     # patch beyond the proxy's ends
             "depth_tol_m": 0.015,      # skin within this y of the proxy (the face front only)
-            "core": 0.45,              # |dz|/hh below this is full density
-            "tail_start": 0.55, "tail_thin": 0.85,  # the tail thins to 1 - tail_thin
+            "core": 0.35,              # |dz|/hh below this is full density
+            "tail_start": 0.5, "tail_thin": 0.9,  # the tail thins to 1 - tail_thin
             "head_feather": 0.1,       # the head starts at half density, full after this
             "length_m": [0.006, 0.008, 0.0085, 0.006],  # at along 0, 0.35, 0.7, 1
             # comb by thirds (x outward, z up), blended
             "thirds": {"inner_up": 1.4, "inner_out": 0.6, "mid_up": 0.12, "tail_up": -0.35},
             "edge_turn": 0.45,         # upper-edge hairs turn down, lower-edge up (x dz)
             "smooth_iters": 2,
-            "groom": {"per_cm2": 230, "points": 6, "root_sink_m": 0.0003,
+            "top_soft": 0.5, "top_jag": 0.35,  # softer top falloff (in hh) and its irregular wobble
+            "groom": {"per_cm2": 140, "points": 6, "root_sink_m": 0.0003,
                       "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
                       "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4},
-            "tone": {"melanin": 0.97, "redness": 0.45, "sigma": 0.02,
+            "tone": {"melanin": 0.96, "redness": 0.45, "sigma": 0.025,
+                     "light_share": 0.25, "light_melanin": 0.88,  # some lighter brown hairs
                      "swatches": [[0.2, "#948e86"], [0.86, "#5a3e2a"], [0.97, "#2a1f18"],
                                   [1.0, "#1e1712"]],
                      "redness_ref": 0.45, "value_sigma": 0.25},
-            "hero": {"radius_m": [0.00003, 0.00005], "tip_radius": 0.3,
+            "hero": {"radius_m": [0.000025, 0.00004], "tip_radius": 0.15,
                      "material": {"roughness": 0.3, "radial_roughness": 0.35, "coat": 0.1,
                                   "root_dark": 0.04},
                      "clump": {"shape": 0.3, "tip_spread": 0.0003, "guide_distance_m": 0.0018},
@@ -351,19 +353,20 @@ DEFAULTS = {
         "lashes": {
             "seed": 17, "proxy": "eyelashes", "drop_proxy": True, "bins": 14, "points": 7,
             "margin_step_m": 0.0005, "margin_min_open_m": 0.0006, "margin_in_m": 0.0003,
-            "upper": {"count": 165, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.009, 0.0075],
+            "upper": {"count": 190, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.009, 0.0075],
                       "curl_deg": 55, "forward": 0.8, "splay_deg": 6, "fan_deg": 40,
                       "row_jitter_m": 0.00025, "strip_cols": 8, "strip_forward_scale": 0.6},
-            "lower": {"count": 80, "length_m": [0.0018, 0.0032, 0.0045, 0.0042, 0.003],
+            "lower": {"count": 60, "length_m": [0.0018, 0.0032, 0.0045, 0.0042, 0.003],
                       "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
-                      "row_jitter_m": 0.0002, "strip_cols": 6},
-            "melanin": 0.99, "redness": 0.3, "clump": 0.55, "gap_m": 0.00015,
-            "hero": {"radius_m": [0.00004, 0.000055], "tip_radius": 0.25,
+                      "row_jitter_m": 0.0002, "strip_cols": 6, "radius_scale": 0.7},
+            # dark brown, not black; clumps of 3-5 (guide distance)
+            "melanin": 0.94, "redness": 0.45, "clump": 0.6, "gap_m": 0.00015,
+            "hero": {"radius_m": [0.000035, 0.000045], "tip_radius": 0.05,
                      "material": {"roughness": 0.25, "radial_roughness": 0.3, "coat": 0.1,
                                   "root_dark": 0.0},
-                     "clump": {"shape": 0.5, "tip_spread": 0.0001, "guide_distance_m": 0.0012}},
-            "atlas": [512, 512], "strip_radius_px": 2.2, "lash_line_px": 1.5, "strip_gap_m": 0.0003,
-            "color": "#1a1410",
+                     "clump": {"shape": 0.5, "tip_spread": 0.0001, "guide_distance_m": 0.0006}},
+            "atlas": [512, 512], "strip_radius_px": 1.6, "lash_line_px": 1.5, "strip_gap_m": 0.0003,
+            "color": "#2a1f17",
         },
     },
     "suit": {

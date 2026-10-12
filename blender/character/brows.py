@@ -118,7 +118,12 @@ def build(b, frame, cfg):
     d3 = cfg["thirds"]
     for v in bm.verts:
         side, dz, along, hh = info[v[idx]]
-        edge = 1 - smoothstep(cfg["core"], 1 + margin / hh, abs(dz))
+        # a softer, irregular top edge (real brows have no ruled top line)
+        if dz > 0:
+            jag = cfg["top_jag"] * (math.sin(along * 23 + side) + 0.6 * math.sin(along * 61 + 2 * side)) / 1.6
+            edge = 1 - smoothstep(cfg["core"], 1 + margin / hh + cfg["top_soft"], dz + jag)
+        else:
+            edge = 1 - smoothstep(cfg["core"], 1 + margin / hh, -dz)
         tail = 1 - smoothstep(cfg["tail_start"], 1.0, along) * cfg["tail_thin"]
         head = 0.45 + 0.55 * smoothstep(0.0, cfg["head_feather"], along)
         fl["density"][v] = max(min(edge * tail * head, 1.0), 0.0)
@@ -156,6 +161,8 @@ def build(b, frame, cfg):
     beard_groom.collide(pts, frame.skin_bvh, gap)
     tone = cfg["tone"]
     mel = np.clip(tone["melanin"] + rng.normal(0, tone["sigma"], m), 0, 1)
+    light = np.random.default_rng(cfg["seed"] + 7).random(m) < tone.get("light_share", 0.0)
+    mel[light] = np.clip(tone.get("light_melanin", tone["melanin"]) + rng.normal(0, tone["sigma"], light.sum()), 0, 1)
     red = np.clip(tone["redness"] + rng.normal(0, tone["sigma"] * 0.5, m), 0, 1)
     hero = cfg["hero"]
     rad = np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], m)[:, None]

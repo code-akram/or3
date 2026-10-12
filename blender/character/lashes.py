@@ -244,7 +244,8 @@ def build(b, frame, cfg):
         # kept out of the skin (a hooded upper lid would otherwise swallow the
         # upturned tips) before the strip is built along them
         beard_groom.collide(pts, frame.skin_bvh, np.concatenate([[0.0], np.full(k - 1, cfg["gap_m"])]))
-        rad = np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], n)[:, None]
+        rad = (np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], n)[:, None]
+               * lc.get("radius_scale", 1.0))
         mel = np.clip(cfg["melanin"] + rng.normal(0, 0.01, n), 0, 1)
         red = np.full(n, cfg["redness"])
         all_pts.append(pts)
