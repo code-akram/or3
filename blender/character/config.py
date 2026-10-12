@@ -193,50 +193,90 @@ DEFAULTS = {
             "specular": 0.1,
             "anisotropy": 0.3,
         },
-        # Short full beard as shell-textured hair (hair_beard.py + facial_hair.py).
+        # Short full beard: strand groom (hero, hair curves in hero_only) and
+        # game shells + cards baked from it (hair_beard.py, beard_groom.py,
+        # beard_bake.py). Lengths/densities: bench/m1/v2/direction.md §2 C.
         "beard": {
             "seed": 11,
+            # Region (landmark lines in profile; see hair_beard.landmarks).
             "sideburn_back_m": 0.004,  # behind the front of the ear
             "sideburn_up_m": -0.004,   # cheek line start above ear centre
-            "moustache_m": 0.012,      # cheek line end above the upper lip (meets the moustache top)
-            "jaw_drop_m": 0.055,       # neckline start below ear centre
+            "corner_back_m": 0.022,    # cheek line end: behind the lip front
+            "moustache_m": 0.010,      # cheek line end above the upper lip
             "cheek_dip_m": 0.02,       # cheek line sag under the cheekbone
-            "throat_back_m": 0.05,     # neckline end behind the chin front
-            "under_chin_m": 0.008,     # neckline end below the chin (clears the shirt collar)
+            "jaw_drop_m": 0.06,        # neckline start below ear centre
+            "neck_back_m": 0.012,      # ... behind the ear front
+            "throat_back_m": 0.045,    # neckline end behind the chin front
+            "under_chin_m": 0.018,     # neckline end below the chin
             "moustache_height_m": 0.012,  # moustache top over the upper lip
             "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare
-            "moustache_margin_m": 0.003,  # stubble band above the moustache (under the nose)
-            "margin_m": 0.009,         # patch reaches this far past the cheek line (stubble band)
-            "neck_margin_m": 0.009,    # ... past the neckline
-            "back_margin_m": 0.006,    # ... behind the sideburn (under the hair)
-            "fade_m": 0.008,           # full density this far inside the lines
-            "density_pow": 2.0,        # band density ~ x^k: sparse stubble at the outer edge
-            "stubble_short": 0.25,     # hair length factor at the outer edge of the band
-            "line_wobble_m": 0.004,    # low-frequency irregularity of the beard lines
+            # Patch reaches this far past each line (cheek, neck, back,
+            # moustache top): the stubble band.
+            "margin_m": 0.014, "neck_margin_m": 0.03, "back_margin_m": 0.006,
+            "moustache_margin_m": 0.003,
+            # Density across the line: 1 at in_m inside, line_density at the
+            # line, 0 at out_m outside; stubble from stubble_in_m inside to
+            # the patch edge.
+            "fade": {"in_m": 0.010, "out_m": 0.004, "neck_in_m": 0.014, "neck_out_m": 0.006,
+                     "line_density": 0.15, "pow": 1.6, "line_length": 0.35,
+                     "stubble_in_m": 0.004},
+            "line_wobble_m": 0.004,
             "edge_smooth_iters": 6,
-            "base_tris": 700,          # patch decimated to this before the shells stack
-            # Hair length (shell stack height) by area.
-            "length": {"cheek_m": 0.007, "jaw_m": 0.010, "chin_extra_m": 0.006,
-                       "chin_radius_m": 0.03, "moustache_m": 0.008, "neck_m": 0.008,
-                       "lip_near_m": 0.008, "lip_scale": 0.8},  # shorter toward the lips
-            # Comb direction components (world, before projecting onto the skin).
+            # Hair length by zone (direction §2 C: cheeks 6-8, jaw 9-11,
+            # chin 12-15, soul patch 10, moustache 8-10 over the lip by 2 mm).
+            "length": {"cheek_m": 0.0075, "jaw_m": 0.0105, "chin_extra_m": 0.0045,
+                       "chin_radius_m": 0.03, "soul_m": 0.010, "soul_radius_m": 0.008,
+                       "moustache_m": 0.0095, "lip_overlap_m": 0.002, "neck_m": 0.009},
             "comb": {"cheek_back": 0.3, "chin_forward": 0.3, "under_jaw_back": 0.6,
-                     "moustache_down": 0.9, "moustache_side": 0.7, "philtrum_x_m": 0.005,
-                     "smooth_iters": 2},
-            "uv": {"max_angle_deg": 115, "pad": 0.03},
-            "shells": {
-                "layers": 20, "atlas_cols": 4, "tile": [1024, 512],
-                "lean": 1.0,           # how far hairs bend over along the comb (0 = straight out)
-                # Hair field (facial_hair.atlas_image), in tile pixels (~0.33 mm).
-                "texture": {"spacing_px": 3.0, "density": 1.0, "radius_px": 1.5, "taper": 0.6,
-                            "short_thin": 0.4,      # a hair at zero length is this x thick
-                            "elongate": 1.7,        # dash length / width along the hair's bend
-                            "len_min": 0.35, "value_sigma": 0.45, "base_value": 0.85,
-                            "root_shade": 0.45,     # darker toward the root (self-shadow)
-                            "drift_px": 6.0, "comb_drift_px": 4.0,  # per-hair sideways bend
-                            "color": "#2a1d14"},
-                "roughness": 0.75, "specular": 0.2,
-            },
+                     "moustache_down": 1.0, "moustache_side": 0.6, "philtrum_x_m": 0.006,
+                     "smooth_iters": 3},
+            # Strand growth (beard_groom.grow): exit angle over the skin
+            # relaxing to the tip angle, yaw / curl spread, curly share.
+            "groom": {"per_cm2": 200, "points": 8, "root_sink_m": 0.0005,
+                      "elev0": 38, "elev1": 4, "elev1_under": 0, "elev_sigma": 10,
+                      "elev0_moustache": 22, "elev1_moustache": -25,
+                      "yaw_sigma": 15, "curl_sigma": 12, "curl_share": 0.25,
+                      "curl_radius_m": [0.008, 0.015], "curl_lift": 0.15,
+                      "len_min": 0.7, "bend_pow": 1.0,
+                      "gap_m": [0.0002, 0.0004],  # clearance over the skin, root -> tip
+                      "clump_base": 0.25, "clump_moustache": 0.35, "clump_chin": 0.25,
+                      "frizz_base": 1.0},
+            "stubble": {"per_cm2": 60, "points": 3, "length_m": [0.001, 0.002],
+                        "elev0": 35, "elev1": 20, "frizz": 0.3, "radius_scale": 0.8},
+            # Tone: melanin / redness per strand (hero), with the game
+            # palette interpolated by melanin (swatches, sRGB).
+            "tone": {"melanin": 0.9, "redness": 0.6, "sigma": 0.04,
+                     "warm_share": 0.12, "warm": [0.72, 0.75],
+                     "grey_share": 0.025, "grey_extra": 0.05, "grey": [0.2, 0.15],
+                     "swatches": [[0.2, "#a29d96"], [0.72, "#6a4a32"], [0.9, "#3a2a1f"],
+                                  [1.0, "#251a13"]],
+                     "value_sigma": 0.3},
+            "hero": {"radius_m": [0.00004, 0.00007], "tip_radius": 0.35,
+                     "material": {"roughness": 0.32, "radial_roughness": 0.35, "coat": 0.1,
+                                  "root_dark": 0.06},
+                     "clump": {"shape": 0.4, "tip_spread": 0.0004, "guide_distance_m": 0.004},
+                     "frizz": {"distance_m": 0.0007, "shape": 0.6}},
+            # Game shells: the decimated patch stacked along the normal at
+            # t_k x the local groom canopy; tile k is the groom slice.
+            "shells": {"layers": 14, "t_pow": 1.3, "base_tris": 420, "lift_m": 0.0,
+                       "atlas_cols": 2, "tile": [1024, 512], "px_per_m": 3000.0,
+                       "radius_scale": 1.0, "min_radius_px": 0.45,
+                       "canopy_radius_m": 0.005, "canopy_pct": 80, "canopy_floor_m": 0.0006,
+                       "shade": {"root": 0.6, "full_at": 0.8},
+                       "uv": {"max_angle_deg": 120, "pad": 0.02, "origin_back_m": 0.0,
+                              "origin_up_m": 0.0},
+                       "roughness": 0.6, "specular": 0.25},
+            # Silhouette cards along groom clumps (beard_bake.build_cards).
+            "cards": {"count": 180, "spacing_m": 0.0035, "clump_radius_m": 0.002,
+                      "min_members": 4, "min_len_m": 0.005, "segments": 3,
+                      "tip_extend": 0.08, "width_scale": 1.3, "taper": 0.5,
+                      "min_halfwidth_m": 0.0008, "max_halfwidth_m": 0.0025,
+                      "jaw_nz": [-0.85, 0.05], "moustache_edge_m": 0.006,
+                      "roll_jaw_deg": 80, "roll_moustache_deg": 35, "roll_chin_deg": 50,
+                      "roll_sigma_deg": 15,
+                      "cell": [48, 128], "atlas_px": [2048, 1024], "px_per_m": 11000.0,
+                      "radius_scale": 1.0, "min_radius_px": 0.6, "root_shade": 0.55,
+                      "roughness": 0.6, "specular": 0.25},
         },
         # Eyebrows as shells (brows.py), replacing the MPFB eyebrow proxy.
         "brows": {
