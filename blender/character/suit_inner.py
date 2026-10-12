@@ -268,7 +268,7 @@ class Inner:
                                                 (0.80, S["cuff_reveal_m"] - 0.002))):
                 pts = [c + (p - c) * scale + T * along for p in pts16]
                 g.add_row(pts + [pts[0].copy()], [(0.3 * i / n, 0.02 * k) for i in range(n + 1)])
-            g.fill(G.uv, G.tag, 4, flip=(side == "r"))
+            g.fill(G.uv, G.tag, 4, flip=True)   # the sleeve end's column order on both sides: faces out
             for row in g.rows:
                 G.weight(row, sb.ARM[side])
             G.mark_row(4, g, 2, "edge", inside_sign=-1.0, stitch_in_m=0.004)

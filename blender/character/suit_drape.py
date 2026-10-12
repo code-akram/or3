@@ -64,7 +64,8 @@ DEFAULTS = {
     "button_shrink": 0.025,     # waist band shrink at the fastened button (X pull lines)
     "highpass_m": 0.05,         # keep fold wavelengths below this
     "clamp_m": 0.004,           # soft clamp of |h|
-    "base_gain": 0.35,          # outside the fold regions
+    "base_gain": 0.1,           # outside the fold regions (0.35 printed the sim grid as a windowpane check)
+    "denoise_iters": 4,         # graph smoothing of the high-passed height (grid-aligned sim ripples)
     # (landmark, radius m, gain); landmarks in suit_drape.landmarks()
     "regions": {"elbow": [0.075, 1.0], "armpit": [0.08, 0.9], "lower_back": [0.11, 0.8],
                 "crotch": [0.09, 1.0], "knee_back": [0.09, 1.0], "break": [0.08, 1.0],
@@ -522,7 +523,7 @@ def _measure(D, s, ob, rest, prev, cloth, skin, skin_n, body_col, lm):
     low = smooth_graph(h, E, n, iters)
     hp = h - low
     # light de-noise: the shortest wavelengths are sim noise, not folds
-    hp = smooth_graph(hp, E, n, 2)
+    hp = smooth_graph(hp, E, n, D["denoise_iters"])
     # regions are places on the garment: rest positions against the rest-pose
     # landmarks (the posed knee and foot move several cm away from them)
     gain, region_px = region_mask(np.asarray(rest, np.float64), skin_n.astype(np.float64), lm,

@@ -901,7 +901,11 @@ class Jacket:
         C, T, up, sd = axis(L)
         lip = [v.co + (C - v.co).normalized() * 0.004 - T * 0.003 for v in last]
         g.add_row(lip, [(uv[0], uv[1] + 0.005) for uv in g.uvs[-1]])
-        g.fill(G.uv, G.tag, TAG[f"sleeve_{side}"], flip=(side == "r"))
+        # columns turn the same way about each arm's own axis (sd = -T x up)
+        # and rows run along it, so both sleeves need the same winding for the
+        # faces to point out (the left one pointed in: F's tuck then pushed
+        # the shirt cuff out through it)
+        g.fill(G.uv, G.tag, TAG[f"sleeve_{side}"], flip=True)
         bones = sb.ARM[side] | {f"clavicle_{side}", "spine_03"}
         for row in g.rows:
             G.weight(row, bones)
