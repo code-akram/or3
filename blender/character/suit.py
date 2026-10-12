@@ -30,27 +30,37 @@ DEFAULTS = {
     "tailor": True,             # False: stock shell, as in spike 1
     "button_stance": 0.615,     # fastening button z / stature (look-spec: 0.61 +- 0.01)
     "jacket": {
+        # hem: "seat" = just covering the seat, hem_below_seat_m under the
+        # gluteal fold (suit_jacket.seat_fold; on this figure that also matches
+        # the knuckle rule); "supra" = hem_to_suprasternale x suprasternale z
+        # (the half neck-to-floor rule, which reads as a coat on long legs)
+        "hem_mode": "seat", "hem_below_seat_m": 0.025,
         "hem_to_suprasternale": 0.50,
         "button_gap_m": 0.11,
         "columns": 72,
-        "row_skirt_m": 0.025, "row_body_m": 0.02, "row_top_m": 0.012,
+        "row_skirt_m": 0.018, "row_body_m": 0.02, "row_top_m": 0.012,
         "slice_band_m": 0.012,
         "canvas_limit_m": 0.014,
         "uv_circ_m": 1.08,
         # radial allowances over the body (metres)
         "ease": {"chest": 0.024, "back": 0.014, "side": 0.020,
                  "waist_front": 0.016, "waist_back": 0.013, "waist_side": 0.014,
-                 "hip": 0.018, "flare": 0.010},
+                 "hip": 0.018, "flare": 0.005},
         "shoulder": {"over_body_m": 0.012, "back_neck_m": -0.022, "neck_point_drop_m": 0.012,
                      "depth_top": 0.78, "clear_m": 0.010, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
                      "neck_half_m": 0.072, "neck_ease_m": 0.016, "neck_curve_pow": 0.8,
-                     "neck_clear_m": 0.012, "neck_blend_frac": 0.12, "seam_below_band_m": 0.010, "gorge_cols": 6, "band_clear_m": 0.004,
+                     "neck_clear_m": 0.005, "neck_band_lo_m": 0.0, "neck_band_hi_m": 0.006, "neck_lift_clear_m": 0.005, "neck_blend_frac": 0.12, "seam_below_band_m": 0.010, "gorge_cols": 6, "band_clear_m": 0.004,
                      "armpit_below_joint_m": 0.115, "bulge_pow": 0.7, "cap_below_joint_m": 0.02},
         "overlap_m": 0.02, "underlap_tuck_m": 0.003, "front_cut_m": 0.03,
-        "quarter_cut_m": 0.025, "quarter_height_m": 0.12,
+        "quarter_cut_m": 0.035, "quarter_height_m": 0.10,
         "skirt_leg_weight": 0.5,
+        # lapel: gorge_below_neck_m places the top ring at the front, the
+        # gorge seam sits gorge_drop_m lower on the chest (the collar's front
+        # end lies on the roll line between them); roll 16 mm, a rounded edge
+        # edge_m thick, the edge stitch stitch_in_m in from it
         "lapel": {"width_m": 0.080, "width_pow": 2.2, "swing_u": 0.10,
-                  "gorge_below_neck_m": 0.032, "roll_m": 0.012, "edge_m": 0.003,
+                  "gorge_below_neck_m": 0.032, "gorge_drop_m": 0.045, "stitch_in_m": 0.006,
+                  "roll_m": 0.016, "edge_m": 0.0035,
                   "tip_rise_m": 0.010, "rise_h_m": 0.05, "tip_lift_m": 0.0, "min_row_m": 0.006},
         # collar (suit_neck): the fold sits reveal_* under the shirt band's top;
         # the front end lies on the lapel's top edge to the notch, then turns
@@ -58,16 +68,16 @@ DEFAULTS = {
         "collar": {"reveal_back_m": 0.014, "reveal_side_m": 0.014, "stand_min_m": 0.006,
                    "shirt_clear_m": 0.003, "body_clear_m": 0.012, "thickness_m": 0.004,
                    "fall_back_m": 0.040, "fall_side_m": 0.042, "seam_cover_m": 0.008,
-                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09,
+                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.2, "drop_m": 0.012,
                    "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015},
-        "vents": "double", "vent_height_m": 0.24, "vent_x_frac": 0.55,
+        "vents": "double", "vent_height_m": 0.20, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         "sleeve": {"columns": 28, "row_m": 0.016, "band_m": 0.012, "ease_m": 0.010,
                    "top_r_m": 0.066, "cuff_r_m": 0.046, "past_wrist_m": 0.005,
                    "rope_m": 0.0035, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
                    "elbow_blend_m": 0.04, "uv_circ_m": 0.36},
         "pockets": {"flap_x0_m": 0.07, "flap_w_m": 0.16, "flap_h_m": 0.06,
-                    "flap_below_button_m": 0.075,
+                    "flap_below_button_m": 0.10,
                     "welt": {"from_roll_m": 0.095, "w_m": 0.105, "h_m": 0.024,
                              "above_button_m": 0.235, "slant": 0.22}},
     },
@@ -125,8 +135,8 @@ DEFAULTS = {
         "wool": {"albedo": [0.020, 0.021, 0.025], "rough": 0.68, "sheen": 0.22, "sheen_rough": 0.4,
                  "sheen_tint": [0.9, 0.9, 1.0], "spec": 0.15},
         "shirt": {"albedo": 0.72, "rough": 0.5, "sheen": 0.2, "sheen_rough": 0.5, "spec": 0.4},
-        "silk": {"albedo": 0.015, "rough": 0.35, "sheen": 0.1, "sheen_rough": 0.3, "spec": 0.5,
-                 "aniso": 0.5},
+        "silk": {"albedo": 0.015, "rough": 0.45, "sheen": 0.15, "sheen_rough": 0.35, "spec": 0.45,
+                 "aniso": 0.3},
         "button": {"albedo": 0.012, "rough": 0.25, "spec": 0.5, "coat": 0.4, "coat_rough": 0.12},
         "leather": [0.012, 0.28, 0.0],   # polished black calf
         "sole": [0.02, 0.65, 0.0],
@@ -134,7 +144,7 @@ DEFAULTS = {
     # per-pixel wool surface (suit_textures.surface_maps): fibre noise in
     # roughness and albedo, cavity and fold occlusion, Kuwahara r (painterly
     # albedo, direction.md §4), roughness offsets per "<part>:<panel tag>"
-    "surface": {"seed": 5, "rough_noise": 0.06, "albedo_noise": 0.05, "cavity": 0.35,
+    "surface": {"seed": 5, "rough_noise": 0.06, "albedo_noise": 0.015, "cavity": 0.35,
                 "fold_ao": 0.55, "ao_in_albedo": 0.35, "kuwahara": 1,
                 "panel_rough": {"suit_jacket:2": -0.10, "suit_jacket:3": -0.05}},
     "textures": {"enabled": True, "wool_px": 2048, "shirt_px": 1024, "tie_px": 512,

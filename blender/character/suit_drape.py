@@ -47,6 +47,10 @@ from mathutils.bvhtree import BVHTree
 DEFAULTS = {
     "enabled": True,
     "cache": True,
+    # a cached drape is reused while no garment vertex has moved more than this
+    # since it was simulated (the folds ride on the UVs, so small body or fit
+    # changes keep them); topology, pins and options are part of the key
+    "cache_tol_m": 0.015,
     "parts": ["jacket", "trousers"],
     "level": 2,                 # simple subdivision levels of the sim mesh
     "frames": 36, "ramp": 22,   # P0 -> P1 over `ramp` frames, then hold
@@ -327,7 +331,6 @@ def run(b, D, garments, body, colliders=(), extra_landmarks=None):
 
     # sim meshes and their cache keys
     sims = {}
-    body_key = _mesh_key(body)
     for key, (g, pin_fn) in garments.items():
         if key not in D["parts"]:
             continue
@@ -348,14 +351,25 @@ def run(b, D, garments, body, colliders=(), extra_landmarks=None):
         res = pin_fn(co, panel)
         pin, shrink = res[0], res[1]
         stiff = res[2] if len(res) > 2 else np.zeros(len(co))
-        k = _hash(_mesh_key(g), body_key, pin.astype(np.float32), shrink.astype(np.float32),
-                  stiff.astype(np.float32),
-                  {k: D[k] for k in D if k not in ("enabled", "cache")}, [str(x) for x in lm.items()])
+        gco, topo = _mesh_key(g)
+        k = _hash(key, topo, np.round(pin, 1).astype(np.float32), np.round(shrink, 1).astype(np.float32),
+                  np.round(stiff, 1).astype(np.float32),
+                  {k: D[k] for k in D if k not in ("enabled", "cache", "cache_tol_m")}, sorted(lm))
         sims[key] = {"g": g, "ob": ob, "pin": pin, "shrink": shrink, "stiff": stiff, "key": k,
-                     "panel": panel}
+                     "panel": panel, "gco": gco}
     root = cache_dir(b)
-    todo = [k for k, s in sims.items()
-            if not (D["cache"] and os.path.exists(os.path.join(root, s["key"] + ".npz")))]
+
+    def hit(s):
+        path = os.path.join(root, s["key"] + ".npz")
+        if not (D["cache"] and os.path.exists(path)):
+            return False
+        z = np.load(path, allow_pickle=False)
+        if "gco" not in z or z["gco"].shape != s["gco"].shape:
+            return False
+        moved = float(np.abs(z["gco"] - s["gco"]).max())
+        s["cache_moved_m"] = round(moved, 4)
+        return moved <= D["cache_tol_m"]
+    todo = [k for k, s in sims.items() if not hit(s)]
     stats["cache_dir"] = root
     stats["cached"] = sorted(set(sims) - set(todo))
     if todo:
@@ -366,6 +380,7 @@ def run(b, D, garments, body, colliders=(), extra_landmarks=None):
         if os.path.exists(path):
             z = np.load(path, allow_pickle=False)
             st = json.loads(str(z["stats"]))
+            st["cache_moved_m"] = s.get("cache_moved_m", 0.0)
             stats[key] = st
             if st.get("gate_ok"):
                 coll.objects.unlink(s["ob"])
@@ -482,7 +497,7 @@ def _simulate(b, D, sims, arm, body, colliders, coll, lm, stats):
                                     skin=skin_co, rest=rest[key], h=h, pin=s["pin"], hp=hp_raw)
             if st["gate_ok"] or attempts[key] >= D["gate"]["retries"]:
                 path = os.path.join(cache_dir(b), s["key"] + ".npz")
-                np.savez_compressed(path, h=h.astype(np.float32), stats=json.dumps(st))
+                np.savez_compressed(path, h=h.astype(np.float32), gco=s["gco"], stats=json.dumps(st))
             else:
                 attempts[key] += 1
                 retry[key] = s

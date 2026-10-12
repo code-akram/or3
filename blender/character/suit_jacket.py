@@ -40,12 +40,22 @@ class Jacket:
         self.N = J["columns"]
         self.m = {}
         sh = J["shoulder"]
-        self.z_h = J["hem_to_suprasternale"] * supra
+        # hem: just covering the seat (the gluteal fold - cover), or the old
+        # "half the neck-to-floor distance" rule (hem_to_suprasternale)
+        self.seat = seat_fold(body)
+        if J.get("hem_mode", "seat") == "seat":
+            self.z_h = self.seat["fold_z"] - J["hem_below_seat_m"]
+        else:
+            self.z_h = J["hem_to_suprasternale"] * supra
         neck = body.joint("neck_01").z
         self.z_nb = neck + sh["back_neck_m"]          # back collar seam
         self.z_np = self.z_nb - sh["neck_point_drop_m"]  # neck point (shoulder seam at the neck)
-        self.z_g = self.z_np - J["lapel"]["gorge_below_neck_m"]  # gorge / shoulder ring
+        self.z_g = self.z_np - J["lapel"]["gorge_below_neck_m"]  # top ring (shoulder ring) at the front
         self.z_sh = self.z_g
+        # the gorge seam (the lapel's top edge at the roll line) sits lower, on
+        # the chest; between it and the top ring the collar's front end lies on
+        # the roll line (suit_neck.build_jacket_collar)
+        self.z_gl = self.z_g - J["lapel"].get("gorge_drop_m", 0.0)
         self.x_n = sh["neck_half_m"]
         js = body.joint("upperarm_l")
         self.z_pit = js.z - sh["armpit_below_joint_m"]
@@ -73,7 +83,10 @@ class Jacket:
             lift = smoothstep((z - self.z_b) / J["front_cut_m"])
             x = lerp(-ov if left else ov * 0.75, x, lift) if left else lerp(-ov * 0.75, -x, lift)
             return x
-        cut = J["quarter_cut_m"] * smoothstep((self.z_h + J["quarter_height_m"] - z) / J["quarter_height_m"])
+        # rounded quarters: a circular arc that leaves the edge vertically and
+        # meets the hem tangentially (no square corner)
+        t = min(1.0, max(0.0, (self.z_h + J["quarter_height_m"] - z) / J["quarter_height_m"]))
+        cut = J["quarter_cut_m"] * (1.0 - math.sqrt(max(0.0, 1.0 - t * t)))
         return (-ov + cut) if left else (ov * 0.75 - cut)
 
     # --- slices -------------------------------------------------------------------------------
@@ -122,7 +135,11 @@ class Jacket:
             z += J["row_top_m"]
         zs.append(self.z_sh)
         # make sure a row sits at the button and one just above it (the lapel start)
-        zs = sorted(set(round(x, 5) for x in zs + [self.z_b, self.z_b + 0.012]))
+        extra = [self.z_b, self.z_b + 0.012]
+        if self.z_gl < self.z_sh - 0.006:   # a row at the gorge seam
+            zs = [x for x in zs if abs(x - self.z_gl) > 0.004]
+            extra.append(self.z_gl)
+        zs = sorted(set(round(x, 5) for x in zs + extra))
         return zs
 
     def build_rings(self):
@@ -279,8 +296,68 @@ class Jacket:
                         "raw": ring["raw"], "radii": ring["radii"], "ease": ring["ease"],
                         "a0": ring["a0"], "a1": ring["a1"], "pts": pts, "yoke": True})
         rows = rows[:-1] + mid + [ring]
+        self.m["canvas_bridged_verts"] = self.bridge_columns(rows)
+        if __import__("os").environ.get("SUIT_JACKET_DEBUG"):
+            for i in (1, 4, 8, 12, 16, 20):
+                print(f"[jk] col {i:2d}: " + " ".join(f"({r['pts'][i].x:.3f},{r['pts'][i].y:.3f},{r['pts'][i].z:.3f})"
+                                                    for r in rows if r["z"] > self.z_pit - 0.04))
         self.rings = rows
         return rows
+
+    def bridge_columns(self, rows):
+        """The chest and back canvas up the columns: from below the armpit to
+        the top ring each front and back column's profile (radius from the
+        body's vertical axis against z) is made convex (an upper hull), so the
+        cloth bridges the hollow above the collarbone instead of dipping into
+        it and leaving a shelf under the shoulder line; then 1-2-1 smoothed.
+        Side columns (the scye) are left alone. Returns the count moved."""
+        sh = self.J["shoulder"]
+        z0 = self.z_pit - sh.get("bridge_below_pit_m", 0.04)
+        ks = [k for k, r in enumerate(rows) if r["z"] >= z0]
+        if len(ks) < 4:
+            return 0
+        cy = rows[ks[0]]["cy"]
+        moved = 0
+        for i in range(self.N + 1):
+            pts = [rows[k]["pts"][i] for k in ks]
+            d0 = Vector((pts[0].x, pts[0].y - cy, 0.0))
+            if d0.length < 1e-6:
+                continue
+            w = smoothstep((abs(d0.normalized().y) - 0.45) / 0.3)
+            if w <= 0:
+                continue
+            dirs = [Vector((p.x, p.y - cy, 0.0)) for p in pts]
+            r = [d.length for d in dirs]
+            z = [p.z for p in pts]
+            # upper hull of (z, r): every interior point at least on the chord
+            # of its hull neighbours (endpoints fixed)
+            hull = [0]
+            for k in range(1, len(pts)):
+                while len(hull) >= 2:
+                    a, b = hull[-2], hull[-1]
+                    # b under the chord a -> k: drop it
+                    t = (z[b] - z[a]) / max(z[k] - z[a], 1e-9)
+                    if r[b] <= r[a] + (r[k] - r[a]) * t:
+                        hull.pop()
+                    else:
+                        break
+                hull.append(k)
+            rn = list(r)
+            for a, b in zip(hull, hull[1:]):
+                for k in range(a + 1, b):
+                    t = (z[k] - z[a]) / max(z[b] - z[a], 1e-9)
+                    rn[k] = max(r[k], r[a] + (r[b] - r[a]) * t)
+            for _ in range(2):
+                rs = list(rn)
+                for k in range(1, len(rn) - 1):
+                    rn[k] = max(rs[k], 0.25 * rs[k - 1] + 0.5 * rs[k] + 0.25 * rs[k + 1])
+            for k, p in enumerate(pts):
+                dr = (rn[k] - r[k]) * w
+                if dr > 1e-5 and dirs[k].length > 1e-6:
+                    q = p + dirs[k].normalized() * dr
+                    p.x, p.y = q.x, q.y
+                    moved += 1
+        return moved
 
     def neckline(self):
         """Top row: the collar seam, gorge points at the front rising to the back."""
@@ -333,7 +410,7 @@ class Jacket:
                 a, z, r_old = nf.polar(pts[i])
                 if it == 0:   # up to just under the shirt band's base (the neck's root)
                     z = lerp(z, max(z, nf.zb(a) - sh["seam_below_band_m"]), w)
-                r_req = max(nf.r_body_max(a, z - 0.004, z + 0.012) + sh["neck_clear_m"],
+                r_req = max(nf.r_body_max(a, z - sh.get("neck_band_lo_m", 0.004), z + sh.get("neck_band_hi_m", 0.012)) + sh["neck_clear_m"],
                             nf.shirt_outer(a, z - 0.012, z + 0.006) + 0.004,
                             # and outside the band's base (the stand rises from here)
                             nf.shirt_outer(a, nf.zb(a) - 0.002, nf.zb(a) + 0.006) + sh.get("band_clear_m", 0.004))
@@ -343,7 +420,7 @@ class Jacket:
                     r_new = max(r_old, lerp(r_old, r_req, w))
                 pts[i] = nf.point(a, z, r_new)
             # the collar seam rides over the trapezius where it rises above the neck
-            lifted += sb.lift_onto_body(tree, pts[1:-1], sh["clear_m"], above=0.15)
+            lifted += sb.lift_onto_body(tree, pts[1:-1], sh.get("neck_lift_clear_m", sh["clear_m"]), above=sh.get("neck_lift_above_m", 0.04))
         for _ in range(2):   # smooth the heights along the seam (the lift steps)
             zs = [p.z for p in pts]
             for i in range(2, N - 1):
@@ -364,6 +441,28 @@ class Jacket:
             v = r["z"] - self.z_h
             g.add_row(r["pts"], [(C * i / N, v) for i in range(N + 1)])
         self.neckline()
+        # the strip from the top ring to the collar seam spans the trapezius:
+        # intermediate rows, each kept clear of the body, so it cannot cut
+        # through the quads' middles
+        ring = self.rings[-1]["pts"]
+        tree = self.body.bvh()
+        clear = self.J["shoulder"].get("neck_lift_clear_m", 0.005)
+        K = self.J["shoulder"].get("neck_rows", 3)
+        pushed = 0
+        for k in range(1, K):
+            t = k / K
+            pts = [a.lerp(b, t) for a, b in zip(ring, self.neck_pts)]
+            for i in range(1, N):
+                p = pts[i]
+                hit = tree.find_nearest(p, 0.05)
+                if hit[0] is None:
+                    continue
+                d = (p - hit[0]).dot(hit[1])
+                if d < clear:
+                    pts[i] = p + hit[1] * (clear - d)
+                    pushed += 1
+            g.add_row(pts, [(C * i / N, pts[i].z - self.z_h) for i in range(N + 1)])
+        self.m["neck_strip_pushed"] = pushed
         g.add_row(self.neck_pts, [(C * i / N, self.neck_pts[i].z - self.z_h) for i in range(N + 1)])
         g.fill(G.uv, G.tag, TAG["block"])
         self.block = g
@@ -432,7 +531,7 @@ class Jacket:
         N = self.N
         # the cap ring and the yoke rows have another cross-section (narrowed,
         # draped): arc lengths along them do not match the rows below
-        rows_k = [k for k, r in enumerate(self.rings) if self.z_b - 1e-6 <= r["z"] <= self.z_g + 1e-6
+        rows_k = [k for k, r in enumerate(self.rings) if self.z_b - 1e-6 <= r["z"] <= self.z_gl + 1e-6
                   and not r.get("cap") and not r.get("yoke")]
         # rows closer than min_row_m on the roll line (the yoke rows bunch under
         # the gorge) would stack the lapel's top into shelves: skip them (the
@@ -451,7 +550,7 @@ class Jacket:
             col = 0 if left else N
             for k in rows_k:
                 z = self.rings[k]["z"]
-                u = (z - self.z_b) / (self.z_g - self.z_b)
+                u = (z - self.z_b) / (self.z_gl - self.z_b)
                 w = J["width_m"] * (1 - (1 - u) ** J["width_pow"])
                 s_e = lerp(-self.J["overlap_m"] * 0.8, w, smoothstep(u / J["swing_u"]))
                 h = J["roll_m"] * (0.3 + 0.7 * math.sin(math.pi * u) ** 0.7)
@@ -460,8 +559,31 @@ class Jacket:
                 # the top edge (gorge line) tilts up toward the lapel point over
                 # the last rows, so the point sits above the gorge without a wall
                 zr = self.block.rows[k][0].co.z
-                rise = J["tip_rise_m"] * smoothstep((zr - (self.z_g - J["rise_h_m"])) / J["rise_h_m"])
+                rise = J["tip_rise_m"] * smoothstep((zr - (self.z_gl - J["rise_h_m"])) / J["rise_h_m"])
                 self.lapel_row(g, k, col, left, s_e, h, e, u, rise=rise, tip=(k == rows_k[-1]))
+            k_top = len(g.rows) - 1
+            setattr(self, "lapel_top_l" if left else "lapel_top_r", list(g.rows[k_top]))
+            # the top edge (the notch's lower jaw) gets the same rounded edge:
+            # two lip rows turning over and back under toward the chest
+            top, below = g.rows[k_top], g.rows[k_top - 1]
+            r_e = min(0.0012, 0.4 * J["edge_m"])
+            for frac, dn in ((0.9, 0.5), (0.25, 0.92)):
+                pts, uvs = [], []
+                for i, v in enumerate(top):
+                    if i == 0:
+                        pts.append(None)
+                        uvs.append(g.uvs[-1][0])
+                        continue
+                    along = v.co - below[i].co
+                    along = along.normalized() if along.length > 1e-6 else Vector((0, 0, 1))
+                    hgt = self._lap_hh[i - 1]
+                    n = self._lap_n[i - 1]
+                    q = v.co + along * (r_e * frac) - n * (min(hgt, 0.006) * dn)
+                    pts.append(q)
+                    uu, vv = g.uvs[-1][i]
+                    uvs.append((uu, vv + (q - (g.rows[-1][i].co)).length))
+                row = [top[0]] + [g.bm.verts.new(p) for p in pts[1:]]
+                g.add_shared_row(row, uvs)
             g.fill(G.uv, G.tag, TAG["lapel"], flip=not left)
             for row in g.rows[1:]:
                 for v in row[1:]:
@@ -469,9 +591,11 @@ class Jacket:
             setattr(self, "lapel_l" if left else "lapel_r", g)
             # edge stitch along the lapel edge (column 5) and its top edge; the
             # left lapel carries the buttonhole
-            full = [k for k, row in enumerate(g.rows) if len(set(id(v) for v in row)) > 1]
-            G.mark_column(TAG["lapel"], g, 5, "edge", rows=full, inside_sign=-1.0)
-            G.mark_row(TAG["lapel"], g, len(g.rows) - 1, "edge", cols=range(1, 6), inside_sign=-1.0)
+            full = [k for k, row in enumerate(g.rows[:k_top + 1]) if len(set(id(v) for v in row)) > 1]
+            st = J.get("stitch_in_m", 0.006)
+            G.mark_column(TAG["lapel"], g, 5, "edge", rows=full, inside_sign=-1.0, stitch_in_m=st - 0.004)
+            G.mark_row(TAG["lapel"], g, k_top, "edge", cols=range(1, 6), inside_sign=-1.0,
+                       stitch_in_m=st - r_e)
             if left:
                 k = full[int(len(full) * 0.8)]
                 s_e = g.uvs[k][5][0] - 0.01
@@ -481,22 +605,37 @@ class Jacket:
         root = self.block.rows[k][col]
         if s_e <= 0.004:
             # collapsed row at the start: everything on the roll line
-            pts = [root] * 7
-            g.add_shared_row(pts, [(0.0, u * 0.4)] * 7)
+            pts = [root] * 10
+            g.add_shared_row(pts, [(0.0, u * 0.4)] * 10)
             return
+        # the cross-section: the roll (a soft fold over the roll line, h
+        # high), the face lying down toward the edge, then a pressed-but-soft
+        # edge of thickness e: a bevel onto the rounded edge and back under
+        # (columns 5..9; the edge stitch runs stitch_in_m inside column 5)
+        r_e = min(0.0012, 0.4 * e)
         spec = [(-0.5 * h, 0.6 * h), (0.25 * h, h), (0.35 * s_e, 0.45 * h + e),
-                (0.7 * s_e, 0.15 * h + e), (s_e, e), (s_e - 0.003, 0.0005)]
+                (0.7 * s_e, 0.15 * h + e), (s_e - 0.004, e),
+                (s_e - r_e, e - 0.25 * r_e), (s_e, 0.5 * e), (s_e - r_e, 0.12 * e), (s_e - 0.0035, 0.0004)]
         verts = [root]
         uvs = [(0.0, u * 0.4)]
-        for s, hh in spec:
+        prev = None
+        self._lap_n, self._lap_hh = [], []
+        for j, (s, hh) in enumerate(spec):
             p, n, t = self.surface(k, s, left)
+            self._lap_n.append(n)
+            self._lap_hh.append(hh)
             q = p + n * hh
             if rise:
                 q.z += rise * max(0.0, s) / max(s_e, 1e-6)
             if tip and s > 0:
                 q += n * (self.J["lapel"]["tip_lift_m"] * s / s_e)  # the point stands off the chest
             verts.append(g.bm.verts.new(q))
-            uvs.append((max(s, 0.0) + 0.01, u * 0.4 + rise))
+            if j <= 4:
+                uu = max(s, 0.0) + 0.01
+            else:   # round the edge: arc length on (no folded-back UVs)
+                uu = uvs[-1][0] + (q - prev).length
+            uvs.append((uu, u * 0.4 + rise))
+            prev = q
         g.add_shared_row(verts, uvs)
 
     # --- collar ------------------------------------------------------------------------------
@@ -807,8 +946,11 @@ class Jacket:
         m = dict(self.m)
         m["hem_z"] = round(self.z_h, 4)
         m["hem_to_suprasternale"] = round(self.z_h / self.supra, 4)
+        m["seat"] = self.seat
         m["button_stance_to_stature"] = round(self.z_b / self.stature, 4)
-        m["gorge_z"] = round(self.z_g, 4)
+        m["gorge_z"] = round(self.z_gl, 4)
+        m["top_ring_front_z"] = round(self.z_g, 4)
+        m["gorge_below_suprasternale_m"] = round(self.supra - self.z_gl, 4)
         m["neck_point_z"] = round(self.z_np, 4)
         m["back_neck_z"] = round(self.z_nb, 4)
         m["shoulder_half_m"] = round(self.half_sh, 4)
@@ -824,6 +966,41 @@ class Jacket:
         m["waist_suppression"] = round(width(self.z_b) / chest, 4)
         m["rows"] = len(self.rings)
         return m
+
+
+def seat_fold(body):
+    """The gluteal fold: on the posterior profile of the seat (|x| 3-13 cm),
+    below the buttocks' most posterior point, where the profile has receded
+    70 % of the way to the back of the thigh. Also the classic length rules'
+    inputs for the report (knuckle height with the arm hanging)."""
+    vs = body.verts(sb.TORSO | sb.LEG["l"] | sb.LEG["r"])
+    pts = [(v.co.z, v.co.y) for v in vs if 0.03 < abs(v.co.x) < 0.13 and 0.70 < v.co.z < 1.10]
+    prof = {}
+    for z, y in pts:
+        k = int(z / 0.005)
+        prof[k] = max(prof.get(k, -1.0), y)
+    ks = sorted(prof)
+    zs = [k * 0.005 + 0.0025 for k in ks]
+    ys = [prof[k] for k in ks]
+    # smooth the profile
+    ys = [sum(ys[max(0, i - 2):i + 3]) / len(ys[max(0, i - 2):i + 3]) for i in range(len(ys))]
+    cand = [i for i, z in enumerate(zs) if 0.85 < z < 1.05]
+    ip = max(cand, key=lambda i: ys[i])
+    z_peak, y_peak = zs[ip], ys[ip]
+    it = min(range(len(zs)), key=lambda i: abs(zs[i] - (z_peak - 0.15)))
+    y_thigh = ys[it]
+    fold = z_peak
+    for i in range(ip, -1, -1):
+        if ys[i] < y_thigh + 0.3 * (y_peak - y_thigh):
+            fold = zs[i]
+            break
+    S, E, W = body.joint("upperarm_l"), body.joint("lowerarm_l"), body.joint("hand_l")
+    # knuckle (MCP) height with the arm hanging straight down from the shoulder joint
+    mcp = (body.joint("middle_01_l") - W).length if "middle_01_l" in body.arm.data.bones else 0.095
+    knuckle = S.z - ((E - S).length + (W - E).length + mcp)
+    return {"fold_z": round(fold, 4), "peak_z": round(z_peak, 4), "peak_y": round(y_peak, 4),
+            "thigh_y": round(y_thigh, 4), "knuckle_hanging_z": round(knuckle, 4),
+            "half_back_neck_rule_z": round(0.5 * (body.joint("neck_01").z - 0.022), 4)}
 
 
 def body_bideltoid(body):

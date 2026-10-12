@@ -478,12 +478,27 @@ def build_jacket_collar(jk, nf, J, tag):
     NF = J["fall_rows"]
 
     def lapel_top(left):
-        grid = jk.lapel_l if left else jk.lapel_r
-        return [v.co.copy() for v in grid.rows[-1]]
+        row = getattr(jk, "lapel_top_l" if left else "lapel_top_r", None)
+        if row is None:
+            row = (jk.lapel_l if left else jk.lapel_r).rows[-1]
+        return [v.co.copy() for v in row]
+
+    def outward(p):
+        hit = under.find_nearest(p, 0.05)
+        n = hit[1] if hit[0] is not None else nf.radial(p).normalized()
+        return n if n.dot(nf.radial(p)) >= 0 else -n
+
+    def roll_line(left, z0, z1):
+        """The block's front edge (the roll line) between the lapel's top
+        (z0) and the gorge point (z1), top-down, a little proud of the block."""
+        col = 0 if left else N
+        pts = [row[col].co.copy() for row in jk.block.rows[:-1] if z0 + 0.004 < row[col].co.z < z1 - 0.004]
+        pts.sort(key=lambda p: -p.z)
+        return [p + outward(p) * (J["end_lift_m"] + 0.001) for p in pts]
 
     # the collar end paths (front columns): gorge point -> along the lapel's
     # top edge to the notch -> up to the collar point
-    ends, notch, cpoint = {}, {}, {}
+    ends, notch, cpoint, roll = {}, {}, {}, {}
     ang = math.radians(J["notch_deg"])
     for left in (True, False):
         lt = lapel_top(left)
@@ -502,8 +517,16 @@ def build_jacket_collar(jk, nf, J, tag):
         # (skipping the lapel's fold bulge at the roll line, which the end would cross)
         seam = [p + n * J["end_lift_m"] for k, p in enumerate(lt)
                 if k >= 3 and (p - lt[0]).length <= (S - lt[0]).length]
-        seam = [R] + seam
-        seam[0] = R
+        roll[left] = []
+        if R.z - lt[0].z > 0.01:
+            # a dropped gorge: the collar's fold continues the lapel's roll
+            # line down from the gorge point to the lapel's top (the fold curve
+            # of the end patch, below); the end path starts on the roll's crest
+            crest = lt[2] + outward(lt[2]) * J["end_lift_m"]
+            roll[left] = [crest] + list(reversed(roll_line(left, lt[0].z, R.z)))
+            seam = [crest] + seam
+        else:
+            seam = [R] + seam
         path = seam + [S + n * J["end_lift_m"], Cp]
         notch[left], cpoint[left] = S, Cp
         ends[left] = path
@@ -530,6 +553,13 @@ def build_jacket_collar(jk, nf, J, tag):
         w = smoothstep(1 - cf / end_frac) if cf < end_frac else 0.0
         reveal = lerp(J["reveal_side_m"], J["reveal_back_m"], nf.back(a))
         z_f = max(nf.zt(a) - reveal, z_s + J["stand_min_m"])
+        # in front of the neck point the fold line runs down toward the gorge,
+        # continuing the lapel's roll line (the stand lowers), instead of
+        # standing at full height to the end
+        df = J.get("drop_frac", 0.0)
+        if df > end_frac and cf < df:
+            wd = smoothstep((df - cf) / (df - end_frac))
+            z_f = lerp(z_f, max(z_s + J["stand_min_m"], z_f - J.get("drop_m", 0.0)), wd)
         z_f = lerp(z_f, z_s + 0.0015, w)
         # the fold hugs the shirt collar at its own height; the stand (a straight
         # line from the seam) stays outside the shirt and the body all the way
@@ -589,6 +619,16 @@ def build_jacket_collar(jk, nf, J, tag):
         Lc = resample_corner(path, len(path) - 2, NF)        # rows 4 .. 4 + NF
         Rc = [cols[idx[-1]][4 + j] for j in range(NF + 1)]
         T = [cols[i][4] for i in idx]
+        if roll[left]:
+            # the fold: up the roll line from the lapel's crest to the gorge
+            # point, then the neckline back to column i_e, by arc length; the
+            # stand rows of the end columns run from their seam point to it
+            T = resample(roll[left] + T, i_e)
+            for k, i in enumerate(idx[:-1]):
+                p0 = cols[i][0]
+                cols[i][1] = p0.lerp(T[k], 0.4)
+                cols[i][2] = p0.lerp(T[k], 0.8)
+                cols[i][3] = p0.lerp(T[k], 0.95)
         T[0] = Lc[0]
         Cp, E = Lc[-1], Rc[-1]
         Ep = cols[idx[-2]][4 + NF]

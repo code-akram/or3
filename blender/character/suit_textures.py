@@ -497,7 +497,7 @@ def surface_maps(H, layout, side, spec, S, name):
     rough = np.clip(rough, 0.05, 1.0)
     base = np.array(spec["albedo"] if isinstance(spec["albedo"], (list, tuple)) else [spec["albedo"]] * 3,
                     np.float64)[:3]
-    var = 1.0 + S["albedo_noise"] * (0.5 * n1 + 0.5 * n2)
+    var = 1.0 + S["albedo_noise"] * (0.8 * n1 + 0.2 * n2)
     shade = var * (1.0 - S["cavity"] * cav) * (1.0 - S["ao_in_albedo"] * (1.0 - ao))
     alb = base[None, None, :] * shade[..., None]
     if S["kuwahara"]:

@@ -48,6 +48,7 @@ ap.add_argument("--hide", default="")
 ap.add_argument("--samples", type=int, default=None)
 ap.add_argument("--lum", action="store_true", help="linear EXR + ID pass -> lum.json (shirt : wool)")
 ap.add_argument("--suffix", default="", help="appended to every output file name")
+ap.add_argument("--clay", action="store_true", help="every mesh in a flat grey clay (form only)")
 ap.add_argument("--mat", default="", help='look-dev material override, JSON {"name part": {"BSDF input": value}}')
 A = ap.parse_args(argv)
 
@@ -68,6 +69,8 @@ VIEWS = {
     "closeup_h": ((-0.63, -1.36, 1.58), (0.0, 0.0, 1.50), 0.42),   # the harness close-up's azimuth (25°), collar framing
     "collar_back": ((0.25, 1.0, 1.75), (0.0, 0.0, 1.52), 0.3),
     "collar_side": ((1.0, 0.0, 1.56), (0.0, 0.0, 1.56), 0.22),
+    "neck_front": ((0.0, -1.0, 1.52), (0.0, 0.0, 1.52), 0.36),         # the collar ends and the shoulder line
+    "neck_top": ((0.0, -0.25, 2.4), (0.0, 0.0, 1.5), 0.45),            # from above: collar fall on the shoulders
     "armpit": ((-0.7, -0.8, 1.05), (-0.24, -0.02, 1.40), 0.32),       # the left scye from below the front
     "armpit_back": ((-0.7, 0.8, 1.05), (-0.24, 0.02, 1.40), 0.32),
     "pocket": ((-0.5, -1.0, 1.1), (-0.12, -0.1, 1.03), 0.3),
@@ -141,6 +144,17 @@ if A.mat:
                 for k, v in ins.items():
                     if p is not None and k in p.inputs:
                         p.inputs[k].default_value = v if not isinstance(v, list) else tuple(v)
+
+if A.clay:
+    cm = bpy.data.materials.new("clay")
+    cm.use_nodes = True
+    cp = cm.node_tree.nodes["Principled BSDF"]
+    cp.inputs["Base Color"].default_value = (0.4, 0.4, 0.42, 1)
+    cp.inputs["Roughness"].default_value = 0.6
+    for o in sc.objects:
+        if o.type == "MESH":
+            o.data.materials.clear()
+            o.data.materials.append(cm)
 
 only = [s for s in A.only.split(",") if s]
 hide = [s for s in A.hide.split(",") if s]
