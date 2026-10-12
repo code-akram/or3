@@ -5,8 +5,10 @@ Reads ``<run>/smplx_params.npz`` (written by bench_gvhmr.py), then:
 1. Forward-kinematics the SMPL-X body (22 body joints) in world (gravity-aligned, y-up) and camera frames.
 2. Measures jitter (mean |jerk|, m/s^3), acceleration, foot skating (horizontal speed of a planted foot),
    root drift, 2D reprojection error against ViTPose, and implausible angular-speed spikes.
-3. Cleans up: One Euro filter on joint rotations (quaternions) and root translation, then a root-level
-   foot-contact lock (cancels the planted foot's horizontal slide) and a floor clamp.
+3. Cleans up: One Euro filter on joint rotations (quaternions) and root translation, then a contact-aware
+   foot lock (foot_lock.py: height + speed contacts with hysteresis, feet pinned in world space and reached
+   with analytic two-bone leg IK; root horizontal path untouched) and a floor clamp. ``--foot-lock root``
+   selects the first version's root-level lock for A/B.
 4. Re-measures, and exports raw + clean motion as npz and BVH (22-joint SMPL-X body skeleton)
    to ``--motion-out``, plus a 2D overlay video, a world stick-figure video and a plot to ``--vis-out``.
 
@@ -20,11 +22,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from scipy.spatial.transform import Rotation as R
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir from sys.path
+import foot_lock as fl  # noqa: E402
 
 FPS = 30.0
 # SMPL-X / SMPL body kinematic tree (first 22 joints).
@@ -175,8 +181,15 @@ def smooth_rotations(aa: np.ndarray, min_cutoff: float, beta: float) -> np.ndarr
     return R.from_quat(qs.reshape(-1, 4)).as_rotvec().reshape(L, J, 3)
 
 
-def smooth_vec(x: np.ndarray, min_cutoff: float, beta: float) -> np.ndarray:
+def smooth_vec(x: np.ndarray, min_cutoff: float, beta: float, pad: int = 15) -> np.ndarray:
+    """Zero-phase One Euro on a vector track. The ends are padded by odd reflection (linear extrapolation)
+    so the filter does not pull the first/last positions inward: unpadded, it shortened the root's net
+    travel by ~2 % on a 3 s walk."""
     f = OneEuro(min_cutoff, beta)
+    n = min(pad, len(x) - 1)
+    if n > 0:
+        xp = np.concatenate([2 * x[:1] - x[n:0:-1], x, 2 * x[-1:] - x[-2 : -n - 2 : -1]])
+        return (0.5 * (f(xp) + f(xp[::-1])[::-1]))[n : n + len(x)]
     return 0.5 * (f(x) + f(x[::-1])[::-1])
 
 
@@ -202,8 +215,9 @@ def retime(aa: np.ndarray, tr: np.ndarray, n_src: int, src_fps: float) -> tuple[
 
 
 def foot_lock(j: np.ndarray, transl: np.ndarray, up: int = 1) -> tuple[np.ndarray, np.ndarray]:
-    """Root-level foot lock: integrate the planted foot's horizontal velocity and subtract it from the
-    root, so a planted foot stays put. (A full two-bone leg IK is the production version.)"""
+    """First version (kept for A/B only): root-level foot lock that integrates the planted foot's
+    horizontal velocity and subtracts it from the root. Measured: removes 11-17 % of real travel and
+    can make skating worse. The default is foot_lock.lock_feet (contact-aware two-bone leg IK)."""
     c = foot_contacts(j, up)
     corr = np.zeros((len(j), 3))
     acc = np.zeros(3)
@@ -369,6 +383,13 @@ def main() -> None:
     ap.add_argument("--src-fps", type=float, default=None, help="source clip fps (default: probe the clip)")
     ap.add_argument("--src-frames", type=int, default=None)
     ap.add_argument("--retime", action="store_true", help="undo the 24->30 fps frame duplication before smoothing")
+    ap.add_argument("--foot-lock", choices=["ik", "root", "none"], default="ik",
+                    help="ik: contact-aware two-bone leg IK (default); root: first version's root-level lock")
+    ap.add_argument("--blend", type=int, default=6, help="IK blend-in/out window (frames)")
+    ap.add_argument("--soft", type=float, default=0.98, help="soft-IK start (fraction of leg length)")
+    ap.add_argument("--reach", type=float, default=0.995, help="max leg extension before the root is lowered")
+    ap.add_argument("--offset-sigma", type=float, default=1.0, help="temporal smoothing of the IK pin offsets (frames)")
+    ap.add_argument("--drop-sigma", type=float, default=6.0, help="smoothing of the vertical root correction (frames)")
     a = ap.parse_args()
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "4")))
 
@@ -411,9 +432,43 @@ def main() -> None:
     tr_s = smooth_vec(tr_r, a.min_cutoff, a.beta)
     j_s = fk(bm, go_s, bp_s, be_r, tr_s)
     m_smooth = metrics(j_s) | ang_speed_spikes(go_s, bp_s)
-    # 3) root-level foot lock + global floor clamp
-    tr_l, c_raw = foot_lock(j_s, tr_s)
-    j_clean = fk(bm, go_s, bp_s, be_r, tr_l)
+    # 3) foot lock + global floor clamp. Contacts are detected once, on the smoothed motion, and the same
+    #    labels score every variant (raw / smoothed / root lock / IK), so the slide numbers are comparable.
+    contacts = fl.detect_contacts(j_s, kp2d if Lr == L else None)
+    rest_t = rest_joints(bm, be_r)  # (Lr, 22, 3)
+    assert np.abs(fl.fk(rest_t, fl.aa_to_mat(aa_s), tr_s)[0] - j_s).max() < 1e-4, "numpy FK != SMPL-X FK"
+    tr_root, _ = foot_lock(j_s, tr_s)
+    j_root = fk(bm, go_s, bp_s, be_r, tr_root)
+    aa_ik, tr_ik, lock_info = fl.lock_feet(rest_t, aa_s, tr_s, contacts, blend=a.blend, soft=a.soft, reach=a.reach,
+                                             drop_sigma=a.drop_sigma, offset_sigma=a.offset_sigma)
+    go_ik, bp_ik = aa_ik[:, 0], aa_ik[:, 1:].reshape(Lr, -1)
+    j_ik = fk(bm, go_ik, bp_ik, be_r, tr_ik)
+    variants = {"smoothed": (j_s, aa_s), "root_lock": (j_root, aa_s), "ik_lock": (j_ik, aa_ik)}
+    if Lr == L:
+        variants = {"raw": (j_raw, aa)} | variants
+    tv_ref = fl.travel(j_s)
+    tv_raw = fl.travel(j_raw)
+    lock_cmp = {}
+    for name, (jv, aav) in variants.items():
+        tv = fl.travel(jv)
+        lock_cmp[name] = {
+            "slide_cm_s": fl.slide_cm_s(jv, contacts),
+            "pivot_slide_cm_s": fl.slide_cm_s(jv, contacts, pivot=True),
+            "jitter_mean_jerk_m_s3": float(np.linalg.norm(deriv(jv, 3), axis=-1).mean()),
+            "travel_net_m": tv["net_m"],
+            "travel_path_lp_m": tv["path_lp_m"],
+            "travel_vs_smoothed_pct": round(100 * tv["path_lp_m"] / max(tv_ref["path_lp_m"], 1e-9), 1),
+            "travel_vs_raw_pct": round(100 * tv["path_lp_m"] / max(tv_raw["path_lp_m"], 1e-9), 1),
+            "net_vs_raw_pct": round(100 * tv["net_m"] / max(tv_raw["net_m"], 1e-9), 1),
+        }
+    lock_cmp["ik_knees"] = fl.knee_pops(j_s, j_ik, aa_s, aa_ik)
+    lock_cmp["ik_info"] = lock_info
+    if a.foot_lock == "ik":
+        go_s, bp_s, tr_l, j_clean = go_ik, bp_ik, tr_ik, j_ik
+    elif a.foot_lock == "root":
+        tr_l, j_clean = tr_root, j_root
+    else:
+        tr_l, j_clean = tr_s, j_s
     floor = np.percentile(j_clean[:, [7, 8, 10, 11], 1], 2)
     tr_l = tr_l - np.array([0, floor, 0])
     j_clean = j_clean - np.array([0, floor, 0])
@@ -441,6 +496,8 @@ def main() -> None:
         "src_fps": a.src_fps,
         "src_frames": a.src_frames,
         "retime": a.retime,
+        "foot_lock": a.foot_lock,
+        "foot_lock_ab": lock_cmp,
         "raw": m_raw,
         "retimed": m_retimed,
         "retimed_one_euro": m_smooth,
@@ -452,7 +509,7 @@ def main() -> None:
     (mo / "qc.json").write_text(json.dumps(res, indent=1))
     print(json.dumps(res, indent=1))
 
-    plot(j_raw, j_clean, foot_contacts(j_raw), vo / "qc_plot.png")
+    plot(j_raw, j_clean, contacts if Lr == L else foot_contacts(j_raw), vo / "qc_plot.png")
     if not a.no_video:
         video = next(run.glob("*/0_input_video.mp4"))
         overlay_video(str(video), kp2d, j_cam, K, vo / "overlay_2d.mp4")

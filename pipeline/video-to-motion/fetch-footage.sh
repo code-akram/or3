@@ -5,10 +5,13 @@
 # Usage: pipeline/video-to-motion/fetch-footage.sh [ID ...]
 #   With no arguments, fetches every candidate below.
 #
-# Note (2026-10-12): YouTube answers every player client from this machine with
-# "Sign in to confirm you're not a bot", so the Lionsgate Movies YouTube entries need
-# `--cookies <file>` (export from a logged-in browser) passed via YTDLP_EXTRA.
+# Note (2026-10-12): this machine's IPs are Hetzner datacenter ranges, and YouTube answers every
+# player client (IPv4 and IPv6, current nightly, with PO tokens) with "Sign in to confirm you're not
+# a bot". The Lionsgate Movies YouTube entries therefore need browser cookies: use
+# fetch-youtube.sh, which checks private/youtube-cookies.txt and calls this script.
 # The Lionsgate UK TikTok entries download without auth.
+# YTDLP overrides the yt-dlp binary. With --cookies in YTDLP_EXTRA no info.json is written
+# (yt-dlp copies cookie values into the formats in it); a cookie-free meta.txt is written instead.
 set -euo pipefail
 
 # Worktrees share the main checkout's private/ directory.
@@ -35,15 +38,22 @@ candidates=(
 want=("$@")
 fmt='bv*[height<=1080][vcodec^=avc1]/bv*[height<=1080][vcodec^=h264]/bv*[height<=1080]/b'
 read -r -a extra <<<"${YTDLP_EXTRA:-}"
+ytdlp="${YTDLP:-yt-dlp}"
 
 for entry in "${candidates[@]}"; do
   IFS='|' read -r id url channel title section <<<"$entry"
   if ((${#want[@]})) && [[ ! " ${want[*]} " == *" $id "* ]]; then continue; fi
   out="$footage_dir/$id"
   mkdir -p "$out"
-  args=(--no-playlist -f "$fmt" --write-info-json -o "$out/source.%(ext)s" "${extra[@]}")
+  args=(--no-playlist -f "$fmt" -o "$out/source.%(ext)s" "${extra[@]}")
+  if [[ " ${extra[*]} " == *" --cookies "* ]]; then
+    args+=(--no-write-info-json --print-to-file \
+      '%(id)s|%(channel)s|%(channel_id)s|%(upload_date)s|%(width)sx%(height)s|%(fps)s|%(webpage_url)s|%(title)s' "$out/meta.txt")
+  else
+    args+=(--write-info-json)
+  fi
   [[ "$section" != full ]] && args+=(--download-sections "$section")
   echo "== $id  [$channel]  $title  ($section)"
   printf '%s\n%s\n%s\n' "$url" "$channel" "$title" >"$out/SOURCE.txt"
-  yt-dlp -q "${args[@]}" "$url" || echo "!! $id failed"
+  "$ytdlp" -q "${args[@]}" "$url" || echo "!! $id failed"
 done
