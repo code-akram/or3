@@ -666,6 +666,12 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - SMPL password rotation: done by the user.
 - **m2 frame-time criterion** (user, 2026-10-12): ≤ 1 % missed vsync plus work median ≤ 12 ms, measured ≥ 20 min after 5 min warm-up, late slice included (§15).
 - **m1 started** (2026-10-12).
+- **m1 look rulings (user)**:
+  - Jacket: double side vents.
+  - No scar or other distinguishing mark.
+  - No automated face-similarity check: the user answers the likeness question at each review.
+  - No tie spring bones: the tie is tucked under the waistcoat.
+  - **The city has no recorded human voices** (announcements, talking machines).
 - **m1 wave 1 merged**: the look-dev harness plus modular build (track A) and the look spec (track C). Wave 2 (suit, head plus proportions, hair plus beard) runs in parallel worktrees, leading to the direction checkpoint.
 - **Audio listening gate (spike 7), on the Air's speakers:**
   - Approved: dry steps, the alley IR (the 8.6 dB calibration stands), and clarity at low volume.
