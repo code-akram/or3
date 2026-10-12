@@ -732,11 +732,13 @@ class Jacket:
             # underlap: a strip on the back panel's edge, under the outer flap
             inner_col = [new_col[z] for z in sorted(new_col)]
             if len(inner_col) >= 2 and J["vent_underlap_m"] > 0:
-                side = 1 if x > 0 else -1
+                # the strip runs toward the centre back, under the back panel
+                # (as the right vent always did; a fixed column step sent the
+                # left one outward, out through the side panel)
                 ug = G.grid("underlap")
                 for k, v in enumerate(inner_col):
-                    nb = g.rows[k][min(max(ci + side, 0), N)]
-                    d = (nb.co - v.co)
+                    d = Vector((-math.copysign(1.0, x), 0.0, 0.0))
+                    d = (d - v.normal * d.dot(v.normal))
                     d.z = 0
                     d = d.normalized() * J["vent_underlap_m"]
                     n = v.normal

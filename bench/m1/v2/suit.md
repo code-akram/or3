@@ -28,17 +28,38 @@ Parametric trousers built on the body replace the stock shell:
 
 In this round I also flipped the face winding. The quads faced into the leg on both sides; the faces' signed volume was negative. That zeroed the facing-gated drape regions (knee back, break) and inverted the fold sign. In a single-sided game material, it would also have culled the trousers.
 
+### Face orientation (all garments)
+
+Checked against the skeleton (`/tmp/suitwork/ncheck4.py`: a face points out when its normal points away from the nearest bone segment; the skin can't be the reference because `hide_body` deletes it under the cloth). Two more inverted pieces were found and fixed:
+
+- **The left sleeve** (about 860 faces) pointed in. Both sleeves' columns turn the same way about their own arm axis, so they need the same winding, but the code flipped only the right one.
+- **The left shirt cuff** pointed in for the same reason.
+
+Blender shades back faces, so neither showed in renders. But Track F's rest-pose tuck sinks inner layers along −normal. On the inverted pieces it pushed the left shirt cuff out through the sleeve: a white band with a sawtooth edge, visible at the wrists in the full-body view (`20261012T204934Z-suitD-v2a/suit_studio/cuff_x.png`).
+
+The shoes, trousers, waistcoat and tie are now all outward. The only inward faces left are 17 at the back of the shirt collar, where the single-sheet collar folds over, which is expected for a fold.
+
 ### Cloth-sim folds (`suit_drape.py`)
 
 The jacket and trousers are simulated from P0 (arms raised 12°) to P1 (elbow −18°, knee 14°, hip 8°) on a subdivided copy. The fold height is the high-passed normal offset of the cloth from the skinned shape. It is gated by region (elbow, armpit, lower back, button pull, crotch, knee back, break), soft-clamped to 4 mm and baked into the normal, AO and cavity maps through the UVs. A quality gate (penetration, strain, settle, wavelength, amplitude) drops the folds rather than shipping crumpled paper. This round:
 
 - Regions are placed on rest positions (the posed knee and foot move several cm from the rest landmarks).
 - Trouser pins: the waistband and seat are pinned, the leg is soft (0.12), and the hem is fully pinned below 12 cm, ramping to 20 cm. With the hem soft, the shoe collider pushed the break into a crumpled ring (p99 strain 0.78), and the gate dropped all the trouser folds.
-- Result: TODO
+- The jacket gain outside the regions went from 0.35 to 0.1, and the denoise from 2 to 4 graph-smoothing passes. At 0.35 the sim's grid-aligned ripples printed on every panel as a faint windowpane check (visible in the lookdev front view of `suitD-v2a`).
+- Result (`suitD-v2b`): both gates pass.
+  - Jacket: p99 strain 0.093, fold RMS 1.34 mm, wavelength about 9 cm, 0.2 % inside the body. The region vertices are elbow 748, armpit 2522, lower back 1481, button 3692.
+  - Trousers: p99 strain 0.118, fold RMS 0.92 mm, 0 inside. The regions are knee back 1154, crotch 313, lower back 437 and break 1908; the break is pinned, so its folds stay faint.
+  - The drape cache key changed (winding, gain), so this was a fresh sim: 114 s on the drape.
 
 ### Materials (`suit_textures.py`, `suit_leather.py`, new `suit_hero.py`)
 
-- Wool: TODO final values.
+- **Wool**: albedo (0.013, 0.014, 0.019) linear, a blue-black about 0.014, roughness 0.68, specular 0.15. Sheen 0.35, sheen roughness 0.4, tint (0.72, 0.8, 1.0). The baked surface maps carry roughness and albedo noise, cavity and fold AO, and Kuwahara r 1. The swept variants on the hero rig (`/tmp/suitwork/w1cmp.png`, `w1tt.png`) were:
+  - (0.020, 0.021, 0.025) with sheen 0.22: dark brown under the 3000 K key (Track E's flag)
+  - ×(0.7, 0.76, 0.95) with sheen 0.3: still warm
+  - ×(0.6, 0.64, 0.8) with sheen 0.35 and a cool tint: reads as a warm black, not brown, while the turntable stays a dark charcoal with a faint cool cast
+
+  The shipped value sits between the last two.
+- **Shirt-to-wool luminance** (median, suit_views `--lum`, EEVEE): 45.6 : 1 (bust) and 48.4 : 1 (body) under the neon rig; 25.2 : 1 and 22.9 : 1 under the studio rig. The target is ≥ 20 : 1. The round's starting point (`/tmp/suitwork/base`, same tool) gave 21.9 / 24.9 under neon and 12.6 / 11.1 under studio. The mean ratio is lower (16–27) because the sheen rim and the lit shoulders lift the wool's mean.
 - **Hero-only detail** (`suit_hero.py`, a new `suit_hero` build step after `export_glb`, so the GLB is unchanged): a 0.6 mm 2/2 twill as a procedural bump (yarn-modulated diagonal rib, strength 0.4, 0.2 mm), chained after the baked normal map on every wool material, and subsurface on the shirt (0.15, 1.5 mm, red-shifted radius). The atlas twill is only a faint 1.9 mm pattern (period > 2 px, so it doesn't alias).
 - Shoes (a fork, merged): parametric cap-toe derbies on a last fitted to the foot:
   - V-split upper with a cap step, back-stay, tongue, collar lip, punched eyelets, crossed laces with a bow

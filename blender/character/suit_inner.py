@@ -18,7 +18,7 @@ import math
 from mathutils import Vector
 
 from . import suit_build as sb
-from .suit_build import lerp
+from .suit_build import lerp, smoothstep
 
 NECK = {"neck_01", "head"}
 UPPER = {"spine_03", "clavicle_l", "clavicle_r", "neck_01"}
@@ -115,6 +115,7 @@ class Inner:
         def half(z):
             return (0.0, min(self.w_vest(z) + margin, 0.11))
         fronts = self.front_panel(G, "front", rows, half, off, 8, tag=1)
+        self.m["shirt_front_raised_verts"] = self.front_to_neckline(fronts, z0, z1, off)
         for g in fronts:
             for row in g.rows:
                 G.weight(row, sb.TORSO | {"neck_01"})
@@ -164,6 +165,42 @@ class Inner:
         self.shirt = G.finish(self.b, self.like, self.mats["shirt"])
         self.marks[self.shirt.name] = G.marks
         return self.shirt
+
+    def front_to_neckline(self, grids, z0, z1, off, gap=0.0015, x_full=0.045, x_none=0.065):
+        """The front's top edge follows the collar band's bottom edge, which
+        dips at the centre and rises round the neck, instead of a level line
+        at the centre-front height: level, it stood proud of the band under the
+        collar points as a white ledge. Each column is stretched up to just
+        under the band (`gap`; running into it, the faces crossed the band) and
+        re-lofted on the torso at its new height (faded out past the side of
+        the neck, where the jacket collar covers the front). At the centre the
+        front already runs up inside the band and stays."""
+        nf = self.neck
+        cache = {}
+        moved = 0
+        for g in grids:
+            for row in g.rows:
+                for v in row:
+                    z = v.co.z
+                    if z <= z0 + 1e-6:
+                        continue
+                    w = 1.0 - smoothstep((abs(v.co.x) - x_full) / (x_none - x_full))
+                    if w <= 0.0:
+                        continue
+                    a = nf.polar(v.co)[0]
+                    top = z1 + w * (nf.zb(a) - gap - z1)
+                    if top <= z1 + 1e-4:
+                        continue
+                    z2 = z0 + (z - z0) * (top - z0) / (z1 - z0)
+                    key = round(z2, 3)
+                    if key not in cache:
+                        cache[key] = self.slice(key)
+                    cy, radii = cache[key]
+                    aa = sb.angle_at_x(cy, radii, v.co.x, front=True, ease=lambda a: off)
+                    r = sb.sample_ring(radii, aa) + off
+                    v.co = Vector((r * math.cos(aa), cy + r * math.sin(aa), z2))
+                    moved += 1
+        return moved
 
     def build_shirt_collar(self, G):
         """Band, fold and fall with two points, plus the front closure
@@ -303,7 +340,8 @@ class Inner:
             z = lerp(z_kb, z_end, t)
             dd = (z_kb - z)
             w = T["blade_top_w_m"] + (T["blade_w_m"] - T["blade_top_w_m"]) * min(1.0, dd / T["blade_full_at_m"])
-            dimple = T["dimple_m"] * max(0.0, 1 - dd / 0.08)
+            # (none on the first row, which tucks up inside the knot)
+            dimple = T["dimple_m"] * max(0.0, 1 - dd / 0.08) if k > 0 else 0.0
             pts, uvs = [], []
             for i in range(cols + 1):
                 s = i / cols - 0.5           # -0.5 .. 0.5 across
@@ -316,14 +354,22 @@ class Inner:
                     base = hit[0]
                 n = Vector((0, -1, 0))
                 lift = 0.003 + 0.003 * (1 - (2 * s) ** 2)   # slightly convex blade
-                lift -= dimple * max(0.0, 1 - abs(s) * 4)    # dimple under the knot
+                lift -= dimple * max(0.0, 1 - (2.5 * s) ** 2) ** 2   # dimple under the knot (smooth: a V-shaped one lit as a crisp white diamond)
+                # never closer than 2.5 mm to the shirt: at 1 mm the placket
+                # ridge (and the decimated shirt) showed through the dimple
+                # as a white diamond
+                lift = max(lift, 0.0025)
                 pts.append(Vector((x, base.y, z)) + n * lift)
                 uvs.append((0.5 + 0.08 * (s + 0.5), 0.6 + T["knot_h_m"] + dd))
-            # the first blade row starts inside the knot bottom
+            # the first blade row starts inside the knot bottom, but stays in
+            # front of the shirt (pushed 4 mm back it went behind it at the
+            # dimple, and the shirt showed under the knot as a white dot)
             if k == 0:
                 for p in pts:
                     p.z += 0.008
-                    p.y += 0.004
+                    hit = shirt_tree.ray_cast(Vector((p.x, -1, p.z)), Vector((0, 1, 0)), 2.0)
+                    y_max = hit[0].y - 0.0015 if hit[0] is not None else p.y + 0.004
+                    p.y = min(p.y + 0.004, y_max)
             bg.add_row(pts, uvs)
         bg.fill(G.uv, G.tag, 2, flip=True)   # normals out (toward the viewer)
         for row in bg.rows:

@@ -76,6 +76,8 @@ VIEWS = {
     "armpit_back_l": ((0.45, 1.0, 1.35), (0.21, 0.04, 1.40), 0.2),     # the sliver under the left sleeve, from behind
     "pocket": ((-0.5, -1.0, 1.1), (-0.12, -0.1, 1.03), 0.3),
     "pocket_x": ((-0.45, -1.0, 1.06), (-0.12, -0.12, 1.0), 0.13),     # extreme close-up of the flap
+    "vent_x": ((0.3, 1.1, 1.06), (0.11, 0.1, 1.03), 0.10),           # close-up of the left vent top, from behind
+    "vent_xr": ((-0.3, 1.1, 1.06), (-0.11, 0.1, 1.03), 0.10),        # the right vent top
     "shoulder": ((-0.3, -1.0, 1.55), (-0.2, -0.05, 1.48), 0.35),
     "shoulder_front": ((-0.22, -1.2, 1.45), (-0.22, 0.0, 1.45), 0.3),      # the shoulder line and sleeve head, square on
     "shoulder_side": ((-1.2, 0.0, 1.42), (-0.25, 0.0, 1.42), 0.36),       # sleeve pitch, roped head in profile
