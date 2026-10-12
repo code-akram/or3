@@ -100,6 +100,7 @@ def main():
     stem = out[:-4] if out.endswith(".glb") else out
     b.step("export_glb", export.write_glb, out)
     b.step("head_hero", head.hero)  # Cycles-only skin and eyes, after the GLB export (track A)
+    b.step("suit_hero", suit.hero)  # hero-only (Cycles) suit detail: after the GLB, into the .blend only
     b.step("save_blend", export.save_blend, stem + ".blend")
 
     s.update(b.notes)

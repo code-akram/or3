@@ -41,6 +41,8 @@ ap.add_argument("--check", action="store_true", help="run suit_check.py (holes, 
 ap.add_argument("--collar", action="store_true",
                 help="run suit_collar.py (collar-zone guard: bare skin, backfaces, intersections) on the GLB")
 ap.add_argument("--res", type=int, default=600)
+ap.add_argument("--rig", default="suit", help="suit_views light rig: suit | studio | neon")
+ap.add_argument("--save-blend", action="store_true", help="also save DIR/character.blend (the staged scene)")
 A = ap.parse_args(argv)
 
 main_root = subprocess.run(["git", "-C", REPO, "rev-parse", "--path-format=absolute",
@@ -86,6 +88,9 @@ s["timings_s"] = b.timings
 s["config"] = cfg
 with open(os.path.join(A.out, "character.stats.json"), "w") as f:
     json.dump(s, f, indent=2, default=str)
+if A.save_blend:
+    b.step("suit_hero", suit.hero)   # as build_character: hero-only detail, after the GLB
+    export.save_blend(b, os.path.join(A.out, "character.blend"))
 print(f"[suit_dev] build {time.perf_counter() - t0:.1f} s, total tris {s['total_tris']}")
 for name, m in sorted(s["meshes"].items()):
     if "suit" in name or "shoe" in name:
@@ -94,7 +99,7 @@ for name, m in sorted(s["meshes"].items()):
 if not A.no_render:
     cmd = [bpy.app.binary_path, "-b", "-t", "4", "--factory-startup", "--python-exit-code", "1",
            "--python", os.path.join(HERE, "suit_views.py"), "--", "--glb", glb, "--out-dir", A.out,
-           "--views", A.views, "--res", str(A.res)]
+           "--views", A.views, "--res", str(A.res), "--rig", A.rig]
     if A.wire:
         cmd.append("--wire")
     if A.hide:

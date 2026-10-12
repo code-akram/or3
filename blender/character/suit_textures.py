@@ -13,6 +13,8 @@ in that panel's UV space:
     ("crease", [(u, v), ...])      a pressed crease ridge
     ("buttonhole", (u, v), length) a keyhole bar-tack
     ("welt", [(u, v), ...])        a raised welt strip (pocket mouths)
+    ("jet", [(u, v), (u, v)])      a jetted pocket: two narrow lips either side
+                                   of a slit, bar-tacked at both ends
 
 apply() packs the panels of a material group into one atlas (uniform texel
 density), rewrites the UVs, draws the height map with numpy, converts it to a
@@ -27,11 +29,13 @@ import bmesh
 import bpy
 import numpy as np
 
+from . import suit_leather
+
 # weave period in metres and amplitude (height units are metres before the
 # normal-map slope scale)
 WEAVE = {
     # periods are a little over 2 px at the atlas density, below that the twill aliases
-    "wool": {"period_m": 0.0019, "amp": 0.00006, "noise": 0.00003, "twill": True},
+    "wool": {"period_m": 0.0019, "amp": 0.000025, "noise": 0.00003, "twill": True},   # faint: the hero adds the real 0.6 mm twill (suit_hero)
     "shirt": {"period_m": 0.0012, "amp": 0.00003, "noise": 0.000015, "twill": False},
     "silk": {"period_m": 0.0014, "amp": 0.00006, "noise": 0.00001, "twill": True, "angle": 0.6},
     "leather": {"period_m": 0.0, "amp": 0.0, "noise": 0.00004, "twill": False},
@@ -41,18 +45,75 @@ WEAVE = {
 
 # --- materials -----------------------------------------------------------------------------
 
-def material(name, albedo, rough, sheen):
+def material(name, albedo, rough, sheen=0.0, sheen_rough=0.5, sheen_tint=(1.0, 1.0, 1.0),
+             spec=0.5, coat=0.0, coat_rough=0.03, aniso=0.0, aniso_rot=0.0, sss=0.0, **_):
+    """A Principled material that survives the glTF round trip: albedo (grey
+    or rgb), roughness, sheen (the exporter writes Sheen Tint as
+    sheenColorFactor and ignores Sheen Weight, so strength x tint goes in the
+    tint), Specular IOR Level (KHR_materials_specular: factor = 2 x level),
+    coat (KHR_materials_clearcoat), anisotropy along the UV tangent
+    (KHR_materials_anisotropy). sss is Cycles-only (subsurface, not exported)."""
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.use_nodes = True
-    bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-    bsdf.inputs["Base Color"].default_value = (albedo, albedo, albedo, 1.0)
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    rgb = tuple(albedo) if isinstance(albedo, (list, tuple)) else (albedo, albedo, albedo)
+    bsdf.inputs["Base Color"].default_value = rgb[:3] + (1.0,)
     bsdf.inputs["Roughness"].default_value = rough
     if "Sheen Weight" in bsdf.inputs:
         bsdf.inputs["Sheen Weight"].default_value = 1.0 if sheen else 0.0
-        bsdf.inputs["Sheen Tint"].default_value = (sheen, sheen, sheen, 1.0)
-        bsdf.inputs["Sheen Roughness"].default_value = 0.5
-    mat.diffuse_color = (albedo, albedo, albedo, 1.0)
+        bsdf.inputs["Sheen Tint"].default_value = tuple(sheen * c for c in sheen_tint) + (1.0,)
+        bsdf.inputs["Sheen Roughness"].default_value = sheen_rough
+    bsdf.inputs["Specular IOR Level"].default_value = spec
+    if coat:
+        bsdf.inputs["Coat Weight"].default_value = coat
+        bsdf.inputs["Coat Roughness"].default_value = coat_rough
+    if aniso:
+        bsdf.inputs["Anisotropic"].default_value = aniso
+        bsdf.inputs["Anisotropic Rotation"].default_value = aniso_rot
+        tg = nt.nodes.new("ShaderNodeTangent")
+        tg.direction_type = "UV_MAP"
+        nt.links.new(tg.outputs["Tangent"], bsdf.inputs["Tangent"])
+    if sss:
+        bsdf.inputs["Subsurface Weight"].default_value = sss
+        bsdf.inputs["Subsurface Radius"].default_value = (1.0, 0.9, 0.8)
+        bsdf.inputs["Subsurface Scale"].default_value = 0.002
+    mat.diffuse_color = rgb[:3] + (1.0,)
     return mat
+
+
+def gltf_output_group():
+    """The exporter's "glTF Material Output" group (its Occlusion input becomes
+    the glTF occlusion texture)."""
+    name = "glTF Material Output"
+    g = bpy.data.node_groups.get(name)
+    if g is None:
+        g = bpy.data.node_groups.new(name, "ShaderNodeTree")
+        g.interface.new_socket("Occlusion", in_out="INPUT", socket_type="NodeSocketFloat")
+        g.nodes.new("NodeGroupInput")
+    return g
+
+
+def attach_surface(mat, albedo_img, orm_img):
+    """Base colour from an sRGB albedo map; roughness (G), metallic (B) and
+    occlusion (R) from one linear ORM map."""
+    nt = mat.node_tree
+    bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
+    if albedo_img is not None:
+        ta = nt.nodes.new("ShaderNodeTexImage")
+        ta.image = albedo_img
+        nt.links.new(ta.outputs["Color"], bsdf.inputs["Base Color"])
+    if orm_img is not None:
+        to = nt.nodes.new("ShaderNodeTexImage")
+        to.image = orm_img
+        orm_img.colorspace_settings.name = "Non-Color"
+        sep = nt.nodes.new("ShaderNodeSeparateColor")
+        nt.links.new(to.outputs["Color"], sep.inputs[0])
+        nt.links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
+        nt.links.new(sep.outputs["Blue"], bsdf.inputs["Metallic"])
+        grp = nt.nodes.new("ShaderNodeGroup")
+        grp.node_tree = gltf_output_group()
+        nt.links.new(sep.outputs["Red"], grp.inputs["Occlusion"])
 
 
 def attach_normal_map(mat, image, strength=1.0):
@@ -247,6 +308,16 @@ class Height:
     def crease(self, pts, height=0.0009, width_m=0.004):
         self.line(pts, self.ridge(height, width_m), width_m * 1.5)
 
+    def jet(self, pts, lip_m=0.005, height=0.0007):
+        """Jetted pocket: a slit (groove) between two narrow lips, bar tacks at the ends."""
+        self.line(pts, self.groove(0.0008, 0.0012), 0.002)
+        for sign in (1, -1):
+            self.line(pts, self.ridge(height, lip_m), lip_m, offset_m=sign * 0.5 * lip_m)
+        self.stitch(pts, offset_m=lip_m + 0.001, height=0.0003)
+        self.stitch(pts, offset_m=-lip_m - 0.001, height=0.0003)
+        for end in (pts[0], pts[-1]):
+            self.spot(end, 0.0015, 0.0004)
+
     def welt(self, pts, height=0.0009, width_m=0.012):
         self.line(pts, self.ridge(height, width_m), width_m)
         self.stitch(pts, offset_m=width_m * 0.5 + 0.001, height=0.0003)
@@ -318,6 +389,8 @@ def draw_marks(H, layout, marks, side):
                 H.edge([T(p) for p in data], **(mark[2] if len(mark) > 2 else {}))
             elif kind == "crease":
                 H.crease([T(p) for p in data])
+            elif kind == "jet":
+                H.jet([T(p) for p in data])
             elif kind == "welt":
                 H.welt([T(p) for p in data])
             elif kind == "buttonhole":
@@ -331,9 +404,144 @@ def strip_panel_attr(objs):
             o.data.attributes.remove(a)
 
 
-def apply(o, parts, mats, marks):
-    """parts: {name: object}; marks: {object name: {tag: [marks]}}. Groups:
-    wool_a (jacket), wool_b (waistcoat + trousers), shirt, silk (tie)."""
+def add_folds(H, objs, folds, layout, side, gain=1.0):
+    """Rasterise each object's cloth-sim fold height (suit_drape.Fold) into the
+    height map: half resolution (folds are 2-4 cm long), bilinear-upsampled."""
+    from . import suit_drape
+    out = {}
+    px2 = H.px // 2
+    acc = np.zeros((px2, px2), np.float64)
+    for ob in objs:
+        f = folds.get(ob.name) if folds else None
+        if f is None:
+            continue
+        uv = suit_drape.fold_uvs(f, layout, side)
+        img, cover = suit_drape.rasterise(f.ob.data, uv, f.h.astype(np.float64), px2)
+        acc += img
+        out[ob.name] = {"cover_px": int(cover.sum()), "max_mm": round(float(np.abs(img).max()) * 1000, 2)}
+    if out:
+        up = np.kron(acc, np.ones((2, 2)))
+        # smooth the 2x blocks (a cheap bilinear)
+        up = (up + np.roll(up, 1, 0) + np.roll(up, 1, 1) + np.roll(np.roll(up, 1, 0), 1, 1)) / 4.0
+        H.h += (gain * up[:H.px, :H.px]).astype(np.float32)
+        H.folds = up[:H.px, :H.px].astype(np.float32)
+    return out
+
+
+def _blur(a, r):
+    """Approximate gaussian: three box passes of radius r (px), wrap-around."""
+    r = max(1, int(round(r)))
+    for _ in range(3):
+        c = np.cumsum(np.pad(a, ((0, 0), (r + 1, r)), mode="wrap"), axis=1)
+        a = (c[:, 2 * r + 1:] - c[:, :-2 * r - 1]) / (2 * r + 1)
+        c = np.cumsum(np.pad(a, ((r + 1, r), (0, 0)), mode="wrap"), axis=0)
+        a = (c[2 * r + 1:, :] - c[:-2 * r - 1, :]) / (2 * r + 1)
+    return a
+
+
+def _down2(a):
+    return 0.25 * (a[0::2, 0::2] + a[1::2, 0::2] + a[0::2, 1::2] + a[1::2, 1::2])
+
+
+def _value_noise(rng, px, cell):
+    n = rng.normal(0.0, 1.0, (px // cell + 3, px // cell + 3)).astype(np.float32)
+    n = np.kron(n, np.ones((cell, cell), np.float32))[:px, :px]
+    n = _blur(n, max(1, cell // 2))
+    return n / max(float(n.std()), 1e-6)
+
+
+def kuwahara(img, r=1):
+    """Kuwahara filter (painterly flattening, art direction §4: suit albedo r 1-2):
+    each pixel takes the mean of the least-variant of its four (r+1)^2 quadrants."""
+    pad = np.pad(img, ((r, r), (r, r), (0, 0)), mode="edge")
+    lum = pad.mean(-1)
+    h, w = img.shape[:2]
+    best_v = np.full((h, w), np.inf, np.float32)
+    out = np.zeros_like(img)
+    for oy in (0, r):
+        for ox in (0, r):
+            acc = np.zeros((h, w, img.shape[2]), np.float32)
+            acc2 = np.zeros((h, w), np.float32)
+            accl = np.zeros((h, w), np.float32)
+            for dy in range(r + 1):
+                for dx in range(r + 1):
+                    sl = (slice(oy + dy, oy + dy + h), slice(ox + dx, ox + dx + w))
+                    acc += pad[sl]
+                    accl += lum[sl]
+                    acc2 += lum[sl] ** 2
+            k = (r + 1) ** 2
+            var = acc2 / k - (accl / k) ** 2
+            sel = var < best_v
+            best_v = np.where(sel, var, best_v)
+            out = np.where(sel[..., None], acc / k, out)
+    return out
+
+
+def linear_to_srgb(c):
+    c = np.clip(c, 0.0, 1.0)
+    return np.where(c <= 0.0031308, 12.92 * c, 1.055 * np.power(c, 1 / 2.4) - 0.055)
+
+
+def surface_maps(H, layout, side, spec, S, name):
+    """Albedo (sRGB) and ORM (occlusion, roughness, metallic) for a wool group,
+    at half the normal map's resolution, from the finished height field:
+    cavity in the seams, stitches and fold valleys darkens the albedo; the
+    fold valleys (cloth sim) carry the occlusion; roughness = base + fibre
+    noise, per panel offsets (the pressed lapel facing is smoother)."""
+    px = H.px // 2
+    h = _down2(H.h.astype(np.float64))
+    mpp = side / px                                    # metres per pixel
+    cav = np.clip((_blur(h, 0.0012 / mpp) - h) / 0.00025, 0.0, 1.0)
+    f = getattr(H, "folds", None)
+    if f is not None:
+        f = _down2(f.astype(np.float64))
+        valley = np.clip((_blur(f, 0.012 / mpp) - f) / 0.0025, 0.0, 1.0)
+    else:
+        valley = np.zeros_like(h)
+    ao = 1.0 - S["fold_ao"] * valley
+    rng = np.random.default_rng(S["seed"])
+    n1 = _value_noise(rng, px, max(2, int(0.003 / mpp)))
+    n2 = _value_noise(rng, px, max(3, int(0.012 / mpp)))
+    rough = spec["rough"] + S["rough_noise"] * (0.6 * n1 + 0.4 * n2)
+    # per-panel roughness offsets
+    for (oname, tag), L in layout.items():
+        off = S["panel_rough"].get(f"{oname.split('.')[-1].split('_export')[0]}:{tag}")
+        if off:
+            x0, y0 = int(L["x0"] / side * px), int(L["y0"] / side * px)
+            x1, y1 = int((L["x0"] + L["w"]) / side * px) + 1, int((L["y0"] + L["h"]) / side * px) + 1
+            rough[y0:y1, x0:x1] += off
+    rough = np.clip(rough, 0.05, 1.0)
+    base = np.array(spec["albedo"] if isinstance(spec["albedo"], (list, tuple)) else [spec["albedo"]] * 3,
+                    np.float64)[:3]
+    var = 1.0 + S["albedo_noise"] * (0.8 * n1 + 0.2 * n2)
+    shade = var * (1.0 - S["cavity"] * cav) * (1.0 - S["ao_in_albedo"] * (1.0 - ao))
+    alb = base[None, None, :] * shade[..., None]
+    if S["kuwahara"]:
+        alb = kuwahara(alb.astype(np.float32), S["kuwahara"])
+    rgba = np.empty((px, px, 4), np.float32)
+    rgba[..., :3] = linear_to_srgb(alb)
+    rgba[..., 3] = 1.0
+    ai = bpy.data.images.new(f"suit_{name}_albedo", px, px, alpha=False)
+    ai.colorspace_settings.name = "sRGB"
+    ai.pixels.foreach_set(rgba.ravel())
+    ai.pack()
+    orm = np.empty((px, px, 4), np.float32)
+    orm[..., 0] = np.clip(ao, 0, 1)
+    orm[..., 1] = rough
+    orm[..., 2] = 0.0
+    orm[..., 3] = 1.0
+    oi = bpy.data.images.new(f"suit_{name}_orm", px, px, alpha=False)
+    oi.colorspace_settings.name = "Non-Color"
+    oi.pixels.foreach_set(orm.ravel())
+    oi.pack()
+    return ai, oi, {"px": px, "rough_mean": round(float(rough.mean()), 3),
+                    "ao_min": round(float(ao.min()), 3), "cavity_mean": round(float(cav.mean()), 4)}
+
+
+def apply(o, parts, mats, marks, folds=None):
+    """parts: {name: object}; marks: {object name: {tag: [marks]}}; folds:
+    {object name: suit_drape.Fold}. Groups: wool_a (jacket), wool_b
+    (waistcoat + trousers), shirt, silk (tie)."""
     T = o["textures"]
     groups = [("wool_a", [parts["jacket"]], T["wool_px"], "wool", mats["wool"]),
               ("wool_b", [parts["waistcoat"], parts["trousers"]], T["wool_px"], "wool", None),
@@ -352,13 +560,20 @@ def apply(o, parts, mats, marks):
         for ob in objs:
             for tag, lst in marks.get(ob.name, {}).items():
                 flat[(ob.name, tag)] = lst
+        leather = suit_leather.Surfaces(H, layout, flat, side, o) if gname == "leather" else None
         draw_marks(H, layout, flat, side)
+        fold_info = add_folds(H, objs, folds, layout, side)
         img = H.normal_image(f"suit_{gname}_normal", slope=T["slope"])
         if mat is None:
             base = mats["wool"]
             mat = base.copy()
             mat.name = f"suit_{gname}"
         attach_normal_map(mat, img, strength=1.0)
+        mat["suit_atlas_side_m"] = side   # suit_hero: metric UVs for the hero-only detail
+        surf = None
+        if weave == "wool" and o.get("surface"):
+            ai, oi, surf = surface_maps(H, layout, side, o["materials"]["wool"], o["surface"], gname)
+            attach_surface(mat, ai, oi)
         for ob in objs:
             keep_second = len(ob.data.materials) > 1   # shoes: upper + sole
             second = ob.data.materials[1] if keep_second else None
@@ -368,7 +583,10 @@ def apply(o, parts, mats, marks):
             else:
                 for p in ob.data.polygons:
                     p.material_index = 0
+        if leather:   # shoes: albedo, roughness and clear-coat maps (suit_leather.py)
+            out["leather_maps"] = leather.wire(mat, objs[0].data.materials[1])
         strip_panel_attr(objs)
         out[gname] = {"px": px, "atlas_side_m": round(side, 4), "panels": len(layout),
-                      "mm_per_px": round(1000 * side / px, 3), "marks": sum(len(v) for v in flat.values())}
+                      "mm_per_px": round(1000 * side / px, 3), "marks": sum(len(v) for v in flat.values()),
+                      "folds": fold_info, "surface": surf}
     return out

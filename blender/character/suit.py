@@ -4,11 +4,12 @@ add() fits the stock CC0 garments (the suits01 shell for its trousers, the
 shoes placeholder) and keeps a copy of the unmasked body. post() works on the
 staged export meshes, in rest pose:
 
-    split the stock shell, keep the trousers, drop the rest
+    split the stock shell, drop it (its trousers only when trousers.build is false)
     jacket   suit_jacket: block, lapels, collar, vents, sleeves, pockets
     inner    suit_inner: waistcoat, shirt front + collar + cuffs, tie + knot
     buttons  low-poly discs (jacket front, cuffs, waistcoat)
-    trousers stock shell tailored: break, taper, creases
+    trousers suit_trousers: built on the body (flat front, slim straight leg,
+             quarter break, creases); fallback: the stock shell tailored
     textures suit_textures: atlas UVs, baked-by-script normal maps, materials
     budgets, hide covered body polygons, measurements -> stats.json["suit"]
 
@@ -24,33 +25,43 @@ from mathutils import Vector
 
 from . import budgets, config
 from . import suit_build as sb
-from . import suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures
+from . import suit_drape, suit_hero, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes, suit_textures, suit_trousers
 
 DEFAULTS = {
     "tailor": True,             # False: stock shell, as in spike 1
     "button_stance": 0.615,     # fastening button z / stature (look-spec: 0.61 +- 0.01)
     "jacket": {
+        # hem: "seat" = just covering the seat, hem_below_seat_m under the
+        # gluteal fold (suit_jacket.seat_fold; on this figure that also matches
+        # the knuckle rule); "supra" = hem_to_suprasternale x suprasternale z
+        # (the half neck-to-floor rule, which reads as a coat on long legs)
+        "hem_mode": "seat", "hem_below_seat_m": 0.025,
         "hem_to_suprasternale": 0.50,
         "button_gap_m": 0.11,
         "columns": 72,
-        "row_skirt_m": 0.025, "row_body_m": 0.02, "row_top_m": 0.012,
+        "row_skirt_m": 0.018, "row_body_m": 0.02, "row_top_m": 0.012,
         "slice_band_m": 0.012,
         "canvas_limit_m": 0.014,
         "uv_circ_m": 1.08,
         # radial allowances over the body (metres)
         "ease": {"chest": 0.024, "back": 0.014, "side": 0.020,
                  "waist_front": 0.016, "waist_back": 0.013, "waist_side": 0.014,
-                 "hip": 0.018, "flare": 0.010},
+                 "hip": 0.018, "flare": 0.005},
         "shoulder": {"over_body_m": 0.012, "back_neck_m": -0.022, "neck_point_drop_m": 0.012,
-                     "depth_top": 0.78, "clear_m": 0.010, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
+                     "depth_top": 0.78, "clear_m": 0.007, "under_cap_m": 0.004, "yoke_rows": 4, "scye_pow": 1.0,
                      "neck_half_m": 0.072, "neck_ease_m": 0.016, "neck_curve_pow": 0.8,
-                     "neck_clear_m": 0.012, "neck_blend_frac": 0.12, "seam_below_band_m": 0.010, "gorge_cols": 6, "band_clear_m": 0.004,
+                     "neck_clear_m": 0.005, "neck_band_lo_m": 0.0, "neck_band_hi_m": 0.006, "neck_lift_clear_m": 0.005, "neck_blend_frac": 0.12, "seam_below_band_m": 0.010, "gorge_cols": 6, "band_clear_m": 0.004,
                      "armpit_below_joint_m": 0.115, "bulge_pow": 0.7, "cap_below_joint_m": 0.02},
         "overlap_m": 0.02, "underlap_tuck_m": 0.003, "front_cut_m": 0.03,
-        "quarter_cut_m": 0.025, "quarter_height_m": 0.12,
-        "skirt_leg_weight": 0.5,
+        "quarter_cut_m": 0.035, "quarter_height_m": 0.10,
+        "skirt_leg_weight": {"front": 0.85, "side": 0.5, "back": 0.3},   # leg share at the hem, by side
+        # lapel: gorge_below_neck_m places the top ring at the front, the
+        # gorge seam sits gorge_drop_m lower on the chest (the collar's front
+        # end lies on the roll line between them); roll 16 mm, a rounded edge
+        # edge_m thick, the edge stitch stitch_in_m in from it
         "lapel": {"width_m": 0.080, "width_pow": 2.2, "swing_u": 0.10,
-                  "gorge_below_neck_m": 0.032, "roll_m": 0.012, "edge_m": 0.003,
+                  "gorge_below_neck_m": 0.032, "gorge_drop_m": 0.045, "stitch_in_m": 0.006,
+                  "roll_m": 0.016, "edge_m": 0.0035,
                   "tip_rise_m": 0.010, "rise_h_m": 0.05, "tip_lift_m": 0.0, "min_row_m": 0.006},
         # collar (suit_neck): the fold sits reveal_* under the shirt band's top;
         # the front end lies on the lapel's top edge to the notch, then turns
@@ -58,16 +69,16 @@ DEFAULTS = {
         "collar": {"reveal_back_m": 0.014, "reveal_side_m": 0.014, "stand_min_m": 0.006,
                    "shirt_clear_m": 0.003, "body_clear_m": 0.012, "thickness_m": 0.004,
                    "fall_back_m": 0.040, "fall_side_m": 0.042, "seam_cover_m": 0.008,
-                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09,
+                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.2, "drop_m": 0.012,
                    "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015},
-        "vents": "double", "vent_height_m": 0.24, "vent_x_frac": 0.55,
+        "vents": "double", "vent_height_m": 0.20, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         "sleeve": {"columns": 28, "row_m": 0.016, "band_m": 0.012, "ease_m": 0.010,
                    "top_r_m": 0.066, "cuff_r_m": 0.046, "past_wrist_m": 0.005,
-                   "rope_m": 0.0035, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
+                   "rope_m": 0.006, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
                    "elbow_blend_m": 0.04, "uv_circ_m": 0.36},
         "pockets": {"flap_x0_m": 0.07, "flap_w_m": 0.16, "flap_h_m": 0.06,
-                    "flap_below_button_m": 0.075,
+                    "flap_below_button_m": 0.10,
                     "welt": {"from_roll_m": 0.095, "w_m": 0.105, "h_m": 0.024,
                              "above_button_m": 0.235, "slant": 0.22}},
     },
@@ -101,30 +112,104 @@ DEFAULTS = {
             "knot_top_above_band_m": 0.002, "knot_taper": 0.42, "knot_full": 0.10,
             "knot_wrap_m": 0.0015, "blade_top_w_m": 0.021,
             "blade_w_m": 0.078, "blade_full_at_m": 0.44, "dimple_m": 0.005},
-    "trousers": {"back_hem_m": 0.035, "break_from_z": 0.45, "crease_depth_m": 0.0025,
+    # trousers (suit_trousers): built on the body; build false = the stock
+    # suits01 shell tailored (suit_ops.tailor_trousers: back_hem_m, the last four keys)
+    "trousers": {"build": True,
+                 "waist_to_stature": 0.627,   # waistband top (natural rise, under the waistcoat)
+                 "waistband_m": 0.035, "crotch_drop_m": 0.02, "canvas_limit_m": 0.02,
+                 # radial allowances over the body (metres)
+                 "ease": {"waist": 0.004, "front": 0.004, "hip": 0.0045, "seat": 0.0065,
+                          "thigh_front": 0.008, "thigh_back": 0.012},
+                 # the cut: flat widths (half the leg's circumference); thigh_cut
+                 # scales the eased thigh where the cut starts (the body governs there)
+                 "knee_flat_m": 0.21, "opening_flat_m": 0.19, "thigh_cut": 0.9,
+                 "inner_gap_m": 0.0015, "crotch_close": 0.5, "seat_last_above_m": 0.03,
+                 "row_seat_m": 0.022, "row_knee_m": 0.025, "row_leg_m": 0.04, "row_break_m": 0.02,
+                 "break_zone_m": 0.20, "bridge_iters": 1,
+                 # quarter break: back hem at the heel counter, front on the vamp
+                 "back_hem_m": 0.035, "hem_slant_m": 0.02, "hem_slant_max_m": 0.08, "hem_curve": 2.5,
+                 "vamp_rest_m": 0.0015, "slant_fade_m": 0.15, "heel_clear_m": 0.004,
+                 "break_m": 0.004, "break_h_m": 0.03, "shoe_clear_m": 0.003,
+                 "crease_m": 0.0015, "back_crease_from_m": 0.80,
+                 "tuck_gap_m": 0.003, "tuck_body_min_m": 0.004,
+                 "fly_w_m": 0.035, "fly_end_above_crotch_m": 0.06,
+                 "pocket_drop_m": 0.17, "pocket_in_m": 0.04,
+                 "back_pocket_below_m": 0.06, "back_pocket_w_m": 0.13,
+                 # the stock shell's tailoring (build: false)
+                 "break_from_z": 0.45, "crease_depth_m": 0.0025,
                  "opening_half_m": 0.095, "taper_from_z": 0.50},
     "shoes": {
+        # black calf cap-toe derbies on a parametric last (suit_shoes.py)
         "build": True,              # False: keep the stock shoes04 placeholder
-        "rows": 26, "columns": 24, "band_m": 0.008, "leather_m": 0.004,
-        "heel_ease_m": 0.010, "toe_ease_m": 0.026, "toe_box_m": 0.004,
-        "topline_m": 0.064, "throat_y_m": 0.125,    # throat: this far from the toe tip
-        "cap_m": 0.075, "quarter_m": 0.16,          # seam positions from the toe tip
-        "welt_m": 0.005, "sole_m": 0.010, "heel_m": 0.026, "heel_len_m": 0.085,
-        "laces": {"count": 3, "first_m": 0.165, "pitch_m": 0.018, "half_gap_cols": 1,
-                  "eyelet_r_m": 0.0028, "radius_m": 0.0015},
+        "rows": 27, "half_columns": 9,
+        "leather_m": 0.003, "width_ease_m": 0.003, "top_ease_m": 0.004, "max_top_m": 0.12,
+        "smooth_m": 0.012,          # the last is the foot envelope smoothed along the foot
+        "heel_ease_m": 0.008, "toe_ease_m": 0.028, "heel_r_m": 0.042, "heel_p": 2.0,
+        # toe outline: superellipse exponents (2 round, higher squarer), medial straighter
+        "toe_p_lat": 1.8, "toe_p_med": 2.3, "toe_shift_m": 0.006,
+        "section_p": 2.6, "section_taper": 0.22, "ridge_shift_m": 0.004,
+        "toe_box_h_m": 0.030, "nose_p": 2.4, "toe_spring_m": 0.009,
+        "vamp_soft_m": 0.015,       # the vamp line is the convex envelope of the foot, softened
+        "seat_m": 0.014, "waist_start_m": 0.015, "heel_curve_m": 0.008,
+        "cap_m": 0.072, "cap_step_m": 0.0007,       # cap seam from the toe tip; cap leather step
+        "throat_m": 0.150, "open_m": 0.212,         # lacing throat / ankle opening front, from the toe tip
+        "tongue_row_m": 0.004,      # a full row this far ahead of the opening rounds the tongue top
+        # topline: just under the ridge at the opening's front (the tongue top), then above
+        # the foot's sole under the ankle bones and at the back
+        "topline": {"front_drop_m": 0.003, "side_lat_m": 0.050, "side_med_m": 0.055, "back_m": 0.070,
+                    "dip_at": 0.45},
+        "lip_m": 0.0025,
+        "backstay_m": 0.009, "backstay_lift_m": 0.0006, "counter_m": 0.075,
+        # flex creases behind the cap: distance from the cap seam (main ones first, then fine)
+        "creases_m": [0.013, 0.022, 0.009, 0.017, 0.027], "creases_main": 2,
+        "crease_span_m": 0.042, "crease_depth_m": 0.00045, "crease_w_m": 0.0014, "crease_tilt": 0.12,
+        "welt_m": 0.0045, "welt_heel_m": 0.002, "welt_h_m": 0.0035, "sole_m": 0.0065,
+        "heel_len_m": 0.078, "toplift_m": 0.005,
+        "facing": {"rows": 7, "width_m": 0.026, "gap_bottom_m": 0.004, "gap_top_m": 0.008,
+                   "lift_m": 0.0011, "edge_lift_m": 0.0003, "past_top_m": 0.012},
+        "laces": {"count": 3, "first_m": 0.165, "pitch_m": 0.018, "edge_in_m": 0.0055,
+                  "eyelet_r_m": 0.0024, "radius_m": 0.0011, "sides": 5,
+                  "bow": {"behind_m": 0.007, "knot_r_m": 0.0022, "knot_w_m": 0.007, "loop_pts": 11,
+                          "loop_len_m": 0.026, "loop_w_m": 0.013, "loop_fwd_m": 0.006,
+                          "tail_pts": 4, "tail_side_m": 0.022, "tail_fwd_m": 0.016}},
+        # leather surfaces (suit_leather.py): linear albedo, roughness, clear coat per region
+        "surface": {"albedo": {"upper": 0.012, "cap": 0.011, "facing": 0.012, "lip": 0.010,
+                               "lace": 0.008, "sole": 0.009, "sole_m": 0.009,
+                               "bottom": 0.030, "heel": 0.009, "toplift": 0.016},
+                    "rough": {"upper": 0.28, "cap": 0.18, "facing": 0.27, "lip": 0.45, "lace": 0.42,
+                              "sole": 0.30, "sole_m": 0.30, "bottom": 0.72,
+                              "heel": 0.34, "toplift": 0.7},
+                    "coat": {"upper": 0.45, "cap": 0.9, "facing": 0.45, "lip": 0.1, "lace": 0.15},
+                    "coat_rough": 0.08, "cap_polish": 0.05, "crease_rough": 0.08, "crease_albedo": 1.35,
+                    "paint_r": 2, "paint_amp": 0.14, "seed": 5},
     },
-    "buttons": {"segments": 8, "jacket_r_m": 0.011, "jacket_height_m": 0.004,
+    "buttons": {"segments": 16, "jacket_r_m": 0.011, "jacket_height_m": 0.004,   # rounded edge, rim, dish
                 "cuff_r_m": 0.0075, "vest_r_m": 0.0065, "vest_height_m": 0.003},
     "materials": {
-        # linear albedo, roughness, sheen (glTF: Sheen Tint is the sheen colour,
-        # Sheen Weight is ignored, so the strength goes in the tint).
-        "wool": [0.028, 0.70, 0.08],
-        "shirt": [0.75, 0.55, 0.0],
-        "silk": [0.02, 0.62, 0.12],
-        "button": [0.015, 0.3, 0.0],
+        # suit_textures.material(): albedo (linear, grey or rgb), rough, sheen
+        # (strength; the glTF sheen colour is sheen x sheen_tint), sheen_rough,
+        # spec (Specular IOR Level: 0.5 = F0 0.04), coat, coat_rough, aniso, sss.
+        # Wool: blue-black (reads black, not brown, under the 3000 K key: at
+        # direction's 0.025 grey the key lifted it to dark brown), low
+        # specular so the broad lobe does not grey it, a cool fuzz lobe at
+        # grazing angles (sheen 0.35, roughness 0.4, the tint pulls the amber
+        # out of the rim); roughness and albedo also vary per pixel (surface).
+        "wool": {"albedo": [0.013, 0.014, 0.019], "rough": 0.68, "sheen": 0.35, "sheen_rough": 0.4,
+                 "sheen_tint": [0.72, 0.8, 1.0], "spec": 0.15},
+        "shirt": {"albedo": 0.72, "rough": 0.5, "sheen": 0.2, "sheen_rough": 0.5, "spec": 0.4},
+        "silk": {"albedo": 0.015, "rough": 0.45, "sheen": 0.15, "sheen_rough": 0.35, "spec": 0.45,
+                 "aniso": 0.3},
+        "button": {"albedo": 0.012, "rough": 0.25, "spec": 0.5, "coat": 0.4, "coat_rough": 0.12},
         "leather": [0.012, 0.28, 0.0],   # polished black calf
-        "sole": [0.02, 0.65, 0.0],
+        "sole": [0.012, 0.45, 0.0],     # (maps and coat: shoes.surface)
     },
+    # per-pixel wool surface (suit_textures.surface_maps): fibre noise in
+    # roughness and albedo, cavity and fold occlusion, Kuwahara r (painterly
+    # albedo, direction.md §4), roughness offsets per "<part>:<panel tag>"
+    # (rough_noise 0.06 read as stains on the lapel and gorge close-ups)
+    "surface": {"seed": 5, "rough_noise": 0.03, "albedo_noise": 0.008, "cavity": 0.35,
+                "fold_ao": 0.55, "ao_in_albedo": 0.35, "kuwahara": 1,
+                "panel_rough": {"suit_jacket:2": -0.10, "suit_jacket:3": -0.05}},
     "textures": {"enabled": True, "wool_px": 2048, "shirt_px": 1024, "tie_px": 512,
                  "shoe_px": 1024, "seed": 3, "slope": 1.0},
     "budgets": {"jacket": 14000, "tie": 900, "waistcoat": 3000, "shirt": 2200,
@@ -139,6 +224,16 @@ PART = "suit_{}"  # set per build to "<human>.suit_<part>_export", the staged na
 
 def opts(b):
     return config.merge(DEFAULTS, b.cfg["suit"])
+
+
+def hero(b):
+    """Hero-only material detail (suit_hero.py), after the GLB export: the
+    saved .blend renders it in Cycles, the game asset never sees it."""
+    o = opts(b)
+    if not o.get("tailor", True):
+        return
+    H = config.merge(suit_hero.DEFAULTS, o.get("hero") or {})
+    b.notes["suit_hero"] = suit_hero.apply(b, H)
 
 
 def add(b):
@@ -194,18 +289,27 @@ def post(b):
     m["body_bideltoid_m"] = r(suit_jacket.body_bideltoid(body))
 
     parts = suit_ops.split_shell(b, shell, PART)
-    trousers = parts["trousers"]
+    T = o["trousers"]
+    # the stock trousers stay as the placement reference (parent, collections)
+    # until the built ones exist; renamed so the built ones get the part name
+    trousers = stock = parts["trousers"]
+    if T["build"]:
+        stock.name = stock.data.name = PART.format("stocktrousers")
     for k in ("jacket", "shirt", "tie", "knot"):
         suit_ops.drop(b, parts[k])
     for x in parts["buttons"]:
         suit_ops.drop(b, x)
-    waistband = max(v.co.z for v in trousers.data.vertices)
+    if T["build"]:
+        waistband = suit_trousers.waistband_z(stature, T)
+    else:
+        waistband = max(v.co.z for v in trousers.data.vertices)
     m["waistband_top_z"] = r(waistband)
     m["waistband_to_stature"] = r(waistband / stature)
     z_b = o["button_stance"] * stature
     m["button_stance_to_stature"] = r(z_b / stature)
 
-    mats = {k: suit_textures.material(f"suit_{k}", *v) for k, v in o["materials"].items()}
+    mats = {k: (suit_textures.material(f"suit_{k}", **v) if isinstance(v, dict)
+                else suit_textures.material(f"suit_{k}", *v)) for k, v in o["materials"].items()}
 
     neck = suit_neck.NeckFrame(body, supra, o["shirt"]["collar"])
     G = sb.Garment(PART.format("jacket"), arm, body)
@@ -219,16 +323,36 @@ def post(b):
     m.update(inner["measure"])
     vest, shirt, tie, buttons = inner["vest"], inner["shirt"], inner["tie"], inner["buttons"]
 
-    m["trousers"], tmarks = suit_ops.tailor_trousers(trousers, o["trousers"])
-    trousers.data.materials.clear()
-    trousers.data.materials.append(mats["wool"])
-    if o["shoes"]["build"]:
+    if o["shoes"]["build"]:   # before the trousers: the hem rests on them
         if shoes is not None:
             suit_ops.drop(b, shoes)
-        shoes, m["shoes"] = suit_shoes.build(b, body, o["shoes"], arm, trousers, mats, PART)
+        shoes, m["shoes"] = suit_shoes.build(b, body, o["shoes"], arm, stock, mats, PART)
+    if T["build"]:
+        outer = [(jacket, jk.z_h), (vest, min(v.co.z for v in vest.data.vertices))]
+        trousers, m["trousers"], tmarks = suit_trousers.build(b, body, T, arm, stock, mats, PART,
+                                                              stature, shoes=shoes, outer=outer)
+        suit_ops.drop(b, stock)
+    else:
+        m["trousers"], tmarks = suit_ops.tailor_trousers(trousers, T)
+        trousers.data.materials.clear()
+        trousers.data.materials.append(mats["wool"])
     body.free()
     bpy.data.meshes.remove(src_me)
     b.suit_src = None
+
+    # cloth-sim fold detail (suit_drape): jacket and trousers on the full body
+    folds = {}
+    D = config.merge(suit_drape.DEFAULTS, o.get("drape") or {})
+    if D["enabled"] and o["textures"]["enabled"]:
+        body_ob = max((x for x in b.meshes() if "body" in x.vertex_groups),
+                      key=lambda x: len(x.data.vertices))
+        garments = {"jacket": (jacket, jacket_pins(jk, arm)),
+                    "trousers": (trousers, trouser_pins(arm))}
+        cols = [shoes] if shoes is not None else []
+        y_b = _front_y(jacket, jk.z_b)
+        extra = {"button": [(Vector((0.0, y_b, jk.z_b)), Vector((0, -1, 0)))]}
+        fobs, m["drape"] = suit_drape.run(b, D, garments, body_ob, cols, extra)
+        folds = {f.garment.name: f for f in fobs.values()}
 
     debug_tags = None
     if os.environ.get("SUIT_DEBUG_TAGS"):   # diagnosis: colour the jacket's panels
@@ -244,7 +368,9 @@ def post(b):
                                                 "waistcoat": vest, "shirt": shirt, "tie": tie,
                                                 "buttons": buttons,
                                                 "shoes": shoes if o["shoes"]["build"] else None},
-                                            mats, marks)
+                                            mats, marks, folds)
+    for f in folds.values():
+        f.free()
     else:
         m.get("shoes", {}).pop("marks", None)
         suit_textures.strip_panel_attr([jacket, trousers, vest, shirt, tie, shoes])
@@ -278,6 +404,80 @@ def post(b):
 
 def r(x, n=4):
     return round(x, n)
+
+
+# --- drape pins (suit_drape) ----------------------------------------------------------------
+
+def _smooth(t):
+    import numpy as np
+    t = np.clip(t, 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def _front_y(ob, z):
+    hit = sb.bvh_of([ob]).ray_cast(Vector((0.0, -1.0, z)), Vector((0, 1, 0)), 2.0)
+    return hit[0].y if hit[0] is not None else -0.15
+
+
+def jacket_pins(jk, arm):
+    """Pin weights for the jacket drape: the tailored, canvassed zones follow
+    the skin (collar, lapels, pockets, the chest above the button, the back
+    above the shoulder blades, the sleeve head, the buttoned front); the
+    sleeves, the waist, the lower back and the skirt hang free. The cuff is
+    lightly pinned so it stays at the wrist while the elbow moves. Shrink: a
+    waist band at the fastened button (the X pull lines)."""
+    import numpy as np
+    T = suit_jacket.TAG
+    J = lambda n: np.array(arm.matrix_world @ arm.data.bones[n].head_local)   # noqa: E731
+
+    def fn(co, tag):
+        z, y = co[:, 2], co[:, 1]
+        front = _smooth((-y + 0.02) / 0.06)          # 1 on the front half
+        chest = _smooth((z - (jk.z_b + 0.07)) / 0.10)
+        # the back hangs from the shoulder blades: full pin above the pit, easing
+        # to 0.35 at the waist and 0 at the seat (no shelf where the pin ends)
+        back = np.clip(0.35 + 0.65 * _smooth((z - (jk.z_b + 0.02)) / (jk.z_pit - jk.z_b)), 0, 1) \
+            * _smooth((z - jk.z_hip) / 0.08)
+        pin = front * chest + (1 - front) * back
+        # the buttoned front edges: both panels overlap at the button
+        d_btn = np.hypot(co[:, 0], z - jk.z_b)
+        pin = np.maximum(pin, np.exp(-(d_btn / 0.03) ** 2) * front)
+        for t in (T["collar"], T["lapel"], T["pocket"], T["welt"]):
+            pin[tag == t] = 1.0
+        for s, t in (("l", T["sleeve_l"]), ("r", T["sleeve_r"])):
+            sel = tag == t
+            dS = np.linalg.norm(co - J(f"upperarm_{s}"), axis=1)
+            dW = np.linalg.norm(co - J(f"hand_{s}"), axis=1)
+            w = np.maximum(1.0 - _smooth((dS - 0.07) / 0.06), 0.5 * (1.0 - _smooth((dW - 0.05) / 0.04)))
+            pin[sel] = w[sel]
+        shrink = np.exp(-((z - jk.z_b) / 0.05) ** 2) * front * (tag == T["block"])
+        # bending stiffness: canvassed chest, lapels, collar stiff; back medium; sleeves soft
+        stiff = np.where(tag == T["block"], 0.4 + 0.6 * front * chest, 0.25)
+        for t in (T["collar"], T["lapel"], T["pocket"], T["welt"]):
+            stiff[tag == t] = 1.0
+        return pin, shrink, stiff
+    return fn
+
+
+def trouser_pins(arm):
+    """Trousers hang from the waistband and the top of the seat; the legs
+    follow the skinned shape softly (a free leg swung by the knee and hip
+    bend stretched against the shoe), the hem firmly (it rests on the shoe
+    and moves with the foot: fully pinned over the modelled break, which
+    lies within the collision distance of the shoe; soft there, the shoe
+    pushes it into a crumpled ring and fails the strain gate); the knee back
+    and the crotch stay soft."""
+    import numpy as np
+    z_hip = (arm.matrix_world @ arm.data.bones["pelvis"].head_local).z
+
+    def fn(co, tag):
+        pin = _smooth((co[:, 2] - (z_hip - 0.10)) / 0.08)
+        leg = 0.12
+        hem = _smooth((0.20 - co[:, 2]) / 0.08)
+        pin = np.maximum(pin, np.maximum(leg, hem))
+        stiff = np.full(len(co), 0.6)
+        return pin, np.zeros(len(co)), stiff
+    return fn
 
 
 # --- hidden-surface removal ----------------------------------------------------------------
