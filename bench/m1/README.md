@@ -61,6 +61,8 @@ Example candidate:
 | `<view>_mask.png` | silhouette, white = character |
 | `face_front_mask.png`, `face_profile_mask.png` | head silhouette with only the body and eyes shown (hair, clothes and face cards hidden), orthographic, 0.42 m frame; long hair hides head edits from `closeup`, these don't |
 | `face_strip.png`, `face/` | hair-hidden face strip (body, eyes, brows, lashes, mouth parts): front, ¾ key side (−35°), ¾ shadow side (+35°), profile (−90°), 320² each; row 1 full studio, row 2 key only, optional row 3 key only with the body shaded smooth-by-angle (`--facet DEG` on `lookdev_render.py`, a planarity test that doesn't ship) |
+| `detail_strip.png`, `detail/` | fidelity close-ups, everything shown, studio light, 384² each: left eye, nose in profile, mouth, back and palm of the left hand (face-C fidelity track, `head.md` §8) |
+| `skin_*.png`, `eyes_*.png` | the generated skin and eye maps (albedo, ORM, normal) when `head.refine.skin.save_maps` is on; the same images are packed into the GLB |
 | `read40.png` | the 40 px read test image (48 px, upscaled ×4) with its sample boxes: eye band red, cheek cyan, beard yellow |
 | `render_metrics.json` | raw metrics from the render pass |
 | `metrics.json` | the merged record (below) |
@@ -97,6 +99,8 @@ Blender exits 0 on a Python error, so both Blender calls run with `--python-exit
 | `spec_checks.<name>` | `{value, target, tol, ok}` against look-spec §1.2 (`brow_overhang`: ≥ 12 mm). The sheet header shows them, `+` = within tolerance, `!` = out |
 | `read40` | look-spec §2.2 read test: a ¾ render from the key-light side (azimuth −40°), key light only, the head rendered 320 px tall and box-averaged ×8 to 40 px, read from a **scene-linear EXR** (independent of exposure and view transform). `eye_band_darker` = 1 − L(eye band) / L(cheek); pass ≥ 0.75 (`READ_EYE_MIN`; calibrated 2026-10-12: stock head 0.71, the checkpoint variants 0.76–0.81). `beard_contrast` = \|L(beard) − L(cheek)\| / L(cheek); pass ≥ 0.47 (the spec's 25 % in display terms), skipped until a mesh named `*beard*` exists. The hair-vs-grey separation check is not implemented yet (hair track). |
 | `head_edits` | the resolved controls and plane blends, max vertex move (mm), vertices moved |
+| `spec_checks.nose_hump_mm`, `nose_proj_ratio` | caricature guard for face C (`head_measure.py`): dorsal hump over the nasion–pronasale chord ≤ 2.5 mm; nose projection ÷ length 0.60 ± 0.10 |
+| `refine.head_refine / skin / eyes` | the fidelity stage: subdivision face counts, re-planarisation move, sculpt amplitudes, UV re-pack scales, skin map sizes and timing, eye sphere fit |
 | `landmarks_glb.stature_m` | (context) joint/vertex measures of the **shipped** GLB: top of the body mesh to the lowest point of any mesh (shoe soles) |
 | `landmarks_glb.head_height_m / width_m / depth_m` | extent of body vertices with ≥ 0.5 weight on `head`: crown to the lowest such vertex (≈ chin/jaw), and its x / y extent (incl. ears) |
 | `landmarks_glb.heads_tall` | stature / head height (shoes included; reads lower than the spec value) |

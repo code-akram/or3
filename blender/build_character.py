@@ -70,6 +70,7 @@ def build_config(a):
 def main():
     a = parse_args()
     b = Build(build_config(a))
+    b.out_dir = os.path.dirname(os.path.abspath(a.out))
 
     def enable(b):
         b.mpfb = Mpfb(b.cfg["assets"]["system"], b.cfg["assets"]["suit"])
@@ -88,6 +89,7 @@ def main():
     b.step("head_post", head.post)
     b.step("suit_post", suit.post)
     b.step("hair_post", hair.post)  # after the suit, so hair collides with the final collar
+    b.step("head_refine", head.refine)  # dense face/hands, skin and eye textures (hair/beard sampled the low-res body)
     b.step("rig_post", rig.post)
     b.step("budgets", budgets.apply)
     b.step("fix_alpha", export.fix_alpha)

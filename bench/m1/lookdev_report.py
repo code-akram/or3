@@ -84,6 +84,10 @@ def finalize(a):
         "read40": rm.get("read40"),
         "landmarks_glb": rm.get("landmarks_glb", rm.get("landmarks")),
         "head_edits": build.get("head_edits"),
+        # Face-C fidelity stage (head_refine / skin_tex / eyes_hq): subdivision,
+        # re-planarisation, sculpt, UV re-pack, generated skin and eye stats.
+        "refine": {k: build.get(k) for k in ("head_refine", "skin", "eyes") if build.get(k)} or None,
+        "detail_strip": rm.get("detail_strip"),
         "silhouette": rm["silhouette"],
         "iou_target": rm["iou_target"],
         "iou_prev": rm["iou_prev"],
@@ -115,7 +119,7 @@ def spec_line(m):
     short = {"stature": "stat", "heads_tall": "heads", "bideltoid": "bidelt",
              "shoulder_to_hip": "sh:hip", "leg_ratio": "leg", "leg_to_torso": "leg:tor",
              "bizygomatic": "bizyg", "jaw_to_cheek": "jaw:chk", "lower_face_index": "lfi",
-             "brow_overhang": "brow"}
+             "brow_overhang": "brow", "nose_hump_mm": "hump", "nose_proj_ratio": "nose"}
     parts = []
     for k, c in ch.items():
         v = c["value"] * 1000 if k == "brow_overhang" else c["value"]

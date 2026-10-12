@@ -46,7 +46,7 @@ FACE_MASK_VIEWS = {
     "face_front": (0.0, "head"),
     "face_profile": (90.0, "head"),
 }
-FACE_PARTS = ("body", "low-poly")
+FACE_PARTS = ("body", "low-poly", "eyes_hq")
 # Fixed framing for body views (metres, character feet at z = 0, facing -Y).
 BODY_TARGET_Z = 0.98
 BODY_FRAME_H = 2.15
@@ -66,7 +66,7 @@ READ_BEARD_MIN = 0.47
 # Face strip (hair hidden): azimuths (key-side ¾ is negative), rendered once
 # with the full studio rig and once key-only, so plane breaks show as shadow.
 STRIP_VIEWS = (("front", 0.0), ("q_key", -35.0), ("q_shadow", 35.0), ("profile", -90.0))
-STRIP_PARTS = ("body", "low-poly", "eyebrow", "eyelash", "teeth", "tongue")
+STRIP_PARTS = ("body", "low-poly", "eyes_hq", "eyebrow", "brows", "eyelash", "teeth", "tongue")
 STRIP_RES = 320
 STRIP_FRAME_H = 0.30
 # Look-dev skin (--skin lookdev): the MPFB texture desaturated and darkened a
@@ -146,8 +146,8 @@ def lookdev_skin(meshes):
         return None
     done = []
     for m in body.data.materials:
-        if not m or not m.node_tree:
-            continue
+        if not m or not m.node_tree or m.name.startswith("skin_"):
+            continue  # skin_*: our generated skin (skin_tex.py) is already the look-dev tone
         nt = m.node_tree
         p = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
         if p is None:
@@ -483,7 +483,7 @@ def read_test(out, meshes, lights, head_mid, spec):
     """look-spec §2.2 read test at a 40 px tall head under the key light only:
     eye band darker than the cheek (>= READ_EYE_MIN) and beard contrast
     against the skin (>= READ_BEARD_MIN), both in scene-linear luminance."""
-    eyes = next((o for o in meshes if "low-poly" in o.name), None)
+    eyes = next((o for o in meshes if part_name(o) in ("low-poly", "eyes_hq")), None)
     if eyes is None or not spec.get("menton_z"):
         return {"skipped": "no eye mesh or no spec landmarks (menton)"}
     body = next(o for o in meshes if part_name(o) == "body")
@@ -721,6 +721,59 @@ def face_strip(out, meshes, lights, head, floor):
             "rows": rows, "facet_deg": ARGS.facet or None, "parts": sorted({part_name(o) for o in keep})}
 
 
+DETAIL_RES = 384
+
+
+def detail_strip(out, arm, meshes, lights, head):
+    """Fidelity close-ups with everything shown, studio light, EEVEE: the
+    left eye, the nose in profile, the mouth, the back and the palm of the
+    left hand. Writes detail_strip.png (one row) and detail/<name>.png."""
+    import subprocess
+    scene = bpy.context.scene
+    ddir = os.path.join(out, "detail")
+    os.makedirs(ddir, exist_ok=True)
+    r = scene.render
+    r.engine = "BLENDER_EEVEE"
+    scene.eevee.taa_render_samples = 16
+    r.resolution_x = r.resolution_y = DETAIL_RES
+    r.film_transparent = False
+    r.image_settings.color_mode = "RGB"
+    mw = arm.matrix_world
+    eyes = next((o for o in meshes if part_name(o) in ("low-poly", "eyes_hq")), None)
+    if eyes is not None:
+        eco = np.array([(eyes.matrix_world @ v.co)[:] for v in eyes.data.vertices])
+        eye_l = Vector(eco[eco[:, 0] > 0].mean(0))
+    else:
+        eye_l = head + Vector((0.03, -0.09, 0.0))
+    hand = mw @ arm.data.bones["hand_l"].head_local
+    mid = mw @ arm.data.bones["middle_01_l"].head_local
+    hand_c = hand * 0.35 + mid * 0.65
+    nose = Vector((0.0, eye_l.y - 0.035, eye_l.z - 0.035))
+    shots = (("eye", eye_l, -20.0, 5.0, 0.075), ("nose", nose, -90.0, 0.0, 0.13),
+             ("mouth", eye_l + Vector((-eye_l.x, -0.02, -0.075)), 0.0, -8.0, 0.10),
+             ("hand_back", hand_c, 15.0, 30.0, 0.17), ("hand_palm", hand_c, 165.0, -20.0, 0.17))
+    secs, paths = 0.0, []
+    for name, target, az, el, frame_h in shots:
+        a, e = math.radians(az), math.radians(el)
+        axis = Vector((math.sin(a) * math.cos(e), -math.cos(a) * math.cos(e), math.sin(e)))
+        cd = bpy.data.cameras.new("detail_" + name)
+        cd.lens = 85.0
+        dist = (frame_h * 0.5) / math.tan(math.atan(cd.sensor_width * 0.5 / cd.lens))
+        cam = bpy.data.objects.new("detail_" + name, cd)
+        scene.collection.objects.link(cam)
+        cam.location = target + axis * dist
+        look_at(cam, target)
+        scene.camera = cam
+        p = os.path.join(ddir, f"{name}.png")
+        secs += render(p)
+        paths.append(p)
+    inputs = [x for p in paths for x in ("-i", p)]
+    fc = "".join(f"[{i}]" for i in range(len(paths))) + f"hstack={len(paths)}"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", *inputs, "-filter_complex", fc,
+                    os.path.join(out, "detail_strip.png")], check=True)
+    return {"render_s": round(secs, 3), "views": [s[0] for s in shots]}
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -797,6 +850,8 @@ def main():
     if not ARGS.no_face_strip:
         with timed("face_strip"):
             metrics["face_strip"] = face_strip(out, meshes, lights, head, floor)
+        with timed("detail_strip"):
+            metrics["detail_strip"] = detail_strip(out, arm, meshes, lights, head)
     metrics["silhouette"] = sil
     metrics["iou_target"] = score(ARGS.target)
     metrics["iou_prev"] = score(ARGS.prev)
