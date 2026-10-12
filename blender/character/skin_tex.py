@@ -26,6 +26,7 @@ Pipeline (cfg["head"]["refine"]["skin"]):
          Subdivision modifier (1 px dicing).
 """
 
+import math
 import os
 import time
 
@@ -515,10 +516,17 @@ def build(b):
 HERO = {
     "sss_radius": (1.0, 0.25, 0.12), "sss_scale": 0.0025, "sss_ior": 1.4, "sss_anisotropy": 0.8,
     "specular": 0.5, "ior": 1.4,
-    "coat": 0.05, "coat_oil": 0.18, "coat_roughness": 0.25,
+    "coat": 0.04, "coat_oil": 0.11, "coat_roughness": 0.28,
     "sheen": 0.1, "sheen_roughness": 0.4, "sheen_tint": (1.0, 0.93, 0.88),
-    "pore_scale": 1.3,
-    "micro_mm": 0.014, "micro_scale": 1600.0, "micro_width": 0.09, "micro_break": 0.45,
+    "pore_scale": 1.6, "pore_dark": 0.02, "pore_rough": 0.12,
+    # cross-hatched tension furrows: line angle from horizontal (deg) and weight.
+    # 0.5 mm spacing (the primary lines; the 0.15-0.3 mm secondary net is below
+    # a pixel even in the 135 mm close-up, so the fine grain stands in for it)
+    "micro_mm": 0.035, "micro_period_mm": 0.5, "micro_dirs": ((38.0, 1.0), (-42.0, 0.9), (85.0, 0.5)),
+    "micro_width": 0.3, "micro_distort": 5.0, "micro_distort_scale": 0.5, "micro_break": 0.7,
+    "micro_patch_scale": 700.0,
+    "fine_mm": 0.004, "fine_scale": 20000.0,
+    "rough_plateau": -0.03, "rough_furrow": 0.10,
     "dicing_px": 1.0, "max_subdivisions": 10,
     "displacement": True,
 }
@@ -555,10 +563,8 @@ def hero_material(name, im, hc, layers):
     def tex(img, y):
         return _node(nt, "ShaderNodeTexImage", -900, y, image=img)
     ta = tex(im["albedo"], 600)
-    nt.links.new(ta.outputs["Color"], p.inputs["Base Color"])
     sep = _node(nt, "ShaderNodeSeparateColor", -600, 300)
     nt.links.new(tex(im["orm"], 300).outputs["Color"], sep.inputs[0])
-    nt.links.new(sep.outputs["Green"], p.inputs["Roughness"])
     mh = _node(nt, "ShaderNodeSeparateColor", -600, 0)
     nt.links.new(tex(im["mask_hero"], 0).outputs["Color"], mh.inputs[0])
     oil, fuzz, micro_w = mh.outputs["Red"], mh.outputs["Green"], mh.outputs["Blue"]
@@ -590,6 +596,7 @@ def hero_material(name, im, hc, layers):
     mp = _node(nt, "ShaderNodeSeparateColor", -600, -700)
     nt.links.new(tex(im["mask_pores"], -700).outputs["Color"], mp.inputs[0])
     y = -1000
+    opening = None                                   # 0..1 inside a pore, weighted by the region
     for ch, (scale, r, depth_mm) in zip(("Red", "Green", "Blue"), layers):
         if depth_mm <= 0:
             continue
@@ -605,30 +612,80 @@ def hero_material(name, im, hc, layers):
         nt.links.new(vo.outputs["Distance"], mr.inputs["Value"])
         pit = _math(nt, "MULTIPLY", mr.outputs["Result"], mp.outputs[ch], -600, y)
         total = _math(nt, "SUBTRACT", total, pit, -300, y)
+        op = _node(nt, "ShaderNodeMapRange", -900, y - 120, interpolation_type="SMOOTHSTEP")
+        op.inputs["From Min"].default_value = 0.0
+        op.inputs["From Max"].default_value = r * 0.85
+        op.inputs["To Min"].default_value = 1.0
+        op.inputs["To Max"].default_value = 0.0
+        nt.links.new(vo.outputs["Distance"], op.inputs["Value"])
+        o = _math(nt, "MULTIPLY", op.outputs["Result"], mp.outputs[ch], -600, y - 120)
+        opening = o if opening is None else _math(nt, "MAXIMUM", opening, o, -450, y - 120)
         y -= 250
+    # micro relief: the skin-tension cross-hatch (two distorted wave fields at
+    # +-angle to the horizontal, narrow valleys at the wave minima), broken in
+    # patches, plus a fine grain; the pores sit in it. Relief, not colour.
+    furrow = None
     if hc["micro_mm"] > 0:
-        ve = _node(nt, "ShaderNodeTexVoronoi", -1200, y, feature="DISTANCE_TO_EDGE")
-        ve.inputs["Scale"].default_value = hc["micro_scale"]
-        nt.links.new(rest.outputs["Vector"], ve.inputs["Vector"])
-        mr = _node(nt, "ShaderNodeMapRange", -900, y, interpolation_type="SMOOTHSTEP")
-        mr.inputs["From Min"].default_value = 0.0
-        mr.inputs["From Max"].default_value = hc["micro_width"]
-        mr.inputs["To Min"].default_value = hc["micro_mm"]
-        mr.inputs["To Max"].default_value = 0.0
-        nt.links.new(ve.outputs["Distance"], mr.inputs["Value"])
-        # broken lines: a 3 mm noise fades the network in patches
-        nz = _node(nt, "ShaderNodeTexNoise", -1200, y - 250)
-        nz.inputs["Scale"].default_value = 300.0
+        scale = 2 * math.pi / (20.0 * hc["micro_period_mm"] * 0.001)
+        for k, (ang, wgt) in enumerate(hc["micro_dirs"]):
+            mpn = _node(nt, "ShaderNodeMapping", -1350, y, vector_type="POINT")
+            mpn.inputs["Rotation"].default_value = (0.0, math.radians(90.0 - ang), 0.0)
+            nt.links.new(rest.outputs["Vector"], mpn.inputs["Vector"])
+            wv = _node(nt, "ShaderNodeTexWave", -1200, y, wave_type="BANDS", bands_direction="X",
+                       wave_profile="SIN")
+            wv.inputs["Scale"].default_value = scale
+            wv.inputs["Distortion"].default_value = hc["micro_distort"]
+            wv.inputs["Detail"].default_value = 2.0
+            wv.inputs["Detail Scale"].default_value = hc["micro_distort_scale"]
+            wv.inputs["Phase Offset"].default_value = 1.3 * k
+            nt.links.new(mpn.outputs["Vector"], wv.inputs["Vector"])
+            vr = _node(nt, "ShaderNodeMapRange", -900, y, interpolation_type="SMOOTHSTEP")
+            vr.inputs["From Min"].default_value = 0.0
+            vr.inputs["From Max"].default_value = hc["micro_width"]
+            vr.inputs["To Min"].default_value = wgt
+            vr.inputs["To Max"].default_value = 0.0
+            nt.links.new(wv.outputs["Fac"], vr.inputs["Value"])
+            furrow = vr.outputs["Result"] if furrow is None else _math(nt, "MAXIMUM", furrow, vr.outputs["Result"], -600, y)
+            y -= 250
+        # patches: a ~2.5 mm noise weakens the network here and there
+        nz = _node(nt, "ShaderNodeTexNoise", -1200, y)
+        nz.inputs["Scale"].default_value = hc["micro_patch_scale"]
         nz.inputs["Detail"].default_value = 2.0
         nt.links.new(rest.outputs["Vector"], nz.inputs["Vector"])
-        br = _node(nt, "ShaderNodeMapRange", -900, y - 250, interpolation_type="SMOOTHSTEP")
-        br.inputs["From Min"].default_value = 0.42
-        br.inputs["From Max"].default_value = 0.6
-        br.inputs["To Min"].default_value = 1.0
-        br.inputs["To Max"].default_value = 1.0 - hc["micro_break"]
+        br = _node(nt, "ShaderNodeMapRange", -900, y, interpolation_type="SMOOTHSTEP")
+        br.inputs["From Min"].default_value = 0.38
+        br.inputs["From Max"].default_value = 0.62
+        br.inputs["To Min"].default_value = 1.0 - hc["micro_break"]
+        br.inputs["To Max"].default_value = 1.0
         nt.links.new(nz.outputs["Fac"], br.inputs["Value"])
-        micro = _math(nt, "MULTIPLY", _math(nt, "MULTIPLY", mr.outputs["Result"], micro_w, -600, y), br.outputs["Result"], -450, y)
-        total = _math(nt, "SUBTRACT", total, micro, -300, y)
+        furrow = _math(nt, "MULTIPLY", _math(nt, "MULTIPLY", furrow, br.outputs["Result"], -600, y), micro_w, -450, y)
+        total = _math(nt, "SUBTRACT", total, _math(nt, "MULTIPLY", furrow, hc["micro_mm"], -300, y), -150, y)
+        y -= 250
+    if hc["fine_mm"] > 0:
+        fn = _node(nt, "ShaderNodeTexNoise", -1200, y)
+        fn.inputs["Scale"].default_value = hc["fine_scale"]
+        fn.inputs["Detail"].default_value = 1.0
+        nt.links.new(rest.outputs["Vector"], fn.inputs["Vector"])
+        g = _math(nt, "MULTIPLY", _math(nt, "SUBTRACT", fn.outputs["Fac"], 0.5, -900, y), 2.0 * hc["fine_mm"], -750, y)
+        total = _math(nt, "SUBTRACT", total, _math(nt, "MULTIPLY", g, micro_w, -600, y), -300, y)
+        y -= 250
+    # colour: pore openings at most a couple of percent darker
+    if opening is not None and hc["pore_dark"] > 0:
+        dk = _node(nt, "ShaderNodeMix", 100, 600, data_type="RGBA", blend_type="MULTIPLY")
+        nt.links.new(_math(nt, "MULTIPLY", opening, hc["pore_dark"], -100, 650), dk.inputs["Factor"])
+        nt.links.new(ta.outputs["Color"], dk.inputs["A"])
+        dk.inputs["B"].default_value = (0.55, 0.42, 0.40, 1.0)
+        nt.links.new(dk.outputs["Result"], p.inputs["Base Color"])
+    else:
+        nt.links.new(ta.outputs["Color"], p.inputs["Base Color"])
+    # roughness at micro scale: pores and furrow valleys rougher, plateaus a
+    # little glossier, so a highlight breaks into a stipple
+    rough = _math(nt, "ADD", sep.outputs["Green"], hc["rough_plateau"], -250, 420)
+    if opening is not None and hc["pore_rough"] > 0:
+        rough = _math(nt, "ADD", rough, _math(nt, "MULTIPLY", opening, hc["pore_rough"], -250, 380), -100, 380)
+    if furrow is not None and hc["rough_furrow"] > 0:
+        rough = _math(nt, "ADD", rough, _math(nt, "MULTIPLY", furrow, hc["rough_furrow"], -250, 340), -100, 340)
+    nt.links.new(rough, p.inputs["Roughness"])
     disp = _node(nt, "ShaderNodeDisplacement", 400, -400, space="WORLD")
     disp.inputs["Midlevel"].default_value = 0.0
     disp.inputs["Scale"].default_value = 0.001

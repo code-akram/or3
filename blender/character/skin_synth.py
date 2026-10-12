@@ -186,10 +186,11 @@ def synth_head(m, c, cl, cr):
     # forehead: two broken lines, slightly tilted (asymmetry), arched, wavy;
     # breaks on the centimetre scale (low-frequency noise), depth varies
     for i, (hh, amp) in enumerate(((0.050, c["forehead_mm"]), (0.063, 0.8 * c["forehead_mm"]))):
-        wav = 0.0012 * np.sin(x * 160.0 + 1.7 * i) + 0.0006 * np.sin(x * 410.0 + 0.6 * i)
+        wav = 0.0011 * np.sin(x * 120.0 + 1.7 * i) + 0.00025 * np.sin(x * 410.0 + 0.6 * i)
         b_ = h - (hh + 0.004 * (1 - (u / 0.05) ** 2) + 0.0025 * x / 0.05 + wav)
-        brk = smoothstep(0.38, 0.55, m.mot_low if i == 0 else 1 - m.mot_low) * (0.5 + 0.5 * smoothstep(0.3, 0.6, m.broad))
-        prof = groove(np.abs(b_), None, amp * MM * k, 0.0006, fade=None)
+        brk = smoothstep(0.30, 0.48, m.mot_low if i == 0 else 1 - m.mot_low) * (0.55 + 0.45 * smoothstep(0.3, 0.6, m.broad))
+        prof = 0.55 * groove(np.abs(b_), None, amp * MM * k, 0.0012, fade=None) \
+            + 0.45 * groove(np.abs(b_), None, amp * MM * k, 0.0004, fade=None)
         lines -= prof * smoothstep(0.050, 0.025, u) * R["forehead"] * brk
     # glabellar frown line: left only (character's left, +x)
     d, tt = polyline(x, h, [(0.0045, 0.006), (0.0060, 0.014)])
@@ -208,10 +209,12 @@ def synth_head(m, c, cl, cr):
             d, tt = polyline(fr.f, h, [p0, p1])
             lines -= groove(d, tt, c["crows_mm"] * MM * k, 0.0004, fade="end") * lat * sm
     # under-eye lines (fine, the lid-cheek junction)
-    for pts, amp in (([(0.017, -0.0095), (0.030, -0.0125), (0.046, -0.0085)], 0.07),
-                     ([(0.021, -0.0155), (0.033, -0.0175), (0.044, -0.0145)], 0.05)):
+    # (no raised shoulders: under the hero key a shouldered groove here caught
+    # a bright rim along the lid-cheek junction)
+    for pts, amp in (([(0.017, -0.0095), (0.030, -0.0125), (0.046, -0.0085)], 0.04),
+                     ([(0.021, -0.0155), (0.033, -0.0175), (0.044, -0.0145)], 0.03)):
         d, tt = polyline(u, h, pts)
-        lines -= groove(d, tt, amp * MM * k, 0.0005)
+        lines -= groove(d, tt, amp * MM * k, 0.0006, shoulder=0.0)
     # lid and under-eye crepe: fine, broken creases roughly concentric with the
     # eye (thin skin folds this way), warped by the mid noise and broken by the
     # horizontally stretched noise, so the under-eye sheen breaks up instead of
@@ -291,7 +294,7 @@ def synth_head(m, c, cl, cr):
     blem = smoothstep(0.76, 0.80, m.vein_var) * smoothstep(0.7, 0.8, m.speck) * (R["cheek"] + 0.5 * R["forehead"] + 0.6 * R["chin"])
     tint(blem * c["blemish"], (1.06, 0.88, 0.86))
     # pores and creases darken slightly
-    alb *= (1 - 0.30 * pit)[..., None]
+    alb *= (1 - c["cavity_albedo"] * pit)[..., None]          # pores and lines are relief, not colour
     # plane paint (look-spec §0, capped at 0.06 by direction §4) and AO
     L = np.array([0.0, -0.45, 1.0], np.float32)
     L /= np.linalg.norm(L)
@@ -318,7 +321,8 @@ def synth_head(m, c, cl, cr):
     rough += (m.mot_mid - 0.5) * 0.06 + pit * 0.10
     lip_r = c["rough_lips"] + 0.12 * smoothstep(0.55, 0.72, m.aniso_v)
     rough = rough * (1 - lw) + lip_r * lw
-    lid = gauss(fr.eye_d - c["lid_margin_r"], 0.0008)
+    # wet lid margin: the rim that touches the eye only, not the lid's front skin
+    lid = gauss(fr.eye_d - c["lid_margin_r"], 0.0004) * (1 - smoothstep(0.0164, 0.0170, fr.eye_d))
     rough = rough * (1 - lid) + c["rough_lid"] * lid
     rough = np.clip(rough, 0.05, 1.0)
 
@@ -397,7 +401,7 @@ def synth_hands(m, c, hf, fingers):
     nailc = srgb_to_linear(HEX(c["nail"]))
     nw = smoothstep(0.3, 0.8, nails)
     alb = alb * (1 - nw[..., None]) + nailc * nw[..., None]
-    alb *= (1 - 0.3 * pit)[..., None]
+    alb *= (1 - c["cavity_albedo"] * pit)[..., None]
     L = np.array([0.0, -0.45, 1.0], np.float32)
     L /= np.linalg.norm(L)
     alb *= (1 + c["plane_paint"] * np.clip((N * L).sum(-1), -1, 1))[..., None]
@@ -420,15 +424,15 @@ DEFAULT_HEAD = {
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
-    "freckle_thr": 0.78, "freckles": 0.35, "blemish": 0.5,
+    "freckle_thr": 0.80, "freckles": 0.22, "blemish": 0.5,
     "mottle_low": 0.10, "mottle_mid": 0.06,
     "pore_scale": 1.0, "grain_mm": 0.006,
-    "wrinkle_scale": 1.0, "forehead_mm": 0.20, "frown_mm": 0.30, "crows_mm": 0.12, "nasolabial_mm": 0.25, "lip_crease_mm": 0.08,
+    "wrinkle_scale": 1.0, "forehead_mm": 0.30, "frown_mm": 0.30, "crows_mm": 0.15, "nasolabial_mm": 0.25, "lip_crease_mm": 0.08,
     "crepe_mm": 0.02, "crepe_period": 0.0008,
-    "cavity_scale": 0.0006,
+    "cavity_scale": 0.0006, "cavity_albedo": 0.03,
     "plane_paint": 0.06, "ao_in_albedo": 0.22,
     "rough": 0.47, "rough_tzone": 0.40, "rough_beard": 0.58, "rough_ears": 0.48, "rough_lips": 0.45,
-    "lid_margin_r": 0.0165, "rough_lid": 0.2,
+    "lid_margin_r": 0.0162, "rough_lid": 0.2,
 }
 
 DEFAULT_HANDS = {
@@ -437,7 +441,7 @@ DEFAULT_HANDS = {
     "freckle_thr": 0.74, "freckles": 0.4,
     "pore_mm": 0.035, "grain_mm": 0.006,
     "knuckle_crease_mm": 0.45, "palm_crease_mm": 0.4, "palm_line_mm": 0.5, "cuticle_mm": 0.15,
-    "cavity_scale": 0.0006,
+    "cavity_scale": 0.0006, "cavity_albedo": 0.05,
     "plane_paint": 0.05, "ao_in_albedo": 0.22,
     "rough": 0.52,
 }

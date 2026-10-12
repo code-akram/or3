@@ -47,10 +47,10 @@ DEFAULTS = {
     # Eyes converge on a point this far ahead of the eye midpoint (m); 0 = parallel.
     "converge_m": 1.2,
     "pupil_deg": 9.0, "iris_deg": 30.0, "limbus_deg": 2.5,
-    "iris": "#4a2e1a", "iris_inner": "#20120a", "iris_outer": "#2e1d10", "collarette": "#7a4e2a",
-    "outer_mix": 0.6, "limbus_frac": 0.12, "limbal_dark": 0.45,
-    "sclera": "#c4b4a6", "sclera_back": "#86675f", "vein": "#a2423a", "vein_amount": 0.8,
-    "redness": 0.45, "sclera_corner": 0.15,
+    "iris": "#4a2e1a", "iris_inner": "#20120a", "iris_outer": "#2e1d10", "collarette": "#8e5e33",
+    "outer_mix": 0.6, "limbus_frac": 0.12, "limbal_dark": 0.55,
+    "sclera": "#bdab9d", "sclera_back": "#86675f", "vein": "#a2423a", "vein_amount": 0.8,
+    "redness": 0.45, "sclera_corner": 0.30,
     # Lid occlusion baked into the eye (the game's eye-occlusion shell): darker
     # within *_mm of the upper / lower lid, from rays cast against the body.
     "lid_occlusion": True, "lid_probe_mm": 4.0,
@@ -336,14 +336,15 @@ def texture(c, lids=None):
         fib = fbm(U * 140, ri * 6 + side * 7, 140, seed + 11, 3)           # radial fibres
         fib2 = fbm(U * 60, ri * 3, 60, seed + 23, 2)
         crypt = fbm(U * 90, ri * 14, 90, seed + 31, 3)
-        iris = lin(H(c["iris"]))[None, None] * (0.75 + 0.6 * fib + 0.2 * fib2)[..., None]
+        iris = lin(H(c["iris"]))[None, None] * (0.55 + 0.95 * fib + 0.25 * fib2)[..., None]
         inner = lin(H(c["iris_inner"]))
         outer = lin(H(c["iris_outer"]))
         coll = lin(H(c["collarette"]))
         w_in = skin_tex.gauss(ri, 0.10)
         iris = iris * (1 - w_in[..., None]) + inner[None, None] * w_in[..., None]
         cw = skin_tex.gauss(ri - (0.36 + 0.06 * (fib2 - 0.5)), 0.045) * (0.5 + fib)
-        iris = iris * (1 - 0.6 * cw[..., None]) + coll[None, None] * (0.6 * cw)[..., None]
+        cw = np.clip(cw, 0, 1)
+        iris = iris * (1 - 0.8 * cw[..., None]) + coll[None, None] * (0.8 * cw)[..., None]
         cr = ss(0.62, 0.72, crypt) * ss(0.35, 0.6, ri)
         iris *= (1 - 0.55 * cr)[..., None]
         w_out = ss(0.55, 1.0, ri) ** 1.5 * c["outer_mix"]
@@ -372,7 +373,7 @@ def texture(c, lids=None):
         scl *= (1 + halo[..., None] * (np.array((1.08, 0.78, 0.76), np.float32) - 1))
         # corners (nasal and temporal) darker and warmer
         corner = np.abs(np.cos(phi)) ** 3 * ss(idg + 6, idg + 22, theta)
-        scl *= (1 + (corner * c["sclera_corner"])[..., None] * (np.array((0.97, 0.90, 0.88), np.float32) - 1))
+        scl *= (1 + (corner * c["sclera_corner"])[..., None] * (np.array((0.97, 0.84, 0.81), np.float32) - 1))
         # compose
         in_iris = ss(idg + 0.4, idg - 0.4, theta)
         col = iris * in_iris[..., None] + scl * (1 - in_iris)[..., None]
@@ -524,7 +525,7 @@ HERO = {
     "cornea_ior": 1.376, "cornea_rough": 0.02, "film_rough": 0.04,
     "occl_mix": 0.5,           # share of the baked lid occlusion kept on the hero eyeball
     "iris_rough": 0.6, "sclera_rough": 0.14, "sclera_specular": 0.5, "eyeball_sss": 0.3,
-    "meniscus_mm": 0.12, "meniscus_rough": 0.05, "meniscus_ior": 1.336,
+    "meniscus_mm": 0.15, "meniscus_rough": 0.05, "meniscus_ior": 1.336,
     "caruncle": "#a57a72", "caruncle_mm": (1.8, 1.1, 0.5), "caruncle_deg": 5.0,
 }
 
