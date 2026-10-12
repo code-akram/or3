@@ -13,6 +13,8 @@ in that panel's UV space:
     ("crease", [(u, v), ...])      a pressed crease ridge
     ("buttonhole", (u, v), length) a keyhole bar-tack
     ("welt", [(u, v), ...])        a raised welt strip (pocket mouths)
+    ("jet", [(u, v), (u, v)])      a jetted pocket: two narrow lips either side
+                                   of a slit, bar-tacked at both ends
 
 apply() packs the panels of a material group into one atlas (uniform texel
 density), rewrites the UVs, draws the height map with numpy, converts it to a
@@ -247,6 +249,16 @@ class Height:
     def crease(self, pts, height=0.0009, width_m=0.004):
         self.line(pts, self.ridge(height, width_m), width_m * 1.5)
 
+    def jet(self, pts, lip_m=0.005, height=0.0007):
+        """Jetted pocket: a slit (groove) between two narrow lips, bar tacks at the ends."""
+        self.line(pts, self.groove(0.0008, 0.0012), 0.002)
+        for sign in (1, -1):
+            self.line(pts, self.ridge(height, lip_m), lip_m, offset_m=sign * 0.5 * lip_m)
+        self.stitch(pts, offset_m=lip_m + 0.001, height=0.0003)
+        self.stitch(pts, offset_m=-lip_m - 0.001, height=0.0003)
+        for end in (pts[0], pts[-1]):
+            self.spot(end, 0.0015, 0.0004)
+
     def welt(self, pts, height=0.0009, width_m=0.012):
         self.line(pts, self.ridge(height, width_m), width_m)
         self.stitch(pts, offset_m=width_m * 0.5 + 0.001, height=0.0003)
@@ -318,6 +330,8 @@ def draw_marks(H, layout, marks, side):
                 H.edge([T(p) for p in data], **(mark[2] if len(mark) > 2 else {}))
             elif kind == "crease":
                 H.crease([T(p) for p in data])
+            elif kind == "jet":
+                H.jet([T(p) for p in data])
             elif kind == "welt":
                 H.welt([T(p) for p in data])
             elif kind == "buttonhole":
