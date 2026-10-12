@@ -407,7 +407,7 @@ def alley(haze_density=0.0):
         col.objects.link(ob)
         ob.location = (0.4, y, 6.0)
         rig.look_at(ob, Vector((0.2, y - math.copysign(4.0, y), 0)))
-        glow = emissive("set_street_" + name, (1.0, 0.55, 0.2) if temp < 3000 else (0.7, 0.85, 1.0), 0.08, False)
+        glow = emissive("set_street_" + name, (1.0, 0.55, 0.2) if temp < 3000 else (0.7, 0.85, 1.0), 0.03, False)
         quad(col, "set_street_" + name + "_bg",
              [V((-8, math.copysign(L / 2 - 0.01, y), 0)), V((8, math.copysign(L / 2 - 0.01, y), 0)),
               V((8, math.copysign(L / 2 - 0.01, y), 9)), V((-8, math.copysign(L / 2 - 0.01, y), 9))],

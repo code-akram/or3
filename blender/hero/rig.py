@@ -166,6 +166,20 @@ def _character_from_scene():
     for o in bpy.context.scene.objects:
         if o.type == "MESH" and o not in objs:
             o.hide_render = True
+    # hero_only geometry that nothing drives (no parent, no armature or
+    # surface-deform modifier) would stay put when the rig is posed: pin it
+    # to the head bone, keeping its world transform.
+    head = arm.data.bones.get("head")
+    for o in objs:
+        if o.parent is None and head is not None and not any(
+                m.type in ("ARMATURE", "SURFACE_DEFORM", "NODES") for m in o.modifiers):
+            mw = o.matrix_world.copy()
+            o.parent = arm
+            o.parent_type = "BONE"
+            o.parent_bone = "head"
+            bpy.context.view_layer.update()
+            o.matrix_world = mw
+            print(f"[rig] pinned hero_only {o.name} to the head bone", flush=True)
     return Character(arm, objs)
 
 
