@@ -214,11 +214,13 @@ DEFAULTS = {
             "throat_back_m": 0.055,    # neckline end behind the chin front
             "under_chin_m": 0.026,     # neckline end below the chin
             "moustache_height_m": 0.012,  # moustache top over the upper lip
-            "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare
+            "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare ...
+            "philtrum_free_m": 0.006,  # ... but only above this height over the lips (the philtrum keeps roots)
             "lips_w": 0.5,             # body vertices over this `lips` weight are vermilion: no roots
             "fade_m": 0.010,           # skin_tex.beard_depth: the skin's stubble shadow ramp past the margin
             "lip_band_m": 0.004,       # top band of the upper lip in the shell patch (no roots): moustache overhang
-            "lower_lip_root_m": 0.003,  # lip-group skin this far over the lower lip's bottom, facing forward: roots
+            "lower_lip_root_m": 0.0045,  # lip-group skin this far over the lower lip's bottom, facing forward: roots
+            "lower_lip_ny": -0.1,      # ... "facing forward": normal y under this
             "mouth_depth_m": 0.008,    # skin this far behind the lip front, inside the corners, facing back: mouth
             # Patch reaches this far past each line (cheek, neck, back,
             # moustache top): the stubble band.
@@ -244,7 +246,7 @@ DEFAULTS = {
             # chin; the moustache hangs over the upper lip edge.
             "length": {"cheek_m": 0.009, "jaw_m": 0.012, "chin_extra_m": 0.012,
                        "chin_radius_m": 0.03, "soul_m": 0.012, "soul_radius_m": 0.010,
-                       "moustache_m": 0.014, "lip_overlap_m": 0.007, "under_below_mouth_m": 0.02, "neck_m": 0.0125},
+                       "moustache_m": 0.014, "lip_overlap_m": 0.007, "philtrum_scale": 0.7, "under_below_mouth_m": 0.02, "neck_m": 0.0125},
             "comb": {"cheek_back": 0.3, "chin_forward": 0.1, "soul_forward": 0.8, "under_jaw_back": 0.6,
                      "moustache_down": 1.0, "moustache_side": 0.25, "philtrum_x_m": 0.006,
                      "smooth_iters": 3},
@@ -257,6 +259,7 @@ DEFAULTS = {
                       "elev0_moustache": 22, "elev1_moustache": -25,
                       "yaw_sigma": 32, "curl_sigma": 14, "curl_share": 0.3,  # a little unkempt
                       "curl_radius_m": [0.008, 0.015], "curl_lift": 0.15,
+                      "yaw_moustache": 0.5, "curl_share_moustache": 0.1,
                       "len_min": 0.7, "bend_pow": 1.0,
                       "gap_m": [0.0002, 0.0004],  # clearance over the skin, root -> tip
                       "clump_base": 0.25, "clump_moustache": 0.35, "clump_chin": 0.25,

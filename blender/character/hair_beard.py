@@ -88,7 +88,10 @@ def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose):
     lips, ears, head, neck_g = groups
     if w.get(ears, 0) > 0.2 or w.get(head, 0) + w.get(neck_g, 0) < 0.5:
         return -1.0, 0
-    if p.z > nose[1] and p.y < nose[0]:
+    # nose = (y, z[, z_sill]): skin in front of y and above z is nose. The
+    # optional third value lifts the test to the nose sill, so the philtrum
+    # under an overhanging nose (in front of the lips) keeps its roots.
+    if p.z > (nose[2] if len(nose) > 2 else nose[1]) and p.y < nose[0]:
         return -1.0, 0
     ds = [(_line_dist(p, neck, False), 1), (back_y - p.y, 2)]
     if p.y < cheek[0][0]:
@@ -118,7 +121,8 @@ def region(b, frame, cfg, rng):
     wob, ph = cfg["line_wobble_m"], [rng.uniform(0, 6.3) for _ in range(3)]
     margins = (cfg["margin_m"], cfg["neck_margin_m"], cfg["back_margin_m"], cfg["moustache_margin_m"])
     moustache_top = frame.lips_max.z + cfg["moustache_height_m"]
-    nose = (frame.lips_min.y - cfg["nose_clear_m"], frame.lips_max.z)
+    nose = (frame.lips_min.y - cfg["nose_clear_m"], frame.lips_max.z,
+            frame.lips_max.z + cfg.get("philtrum_free_m", 0.0))
     dist, which = {}, {}
     for v in body.data.vertices:
         p = mw @ v.co
@@ -146,7 +150,7 @@ def region(b, frame, cfg, rng):
     r3 = mw.to_3x3()
     low_band = set(i for i in on_lips
                    if (mw @ body.data.vertices[i].co).z < frame.lips_min.z + cfg["lower_lip_root_m"]
-                   and (r3 @ body.data.vertices[i].normal).normalized().y < -0.3)
+                   and (r3 @ body.data.vertices[i].normal).normalized().y < cfg.get("lower_lip_ny", -0.3))
     on_lips -= low_band
     keep = set(i for i, d in dist.items() if d > -margins[which[i]] and i not in on_lips)
     # The top band of the upper lip joins the patch with no roots, so the
@@ -242,10 +246,14 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
             L = max(L, ln["soul_m"] * near_soul + L * (1 - near_soul))
             if under:
                 L = min(L, ln["neck_m"] + ln["chin_extra_m"] * near_chin * 0.6)
-        out["length_m"][v] = max(L * (1.0 if moustache else lenf), 0.002)
         side = math.copysign(1.0, p.x - c.x)
+        phil = min(abs(p.x - c.x) / cb["philtrum_x_m"], 1.0)
         if moustache:
-            phil = min(abs(p.x - c.x) / cb["philtrum_x_m"], 1.0)
+            # shorter in the philtrum groove (the hairs there comb straight down)
+            pl = ln.get("philtrum_scale", 1.0)
+            L *= pl + (1 - pl) * phil
+        out["length_m"][v] = max(L * (1.0 if moustache else lenf), 0.002)
+        if moustache:
             g = Vector((side * phil * cb["moustache_side"], 0, 0)) + down * cb["moustache_down"]
         elif under:
             g = down + Vector((0, cb["under_jaw_back"], 0))
@@ -298,8 +306,10 @@ def grow_beard(roots, n, f, g, rng, frame):
     e1 = np.where(must, deg(g["elev1_moustache"]), np.where(under, deg(g["elev1_under"]), deg(g["elev1"])))
     e1 = e1 + rng.normal(0, deg(g["elev_sigma"]), m)
     yaw = rng.normal(0, deg(g["yaw_sigma"]), m)
+    # the moustache hangs: less sideways spread, so its hairs drop over the lip
+    yaw = np.where(must, yaw * g.get("yaw_moustache", 1.0), yaw)
     L = f["length_m"] * rng.uniform(g["len_min"], 1.0, m)
-    curly = rng.random(m) < g["curl_share"]
+    curly = rng.random(m) < np.where(must, g.get("curl_share_moustache", g["curl_share"]), g["curl_share"])
     R = rng.uniform(*g["curl_radius_m"], m)
     curl = np.where(curly, rng.choice([-1, 1], m) * L / R, rng.normal(0, deg(g["curl_sigma"]), m))
     pts = beard_groom.grow(roots, n, f["comb"], L, e0, e1, yaw, curl, g["points"], g["bend_pow"])
