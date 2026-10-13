@@ -85,8 +85,9 @@ DEFAULTS = {
         # up at notch_deg to the collar point; in front of the neck point
         # (drop_frac of the way round) the fold lowers by drop_m so the ends
         # lie down onto the lapel; end_relax smooths the ends' fall.
-        # The outer edge: faired round the collar (edge_fair_passes), a
-        # rounded edge 2 * edge_r_m thick, the collar point's edge too; the
+        # The outer edge: faired round the collar (edge_fair_passes) and settled
+        # over the bumps the rest leaves (edge_settle_passes), a rounded edge
+        # 2 * edge_r_m thick, the collar point's edge too; the
         # fold faired (fold_fair_passes); the end path held as built
         # (hold_end); the fall at the side 3.5 cm (4.2 stood out at the side
         # of the neck as a wing)
@@ -96,7 +97,7 @@ DEFAULTS = {
                    "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.3, "drop_m": 0.025, "end_relax": 2,
                    "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015,
                    "edge_fair_passes": 20, "edge_r_m": 0.00125, "under_m": 0.004, "hold_end": True,
-                   "fold_fair_passes": 6},
+                   "fold_fair_passes": 6, "edge_settle_passes": 30},
         "vents": "double", "vent_height_m": 0.20, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         # sleeve: tapers from the bicep (top_r, at the armpit) to the cuff,

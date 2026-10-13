@@ -798,6 +798,18 @@ def build_jacket_collar(jk, nf, J, tag):
             d = nf.point(*pol[i]) - cols[i][je]
             for j in range(5, je + 1):
                 cols[i][j] = rest_on(outside(cols[i][j] + d * ((j - 4) / NF), (under, stand))[0])
+        # the pushes above lift single points back over the lapels and the
+        # stand (bumps up to 1.2 mm across the edge at the sides of the
+        # neck): settle the edge over them, height 1-2-1, radius outward
+        # only, resting each pass, so it lies over the bumps as one curve
+        for _ in range(J.get("edge_settle_passes", 0)):
+            pol = [nf.polar(cols[i][je]) for i in range(N + 1)]
+            for i in range(1, N):
+                z = (pol[i - 1][1] + 2 * pol[i][1] + pol[i + 1][1]) * 0.25
+                r = max(pol[i][2], (pol[i - 1][2] + 2 * pol[i][2] + pol[i + 1][2]) * 0.25)
+                d = nf.point(pol[i][0], z, r) - cols[i][je]
+                for j in range(5, je + 1):
+                    cols[i][j] = rest_on(cols[i][j] + d * ((j - 4) / NF))
     _dump("final", cols, i_b)
     rows = [[cols[i][j] for i in range(N + 1)] for j in range(5 + NF)]
     if DEBUG:
