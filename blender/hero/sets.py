@@ -31,10 +31,13 @@ WALL_L, WALL_R = -2.6, 3.2
 SPILL = 1.0
 LENGTH = 48.0
 
+AMBER_GAIN = 1.6   # amber practicals (signs, bulkhead, sodium) vs the 3,900 K grade white point
 NEON = {  # linear RGB, emission colour of the tubes
     "magenta": (1.0, 0.06, 0.42),
     "teal": (0.02, 0.85, 0.80),
-    "amber": (1.0, 0.42, 0.06),
+    # amber is pushed deeper than it should read: the hero grade's 3,900 K
+    # white point cools every set light, and amber is the one that suffers
+    "amber": (1.0, 0.30, 0.015),
     "red": (1.0, 0.05, 0.03),
     "cold": (0.55, 0.75, 1.0),
 }
@@ -358,22 +361,22 @@ def alley(haze_density=0.0):
     # signs: (+Y = behind the character from the front cameras)
     sign_blade(col, "sg_hotel", "HOTEL", "magenta", WALL_L, 3.2, 3.6, +1, strength=40)
     sign_shape(col, "sg_ring", "ring", "teal", WALL_R, 5.5, 2.9, -1, strength=35)
-    sign_wall(col, "sg_bar", "BAR", "amber", WALL_L, 9.5, 2.6, +1, strength=30)
+    sign_wall(col, "sg_bar", "BAR", "amber", WALL_L, 9.5, 2.6, +1, strength=30 * AMBER_GAIN)
     sign_shape(col, "sg_arrow", "arrow", "magenta", WALL_R, 12.0, 3.4, -1, strength=30)
     sign_blade(col, "sg_noodle", "RAMEN", "teal", WALL_R, 16.0, 4.0, -1, strength=35, letter=0.3)
-    sign_shape(col, "sg_bars", "bars", "amber", WALL_L, 18.5, 3.0, +1, strength=25)
+    sign_shape(col, "sg_bars", "bars", "amber", WALL_L, 18.5, 3.0, +1, strength=25 * AMBER_GAIN)
     # behind the front cameras (for back and profile views)
     sign_blade(col, "sg_open", "OPEN", "teal", WALL_L, -6.0, 3.2, +1, strength=35)
     sign_shape(col, "sg_zig", "zigzag", "magenta", WALL_R, -9.0, 3.0, -1, strength=35)
-    sign_wall(col, "sg_kissa", "KISSA", "amber", WALL_R, -3.5, 2.7, -1, strength=30)
+    sign_wall(col, "sg_kissa", "KISSA", "amber", WALL_R, -3.5, 2.7, -1, strength=30 * AMBER_GAIN)
     sign_shape(col, "sg_ring2", "ring", "red", WALL_L, -13.0, 3.6, +1, strength=25, scale=0.8)
 
     # a doorway in the concrete wall, with a warm bulkhead lamp over it
     dark = plain("set_door", (0.012, 0.012, 0.014), 0.35, 0.6)
     box(col, "set_door", (0.08, 1.0, 2.1), (WALL_R - 0.02, 1.4, 1.05), dark)
-    lamp = emissive("set_bulkhead", (1.0, 0.55, 0.22), 12.0)
+    lamp = emissive("set_bulkhead", (1.0, 0.42, 0.10), 12.0 * AMBER_GAIN)
     box(col, "set_bulkhead", (0.12, 0.25, 0.12), (WALL_R - 0.08, 1.4, 2.4), lamp)
-    spill(col, "set_bulkhead_l", 2400, 15.0, (0.3, 0.3), (WALL_R - 0.25, 1.4, 2.3), (1.5, 1.4, 0.0))
+    spill(col, "set_bulkhead_l", 1900, 15.0 * AMBER_GAIN, (0.3, 0.3), (WALL_R - 0.25, 1.4, 2.3), (1.5, 1.4, 0.0))
 
     # pipes, AC units, a dumpster, overhead cables
     metal = plain("set_metal", (0.06, 0.06, 0.065), 0.35, 1.0)
@@ -395,7 +398,9 @@ def alley(haze_density=0.0):
         tube(col, f"set_cable_{i}", pts, 0.008, cable)
 
     # street light at each end, through the haze
-    for name, y, temp, power in (("far", 21.0, 1900, 250.0), ("near", -21.0, 4500, 250.0)):
+    # far: sodium; near: was a cool 4,500 K, now a warm 3,200 K so the
+    # alley keeps an amber end under the 3,900 K white point
+    for name, y, temp, power in (("far", 21.0, 1800, 250.0 * AMBER_GAIN), ("near", -21.0, 3200, 250.0)):
         ld = bpy.data.lights.new("set_street_" + name, "SPOT")
         ld.use_temperature = True
         ld.temperature = temp
@@ -407,7 +412,7 @@ def alley(haze_density=0.0):
         col.objects.link(ob)
         ob.location = (0.4, y, 6.0)
         rig.look_at(ob, Vector((0.2, y - math.copysign(4.0, y), 0)))
-        glow = emissive("set_street_" + name, (1.0, 0.55, 0.2) if temp < 3000 else (0.7, 0.85, 1.0), 0.03, False)
+        glow = emissive("set_street_" + name, (1.0, 0.45, 0.12) if temp < 3500 else (0.7, 0.85, 1.0), 0.03, False)
         quad(col, "set_street_" + name + "_bg",
              [V((-8, math.copysign(L / 2 - 0.01, y), 0)), V((8, math.copysign(L / 2 - 0.01, y), 0)),
               V((8, math.copysign(L / 2 - 0.01, y), 9)), V((-8, math.copysign(L / 2 - 0.01, y), 9))],

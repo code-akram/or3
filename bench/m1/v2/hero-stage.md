@@ -142,6 +142,7 @@ All under `data/build/hero/` in the main checkout. Builds come from `data/build/
 | `20261013T001800Z-main5-ttbust` | same | turntable bust at 100 % (85 mm, az 30 and 0) |
 | `20261013T002500Z-shadowx` | same | shadow-cheek breakdown (each light group removed; fill / eye / wrap variants) |
 | **`20261013T002954Z-main5-sheet`** | same | **the full preview set under the skin-direction rig: 9 shots, 100 % crops of portrait / profile / hands / eye, turntable rest + stand at 4 views (beauty, clay, normal); `sheet.png`** |
+| `20261013T010935Z-main5-amber` | same | warmer set-only amber practicals vs the 3,900 K white point: sign, draw, back, walk |
 
 ## Render time per shot
 
@@ -202,7 +203,7 @@ For the owning tracks. The stage doesn't fix any of these.
   - Exposure is measured: lit cheek 0.51–0.52, shadow core 0.15–0.19. The coordinator accepted it.
 - **Alley set, haze, rain, signs**: done.
   - Neon behind faces is dimmed per shot (`neon`).
-  - With the 3,900 K white point the alley is teal and blue-dominant; the amber reads in the practicals only.
+  - The 3,900 K white point turned the alley teal and blue (main5-sheet). The set-only amber practicals are now pushed to compensate: amber neon (1.0, 0.30, 0.015), amber signs, bulkhead and sodium ×1.6 (`sets.AMBER_GAIN`), bulkhead 1,900 K, the near street lamp 4,500 → 3,200 K. The magenta / teal / amber triad is back (`20261013T010935Z-main5-amber`). Character light and white point are unchanged.
   - Limits: no rain motion blur, and the alley's far end is a flat emissive plane.
 - **Wet look**: done, render side: shoulder beads, wet strand tips, eyes to camera.
 - **Grade**: done (white point, CDL power, saturation 0.97). The painterly A/B stays masked off the character (§4).
