@@ -1,6 +1,6 @@
 # m1 v2 Track E: the Cycles hero stage
 
-_2026-10-12. Owner: Track E. Code: `blender/hero/`, `bench/m1/hero.sh`. Recipe: `direction.md` §5._
+_2026-10-12/13. Owner: Track E. Code: `blender/hero/`, `bench/m1/hero.sh`. Recipe: `direction.md` §5, lighting and grade superseded by `skin-direction.md` (Track E action list)._
 
 ## What it is
 
@@ -10,8 +10,9 @@ neon-noir alley, graded, plus the honesty turntable.
 
 ```sh
 KEEP_BLEND=1 bench/m1/lookdev.sh --config bench/m1/variants/direction.json <label>   # the build
-bench/m1/hero.sh [--preview|--final|--draft] [--shots LIST] [--no-turntable] <character.blend> <label>
-bench/m1/hero.sh --regrade <run dir>        # re-grade the EXRs without re-rendering
+bench/m1/hero.sh [--preview|--final|--max|--draft] [--pct N] [--shots LIST] [--crop close|LIST] \
+    [--no-turntable] [--tt-views LIST] [--tt-poses LIST] [--wb K] <character.blend> <label>
+bench/m1/hero.sh --regrade <run dir>        # re-grade the EXRs without re-rendering (WB=K env for the white point)
 ```
 
 Runs land in `data/build/hero/<UTC>-<label>/` (main checkout, gitignored): `<shot>.png` (graded),
@@ -21,10 +22,11 @@ Runs land in `data/build/hero/<UTC>-<label>/` (main checkout, gitignored): `<sho
 | Module | Job |
 |---|---|
 | `rig.py` | **The shared light rigs** (every track's evidence renders): `hero` = the §5 base rig placed relative to the camera; `turntable` = 5,600 K three-point on an 18 % grey cove. Cameras (presets, `tt<deg>`, custom `az=..,el=..,lens=..,aim=..,frame=..,f=..`), Cycles settings, clay and normal passes, grey-card calibration. Also a CLI. |
-| `poses.py` | Poses on the game_engine rig, in armature space (roll-independent): analytic two-bone IK with a hinge-preserving twist, planted feet (yaw, heel lift, flat toes), hand orientation with the roll on the forearm, finger curl, head look. Poses: `rest`, `stand`, `stand_profile`, `walk`, `ready` (compressed high-ready), `ready_low`. |
+| `poses.py` | Track F's canonical poses (`deform_poses`) plus E's solver, then Track F's deformation runtime after every pose. The solver works in armature space (roll-independent): analytic two-bone IK with a hinge-preserving twist, planted feet, hand orientation with the roll on the forearm, finger curl, head look. Poses: `rest`, `stand` (F `hero`), `stand_profile`, `ready` (F `high_ready`), `ready_low` (F `low_ready`), `cuff` (F `hero` body + E arms), `walk` (E); E's own versions as `*_e`. |
+| `wet.py` | Render-side wet look: water beads on the shoulders, wet hair tips (cards and strand grooms), eyes turned to the camera. |
 | `sets.py` | The alley: Poly Haven CC0 wet asphalt (height-map + noise puddles, roughness 0.035, rain-ripple bump), brick and concrete walls with a wet base band, kerbs, invented neon signs (blade signs HOTEL / RAMEN / OPEN, wall words BAR / KISSA, tube ring / arrow / zigzag / bars; magenta, teal, amber, red) each with a colour spill light, a doorway bulkhead lamp, pipes, AC units, a dumpster, sagging overhead cables, sodium and cool street lights at the two ends; rain streaks generated per shot in the camera's view volume. The whole set turns on one root so every camera looks down the alley. |
 | `shots.py` | The shot list (lens, pose, resolution, rig overrides, haze, rain, framing shift, exposure). |
-| `stage.py` | Renders the shots to EXR and the turntable to PNG; fills in Cycles SSS on the skin only when the build has none (reported). |
+| `stage.py` | Renders the shots to EXR (and the optional 100 % crops) and the turntable to PNG; fills in Cycles SSS on the skin only when the build has none (reported). |
 | `grade.py` | Compositor grade on the EXRs (separate compositor-only scene). |
 | `sheet.py` | Contact sheet. |
 | `fetch_textures.py` | Fetches the three Poly Haven sets into `data/vendor/polyhaven/` and prints their provenance records. |
@@ -35,15 +37,30 @@ Runs land in `data/build/hero/<UTC>-<label>/` (main checkout, gitignored): `<sho
 blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig.py -- \
     --in RUN/character.blend --out DIR --light hero|turntable|both \
     --cam portrait,bust,profile,back,full,draw,hands,eye | tt | tt90 | "az=30,el=5,lens=85,aim=head,frame=0.45,f=2" \
-    --pose rest|stand|walk|ready --quality draft|preview|final --passes beauty,clay,normal [--haze] [--calibrate]
+    --pose rest|stand|walk|ready|cuff|<any deform_poses name> --quality draft|preview|final|max [--pct N] \
+    --passes beauty,clay,normal [--haze] [--calibrate]
+# cameras: ';' between cameras; a single spec containing '=' is one camera
 ```
 
 - **Ratios are irradiance ratios at the subject**: each area light's power is `ratio * E_key * pi * d^2`, so a light can move without changing its ratio. The rig is placed relative to the camera (azimuth measured from the camera axis, + = camera-left), so every view gets the same light.
-- **Hero rig** (direction §5): key 3,000 K, 0.8 m square, 1.5 m, 40° camera-left, 25° up, 1.0; magenta rim strip (0.3 x 1.5 m) behind-right; teal kicker strip behind-left; cool fill 0.08; 10 cm eye light at the lens, 0.12, no shadow, diffuse 0.3 (mostly a catchlight). Emitters are invisible to the camera. Near-black world, AgX "Medium High Contrast", exposure −0.6 EV, `HERO_E` = 3.0.
+- **Hero rig** (`skin-direction.md`, binding; it supersedes §5's 0.8 m key and Medium High Contrast look):
+  - Key: 3,000 K, 0.3 × 0.3 m at 1.5 m, 55° camera-left (short lighting on the ¾ face), 30° up, ratio 1.0.
+  - Wrap: same colour, 1.5 × 1.5 m at 2.0 m (my distance; the spec gives none), 35°, 10° up, ratio 0.25.
+  - Magenta rim strip (0.3 × 1.5 m) at −125°, 20° up, grazing the jaw and cheek edge. Teal kicker strip behind-left.
+  - Cool fill 0.08. Eye light: 5 cm at the lens, 0.08, no shadow, diffuse 0.3 (mostly a catchlight).
+  - Emitters are invisible to the camera. Near-black world, exposure −0.6 EV, `HERO_E` = 3.0.
+  - In the alley the key, wrap, fill and eye light are light-linked to the character (flags).
+  - Ungraded `rig.py` renders use AgX Base Contrast plus the view's 3,900 K white balance; the stage's EXRs get the full grade.
   - **Deviation**: rim 1.4 and kicker 0.8 in the shared rig (spec 0.7 / 0.4). At the spec ratios the rims did not separate the hair from black. In the alley shots they go to 2.2 / 1.2 (`shots.RIMS`), because the rims there also compete with the sign spill.
+  - **Measured** (portrait at 100 %, main5 build, display Rec.709 luma):
+    - Lit (far) cheek: 0.51–0.52, inside the 0.50–0.55 target.
+    - Shadow (near) cheek: 0.15–0.19 in the core and 0.21–0.25 in the half-tone, slightly above the 0.12–0.18 target.
+    - Breakdown at 16 spp, change in shadow-cheek luma when each is removed: fill + eye light −0.043, wrap −0.043, set lights −0.033, rims 0. Even fill 0, catchlight-only eye light and a 0.15 wrap at 45° only bring the half-tone to 0.21. The rest is the key's own half-tone and bounce, so the spec values stay.
 - **Turntable**: 5,600 K key 1.0 (45° camera-left, 30° up), fill 0.3, rim 0.5, an 18 % grey cove that turns with the camera, AgX look None, exposure 0, no DOF, haze or grade. Calibrated with `--calibrate`: an 18 % card at the chest reads 0.44 display, a 35 % card 0.57.
 - **Passes**: `clay` (grey 0.5, roughness 0.55, normal maps off, alpha cut-outs kept) and `normal` (camera-space shading normal including normal maps, Standard view, 16 spp).
-- **Cameras**: 24 mm vertical sensor fit, so `frame` is the frame height in metres at the aim point. Aim points are `eyes`, `head`, `chest`, `body`, `hands`, `hand_l` and `hand_r`, posed. DOF focuses on the near eye for head shots, at the shot's f-stop.
+- **Cameras**: 24 mm vertical sensor fit, so `frame` is the frame height in metres at the aim point, and `shift` / `shift_y` are fractions of the frame height. Aim points are `eyes`, `head`, `chest`, `body`, `hands`, `hand_l`, `hand_r` and `cuff_feet`, posed.
+  - DOF focuses on the near eye's cornea for head shots (eyeball centre + 12 mm toward the camera; Track A's diagnosis: the centre left the lashes 12 mm out of focus).
+  - Hand shots focus on the hands or the cuff, not on the aim point below them.
 
 ## The hero stage
 
@@ -51,12 +68,12 @@ blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig
 
 | Shot | Lens / framing | Pose | Light (on top of the hero rig and the set) |
 |---|---|---|---|
-| portrait (§5 #1) | 85 mm, f/2 on the near cornea, head and shoulders, ¾ (az 30), face on the right third | stand (F `hero`), eyes to camera | base rig, rims 2.2 / 1.2, drizzle (700 streaks), haze 0.008, wet hair tips, 35 water beads per shoulder |
+| portrait (§5 #1) | 85 mm, f/2 on the near cornea, head and shoulders (0.42 m frame), ¾ (az 30), eyes on the upper third | stand (F `hero`), eyes to camera | base rig, rims 2.2 / 1.2, drizzle (700 streaks), haze 0.008, wet hair tips, 35 water beads per shoulder |
 | sign (#2), 1152x2048 poster | 50 mm f/4, full body, camera at 1.1 m | stand (F `hero`: left hand at the jacket button) | magenta key 1.2 x 0.4 m above-right 1.3, teal across the street 0.5, sodium 2,000 K 0.3, heavy rain (2,200), puddles |
 | profile (#3) | 100 mm f/2.8, bust profile | stand, head straight, chin 2–3° down | amber key 0.3, teal rim 2.5 from beyond the face, magenta kicker 0.35, wet tips, beads |
 | draw (#4) | 35 mm f/5.6, ¾ full body, camera at 1.2 m | ready (F `high_ready`, empty hands) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
-| hands (#5), 1152x2048 poster | 100 mm f/5.6 from 5.4 m, camera at 0.75 m: from the cuff to the floor, so the shoe and trouser break are in frame; focus on the cuff | cuff (F `hero` body, E's arms: the right hand pinches the left shirt cuff) | key 0.8 |
-| eye (#6) | 135 mm at 0.42 m, f/16 (about 9 mm depth of field, the same as f/5.6 at 0.73 m) on the near cornea, eyes and brow | stand, gaze 5° off camera | soft key 1.2 m, eye light 0.3 |
+| hands (#5), 1152x2048 poster | 100 mm f/5.6 from 6 m, camera at 0.8 m: from the cuff to the floor, so the shoe and trouser break are in frame; focus on the cuff | cuff (F `hero` body, E's arms: the right hand pinches the left shirt cuff) | key 0.8 |
+| eye (#6) | 135 mm at 0.73 m, f/4 (about 7 mm in focus) on the near cornea, eyes and brow | stand, gaze 5° off camera | base (skin-direction) key, eye light 0.3 |
 | bust | 50 mm f/2.8, ¾ | stand, eyes to camera | base rig + rims, wet tips, beads |
 | back | 50 mm f/2.8, back ¾ (az 150): hair and suit back | stand | base rig + rims, wet tips, beads |
 | walk | 35 mm f/5.6, ¾ full body (az −35) | walk (mid-stride) | base rig + rims, rain |
@@ -64,7 +81,7 @@ blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig
 
 The shot list follows direction §5, plus the brief's bust, back and walk shots. Deviations:
 - **Under the sign** uses F's canonical `hero` pose, with the left hand at the jacket button (that is the "buttoning" read). Its weight is on the left leg, not §5's right.
-- **Eye close-up**: §5 gives 135 mm at 0.4 m but no f-stop. At 0.4 m, f/2.8 holds only about 1.6 mm in focus, so lids, lashes and skin go soft. f/16 holds about 9 mm, the same as f/5.6 from 0.73 m.
+- **Eye close-up**: skin-direction.md sets f/4. At §5's 0.4 m, f/4 holds only about 2 mm in focus, so lids, lashes and skin would go soft. I shoot from 0.73 m (a 0.13 m frame), where f/4 holds about 7 mm.
 - **Every head shot focuses on the near cornea**, the eyeball centre plus 12 mm toward the camera. Focusing on the centre (Track A's diagnosis) put the focal plane 12 mm behind the lashes.
 
 **Wet look (`wet.py`, render side, transient)**:
@@ -81,15 +98,17 @@ The shot list follows direction §5, plus the brief's bust, back and walk shots.
 - **Haze**: one homogeneous volume box that starts 0.6 m behind the subject, as seen from the camera ("haze behind the face, not in front of it"), density 0.006–0.012 /m. The spec's 0.03 /m over a 16 m deep box washed the frame in it1.
 - **Puddles**: the Poly Haven height map plus 0.35 /m noise, thresholded (about 35 % wet). Water is roughness 0.035, albedo ×0.35, with a faint ripple bump. The rest of the asphalt is wet (albedo ×0.5, roughness ×0.55).
 - **Rain**: per shot, 500–2,200 thin tilted 3-sided cylinders in the camera's view volume (1.3–16 m), transparent plus glossy, kept 0.35 m away from the eyes. No motion blur: they read as streaks because they are long.
-- **Skin SSS (render side, reported)**: the current build ships `skin_head` and `skin_hands` with Subsurface Weight 0. Cycles has no other route to red bleed, so `stage.py --skin-sss auto` (the default) sets direction §2's values (Random Walk Skin, weight 1, radius (1, 0.25, 0.12), scale 2.5 mm, anisotropy 0.8), but **only when the build has none**. `stage.json` and the sheet header list the materials it touched. Once Track A ships its own SSS, the stage leaves it alone.
-- **Grade** (`grade.py`, linear, before AgX Medium High Contrast):
+- **Skin SSS (render side, reported)**: builds up to main3 shipped `skin_head` and `skin_hands` with Subsurface Weight 0. Since main4, Track A's hero skin carries its own SSS, so the stage adds none ("render-side SSS: none" on the sheet). Cycles has no other route to red bleed, so `stage.py --skin-sss auto` (the default) sets direction §2's values (Random Walk Skin, weight 1, radius (1, 0.25, 0.12), scale 2.5 mm, anisotropy 0.8), but **only when the build has none**. `stage.json` and the sheet header list the materials it touched. Once Track A ships its own SSS, the stage leaves it alone.
+- **Grade** (`grade.py`, linear, before AgX Base Contrast; values from `skin-direction.md` where it sets them):
+  - White point 3,900 K: ColorBalance in White Point mode, before the CDL. `--wb K`, 0 = off.
+  - CDL power 1.08 for the contrast (+15 %), instead of the Medium High Contrast look, which flattened the skin's SSS.
   - Kuwahara painterly A/B: anisotropic, 5 px at 1080p, mix 0.6, **masked off the character** by IndexOB (§4: the face stays real).
   - Bloom: threshold 1.0, strength 0.35.
   - Red-orange halation: Fog Glow, threshold 2.0, strength 0.12.
   - 0.8 % lateral dispersion.
   - CDL: slope (1.04, 1.0, 0.94), offset (−0.0008, 0.0004, 0.0016), so shadows go teal and highlights amber.
-  - Black lift 0.0011, saturation 1.04.
-  - Vignette −0.3 EV.
+  - Black lift 0.0011, saturation 0.97.
+  - Vignette −0.3 EV (off on 100 % crops).
   - Grain 2 %, multiplicative.
   - Grading one image takes 0.2–0.8 s, so `hero.sh --regrade RUN` re-tunes the grade without re-rendering.
 
@@ -112,7 +131,18 @@ All under `data/build/hero/` in the main checkout. Builds come from `data/build/
 | `20261012T200818Z-main2-preview` | `20261012T194340Z-heroE-main2` (main + track A forms freeze) | all nine shots + rest turntable (interrupted at tt135 by the load cap); `sheet.png` |
 | `20261012T203233Z-main2-flags` | same | light-linked key/fill/eye; portrait, sign, draw, profile |
 | `20261012T204204Z-main2-final-timing` | same | final portrait at `-t 3`: stopped after 35 min with the shot unfinished (to free the one Blender slot for the track F integration) |
-| **`20261012T212025Z-main3-F`** | **`20261012T211741Z-heroE-main3` (main ff03f62, track F merged)** | F's poses + runtime: portrait, draw, profile, hands, walk, stand turntable tt0/tt90 (beauty, clay, normal); `sheet.png` |
+| `20261012T212025Z-main3-F` | `20261012T211741Z-heroE-main3` (main ff03f62, track F merged) | F's poses + runtime: portrait, draw, profile, hands, walk, stand turntable tt0/tt90 (beauty, clay, normal); `sheet.png` |
+| `20261012T213139Z-main3-final-portrait` | same | final portrait (768 / 0.012) at `-t 3`: stopped unfinished after 57 min |
+| `20261012T224500Z-main4-check` | `20261012T222907Z-heroE-main4` (main with B's strand groom, C, D v2, A's hero eyes) | first wet look (beads, wet strand tips, eyes to camera incl. the hero cornea), cuff pose, eye cam at 0.4 m, 100 % crops; `portrait_wb4200.png`: a global 4,200 K white point fixed the shirt but turned the whole alley blue |
+| `20261012T231000Z-main4-k4300` | same | key-warmth tests (4,300 / 5,000 K) and the grade A/Bs (`*_lookNone`, `*_plain`, `*_base`, `*_sat85`, `*_base85`); turntable tt0 as the skin reference |
+| `20261012T232500Z-ftime` | same | the final-vs-preview cost on the portrait's face region (see the final timing above) |
+| `20261012T233000Z-lightx` | same | the orange face isn't the set: the void set is as orange as the alley |
+| `20261012T233130Z-main4-sheet` | same | full preview sheet under the 5,000 K + 0.85-saturation grade (superseded) |
+| `20261013T000810Z-main5-skinrig` | **`20261013T000424Z-heroE-main5` (main ede62d6: A's skin pass, C round 3)** | the skin-direction rig: portrait at 100 % |
+| `20261013T001800Z-main5-ttbust` | same | turntable bust at 100 % (85 mm, az 30 and 0) |
+| `20261013T002500Z-shadowx` | same | shadow-cheek breakdown (each light group removed; fill / eye / wrap variants) |
+| **`20261013T002954Z-main5-sheet`** | same | **the full preview set under the skin-direction rig: 9 shots, 100 % crops of portrait / profile / hands / eye, turntable rest + stand at 4 views (beauty, clay, normal); `sheet.png`** |
+| `20261013T010935Z-main5-amber` | same | warmer set-only amber practicals vs the 3,900 K white point: sign, draw, back, walk |
 
 ## Render time per shot
 
@@ -132,39 +162,59 @@ Measured at `-t 3` on a shared, loaded machine (load 9–50 on 16 cores), so the
 - Grading takes 0.2–0.8 s per image.
 - Building the set takes 0.1–0.2 s.
 
-**Final** (768 spp, adaptive 0.012, 100 %, OIDN): see "Final timing" below.
+Main5 build (strand grooms, hero eyes, A's skin) at `-t 3`: portrait 124–176 s, sign 160, profile 143, draw 115, hands 104–132, eye 262–311, bust 104, back 105, walk 113. The full portrait at 100 % with preview samples took 540 s, and a 100 % half-frame crop 180–260 s.
 
-## What the stage shows about the character (main ff03f62, run main3-F)
+### Final timing and projection
+
+- The final could not be run to completion on this machine under the load cap:
+  - The final portrait (768 spp / 0.012) at `-t 3` was stopped unfinished twice: after 35 min (main2) and after 57 min (main3), each time to free the one Blender slot for coordinator work.
+- **Measurement**: the portrait's face region (a 1/16-area border crop at 100 %, `data/build/hero/20261012T232500Z-ftime`, main4) took 28.2 s at preview and 838 s at 768 / 0.012.
+  - The full preview frame took 176 s. That fits a fixed per-render cost of about 18 s plus 16 regions.
+  - So the full 768 / 0.012 frame ≈ 18 + 16 × (838 − 18) ≈ 13,100 s ≈ **3.6 h at `-t 3`** on the loaded machine, about 75× its preview time. The face region holds the strands, SSS and DOF, so the whole frame may average a little cheaper.
+- **Projection to 16 threads, otherwise idle**: the machine is a Ryzen 7 7700 (8 cores, 16 threads), and I assume 3–4× the throughput of `-t 3` under load.
+  - At 768 / 0.012 a shot costs about 19–25× its `-t 3` preview time: the portrait about 45–65 min, the 9 shots about 7–9 h (their previews add up to about 1,250 s), and the turntable (8 views × 2 poses, beauty + clay, about 720 s of preview) about 4–5 h more. **That doesn't fit one night.**
+  - So `--final` is now **256 spp / adaptive 0.02** (OIDN), and `--max` keeps 768 / 0.012 for single hero frames. Unmeasured estimate: roughly a third of the 768 cost, so about 7× the `-t 3` preview time per shot. That is about 15–20 min for the portrait, about 2.5 h for the 9 shots and about 1.5 h for the turntable: **about 4 h for the full final set at 16 threads**.
+  - The first scheduled final run's `stage.json` will give the real per-shot seconds.
+  - If the night is short, use `--tt-views tt0,tt90,tt180,tt270` (half the turntable), or render the turntable at `--preview --pct 100`.
+
+## What the stage shows about the character (main ede62d6, run main5-sheet)
 
 For the owning tracks. The stage doesn't fix any of these.
 
-- **A (head, skin)**: the skin is waxy and peach. The build ships no subsurface on `skin_head` / `skin_hands` (the stage adds direction §2's values render-side, as reported), and the lips read orange. Under the 85 mm key the face planes are still broad.
-- **B (hair)**: the cards read as strips or ribbons in the portrait and the back ¾, with no fine strands at the silhouette under the magenta rim.
-- **C (beard, brows)**: the beard is a dark felt mass with a hard edge against the cheek, and the brows are dash strokes.
+- **A (skin, eyes)**: the skin is warm-neutral under the skin-direction rig.
+  - It still reads as one continuous sheen with no mid-frequency relief: Track A's next pass, per skin-direction.md.
+  - The hero eyes (refractive cornea, meniscus, caruncle) read well in the 100 % eye crop.
+  - Earlier the face went orange-tan. That was the 3,000 K key under a 6,500 K white plus the Medium High Contrast look (HSV saturation 0.66–0.78 against the turntable's 0.30–0.39), not the albedo. The new rig and grade fix it.
+- **B (hair)**: the strand groom reads as hair: fine strands at the silhouette, and the wet tips catch the rims. It takes the magenta rim strongly, and in the portrait the hair reads magenta on the rim side. That's a rim-strength question for E if the review wants it calmer.
+- **C (beard, brows, lashes)**: the strand beard has a soft edge now. Round 3 brows and lashes look fine at 100 %.
 - **D (suit)**:
-  - Collar and lapel "wings" stand above the shoulders, in rest pose too.
-  - The shoulders are boxy.
-  - There is a torn flap at the jacket's back hem.
-  - The wool reads brown-grey under the warm key (no sheen).
-  - Sleeves and trousers are tubes.
-  - New in the hands shot: a jagged, sawtooth black edge along the shirt cuff where it meets the sleeve.
-- **F (deformation)**: the runtime runs; the portrait's pose log shows `corr_arm_down_l 0.58, corr_arm_down_r 0.80, corr_elbow_l 0.33, corr_hip_fwd_r 0.11, …` active.
-  - `hero` with the left hand at the jacket button gives the hands shot a natural "hand on the garment" read.
-  - The hands still read as mittens or closed fists (no articulated fingers).
-  - In `high_ready` the clasped hands sit high on the chest and the stance is square, not bladed.
+  - Shoulders are still boxy, and the lapel rolls catch the rim as hard edges.
+  - The trousers are clean tubes.
+  - Earlier builds had a sawtooth black edge on the shirt cuff (main3).
+- **F (deformation)**: the runtime runs on every pose; the portrait's log shows `corr_arm_down_l 0.58, corr_arm_down_r 0.80, corr_elbow_l 0.33, …`.
+  - In the cuff pose (hands, hands_crop) a black shard shows on the right hand's knuckles: mesh interpenetration in the closed fingers.
+  - The hands still read as mittens.
+  - In `high_ready` the hands sit high and the stance is square.
 
 ## Verdicts
 
-- **Shared rig + turntable**: done, merged earlier (53bc1a8). The calibration cards read as intended.
-- **Alley set, haze, rain, signs**: done. It reads as a wet neon-noir alley with depth behind every shot.
-  - Limits:
-    - No rain motion blur.
-    - No water beads or wet hair.
-    - The alley's far end is a flat emissive plane.
-- **Grade**: done.
-  - The painterly A/B is subtle at preview resolution. It is masked off the character on purpose (§4).
-- **Shot list**: 9 shots + turntable, all render.
-  - §5's "buttoning / cuff" hand-on-garment shot is effectively covered by F's `hero` pose in the hands shot.
-- **Poses**: F's canonical poses plus the runtime are in every render. E's walk is kept.
-- **hero.sh**: writes PNGs, painterly A/B, the sheet and stage.json, including for an interrupted stage (`--regrade` re-grades).
-- **Final quality**: see "Final timing".
+- **Shared rig + turntable**: done.
+  - The hero rig is now skin-direction.md's: small short key, wrap, grazing rim, hard eye light.
+  - Exposure is measured: lit cheek 0.51–0.52, shadow core 0.15–0.19. The coordinator accepted it.
+- **Alley set, haze, rain, signs**: done.
+  - Neon behind faces is dimmed per shot (`neon`).
+  - The 3,900 K white point turned the alley teal and blue (main5-sheet). The set-only amber practicals are now pushed to compensate: amber neon (1.0, 0.30, 0.015), amber signs, bulkhead and sodium ×1.6 (`sets.AMBER_GAIN`), bulkhead 1,900 K, the near street lamp 4,500 → 3,200 K. The magenta / teal / amber triad is back (`20261013T010935Z-main5-amber`). Character light and white point are unchanged.
+  - Limits: no rain motion blur, and the alley's far end is a flat emissive plane.
+- **Wet look**: done, render side: shoulder beads, wet strand tips, eyes to camera.
+- **Grade**: done (white point, CDL power, saturation 0.97). The painterly A/B stays masked off the character (§4).
+- **Shot list**: all of §5 is covered, with deviations:
+  - The eye close-up is shot from 0.73 m, not 0.4 m.
+  - Under the sign uses F's `hero` (left hand at the button), so his weight is on the left.
+  - The brief's bust, back and walk shots are added.
+- **Poses**: F's canonical poses plus the runtime in every render; E's walk and cuff arms.
+- **Evidence tooling**: `--crop` (100 % crops), `--pct`, `--wb`, `--regrade`. hero.sh always grades and draws the sheet, even after a failed stage.
+- **Final**: `--final` = 256 spp / 0.02 (accepted), projected at about 4 h for the full set at 16 threads; `--max` = 768 / 0.012. On hold until A's skin pass and D's last suit round are merged.
+
+## Branch and commits
+
+`worktree-agent-a6abc868df2544cd8`, rebased on main ede62d6. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
