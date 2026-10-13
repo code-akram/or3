@@ -30,7 +30,7 @@ from hero import rig, sets  # noqa: E402
 from props import pistol  # noqa: E402
 
 MM = 0.001
-CENTRE = Vector((98.0, 0.0, -45.0)) * MM
+CENTRE = Vector((98.0, 0.0, -52.0)) * MM
 # view: (camera direction from the gun centre in gun space (x muzzle, y the
 # gun's left, z up), frame height m, lens mm, aim offset mm)
 VIEWS = {

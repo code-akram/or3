@@ -17,7 +17,7 @@ rear face x = 0.
     blender -b -t 3 --factory-startup --python-exit-code 1 \\
         --python blender/props/pistol.py -- --out DIR [--size 2048] [--orm 1024] [--samples 16]
 
-writes DIR/pistol.glb (the game asset: the "game" detail level, 9.6k tris,
+writes DIR/pistol.glb (the game asset: the "game" detail level, 10.3k tris,
 one node per moving part - slide, barrel, frame, trigger (origin on its
 hinge), magazine - under a root "pistol", a "grip_socket" empty where the
 web of the hand sits; one material on a 2k base colour, 2k normal and 1k
@@ -29,7 +29,7 @@ From Python (the hero stage poses through hero/poses.py, which does this
 for a pose that holds the gun: "ready", or any pose + "+pistol"):
 
     from props import pistol
-    gun, log = pistol.hold(arm, "r", rerun)          # hero build on hand_r: socket, aim, seat
+    gun, log = pistol.hold(arm, "r", rerun)          # hero build on hand_r: socket, level, straighten, seat
     hand_pose.settle(arm, (), rerun, spec={"r": pistol.hand_spec("r")})
     log += pistol.finish_hold(arm, gun, "r", "l", None, rerun)   # support hand, index, thumbs
     pistol.hide()                                    # a pose without it
@@ -315,16 +315,16 @@ def _smooth(e0, e1, x):
 def grip_w(t):
     """Grip half-width: a hair over the frame's width at the top (so the
     grip surface covers the frame side flush), flaring to the hand."""
-    return 10.72 + 3.78 * _smooth(-2.0, 16.0, t) + 0.3 * math.sin(math.pi * min(max((t - 10) / 50, 0), 1))
+    return 10.72 + 3.78 * _smooth(-2.0, 16.0, t) + 0.3 * math.sin(math.pi * min(max((t - 10) / (GRIP_END - 18.0), 0), 1))
 
 
 def grip_swell(t):
     """Palm swell: the backstrap bulges back (mm)."""
-    return 1.8 * math.sin(math.pi * min(max((t - 4.0) / 59.0, 0.0), 1.0))
+    return 1.8 * math.sin(math.pi * min(max((t - 4.0) / (GRIP_END - 9.0), 0.0), 1.0))
 
 
-STIPPLE_T = (4.0, 61.0)                 # the stippled band (grip stations, mm)
-GRIP_END = 68.0                         # the grip's last station: the magwell from here
+STIPPLE_T = (4.0, 69.0)                 # the stippled band (grip stations, mm)
+GRIP_END = 76.0                         # the grip's last station: the magwell from here
 # the receiver behind the trigger, under the slide: horizontal rings (z, back
 # x, front x (hidden in the frame), back and front corner radii)
 GRIP_TOP = [(-13.2, -1.0, 97.0, 5.0, 2.0), (-17.0, -1.2, 97.0, 6.0, 2.0), (-21.0, -1.4, 97.0, 7.0, 2.0),
@@ -332,7 +332,7 @@ GRIP_TOP = [(-13.2, -1.0, 97.0, 5.0, 2.0), (-17.0, -1.2, 97.0, 6.0, 2.0), (-21.0
 # then stations down the backstrap line: (t, how far the ring has turned from
 # horizontal to normal-to-the-axis)
 GRIP_T = [(2, 0.3), (5, 0.6), (8, 0.85), (11, 1), (14, 1), (17, 1), (21, 1), (25, 1), (29, 1), (33, 1), (37, 1),
-          (41, 1), (45, 1), (49, 1), (53, 1), (57, 1), (61, 1), (64, 1), (66, 1), (68, 1)]
+          (41, 1), (45, 1), (49, 1), (53, 1), (57, 1), (61, 1), (65, 1), (69, 1), (72, 1), (74, 1), (76, 1)]
 
 
 def _front_strap(b, u):
@@ -374,19 +374,25 @@ def build_grip(col, q):
     return ob
 
 
-# beavertail: (x, top z, bottom z, half-width) sections, a rounded tongue over the web
-BEAVERTAIL = [(1.0, -12.6, -33.0, 10.45), (-2.0, -12.6, -30.6, 10.4), (-4.5, -12.75, -28.8, 10.3),
-              (-7.0, -13.1, -27.2, 10.15), (-9.5, -13.7, -25.9, 9.95), (-11.6, -14.5, -24.8, 9.7),
-              (-13.2, -15.4, -23.8, 9.35), (-14.3, -16.3, -22.9, 8.9), (-14.9, -17.2, -22.0, 8.2),
-              (-15.2, -18.0, -21.1, 7.0)]
+def _beavertail_sections():
+    """The beavertail tang: (x, top z, bottom z, half-width) sections. Full
+    width under the slide's rear, then a rounded end (a circle in plan, the
+    same in side view) the web of the hand sits in; thick to its tip."""
+    out = []
+    R, xc = 10.4, -7.4
+    for x in (1.0, -2.0, -4.5, -7.4, -9.6, -11.7, -13.5, -15.0, -16.2, -17.0, -17.5, -17.75):
+        k = (1.0 - x) / 18.75
+        top0, bot0 = -12.6 - 0.9 * k, -33.0 + 8.0 * k
+        r = 1.0 if x >= xc else math.sqrt(max(0.0, 1.0 - ((x - xc) / R) ** 2))
+        r = max(r, 0.12)
+        zc, hh = 0.5 * (top0 + bot0), 0.5 * (top0 - bot0)
+        out.append((x, zc + hh * math.sqrt(r), zc - hh * math.sqrt(r), R * r))
+    return out
 
 
 def build_beavertail(col, q):
     rings = []
-    for x, top, bot, w in BEAVERTAIL:
-        if x < 0:                               # a longer tang, its tip swept up a little
-            k = -x / 15.2
-            x, top, bot = x * 1.22, top + 1.2 * k * k, bot + 1.6 * k * k
+    for x, top, bot, w in _beavertail_sections():
         rb = min(w, (top - bot) / 2) * 0.95
         rings.append([(x, v, u) for u, v in _rrect(bot, top, w, rb, min(2.0, rb), q["corner"])])
     ob = loft("beavertail", rings, col)
@@ -834,9 +840,9 @@ def mat_fibre():
 def materials():
     """The hero (Cycles) materials, procedural in gun-space millimetres."""
     return {
-        "nitride": mat_metal("nitride", (0.10, 0.10, 0.105), (0.42, 0.42, 0.43), 0.40, 0.22, wear=1.0),
-        "steel": mat_metal("steel", (0.075, 0.075, 0.078), (0.40, 0.40, 0.41), 0.44, 0.26, wear=0.7),
-        "anodised": mat_metal("anodised", (0.06, 0.06, 0.066), (0.62, 0.62, 0.64), 0.38, 0.25, wear=0.8),
+        "nitride": mat_metal("nitride", (0.035, 0.035, 0.037), (0.42, 0.42, 0.43), 0.40, 0.22, wear=1.0),
+        "steel": mat_metal("steel", (0.045, 0.045, 0.047), (0.40, 0.40, 0.41), 0.44, 0.26, wear=0.7),
+        "anodised": mat_metal("anodised", (0.04, 0.04, 0.044), (0.62, 0.62, 0.64), 0.38, 0.25, wear=0.8),
         "bronze": mat_metal("bronze", (0.52, 0.34, 0.15), (0.62, 0.45, 0.24), 0.24, 0.18, wear=0.25, streak=0.04),
         "polymer": mat_polymer(),
         "fibre": mat_fibre(),
@@ -844,32 +850,41 @@ def materials():
 
 
 # ================================================================ in the hand
-# Grip socket: where the gun sits in the posed hand, in a roll-independent
-# hand frame built from joint positions (as hand_pose / hands_render do):
-#   f     wrist (hand bone head) -> middle finger root
+# The hold is authored from the hand (the hand is the constraint), in a
+# roll-independent hand frame built from joint positions:
+#   f     wrist (hand bone head) -> middle finger root (the metacarpal line)
 #   t     across the knuckles, toward the index (orthogonal to f)
 #   back  out of the back of the hand
-# The bore is f turned `alpha` toward t (in the palm plane): the fingers run
-# a little below the bore, the wrist straight behind the gun. The gun's left
-# (+Y) is the palm normal. The web crotch (bone level: half way between the
-# thumb's MCP and the middle of the index metacarpal) goes `web_grip` =
-# (t, u) on the grip: just under the beavertail, behind the backstrap
-# surface by the web's flesh. Then:
-#   aim()   turns the wrist (the hand bone about the palm normal) so the bore
-#           sits at `pitch` deg in the world (G/E's high-ready hand is
-#           authored for an empty grip, so it points the muzzle ~20 deg down)
-#   seat()  moves the gun the least distance that takes it out of the palm
-#           (hand and thumb-root skin), then closes it along the palm normal
-#           to first contact: the palm on the grip panel, no overlap.
-SOCKET = {"alpha": 12.0, "web_grip": (4.0, -6.0), "pitch": -2.0, "up": 4.0}
+# The bore is f turned `alpha` deg toward t: the gun nearly in line with the
+# hand and forearm, the knuckle row (which leans ~15 deg off t) along the
+# raked front strap. The knuckle row's middle (half way between the index and
+# pinky roots, bone level) goes `knuckles` = (t, u) on the grip: half way down
+# it, at the front strap, so the middle finger runs right under the trigger
+# guard and the web sits under the beavertail. The gun's left (+Y) is the
+# palm normal. Then:
+#   orient()   turns the hand about the wrist so the gun is level (`pitch`)
+#              and upright, pointing along the forearm;
+#   straighten() moves the wrist (two-bone IK, the hand keeps its
+#              orientation) so the forearm lines up with the hand (wrist
+#              bend <= WRIST_MAX where the arm allows);
+#   seat()     slides the gun along the palm normal until the palm skin sits
+#              `squash_mm` into the grip and the thenar pad `thenar_mm` (soft
+#              tissue; contact() squashes it onto the surface at the end).
+SOCKET = {"alpha": 4.0, "cant": 10.0, "yaw": 0.0, "knuckles": (26.0, 46.0), "pitch": -2.0, "squash_mm": 2.0,
+          "thenar_mm": 6.0}
 # The support hand (thumbs-forward two-hand grip): the strong hand's frame
 # mirrored through the gun's mid-plane, turned `turn` deg fingers-down about
 # the gun's Y axis through grip_point(*pivot), then moved `offset` (gun-space
-# mm): its palm on the bare left grip panel, its fingers over the strong
-# fingers, its thumb forward under the strong thumb. hand_pose's clear and
-# wrap finish it.
-SUPPORT = {"turn": 38.0, "pivot": (40.0, 25.0), "offset": (10.0, 8.0, -14.0)}
+# mm): its heel on the bare left grip panel, its fingers over the strong
+# fingers, its thumb forward under the strong thumb. `turn` is searched in
+# `turns` for the straightest wrist; hand_pose's clear and wrap finish it.
+SUPPORT = {"turns": (0.0, 10.0, 15.0, 20.0, 25.0), "yaws": (0.0, 15.0, 30.0, 45.0, 60.0),
+           "swivels": (-45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0), "pivot": (40.0, 25.0),
+           "offset": (20.0, 4.0, -30.0)}
+WRIST_MAX = 15.0
+WEB_GRIP = (3.0, 0.0)               # (t, u): where the web of the hand sits, under the tang (game socket)
 HERO_NAME = "pistol_hero"
+CONTACT = "pistol_contact"          # the soft-contact modifiers and vertex group
 GAP_M = 0.0004
 
 
@@ -886,24 +901,28 @@ def hand_frame(arm, s):
     return w, f, t, back          # (f, t, back) is right-handed for a right hand, left-handed for a left
 
 
-def web_crotch(arm, s):
+def knuckle_mid(arm, s):
     pb = arm.pose.bones
-    return 0.5 * pb[f"thumb_02_{s}"].head + 0.25 * (pb[f"hand_{s}"].head + pb[f"index_01_{s}"].head)
+    return 0.5 * (pb[f"index_01_{s}"].head + pb[f"pinky_01_{s}"].head)
 
 
 def socket_matrix(arm, s="r", sock=None):
-    """Gun matrix in armature space for the posed hand s, before aim and seat."""
+    """Gun matrix in armature space for the posed hand s (before orient,
+    straighten and seat)."""
     sock = sock or SOCKET
     w, f, t, back = hand_frame(arm, s)
     a = math.radians(sock["alpha"])
     X = f * math.cos(a) + t * math.sin(a)
     Z = -f * math.sin(a) + t * math.cos(a)
     Y = Z.cross(X)
-    y = math.radians(sock.get("yaw", 0.0))      # the muzzle swung toward the palm side
+    c = math.radians(sock.get("cant", 0.0))     # the hand rolled over the grip, thumb side to the gun's left
+    Y, Z = Y * math.cos(c) + Z * math.sin(c), Z * math.cos(c) - Y * math.sin(c)
+    y = math.radians(sock.get("yaw", 0.0))      # the wrist swung in behind the gun, the knuckles kept
     X, Y = X * math.cos(y) + Y * math.sin(y), Y * math.cos(y) - X * math.sin(y)
     R = Matrix((X, Y, Z)).transposed()
-    W = Vector(grip_point(*sock["web_grip"])) * MM
-    return Matrix.Translation(web_crotch(arm, s) - R @ W) @ R.to_4x4()
+    tk, uk = sock["knuckles"]
+    K = Vector(grip_point(tk, uk)) * MM
+    return Matrix.Translation(knuckle_mid(arm, s) - R @ K) @ R.to_4x4()
 
 
 def build_hero(name=HERO_NAME):
@@ -925,67 +944,85 @@ def spawn(arm, s="r", name=HERO_NAME):
     ob = bpy.data.objects.get(name)
     if ob is None:
         ob = build_hero(name)
+    uncontact(arm)
     ob.hide_render = False
     ob.hide_viewport = False
     ob.parent = arm
     ob.parent_type = "BONE"
     ob.parent_bone = f"hand_{s}"
-    place(arm, ob, s)
+    bpy.context.view_layer.update()
+    ob.matrix_world = arm.matrix_world @ socket_matrix(arm, s)
+    bpy.context.view_layer.update()
     return ob
-
-
-def place(arm, ob, s, sock=None):
-    bpy.context.view_layer.update()
-    ob.matrix_world = arm.matrix_world @ socket_matrix(arm, s, sock)
-    bpy.context.view_layer.update()
 
 
 def bore(ob):
     return (ob.matrix_world.to_3x3() @ Vector((1, 0, 0))).normalized()
 
 
-def aim(arm, ob, s="r", pitch=None):
-    """Turn the wrist (the hand bone about the palm normal, through the
-    wrist) so the bore sits at `pitch` deg in the world (secant steps).
-    Returns the turn in deg."""
-    from mathutils import Quaternion
-    pitch = SOCKET["pitch"] if pitch is None else pitch
-    pb = arm.pose.bones[f"hand_{s}"]
-    M0 = pb.matrix.copy()
-    h = M0.translation.copy()
-    _, _, _, back = hand_frame(arm, s)
-    n = -back
-
-    def turn(deg):
-        pb.matrix = (Matrix.Translation(h) @ Quaternion(n, math.radians(deg)).to_matrix().to_4x4()
-                     @ Matrix.Translation(-h) @ M0)
-        bpy.context.view_layer.update()
-        return math.degrees(math.asin(max(-1.0, min(1.0, bore(ob).z))))
-    a0, p0 = 0.0, turn(0.0)
-    a1, p1 = 5.0, turn(5.0)
-    for _ in range(8):
-        if abs(p1 - pitch) < 0.1 or abs(p1 - p0) < 1e-6:
-            break
-        a0, p0, a1 = a1, p1, a1 + (pitch - p1) * (a1 - a0) / (p1 - p0)
-        a1 = max(-45.0, min(45.0, a1))
-        p1 = turn(a1)
-    return a1
+def wrist_bend(arm, s):
+    """Wrist bend of hand s against its rest pose (deg; twist excluded)."""
+    q = arm.pose.bones[f"hand_{s}"].matrix_basis.to_quaternion()
+    y = q @ Vector((0.0, 1.0, 0.0))
+    return math.degrees(math.acos(max(-1.0, min(1.0, y.y))))
 
 
-def _palm(arm, s):
-    """Posed palm skin of hand s (world coords, polygons): the skin of the
-    hand bone and the thumb root near the hand."""
+def orient(arm, ob, s="r", pitch=None, along="target"):
+    """Turn hand s about its wrist so the gun is level (`pitch` deg), upright
+    (slide on top) and points (seen from above) at the target: the
+    character's forward, armature -Y, the line the eyes are on in E's bladed
+    ready (along="forearm": along the forearm; "bore": level it only)."""
     from character import hand_pose
-    sc = hand_pose.Scene(arm, s)
-    body = sc.body
-    co = hand_pose._posed(body)
-    dom = hand_pose._dominant(body)
-    near = np.linalg.norm(co - np.array(sc.centre()[:]), axis=1) < sc.radius
-    keep = near & ((dom == f"hand_{s}") | (dom == f"thumb_01_{s}"))
-    polys = [p for p in hand_pose._polys(body) if all(keep[i] for i in p)]
-    used = sorted({i for p in polys for i in p})
-    remap = {v: k for k, v in enumerate(used)}
-    return co[used], [tuple(remap[i] for i in p) for p in polys]
+    pitch = SOCKET["pitch"] if pitch is None else pitch
+    mw = arm.matrix_world
+    pb = arm.pose.bones
+    if along == "forearm":
+        fore = mw @ pb[f"hand_{s}"].head - mw @ pb[f"lowerarm_{s}"].head
+    elif along == "bore":
+        fore = bore(ob)
+    else:
+        fore = mw.to_3x3() @ Vector((0.0, -1.0, 0.0))
+    h = Vector((fore.x, fore.y, 0.0)).normalized()
+    p = math.radians(pitch)
+    X = h * math.cos(p) + Vector((0.0, 0.0, math.sin(p)))
+    Y = Vector((0.0, 0.0, 1.0)).cross(X).normalized()
+    Z = X.cross(Y)
+    RT = Matrix((X, Y, Z)).transposed()
+    RS = ob.matrix_world.to_3x3().normalized()
+    m3 = mw.to_3x3().normalized()
+    D = m3.inverted() @ (RT @ RS.inverted()) @ m3
+    hand_pose._rotate(arm, f"hand_{s}", D.to_quaternion())
+
+
+def straighten(arm, s="r", reach_mm=90.0):
+    """Move the wrist of hand s (two-bone IK, the hand keeps its world
+    orientation) to the nearby spot where the wrist bends least: a coarse
+    grid across the forearm, then a finer one. Returns (bend before, after,
+    move mm)."""
+    from character import hand_pose
+    names = [f"upperarm_{s}", f"lowerarm_{s}", f"hand_{s}"]
+    base = hand_pose._bases(arm, names)
+    b0 = wrist_bend(arm, s)
+    w, f, t, back = hand_frame(arm, s)
+
+    def score(d):
+        hand_pose._set_bases(arm, base)
+        hand_pose.move_hand(arm, s, d)
+        return wrist_bend(arm, s) + 0.04 * d.length / MM     # a little cost for moving the hand
+
+    best = (score(Vector()), Vector())
+    for step, n in ((reach_mm / 3.0, 3), (reach_mm / 12.0, 2)):
+        centre = best[1].copy()
+        for i in range(-n, n + 1):
+            for j in range(-n, n + 1):
+                for k in (-1, 0, 1):
+                    d = centre + (t * i + back * j + f * k) * step * MM
+                    sc = score(d)
+                    if sc < best[0] - 1e-6:
+                        best = (sc, d.copy())
+    hand_pose._set_bases(arm, base)
+    hand_pose.move_hand(arm, s, best[1])
+    return b0, wrist_bend(arm, s), best[1].length / MM
 
 
 def _local_bvh(ob):
@@ -997,107 +1034,118 @@ def _local_bvh(ob):
                                 epsilon=0.0)
 
 
-def seat(arm, ob, s="r", reach_mm=40.0, rounds=2):
-    """Seat the gun in the palm for a high, snug grip, by rigid moves of the
-    gun (gun-space directions), each to first contact with the palm skin
-    (the hand bone and thumb root) and backed off to a 0.4 mm gap:
-      1. out of the palm along its normal if the socket starts inside it;
-      2. `rounds` times: onto the palm along its normal, up into the hand
-         along the grip axis (a high grip: the beavertail onto the web),
-         and back into the web (the backstrap into the crotch).
-    Returns a log line."""
-    from mathutils.bvhtree import BVHTree
+def _depth(gun, pts_local):
+    """Deepest point (mm) of pts (gun-local) inside the gun: >0 inside, <0
+    the smallest gap outside (nearest surface, its normal decides)."""
+    deep = -1e9
+    for p in pts_local:
+        loc, nrm, _, dist = gun.find_nearest(Vector(p), 0.015)
+        if loc is None:                   # over 15 mm from the gun: outside (the sign test is
+            continue                      # unreliable far off, where the nearest point is an edge)
+        sgn = -1.0 if (Vector(p) - loc).dot(nrm) < 0 else 1.0
+        deep = max(deep, -sgn * dist)
+    return deep / MM
+
+
+def seat(arm, ob, s="r", reach_mm=60.0):
+    """Slide the gun along the palm normal (gun Y) until the palm skin's
+    deepest point sits SOCKET['squash_mm'] inside the grip and the thenar
+    pad's (the thumb root, which wraps the backstrap) SOCKET['thenar_mm']
+    (bisection). Returns a log line."""
+    from character import hand_pose
     gun = _local_bvh(ob)
-    pco, ppolys = _palm(arm, s)
+    sc = hand_pose.Scene(arm, s)
+    co = hand_pose._posed(sc.body)
+    dom = hand_pose._dominant(sc.body)
+    near = np.linalg.norm(co - np.array(sc.centre()[:]), axis=1) < sc.radius
+    Mi = np.array(ob.matrix_world.inverted())
+    parts = {}
+    for key, bone, allow in (("palm", f"hand_{s}", SOCKET["squash_mm"]), ("thenar", f"thumb_01_{s}", SOCKET["thenar_mm"])):
+        p = co[near & (dom == bone)]
+        parts[key] = (p @ Mi[:3, :3].T + Mi[:3, 3], allow)
     M0 = ob.matrix_world.copy()
     R = M0.to_3x3()
 
-    def hits(off):
-        """Palm overlap with the gun moved by off (gun-space mm)."""
-        M = Matrix.Translation(R @ (Vector(off) * MM)) @ M0
-        Mi = np.array(M.inverted())
-        loc = pco @ Mi[:3, :3].T + Mi[:3, 3]
-        return len(gun.overlap(BVHTree.FromPolygons([Vector(p) for p in loc], ppolys, epsilon=0.0)))
-
-    def move(off, d, until_contact, reach=reach_mm, step=1.0):
-        """Slide from off along d: to the first clear point (until_contact
-        False) or to just before the first contact (True). Returns (new
-        offset, distance); the whole reach if that never happens."""
-        prev = 0.0
-        t = 0.0
-        while t < reach:
-            t = min(reach, t + step)
-            h = hits(off + d * t)
-            if bool(h) == until_contact:
-                a, b = prev, t           # a: still in the old state, b: the new state
-                for _ in range(7):
-                    m = 0.5 * (a + b)
-                    if bool(hits(off + d * m)) == until_contact:
-                        b = m
-                    else:
-                        a = m
-                if until_contact:
-                    back = max(0.0, a - GAP_M / MM)
-                    return off + d * back, back
-                return off + d * (b + GAP_M / MM), b
-            prev = t
-        return off + d * reach, reach          # no contact (or never clear) within reach: the whole reach
-    Y = Vector((0, 1, 0))
-    up = Vector((GD[0], 0, GD[1]))         # gun down its grip axis = the hand higher on the grip
-    web = -Vector((GN[0], 0, GN[1]))       # gun back = the backstrap into the web
-    off = Vector((0, 0, 0))
-    h0 = hits(off)
-    steps = []
-    if h0:
-        off, d = move(off, Y, False)
-        steps.append(f"out {d:.1f}")
-        if hits(off):
-            return f"seat: palm overlap {h0} tris, not cleared within {reach_mm:.0f} mm"
-    for _ in range(rounds):
-        for name, d, reach in (("onto palm", -Y, reach_mm), ("up", up, SOCKET.get("up", 25.0)), ("web", web, 15.0)):
-            off, dist = move(off, d, True, reach)
-            steps.append(f"{name} {dist:.1f}" if dist is not None else f"{name} -")
-    ob.matrix_world = Matrix.Translation(R @ (off * MM)) @ M0
+    def excess(dy):           # the gun moved dy mm along its Y = the skin moved -dy
+        sh = np.array((0.0, dy * MM, 0.0))
+        return max(_depth(gun, p - sh) - allow for p, allow in parts.values())
+    e0 = excess(0.0)
+    lo, hi = -reach_mm, reach_mm          # the excess falls as dy grows (the gun leaves the palm)
+    for _ in range(16):
+        m = 0.5 * (lo + hi)
+        if excess(m) > 0.0:
+            lo = m
+        else:
+            hi = m
+    dy = hi
+    ob.matrix_world = Matrix.Translation(R @ Vector((0.0, dy * MM, 0.0))) @ M0
     bpy.context.view_layer.update()
-    return (f"seat: palm overlap at the socket {h0} tris; " + ", ".join(steps)
-            + f" mm; net move {tuple(round(v, 1) for v in off)} mm (gun space)")
+    sh = np.array((0.0, dy * MM, 0.0))
+    dd = {k: _depth(gun, p - sh) for k, (p, _) in parts.items()}
+    return (f"seat: moved {dy:+.1f} mm along the palm normal (excess {e0:+.1f} mm at the socket); "
+            f"palm {dd['palm']:+.1f} mm, thenar {dd['thenar']:+.1f} mm into the grip")
 
 
 def support(arm, ob, s="l", strong="r", sup=None):
-    """Put the support hand s on the gun (orientation, then a two-bone IK
-    move of the wrist; see SUPPORT). Returns a log line."""
+    """Put the support hand s on the gun: for each turn in SUPPORT['turns'],
+    orient the hand (see SUPPORT) and move its wrist there (two-bone IK);
+    keep the turn with the straightest wrist. Returns a log line."""
     from character import hand_pose
     from mathutils import Quaternion
     sup = sup or SUPPORT
+    names = [f"upperarm_{s}", f"lowerarm_{s}", f"hand_{s}"]
+    base = hand_pose._bases(arm, names)
     G = arm.matrix_world.inverted() @ ob.matrix_world          # gun -> armature space
     piv = Vector(grip_point(*sup["pivot"])) * MM
-    turn = Quaternion(Vector((0, 1, 0)), math.radians(sup["turn"])).to_matrix().to_4x4()      # + = fingers down
-    local = (Matrix.Translation(Vector(sup["offset"]) * MM) @ Matrix.Translation(piv) @ turn
-             @ Matrix.Translation(-piv) @ Matrix.Diagonal((1.0, -1.0, 1.0, 1.0)))
-    T = G @ local @ G.inverted()
-    T3 = T.to_3x3()
     w, f, t, back = hand_frame(arm, strong)
-    tw, tf, tt, tb = T @ w, (T3 @ f).normalized(), (T3 @ t).normalized(), (T3 @ back).normalized()
-    cw, cf, ct, cb = hand_frame(arm, s)
-    Rd = Matrix((tf, tt, tb)).transposed() @ Matrix((cf, ct, cb)).transposed().inverted()
-    pb = arm.pose.bones[f"hand_{s}"]
-    h = pb.head.copy()
-    pb.matrix = Matrix.Translation(h) @ Rd.to_4x4() @ Matrix.Translation(-h) @ pb.matrix
-    bpy.context.view_layer.update()
-    d = tw - pb.head
-    hand_pose.move_hand(arm, s, d)
-    err = (pb.head - tw).length * 1000
-    return f"support hand_{s}: wrist moved {d.length * 1000:.0f} mm onto the gun (IK error {err:.1f} mm)"
+    best = None
+    for turn, yaw in [(a, b) for a in sup["turns"] for b in sup["yaws"]]:
+        hand_pose._set_bases(arm, base)
+        Rq = (Quaternion(Vector((0, 0, 1)), math.radians(-yaw)).to_matrix().to_4x4()      # + = fingers to the gun's right
+              @ Quaternion(Vector((0, 1, 0)), math.radians(turn)).to_matrix().to_4x4())   # + = fingers down
+        local = (Matrix.Translation(Vector(sup["offset"]) * MM) @ Matrix.Translation(piv) @ Rq
+                 @ Matrix.Translation(-piv) @ Matrix.Diagonal((1.0, -1.0, 1.0, 1.0)))
+        T = G @ local @ G.inverted()
+        T3 = T.to_3x3()
+        tw, tf, tt, tb = T @ w, (T3 @ f).normalized(), (T3 @ t).normalized(), (T3 @ back).normalized()
+        cw, cf, ct, cb = hand_frame(arm, s)
+        Rd = Matrix((tf, tt, tb)).transposed() @ Matrix((cf, ct, cb)).transposed().inverted()
+        pb = arm.pose.bones[f"hand_{s}"]
+        h = pb.head.copy()
+        pb.matrix = Matrix.Translation(h) @ Rd.to_4x4() @ Matrix.Translation(-h) @ pb.matrix
+        bpy.context.view_layer.update()
+        hand_pose.move_hand(arm, s, tw - pb.head)
+        err = (pb.head - tw).length / MM
+        placed = hand_pose._bases(arm, names)
+        keep = pb.matrix.copy()
+        for sw in sup.get("swivels", (0.0,)):
+            hand_pose._set_bases(arm, placed)
+            if sw:
+                S = arm.pose.bones[names[0]].head
+                hand_pose._rotate(arm, names[0], Quaternion((pb.head - S).normalized(), math.radians(sw)), pivot=S)
+                pb.matrix = keep
+                bpy.context.view_layer.update()
+            bend = wrist_bend(arm, s)
+            if best is None or bend + err < best[0]:
+                best = (bend + err, (turn, yaw, sw), bend, err, hand_pose._bases(arm, names))
+    hand_pose._set_bases(arm, best[4])
+    return (f"support hand_{s}: turn {best[1][0]:.0f}, yaw {best[1][1]:.0f}, elbow swivel {best[1][2]:+.0f} deg, "
+            f"wrist bend {best[2]:.1f} deg, IK error {best[3]:.1f} mm")
 
 
 def hold(arm, s="r", rerun=None):
-    """Spawn, aim and seat the gun in hand s (after the pose, before the
-    hand settle). Returns (object, log lines)."""
+    """Spawn the gun on hand s's socket, level it, straighten the wrist and
+    seat the palm (after the pose, before the hand settle). Returns (object,
+    log lines)."""
+    rerun = rerun or (lambda: None)
     ob = spawn(arm, s)
-    turn = aim(arm, ob, s)
-    if rerun:
-        rerun()
-    log = [f"pistol in hand_{s}: wrist turned {turn:+.1f} deg (bore pitch {SOCKET['pitch']:+.0f})",
+    b_auth = wrist_bend(arm, s)
+    orient(arm, ob, s)                    # level, at the target
+    b0, b1, mv = straighten(arm, s, SOCKET.get("reach_mm", 90.0))
+    orient(arm, ob, s)                    # (move_hand keeps the hand's orientation: a no-op check)
+    rerun()
+    log = [f"pistol in hand_{s}: wrist bend {b_auth:.1f} deg authored, {b0:.1f} levelled, "
+           f"{wrist_bend(arm, s):.1f} after moving the wrist {mv:.0f} mm",
            f"pistol in hand_{s}: " + seat(arm, ob, s)]
     return ob, log
 
@@ -1105,8 +1153,8 @@ def hold(arm, s="r", rerun=None):
 def finish_hold(arm, ob, s="r", support_s=None, support_base=None, rerun=None):
     """After the strong hand's settle: the support hand onto the gun and
     settled on it (its own hand_pose pass, so it closes on the strong
-    fingers as they are), then the index and thumbs placed. Returns log
-    lines."""
+    fingers as they are), the index and thumbs placed, then the soft contact
+    (contact()). Returns log lines."""
     from character import hand_pose
     rerun = rerun or (lambda: None)
     log = []
@@ -1115,7 +1163,69 @@ def finish_hold(arm, ob, s="r", support_s=None, support_base=None, rerun=None):
         rerun()
         log += hand_pose.settle(arm, (), rerun=rerun, spec={support_s: support_spec(support_base)})
     log += place_digits(arm, ob, s, support_s)
+    rerun()
+    log.append(contact(arm, ob))
     return log
+
+
+# ---------------------------------------------------------------- soft contact
+def _contact_meshes(arm):
+    from character import hand_pose
+    return [o for o in hand_pose._meshes(arm) if o.vertex_groups and "index_02_r" in o.vertex_groups]
+
+
+def contact(arm, ob, offset_mm=0.2, near_mm=6.0):
+    """Soft contact: hand skin (both hands, the nails) within `near_mm` of
+    the gun that sits inside it (the palm's and thenar's squash, a finger
+    pad) is pushed out onto its surface by a shrinkwrap (outside mode) right
+    after the skin's armature. Skin further off is left out of the group:
+    there the nearest-point inside test is unreliable. Returns a log line
+    with the largest push."""
+    from character import hand_pose
+    uncontact(arm)
+    gun = _local_bvh(ob)
+    Mi = np.array(ob.matrix_world.inverted())
+    hand_bones = ("hand",) + tuple(f"{d}_0{k}" for d in hand_pose.DIGITS for k in (1, 2, 3))
+    worst, count = 0.0, 0
+    for o in _contact_meshes(arm):
+        before = hand_pose._posed(o)
+        if before is None or len(before) != len(o.data.vertices):
+            continue
+        dom = hand_pose._dominant(o)
+        loc = before @ Mi[:3, :3].T + Mi[:3, 3]
+        idx = [i for i, d in enumerate(dom) if d and d[:-2] in hand_bones
+               and gun.find_nearest(Vector(loc[i]), near_mm * MM)[0] is not None]
+        if not idx:
+            continue
+        vg = o.vertex_groups.new(name=CONTACT)
+        vg.add(idx, 1.0, "REPLACE")
+        m = o.modifiers.new(CONTACT, "SHRINKWRAP")
+        m.target = ob
+        m.wrap_method = "NEAREST_SURFACEPOINT"
+        m.wrap_mode = "OUTSIDE"
+        m.offset = offset_mm * MM
+        m.vertex_group = CONTACT
+        arm_i = next((i for i, mm in enumerate(o.modifiers) if mm.type == "ARMATURE"), None)
+        if arm_i is not None:
+            o.modifiers.move(len(o.modifiers) - 1, arm_i + 1)
+        bpy.context.view_layer.update()
+        after = hand_pose._posed(o)
+        moved = np.linalg.norm(after - before, axis=1)
+        worst = max(worst, float(moved.max()) / MM)
+        count += int((moved > 1e-5).sum())
+    return f"contact: {count} hand skin vertices pushed out onto the gun, by up to {worst:.1f} mm"
+
+
+def uncontact(arm=None):
+    """Remove the soft-contact modifiers and groups (a pose without the gun)."""
+    for o in bpy.data.objects:
+        if o.type == "MESH":
+            m = o.modifiers.get(CONTACT)
+            if m is not None:
+                o.modifiers.remove(m)
+            g = o.vertex_groups.get(CONTACT)
+            if g is not None:
+                o.vertex_groups.remove(g)
 
 
 def hide(name=HERO_NAME):
@@ -1123,6 +1233,7 @@ def hide(name=HERO_NAME):
     if ob is not None:
         ob.hide_render = True
         ob.hide_viewport = True
+    uncontact()
 
 
 def hand_spec(s="r"):
@@ -1159,10 +1270,11 @@ def support_spec(base):
 # trigger guard, pointing at the target.
 DIGITS = {"strong": {"index": ((120.0, -19.0, -19.0), (0, -1, 0))}, "support": {}}
 THUMBS = {
-    "strong": ([((-28, -10, -38), (-2, 28, -32), (30, 30, -28)), ((-32, -13, -30), (-8, 24, -32), (22, 30, -30)),
-                ((-30, -6, -34), (2, 28, -28), (34, 28, -24))], (32, 28, -26)),
-    "support": ([((38, 40, -22), (66, 30, -24), (96, 26, -24)), ((36, 44, -30), (64, 34, -32), (94, 28, -30)),
-                 ((40, 38, -16), (70, 28, -18), (100, 24, -18))], (98, 24, -26)),
+    "strong": ([((-4, 16, -28), (30, 20, -28), (62, 20, -26)), ((-8, 14, -30), (26, 20, -30), (58, 21, -28)),
+                ((0, 18, -26), (34, 21, -26), (66, 21, -24)), ((-10, 10, -32), (22, 22, -32), (54, 23, -30))],
+               (40, 21, -28), (8, 24, -29)),
+    "support": ([((40, 34, -40), (70, 24, -38), (100, 21, -36)), ((36, 38, -44), (66, 26, -40), (96, 22, -38)),
+                 ((44, 32, -36), (74, 24, -34), (104, 21, -32))], (126, 21, -37), (98, 22, -38)),
 }
 
 
@@ -1210,16 +1322,67 @@ def _chain(arm, ob, s, d, pts):
 
 
 def _digit_hits(arm, s, d):
+    """Triangles of digit d of hand s cutting into anything not of its own
+    arm. The thumb counts from its MCP out (its root is the thenar pad,
+    which may squash onto the backstrap, see seat / contact), plus its skin
+    against the index's."""
     from character import hand_pose
     sc = hand_pose.Scene(arm, s)
     g = sc.build((d, "index") if d == "thumb" else (d,))
-    n = sc.hits(g[d], g["foreign"])
-    if d == "thumb" and g["thumb"] is not None and g["index"] is not None:
-        n += len(g["thumb"].overlap(g["index"]))      # the thumb's crotch against the index
+    if d != "thumb":
+        return sc.hits(g[d], g["foreign"])
+    co = hand_pose._posed(sc.body)
+    dom = hand_pose._dominant(sc.body)
+    th = hand_pose._bvh(co, hand_pose._polys(sc.body), np.isin(dom, [f"thumb_02_{s}", f"thumb_03_{s}"]))
+    n = sc.hits(th, g["foreign"])
+    if th is not None and g["index"] is not None:
+        n += len(th.overlap(g["index"]))
     return n
 
 
-def _solve_thumb(arm, ob, s, seeds, tip, steps=(16.0, 8.0, 4.0, 2.0)):
+def _thumb_fan(arm, ob, s, tip, radii=(10.0, 9.0, 8.0), n=24):
+    """Seed chains from the thumb's own root (gun space mm): its MCP on a
+    fan of points one metacarpal out, its IP on a fan one proximal phalanx
+    beyond, the tip aimed at the mark; each bone sampled along its length
+    must keep its skin radius (`radii`, mm) off the gun. Ranked by the tip's
+    distance from the mark; returns up to n (MCP, IP, tip) chains."""
+    from character import hand_pose
+    names = hand_pose.digit_bones(s, "thumb")
+    pb = arm.pose.bones
+    Gi = (arm.matrix_world.inverted() @ ob.matrix_world).inverted()
+    root = Gi @ pb[names[0]].head / MM
+    L = [(pb[k].tail - pb[k].head).length / MM for k in names]
+    gun = _local_bvh(ob)
+    tipv = Vector(tip)
+
+    def clear(a, b, r):
+        for k in (0.35, 0.7, 1.0):
+            q = a.lerp(b, k)
+            if gun.find_nearest(q * MM, r * MM)[0] is not None:
+                return False
+        return True
+
+    def fan(c, length, step):
+        for el in range(-70, 71, step):
+            for az in range(0, 360, step):
+                e, a = math.radians(el), math.radians(az)
+                yield c + Vector((math.cos(e) * math.cos(a), math.cos(e) * math.sin(a), math.sin(e))) * length
+    mcps = [m for m in fan(root, L[0], 10) if clear(root, m, radii[0])]
+    mcps.sort(key=lambda m: (tipv - m).length)
+    out = []
+    for m in mcps[:40]:
+        for ip in fan(m, L[1], 15):
+            if not clear(m, ip, radii[1]):
+                continue
+            t = ip + (tipv - ip).normalized() * min(L[2], (tipv - ip).length)
+            if not clear(ip, t, radii[2]):
+                continue
+            out.append(((t - tipv).length, (tuple(m), tuple(ip), tuple(t))))
+    out.sort(key=lambda c: c[0])
+    return [c for _, c in out[:n]]
+
+
+def _solve_thumb(arm, ob, s, seeds, tip, ip=None, steps=(16.0, 8.0, 4.0, 2.0)):
     """Pose the thumb of hand s on the gun: start from the best of the seed
     chains (MCP, IP, tip points in gun space mm, see _chain), then a greedy
     search turning each thumb bone (children follow) a step either way about
@@ -1232,23 +1395,26 @@ def _solve_thumb(arm, ob, s, seeds, tip, steps=(16.0, 8.0, 4.0, 2.0)):
     names = hand_pose.digit_bones(s, "thumb")
     G = arm.matrix_world.inverted() @ ob.matrix_world
     goal = G @ (Vector(tip) * MM)
+    knuckle = None if ip is None else G @ (Vector(ip) * MM)
     pb = arm.pose.bones
     base = hand_pose._bases(arm, names)
 
     def cost():
         n = _digit_hits(arm, s, "thumb")
         d = (pb[names[2]].tail - goal).length / MM
-        return n * 1000.0 + d, n, d
+        k = 0.0 if knuckle is None else 0.5 * (pb[names[2]].head - knuckle).length / MM
+        return n * 1000.0 + d + k, n, d
 
     best = None
-    for pts in seeds:
+    fan = _thumb_fan(arm, ob, s, tip)
+    for pts in list(seeds) + fan:
         hand_pose._set_bases(arm, base)
         _chain(arm, ob, s, "thumb", pts)
         c = cost()
         if best is None or c[0] < best[0][0]:
             best = (c, hand_pose._bases(arm, names))
     hand_pose._set_bases(arm, best[1])
-    cur, evals = best[0], len(seeds)
+    cur, evals = best[0], len(seeds) + len(fan)
     for st in steps:
         improved = True
         while improved and evals < 400:
@@ -1424,11 +1590,11 @@ def gltf_material(imgs, name="pistol"):
 
 def socket_empty(name="grip_socket", parent=None):
     """The grip socket: on the backstrap where the web of the hand sits
-    (SOCKET web_grip), X along the bore, Z up the gun."""
+    (WEB_GRIP, under the beavertail's tang), X along the bore, Z up the gun."""
     e = bpy.data.objects.new(name, None)
     e.empty_display_type = "ARROWS"
     e.empty_display_size = 0.03
-    e.location = Vector(grip_point(*SOCKET["web_grip"])) * MM
+    e.location = Vector(grip_point(*WEB_GRIP)) * MM
     e.parent = parent
     bpy.context.scene.collection.objects.link(e)
     return e
