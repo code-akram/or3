@@ -525,15 +525,33 @@ def cmd_ratios(a):
         print(f"  subject distance (avg-size face): median {np.median(ds):.2f} m, range {ds.min():.2f}-{ds.max():.2f}")
 
 
+def detector_points(det, bgr):
+    """YuNet's five points (eyes, nose tip, mouth corners) of the largest face, as (5, 3), or None."""
+    det.setInputSize((bgr.shape[1], bgr.shape[0]))
+    _, faces = det.detect(bgr)
+    if faces is None or not len(faces):
+        return None
+    f = max(faces, key=lambda f: f[2] * f[3])
+    return np.c_[f[4:14].reshape(5, 2), np.zeros(5)].astype(np.float32)
+
+
 def cmd_measure(a):
-    """The same ratios for arbitrary images (renders): one landmarker pass per image."""
+    """The same ratios for arbitrary images (renders): one landmarker pass per image. With
+    --yunet, an image the landmarker misses (a near-profile) still gets the detector's five
+    points saved for alignment, without ratios."""
     lm = Landmarker(a.landmarker)
+    det = cv2.FaceDetectorYN.create(str(a.yunet), "", (320, 320), 0.5, 0.3, 5) if a.yunet else None
     rows = []
     for p in a.images:
-        rgb = cv2.cvtColor(cv2.imread(p), cv2.COLOR_BGR2RGB)
+        bgr = cv2.imread(p)
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         res = lm(rgb)
         if res is None:
-            print(f"[measure] no face: {p}", file=sys.stderr)
+            five = detector_points(det, bgr) if det is not None else None
+            if five is not None and a.out_dir:
+                np.save(Path(a.out_dir) / (Path(p).stem + "_lm.npy"), five)
+            print(f"[measure] no landmarker face: {p}" + (" (detector points saved)" if five is not None else ""),
+                  file=sys.stderr)
             continue
         pts, _bs, M = res
         r = ratios_2d(pts)
@@ -592,6 +610,7 @@ def main(argv=None):
     s.add_argument("--out", default="")
     s = sub.add_parser("measure")
     s.add_argument("--landmarker", required=True)
+    s.add_argument("--yunet", default="", help="YuNet model: five-point fallback when the landmarker misses")
     s.add_argument("--out", default="")
     s.add_argument("--out-dir", default="")
     s.add_argument("images", nargs="+")
