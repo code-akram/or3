@@ -166,6 +166,28 @@ def regions(fr, m):
     return r
 
 
+def lip_seam(m, lips, ao, width_m, n_seed=3000, chunk=4096):
+    """Closeness (0..1, a gauss of width_m) of each lip texel to where the lips
+    meet. The inner lips pressed together bake to zero occlusion inside the lips
+    group; the distance is 3D (the seam crosses UV islands and the inner lips
+    fold away from the visible vermilion in UV)."""
+    out = np.zeros(lips.shape, np.float32)
+    inner = m.valid & (lips > 0.6) & (ao < 0.05)
+    near = m.valid & (lips > 0.05)
+    if inner.sum() < 16 or not near.any():
+        return out
+    Q = m.P[inner].astype(np.float32)
+    Q = Q[::max(1, len(Q) // n_seed)]
+    q2 = (Q * Q).sum(-1)
+    Pn = m.P[near].astype(np.float32)
+    d2 = np.empty(len(Pn), np.float32)
+    for i in range(0, len(Pn), chunk):
+        p = Pn[i:i + chunk]
+        d2[i:i + chunk] = ((p * p).sum(-1)[:, None] + q2[None] - 2 * p @ Q.T).min(1)
+    out[near] = gauss(np.sqrt(np.maximum(d2, 0)), width_m)
+    return out
+
+
 def synth_head(m, c, cl, cr):
     fr = Frame(m, cl, cr)
     R = regions(fr, m)
@@ -381,6 +403,11 @@ def synth_head(m, c, cl, cr):
     ao_c = ao + (1 - ao) * c["corner_ao_lift"] * corner
     alb *= (1 - c["ao_in_albedo"] * (1 - ao_c))[..., None]
     tint(corner * c["corner_lift"], (1.06, 1.05, 1.05))
+    # lip seam: a darker line where the lips meet, so a closed mouth reads as
+    # closed (not a pale open oval); softer into the corners (no frown)
+    if c["lip_seam"] > 0:
+        seam = lip_seam(m, lips, ao, c["lip_seam_mm"] * MM) * smoothstep(0.25, 0.85, lips) * (1 - 0.6 * corner)
+        tint(seam * c["lip_seam"], (0.62, 0.58, 0.60))
     alb_hero = np.clip(alb * (1 + c["hero_plane_paint"] * facing)[..., None], 0, 1)
     alb = np.clip(alb * plane, 0, 1)
 
@@ -502,6 +529,7 @@ def synth_hands(m, c, hf, fingers):
 DEFAULT_HEAD = {
     "base": "#b8927b",          # sRGB; the zones move the mean to ~(0.70, 0.55, 0.46)
     "lip": "#8e5f56", "lip_mix": 0.8,
+    "lip_seam": 0.0, "lip_seam_mm": 0.7,     # darker line where the lips meet (amount, width); 0 = off
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
