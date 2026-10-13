@@ -31,7 +31,7 @@ A third-person gun-fu RPG shooter in the browser. One character, inspired by Joh
 | Area | Decision |
 |---|---|
 | Genre | Third-person gun-fu RPG shooter |
-| Character | One original character inspired by the John Wick archetype: long dark hair, beard, black tailored three-piece suit, white shirt, black tie, dress shoes. **Not Keanu Reeves' likeness.** |
+| Character | John Wick, as a non-commercial fan tribute: long dark hair, beard, black tailored three-piece suit, white shirt, black tie, dress shoes. **Since 2026-10-13 the private fan build carries a likeness tribute to Keanu Reeves; the public build keeps the original face** (Decision log 2026-10-13). |
 | Build order | **Character → open world → story → enemies and combat** |
 | Traversal | **Grounded**: walk, jog, run, sprint, turn-in-place, stairs, slopes, curbs. The only exception is **knee-high hops and car-hood slides**. No parkour, no climbing. |
 | World | Open world: **Shinjuku, Tokyo**, from PLATEAU open 3D city data. Starts with Kabukicho, Golden Gai, Omoide Yokocho and the station east side (~1.5 km²). |
@@ -135,7 +135,7 @@ private/       (gitignored) footage, SMPL, weights, commercial material
    - Bake the macro shape keys (`TargetService.bake_targets`) before glTF export, or the Basis shape ships.
    - Fix the GAMEENGINE alpha links (opaque vs MASK) before export.
 2. **Head**:
-   - Sifu-style angular, planar, readable face, **original** (no likeness).
+   - Sifu-style angular, planar, readable face. The public build's face is **original**; the private fan build carries the likeness tribute (Decision log 2026-10-13).
    - Built by scripted, low-dimensional parametric edits (control points or lattices) on the MPFB head.
    - Optional refs: FLAME 2023 Open (CC-BY-4.0), ICT-FaceKit Light (MIT) for later blendshapes.
 3. **Loop**:
@@ -512,7 +512,7 @@ Target total ~11–12 ms, including 5–6 ms scene shading.
 4. **Prefer CC0 / CC-BY / MIT / Apache / BSD / OFL.** CC BY-SA only case by case, with the file kept under SA. ODbL for any OSM-derived layer.
 5. **Audit MakeHuman "CC0" packs per file.** Some files carry AGPL or CC-BY headers.
 6. **Required attributions**: PLATEAU (出典：国土交通省 PLATEAU, modified), Open-Meteo (CC BY 4.0), 100STYLE, CMU, HYG, SADIE II, every CC-BY asset → `CREDITS.md`.
-7. **The character is original** (no likeness). Real brand signage and logos are never reproduced.
+7. **Likeness lives only in the private fan build.** Likeness reference (frames, stills), fitted face shapes and likeness parameters stay in `private/` and are never committed or published; the public repo builds the original face. Credits: "Character inspired by John Wick (Lionsgate). Likeness tribute to Keanu Reeves. Non-commercial fan project." Real brand signage and logos are never reproduced.
 8. Research tool licences acceptable for this non-commercial open project: GVHMR (non-profit, derivatives open source), SMPL (non-commercial art), NVIDIA source licences. Also offline-only: InsightFace ArcFace `w600k_r50` (non-commercial; pending user ack), OSNet-AIN and YuNet (MIT), PANNs Cnn14 and Silero VAD. Build outputs record a snapshot of the spike-6 IR, never the live file.
    - These tools run offline only and never ship:
      - YOLO weights: AGPL-3.0.
@@ -687,6 +687,13 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 ---
 
 ## Decision log
+
+### 2026-10-13 — fan likeness pivot (user)
+- **Ruling:** or3 is a non-commercial fan tribute and an evaluation framework for long-horizon agentic work. The character is John Wick, with a likeness tribute to Keanu Reeves, attributed with credit. This supersedes the "face stays original" rule (§3, §7.7, §14 rule 7, the 2026-10-12 m1 rulings and `bench/m1/v2/BRIEF.md` rule 1) for the **private fan build only**.
+- **Public / private split:** likeness reference, fitted face shapes and likeness parameters live in `private/` (gitignored). The public repo keeps building the original face by default; the fan face is a private build input. Going public or commercial later means dropping that input, or licensing the likeness.
+- **Approved inputs (user):** frames from the official clips in `private/footage/` and official studio stills as private reference; non-commercial research face-fitting tools offline (outputs private).
+- **Caveat recorded:** non-commercial use and attribution reduce but do not remove publicity-rights and trademark risk. Likeness renders are not published outside private review.
+- Hair and grooming move to the films' look (centre part, wet clumped strands over the face, past the jaw; fuller beard).
 
 ### 2026-10-13 — m1 v2 hero character: final review set rendered
 - Eight implementation tracks (head and skin, scalp hair, facial hair, suit, hero stage, deformation, hands, pistol) are merged to `main`. The final review set (9 shots at 256 spp, 100 % crops, painterly variants, turntable) is in `data/build/hero/20261013T081828Z-main9-final/`. Status, weak spots and gates are in `HANDOFF.md`.
