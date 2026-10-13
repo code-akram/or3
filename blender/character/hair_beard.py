@@ -234,7 +234,20 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
             g = down + Vector((0, -fwd, 0)) + Vector((side * 0.15 * (1 - near_chin), 0, 0))
         out["comb"][v] = facial_hair.tangent(v, g.normalized())
         side_burn = smoothstep(frame.lips_min.y + 0.05, frame.ears_min.y, p.y) * smoothstep(mouth_z, frame.ear_z, p.z)
-        out["grey"][v] = cfg["tone"]["grey_share"] + cfg["tone"]["grey_extra"] * max(near_chin, side_burn)
+        tn = cfg["tone"]
+        if "grey_chin" in tn:
+            # zoned: a base share (cheeks), more at the chin, at the mouth
+            # corners (moustache ends) and the sideburns
+            ccx = c.x + side * (corner_x - c.x)
+            dc = math.hypot(p.x - ccx, p.z - (slit_z + tn["corner_up_m"]))
+            near_corner = math.exp(-(dc / tn["corner_radius_m"]) ** 2) if p.y < frame.lips_min.y + 0.03 else 0.0
+            nc = math.exp(-((p - chin).length / tn["chin_grey_radius_m"]) ** 2)
+            base = tn["grey_share"]
+            out["grey"][v] = max(base + (tn["grey_chin"] - base) * nc,
+                                 base + (tn["grey_corner"] - base) * near_corner,
+                                 base + (tn["grey_side"] - base) * side_burn)
+        else:
+            out["grey"][v] = tn["grey_share"] + tn["grey_extra"] * max(near_chin, side_burn)
         wh = v[dl].get(head_g, 0.0)
         wn = v[dl].get(neck_g, 0.0)
         out["neckw"][v] = wn / max(wh + wn, 1e-6)

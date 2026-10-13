@@ -355,9 +355,15 @@ class SkinRefit:
     Records the pre-refine skin; apply() moves every registered point by the
     displacement of its nearest skin point (old nearest -> new nearest)."""
 
+    # After the move, strand points are kept this far over the new skin: a
+    # face-shape change bigger than the refine's few mm (e.g. a face delta
+    # applied after the grooms) would otherwise leave skin poking through.
+    GAP_M = 0.0001
+
     def __init__(self, old_bvh):
         self.old = old_bvh
         self.items = []   # (kind, obj)
+        self.pushed = 0   # strand points pushed back out of the new skin
 
     def add(self, kind, obj):
         self.items.append((kind, obj))
@@ -379,6 +385,7 @@ class SkinRefit:
                     d = self._delta(Vector(pts[j, 0]), new_bvh)
                     pts[j] += np.array(d[:])
                     moved = max(moved, d.length)
+                self.pushed += collide(pts, new_bvh, np.full(k, self.GAP_M))
                 set_base_points(obj, pts)
             else:
                 mw = obj.matrix_world
@@ -420,4 +427,5 @@ def refit(b):
     for kind, obj in fr.items:
         if kind == "mesh":
             guard[obj.name] = facial_hair.guard_tangents(obj, obj.data.uv_layers[0].name, 2e-4, 2)
-    b.notes["facial_hair_refit"] = {"max_move_mm": moved_mm, "tangent_guard": guard}
+    b.notes["facial_hair_refit"] = {"max_move_mm": moved_mm, "strand_points_pushed": fr.pushed,
+                                    "tangent_guard": guard}
