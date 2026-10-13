@@ -10,13 +10,14 @@ the face parts and then measures the spec landmarks on the still-nude human
 dense face, skin and eyes; hero wires the Cycles-only materials after export.
 """
 
-from . import body, head_forms, head_measure, head_refine, head_shape
+from . import body, head_fan, head_forms, head_measure, head_refine, head_shape
 
 
 def edit_base(b):
     body.load_targets(b, b.cfg["head"].get("targets"))
     head_shape.apply(b)
     head_forms.apply(b)
+    head_fan.apply(b)  # optional private face layer; a no-op without a fan config
 
 
 def add_parts(b):

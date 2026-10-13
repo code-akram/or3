@@ -7,7 +7,11 @@ optional --config JSON override, then the legacy CLI flags). Run:
     blender -b -t 3 --factory-startup --python blender/build_character.py -- \
         --system-assets data/raw/makehuman/makehuman_system_assets/unpacked \
         --suit-assets   data/raw/makehuman/suits01/unpacked \
-        --out           data/build/character/character.glb [--config cand.json]
+        --out           data/build/character/character.glb [--config cand.json] [--fan fan.json]
+
+--fan (or the FAN_CONFIG environment variable) names an optional private layer: a JSON file
+whose "fan" block (paths relative to the file) feeds character/head_fan.py and whose optional
+"config" block is deep-merged over the build config. Without it the build is unchanged.
 
 --factory-startup keeps the user's saved scene/prefs out of the run; the MPFB
 extension is enabled explicitly. Asset roots are injected into MPFB's
@@ -39,6 +43,8 @@ def parse_args():
     ap.add_argument("--suit-assets", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--config", help="JSON override, deep-merged over the defaults")
+    ap.add_argument("--fan", default=os.environ.get("FAN_CONFIG") or None,
+                    help="optional private layer (default: $FAN_CONFIG); see character/head_fan.py")
     # Legacy spike-1 flags; when given they override the config.
     ap.add_argument("--suit")
     ap.add_argument("--shoes")
@@ -64,7 +70,20 @@ def build_config(a):
         over["rig"] = {"builtin": a.rig}
     if a.max_influences:
         over["export"] = {"max_influences": a.max_influences}
-    return config.load(a.config, over)
+    cfg = config.load(a.config, over)
+    return config.merge(cfg, load_fan(a.fan)) if a.fan else cfg
+
+
+def load_fan(path):
+    """The fan file's "config" block (deep-merged) plus its "fan" block with absolute paths."""
+    path = os.path.abspath(path)
+    with open(path) as f:
+        spec = json.load(f)
+    fan = dict(spec.get("fan", {}))
+    for k in ("face_delta", "dump_base"):
+        if fan.get(k):
+            fan[k] = os.path.join(os.path.dirname(path), fan[k])
+    return config.merge(spec.get("config", {}), {"fan": fan})
 
 
 def main():
