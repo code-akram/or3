@@ -405,6 +405,9 @@ def build(b, frame, cfg):
     srad = np.linspace(1.0, hero["tip_radius"], sg["points"])[None, :] * \
         rng.uniform(*hero["radius_m"], sm)[:, None] * sg["radius_scale"]
     clump = np.clip(g["clump_base"] + g["clump_moustache"] * f["moustache"] + g["clump_chin"] * f["chin"], 0, 1)
+    if ec and "clump" in ec:
+        # the edge hairs stand apart (less clumping), so the line breaks into strands
+        clump = clump * (ec["clump"] + (1 - ec["clump"]) * np.clip(f["edge"], 0, 1))
     frizz = np.clip(g["frizz_base"] * (L / max(L.max(), 1e-6)) * (1 - 0.6 * f["moustache"]), 0, 1)
     objs = []
     for label, P, R, attrs, nw, gn in (

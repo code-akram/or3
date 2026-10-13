@@ -295,7 +295,7 @@ def hair_material(name, cfg):
     hb.inputs["Roughness"].default_value = cfg["roughness"]
     hb.inputs["Radial Roughness"].default_value = cfg["radial_roughness"]
     hb.inputs["Coat"].default_value = cfg.get("coat", 0.0)
-    hb.inputs["Random Roughness"].default_value = 0.2
+    hb.inputs["Random Roughness"].default_value = cfg.get("random_roughness", 0.2)
     hb.inputs["Random Color"].default_value = 0.0
     mel = nt.nodes.new("ShaderNodeAttribute")
     mel.attribute_type = "GEOMETRY"
