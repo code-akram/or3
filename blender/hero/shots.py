@@ -5,7 +5,8 @@ Each shot: camera spec (a rig.CAMERAS name or a custom spec string), pose,
 resolution at 100 %, beads (water drops per shoulder), gaze (eyes to camera,
 deg off it; None = the pose's own), neon (sign-tube brightness, 1 = the set's;
 dimmer behind faces so the bokeh doesn't compete), light overrides on rig.HERO_LIGHTS (name -> tuple, or
-None to drop a light), haze density, rain streak count, a horizontal frame
+None to drop a light), extra desaturated twins of the rim / kicker (twin: {"cloth" | "skin":
+(saturation fraction, energy factor)}; see rig.PROP_SAT), haze density, rain streak count, a horizontal frame
 shift (rule of thirds; + moves the subject left), exposure offset (EV), and
 the grade's painterly strength. Shifts are fractions of the frame
 height (vertical sensor fit): shift_y -0.16 puts the aim point at the upper third. Light tuples: (colour or K, ratio, (w, h) m,
@@ -39,13 +40,18 @@ SHOTS = {
                          "wrap": None},
                  ev=0.5),
     # 3. Profile, teal: 100 mm bust profile; teal rim 0.9 from behind the
-    # face, amber key 0.3. The silhouette shot.
+    # face, amber key 0.3. The silhouette shot. The rim sits at az 160 (20 deg
+    # off the back axis, not 40): at 140 it reached the forward-facing cheek
+    # plane through the gap under the hair and blew out to a pale blob below
+    # the eye; at 160 it grazes the nose, brow and beard edge only. The skin
+    # gets a softer twin (70 % saturation, 0.8 energy) so the brow ridge
+    # holds a teal line, not a cyan streak.
     "profile": dict(cam="lens=100,az=90,el=0,aim=head,frame=0.6,f=2.8", pose="stand_profile", res=LAND,
                     shift=0.12, haze=0.01, rain=500, beads=35,
                     lights={"key": (KEY_K, 0.3, (0.3, 0.3), 40.0, 25.0, 1.5), "wrap": None,
-                            "rim": (NEON["teal"], 2.5, (0.3, 1.5), 140.0, 15.0, 1.4),
+                            "rim": (NEON["teal"], 2.5, (0.3, 1.5), 160.0, 15.0, 1.4),
                             "kicker": (NEON["magenta"], 0.35, (0.3, 1.2), -135.0, 20.0, 1.6)},
-                    ev=0.4),
+                    twin={"skin": (0.7, 0.8)}, ev=0.4),
     # 4. The draw: 35 mm full body, camera at 1.2 m, az 20 (Track H: at az 5
     # the muzzle points down the lens and the gun reads as a dark square);
     # bladed high-ready holding the pistol two-handed (poses.HOLD); a hard
@@ -73,8 +79,11 @@ SHOTS = {
     # brief: bust 3/4, back 3/4 (hair and suit back), walk.
     "bust": dict(cam="lens=50,az=35,el=3,aim=chest,frame=0.95,f=2.8", pose="stand", res=LAND, shift=-0.12,
                  shift_y=0.1, haze=0.008, rain=500, beads=35, gaze=0.0, neon=0.6, lights=dict(RIMS), ev=0.0),
+    # back: from behind, the magenta rim lands on the broad back of the jacket
+    # (plum, not black) and the teal kicker on the near elbow (a cyan glint);
+    # the suit gets a cloth twin of both at 30 % saturation, 0.75 energy.
     "back": dict(cam="lens=50,az=150,el=4,aim=chest,frame=1.15,f=2.8", pose="stand", res=LAND, shift=0.1, shift_y=0.1,
-                 haze=0.008, rain=500, beads=35, lights=dict(RIMS), ev=0.2),
+                 haze=0.008, rain=500, beads=35, lights=dict(RIMS), twin={"cloth": (0.3, 0.75)}, ev=0.2),
     "walk": dict(cam="lens=35,az=-35,h=1.0,aim=body,frame=2.4,f=5.6", pose="walk", res=LAND, shift=-0.1,
                  haze=0.012, rain=1600, lights=dict(RIMS), ev=0.0),
 }
