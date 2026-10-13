@@ -166,25 +166,51 @@ def regions(fr, m):
     return r
 
 
-def lip_seam(m, lips, ao, width_m, n_seed=3000, chunk=4096):
+def dist_to(P, seeds, where, n_seed=3000, chunk=4096):
+    """3D distance (m) from the texels in `where` to the nearest texel in
+    `seeds` (subsampled to ~n_seed); inf elsewhere, and everywhere when there
+    are fewer than 16 seeds."""
+    out = np.full(where.shape, np.inf, np.float32)
+    if seeds.sum() < 16 or not where.any():
+        return out
+    Q = P[seeds].astype(np.float32)
+    Q = Q[::max(1, len(Q) // n_seed)]
+    q2 = (Q * Q).sum(-1)
+    Pw = P[where].astype(np.float32)
+    d2 = np.empty(len(Pw), np.float32)
+    for i in range(0, len(Pw), chunk):
+        p = Pw[i:i + chunk]
+        d2[i:i + chunk] = ((p * p).sum(-1)[:, None] + q2[None] - 2 * p @ Q.T).min(1)
+    out[where] = np.sqrt(np.maximum(d2, 0))
+    return out
+
+
+def lip_seam(m, lips, ao, width_m):
     """Closeness (0..1, a gauss of width_m) of each lip texel to where the lips
     meet. The inner lips pressed together bake to zero occlusion inside the lips
     group; the distance is 3D (the seam crosses UV islands and the inner lips
     fold away from the visible vermilion in UV)."""
-    out = np.zeros(lips.shape, np.float32)
-    inner = m.valid & (lips > 0.6) & (ao < 0.05)
-    near = m.valid & (lips > 0.05)
-    if inner.sum() < 16 or not near.any():
-        return out
-    Q = m.P[inner].astype(np.float32)
-    Q = Q[::max(1, len(Q) // n_seed)]
-    q2 = (Q * Q).sum(-1)
-    Pn = m.P[near].astype(np.float32)
-    d2 = np.empty(len(Pn), np.float32)
-    for i in range(0, len(Pn), chunk):
-        p = Pn[i:i + chunk]
-        d2[i:i + chunk] = ((p * p).sum(-1)[:, None] + q2[None] - 2 * p @ Q.T).min(1)
-    out[near] = gauss(np.sqrt(np.maximum(d2, 0)), width_m)
+    d = dist_to(m.P, m.valid & (lips > 0.6) & (ao < 0.05), m.valid & (lips > 0.05))
+    return gauss(d, width_m).astype(np.float32)
+
+
+def lip_weight(m, lips, soft_m):
+    """Lip colour weight 0..1. soft_m 0: from the lips group weight (its falloff
+    is one edge ring, so the vermilion border is as hard as the mesh). soft_m > 0:
+    a smoothstep +-soft_m across the group's 0.55 contour by 3D distance, a soft
+    border at any mesh density."""
+    hard = smoothstep(0.25, 0.85, lips)
+    if soft_m <= 0:
+        return hard
+    ring = m.valid & (lips > 0.05)
+    if not ring.any():
+        return hard
+    lo, hi = m.P[ring].min(0) - 3 * soft_m, m.P[ring].max(0) + 3 * soft_m
+    where = m.valid & np.all((m.P > lo) & (m.P < hi), axis=-1)
+    d = dist_to(m.P, m.valid & (np.abs(lips - 0.55) < 0.1), where)
+    out = hard.copy()
+    s = np.where(lips > 0.55, d, -d)[where]
+    out[where] = smoothstep(-soft_m, soft_m, s)
     return out
 
 
@@ -377,11 +403,11 @@ def synth_head(m, c, cl, cr):
     # lips: wind-dried, desaturated brick; vermilion border a touch lighter;
     # parting line dark, straighter at the corners (no pout)
     lipc = srgb_to_linear(HEX(c["lip"]))
-    lw = smoothstep(0.25, 0.85, lips) * c["lip_mix"]
+    lw = lip_weight(m, lips, c["lip_soft_mm"] * MM) * c["lip_mix"]
     alb = alb * (1 - lw[..., None]) + lipc * lw[..., None]
     tint(crease, (0.90, 0.88, 0.88))                                     # dry creases darker
     border = gauss(lips - 0.25, 0.12) * (1 - lw) * smoothstep(-0.075, -0.068, h)
-    tint(border * 0.6, (1.04, 1.03, 1.02))
+    tint(border * c["lip_border"], (1.04, 1.03, 1.02))
     # freckles and small blemishes: faint, sparse (no single eye-catching mark)
     frk = smoothstep(c["freckle_thr"], c["freckle_thr"] + 0.03, m.speck) * (0.5 * R["forehead"] + R["cheek"] + 0.8 * R["nose"] + 0.3 * R["temple"])
     tint(frk * c["freckles"], (0.88, 0.80, 0.76))
@@ -530,6 +556,8 @@ DEFAULT_HEAD = {
     "base": "#b8927b",          # sRGB; the zones move the mean to ~(0.70, 0.55, 0.46)
     "lip": "#8e5f56", "lip_mix": 0.8,
     "lip_seam": 0.0, "lip_seam_mm": 0.7,     # darker line where the lips meet (amount, width); 0 = off
+    "lip_soft_mm": 0.0,                      # vermilion border softness (3D, +-mm); 0 = the group falloff
+    "lip_border": 0.6,                       # lighter skin rim just outside the vermilion
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
