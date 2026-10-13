@@ -71,7 +71,7 @@ blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig
 | portrait (§5 #1) | 85 mm, f/2 on the near cornea, head and shoulders (0.42 m frame), ¾ (az 30), eyes on the upper third | stand (F `hero`), eyes to camera | base rig, rims 2.2 / 1.2, drizzle (700 streaks), haze 0.008, wet hair tips, 35 water beads per shoulder |
 | sign (#2), 1152x2048 poster | 50 mm f/4, full body, camera at 1.1 m | stand (F `hero`: left hand at the jacket button) | magenta key 1.2 x 0.4 m above-right 1.3, teal across the street 0.5, sodium 2,000 K 0.3, heavy rain (2,200), puddles |
 | profile (#3) | 100 mm f/2.8, bust profile | stand, head straight, chin 2–3° down | amber key 0.3, teal rim 2.5 from beyond the face, magenta kicker 0.35, wet tips, beads |
-| draw (#4) | 35 mm f/5.6, full body, camera at 1.2 m near the eye-target line (az 5), so the bladed torso reads about 35° off the camera axis | ready (bladed `high_ready`, G's two-hand grip, empty hands) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
+| draw (#4) | 35 mm f/5.6, full body, camera at 1.2 m, az 20 (Track H: at az 5 the gun reads as a dark square); 100 % crop on the hands on the gun | ready (bladed `high_ready`, holding H's pistol two-handed) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
 | hands (#5), 1152x2048 poster | 100 mm f/5.6 from 6 m, camera at 0.8 m: from the cuff to the floor, so the shoe and trouser break are in frame; focus on the cuff | cuff (F `hero` body, E's arms: the right hand pinches the left shirt cuff) | key 0.8 |
 | eye (#6) | 135 mm at 0.73 m, f/8 focused 6 mm in front of the near cornea (about 14 mm in focus, from the far cornea to the brows), eyes and brow | stand, gaze 5° off camera | base (skin-direction) key, eye light 0.3 |
 | bust | 50 mm f/2.8, ¾ | stand, eyes to camera | base rig + rims, wet tips, beads |
@@ -158,6 +158,9 @@ All under `data/build/hero/` in the main checkout. Builds come from `data/build/
 | `20261013T033000Z-main6-hands` | same | G's `hands_render.py --pierce`: ready, ready_side, cuff, hero_r; pierce 0 / 0 in ready, cuff and stand |
 | `20261013T061348Z-main7-before` | **`20261013T060824Z-heroE-main7` (main c672cab: A's pores and micro bump)** | portrait + eye at preview with 100 % crops, before the eye and fill tests |
 | `20261013T063000Z-main7-var`, `20261013T070500Z-main7-var2` | same | 100 % crops at preview: eye f/5.6 fo6, f/8 fo6, f/8 fo9, f/11 fo8; portrait without wrap, without fill, wrap 0.5 m, wrap raised to 45°/35°, without key, without eye light |
+| `20261013T081402Z-main9-draft`, `20261013T081540Z-main8-draft-base` | `20261013T081002Z-heroE-main9` (main 61726e1: C 5b dense beard), and main8 | draft sanity before the final, with C 5b against main8: time per shot +0–5 %, peak RSS 4.63 vs 4.31 GB |
+| `20261013T090051Z-main9-draw-draft` | main9 build, code at 4b2e49a (H's pistol) | draw at az 20 with the pistol, and the hands-on-gun crop |
+| **`20261013T081828Z-main9-final`** | **main9 build; draw with H's pistol (4b2e49a)** | **THE FINAL REVIEW SET: 9 shots at 256 spp / 100 %, painterly variants, 100 % crops (portrait, eye, profile, hands, draw), turntable rest + stand × 8 views × beauty / clay / normal; `sheet.png`** |
 | **`20261013T070829Z-main7-after`** | same | **eye at f/8 fo6, preview with its 100 % crop; `eye_before_after.png` (the portrait is unchanged: see before)** |
 
 ## Render time per shot
@@ -192,6 +195,44 @@ Main5 build (strand grooms, hero eyes, A's skin) at `-t 3`: portrait 124–176 s
   - So `--final` is now **256 spp / adaptive 0.02** (OIDN), and `--max` keeps 768 / 0.012 for single hero frames. Unmeasured estimate: roughly a third of the 768 cost, so about 7× the `-t 3` preview time per shot. That is about 15–20 min for the portrait, about 2.5 h for the 9 shots and about 1.5 h for the turntable: **about 4 h for the full final set at 16 threads**.
   - The first scheduled final run's `stage.json` will give the real per-shot seconds.
   - If the night is short, use `--tt-views tt0,tt90,tt180,tt270` (half the turntable), or render the turntable at `--preview --pct 100`.
+
+### The final set (measured): `data/build/hero/20261013T081828Z-main9-final`
+
+Three passes into one run dir (`hero.sh --into`):
+1. The eight shots with crops at `-t 12` (5,145 s wall), while Track H held 3 cores.
+2. draw with its crop at `-t 16` (467 s), after H's pistol merged.
+3. The turntable at `-t 16` (1,239 s).
+
+The build is `20261013T081002Z-heroE-main9` (main 61726e1, C 5b). The pistol is spawned at pose time from `blender/props` (H, 4b2e49a), so it needed no rebuild. Ryzen 7 7700, 62 GB RAM, otherwise mostly idle.
+
+| Render | Resolution | spp | Seconds | Peak RSS (GB) |
+|---|---|---|---|---|
+| portrait | 1920x1080 @ 100 % | 256 | 545 | 6.9 |
+| portrait_crop | 960x540 (100 % crop) | 256 | 209 | 7.0 |
+| eye | 1920x1080 @ 100 % | 256 | 1128 | 11.6 |
+| eye_crop | 960x540 (100 % crop) | 256 | 333 | 11.8 |
+| profile | 1920x1080 @ 100 % | 256 | 519 | 11.8 |
+| profile_crop | 960x540 (100 % crop) | 256 | 162 | 11.8 |
+| bust | 1920x1080 @ 100 % | 256 | 399 | 11.8 |
+| back | 1920x1080 @ 100 % | 256 | 417 | 11.8 |
+| sign | 1152x2048 @ 100 % | 256 | 545 | 11.8 |
+| walk | 1920x1080 @ 100 % | 256 | 420 | 11.8 |
+| hands | 1152x2048 @ 100 % | 256 | 341 | 11.8 |
+| hands_crop | 576x1024 (100 % crop) | 256 | 74 | 11.8 |
+| draw | 1920x1080 @ 100 % | 256 | 364 | 6.5 |
+| draw_crop | 576x324 (100 % crop) | 256 | 34 | 6.5 |
+| turntable beauty (16 views) | 1080x1620 | 256 | 586 (33–41 each) | 5.3 |
+| turntable clay (16 views) | 1080x1620 | 256 | 491 (28–34 each) | 5.3 |
+| turntable normal (16 views) | 1080x1620 | 16 | 117 (7–8 each) | 5.3 |
+| **total render** | | | **6682** (1.86 h) | **11.8** |
+
+- Peak RSS is the Blender process's running maximum (`resource.ru_maxrss`), so a row is the peak up to and including that render.
+  - The eye frame (135 mm at f/8 through the dense beard and the strand groom) raised it from 7 to 11.6 GB.
+  - draw and the turntable ran in fresh processes (6.5 and 5.3 GB).
+  - That leaves ample room on 62 GB. C 5b's denser grooms added +0.3 GB and +0–5 % time at draft.
+- **Total render time is 1.86 h** (1.9 h wall, about 6 minutes of it setup, grading and sheets), against the projected about 4 h at 16 threads.
+  - 256 spp with adaptive 0.02 converges well below its cap, and per-shot cost is about 6–9 min at 12 threads; the eye is the outlier at 19 min.
+  - The turntable is about 75 s per view for all three passes.
 
 ## What the stage shows about the character (main ede62d6, run main5-sheet)
 
@@ -273,8 +314,8 @@ Checked on `20261013T071846Z-heroE-main8`:
   - The brief's bust, back and walk shots are added.
 - **Poses**: F's canonical poses plus the runtime and G's hand settle in every render, and the bladed high-ready (`ready`) for the draw. E's walk (arm swing fixed) and cuff arms. 0 hand overlaps in every pose a shot uses.
 - **Evidence tooling**: `--crop` (100 % crops), `--pct`, `--wb`, `--regrade`. hero.sh always grades and draws the sheet, even after a failed stage.
-- **Final**: `--final` = 256 spp / 0.02 (accepted), projected at about 4 h for the full set at 16 threads; `--max` = 768 / 0.012. On hold until A's skin pass and D's last suit round are merged.
+- **Final**: done. `data/build/hero/20261013T081828Z-main9-final/sheet.png` holds all 9 shots, the crops, the painterly variants and the 48-image turntable. It took 1.86 h of render at 256 spp / 0.02, with peak RSS 11.8 GB. `--max` = 768 / 0.012 stays available for single hero frames.
 
 ## Branch and commits
 
-`worktree-agent-a6abc868df2544cd8`, rebased on main ddac8ac. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
+`worktree-agent-a6abc868df2544cd8`, rebased on main 4b2e49a. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
