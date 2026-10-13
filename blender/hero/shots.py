@@ -22,6 +22,10 @@ LAND = (1920, 1080)
 RIMS = {"rim": (NEON["magenta"], 2.2, (0.3, 1.5), -125.0, 20.0, 1.5),
         "kicker": (NEON["teal"], 1.2, (0.3, 1.2), 135.0, 15.0, 1.6)}
 POSTER = (1152, 2048)
+# The suit under the RIMS (bust, back, walk): a cloth twin of the rim and
+# kicker at 30 % saturation, 0.75 energy, so the black jacket's rim side
+# reads black, not plum, and the kicker leaves no cyan glint (rig.PROP_SAT).
+CLOTH_TWIN = {"cloth": (0.3, 0.75)}
 
 SHOTS = {
     # 1. Rain portrait: 85 mm head and shoulders, 3/4, f/2 on the near eye.
@@ -78,14 +82,15 @@ SHOTS = {
                 lights={"eye": (6500, 0.3, (0.05, 0.05), 0.0, 0.0, None)}, ev=0.0),
     # brief: bust 3/4, back 3/4 (hair and suit back), walk.
     "bust": dict(cam="lens=50,az=35,el=3,aim=chest,frame=0.95,f=2.8", pose="stand", res=LAND, shift=-0.12,
-                 shift_y=0.1, haze=0.008, rain=500, beads=35, gaze=0.0, neon=0.6, lights=dict(RIMS), ev=0.0),
+                 shift_y=0.1, haze=0.008, rain=500, beads=35, gaze=0.0, neon=0.6, lights=dict(RIMS), twin=CLOTH_TWIN,
+                 ev=0.0),
     # back: from behind, the magenta rim lands on the broad back of the jacket
     # (plum, not black) and the teal kicker on the near elbow (a cyan glint);
     # the suit gets a cloth twin of both at 30 % saturation, 0.75 energy.
     "back": dict(cam="lens=50,az=150,el=4,aim=chest,frame=1.15,f=2.8", pose="stand", res=LAND, shift=0.1, shift_y=0.1,
-                 haze=0.008, rain=500, beads=35, lights=dict(RIMS), twin={"cloth": (0.3, 0.75)}, ev=0.2),
+                 haze=0.008, rain=500, beads=35, lights=dict(RIMS), twin=CLOTH_TWIN, ev=0.2),
     "walk": dict(cam="lens=35,az=-35,h=1.0,aim=body,frame=2.4,f=5.6", pose="walk", res=LAND, shift=-0.1,
-                 haze=0.012, rain=1600, lights=dict(RIMS), ev=0.0),
+                 haze=0.012, rain=1600, lights=dict(RIMS), twin=CLOTH_TWIN, ev=0.0),
 }
 ORDER = ["portrait", "sign", "profile", "draw", "hands", "eye", "bust", "back", "walk"]
 # shots that get a 100 % crop with --crop close (preview renders at 50 %)

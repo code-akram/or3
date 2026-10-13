@@ -313,7 +313,7 @@ Three defects from the fan preview review came from the lights, not the characte
   - Back centre: unchanged, (10, 13, 21) → (9, 13, 20).
 - The hair keeps its own twin.
 
-Not done here: cloth twins for the bust and walk shots (their far shoulder also takes the magenta rim), and set-light twins.
+**Bust and walk** take the same cloth twin (`shots.CLOTH_TWIN`): their far shoulder took the magenta rim too. Set lights (neon spill) have no twins.
 
 ## What the stage shows about the character (main ede62d6, run main5-sheet)
 
