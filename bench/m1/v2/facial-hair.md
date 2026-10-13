@@ -6,6 +6,26 @@ The baseline beard was a pasted, single-tone black patch with a hard outline, th
 
 Everything is placed off landmarks and by surface sampling: lip, ear, head and neck groups, profile lines, brow-proxy spines, and lid margins ray-cast on the final skin. So Track A's forms v1 → v2 change rebuilt the grooms with no edits.
 
+## Round 4 (brow weight back)
+
+Evidence run: `data/build/lookdev/20261012T235802Z-fhv2-full9`, built on main `81d0c14`. Renders are in `fh/`.
+
+Round 3 left the brows too light and sparse for the archetype's heavy, dark brow. Round 4 brings the weight back by about 30 %:
+
+- **Density:** `groom.per_cm2` 185 → 240. That gives 1,051 and 1,021 strands per side, up from about 810.
+- **Tone:** melanin 0.975 → 0.982, and the lighter-hair share 20 % → 12 %.
+- **Game:** brow shell `albedo_gain` 2.0 → 1.8.
+- **Unchanged:** the strand radius, the soft and irregular top edge (`top_soft` 0.5, `top_jag` 0.35), and the thinning tail.
+
+**Verdict.**
+- **Hero:** the brows read heavy and dark at bust distance (`fh/hero_turntable_bust.png`, `fh/hero_hero_bust.png`). At eye distance the individual strands and the skin between them still show, and the top edge stays soft (`fh/hero_turntable_eye.png`, `fh/hero_turntable_brow.png`).
+- **Game:** the bust render shows a dark, defined brow that matches the hero (`fh/game_turntable_bust.png`). In extreme close-up the shells are still dashes (`fh/game_turntable_brow.png`).
+
+**Checks.**
+- read40 eye band: 0.598 (0.593 in full8).
+- Beard contrast: 0.893.
+- glTF: 0 errors; LOD0 is 121,359 triangles.
+
 ## Round 3 (lashes and brows from the main4 eye close-up)
 
 Evidence run: `data/build/lookdev/20261012T232216Z-fhv2-full8`, built on main `1e8d26f`. Renders are in `fh/`.
