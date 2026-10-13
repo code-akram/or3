@@ -84,12 +84,20 @@ DEFAULTS = {
         # the front end lies on the lapel's top edge to the notch, then turns
         # up at notch_deg to the collar point; in front of the neck point
         # (drop_frac of the way round) the fold lowers by drop_m so the ends
-        # lie down onto the lapel; end_relax smooths the ends' fall
+        # lie down onto the lapel; end_relax smooths the ends' fall.
+        # The outer edge: faired round the collar (edge_fair_passes) and settled
+        # over the bumps the rest leaves (edge_settle_passes), a rounded edge
+        # 2 * edge_r_m thick, the collar point's edge too; the
+        # fold faired (fold_fair_passes); the end path held as built
+        # (hold_end); the fall at the side 3.5 cm (4.2 stood out at the side
+        # of the neck as a wing)
         "collar": {"reveal_back_m": 0.014, "reveal_side_m": 0.014, "stand_min_m": 0.006,
                    "shirt_clear_m": 0.003, "body_clear_m": 0.012, "thickness_m": 0.004,
-                   "fall_back_m": 0.040, "fall_side_m": 0.042, "seam_cover_m": 0.008,
+                   "fall_back_m": 0.040, "fall_side_m": 0.035, "seam_cover_m": 0.008,
                    "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.3, "drop_m": 0.025, "end_relax": 2,
-                   "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015},
+                   "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015,
+                   "edge_fair_passes": 20, "edge_r_m": 0.00125, "under_m": 0.004, "hold_end": True,
+                   "fold_fair_passes": 6, "edge_settle_passes": 30},
         "vents": "double", "vent_height_m": 0.20, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         # sleeve: tapers from the bicep (top_r, at the armpit) to the cuff,
@@ -121,6 +129,10 @@ DEFAULTS = {
         "buttons": 5,
         "margin_m": 0.05,       # front panel reaches this far outside the jacket's V
         "columns": 48, "row_m": 0.015,
+        # the V's edge: a pressed, rounded edge (a quarter round of radius edge_m / 2),
+        # the front flat to edge_press_m from it, so a thin highlight line
+        # runs down the V in the lapels' shadow (the cloth is not brightened)
+        "edge_m": 0.0025, "edge_press_m": 0.002,
     },
     "shirt": {"offset_m": 0.005, "front_margin_m": 0.03,
               # collar (suit_neck): a band closed at the front, a fall over it with
@@ -253,6 +265,15 @@ DEFAULTS = {
     "hide_body": True,
     "hide_margin_m": 0.03,
     "hide_ray_m": 0.06,
+    # the armpit patch that was kept (and poked 45 mm through the jacket in
+    # arm_raise) goes: under the upper arm, clavicle and torso, which the
+    # jacket closes round, a cone ray may cross the hollow under the arm
+    # (8-15 cm) before it meets the jacket; and a ray that meets the body
+    # itself before any garment (the inner arm facing the torso) counts as
+    # blocked when, carried on through the body, it ends on a garment within
+    # hide_self_m rather than leaving the suit
+    "hide_enclosed": {"bones": ["upperarm", "clavicle", "spine"], "m": 0.20},
+    "hide_self_m": 1.5,
 }
 
 PART = "suit_{}"  # set per build to "<human>.suit_<part>_export", the staged naming
@@ -534,7 +555,16 @@ def hide_body(b, o, occluders):
     """Delete body polygons no camera can see: a vertex is covered when every ray
     of a small cone around its normal hits a garment within hide_ray_m. Covered
     vertices within hide_margin_m of a visible one are kept (look-spec §4.3).
-    The head is never touched (hair is not an occluder)."""
+    The head is never touched (hair is not an occluder).
+
+    Two refinements for the armpit, where the patch that was kept poked 45 mm
+    through the jacket in arm_raise: (1) under the bones in hide_enclosed (the
+    upper arm, clavicle and torso, which the jacket closes round: the only
+    ways out are the collar, cuffs and hem) a ray may travel hide_enclosed.m
+    through the hollow under the arm before it meets the jacket; (2) with
+    hide_self_m a ray that meets the body before any garment (the inner arm
+    facing the torso) is blocked when, carried on through the body, it still
+    ends on a garment: the line of sight ends inside the suit."""
     import math
     body = max((x for x in b.meshes() if "body" in x.vertex_groups),
                key=lambda x: len(x.data.vertices))
@@ -545,21 +575,44 @@ def hide_body(b, o, occluders):
     bm.normal_update()
     dl = bm.verts.layers.deform.verify()
     before = budgets.tris(body)
+    self_m = o.get("hide_self_m") or 0.0
+    self_tree = sb.bvh_of_bm(bm) if self_m else None
+    enc = o.get("hide_enclosed") or {}
+    enc_pre = tuple(enc.get("bones", ()))
+    stats = {"self_blocked_rays": 0, "enclosed_far_rays": 0}
+
+    def blocked(p, dd, reach):
+        hg = tree.ray_cast(p, dd, max(reach, self_m))
+        if hg[0] is not None and hg[3] <= reach:
+            stats["enclosed_far_rays"] += hg[3] > o["hide_ray_m"]
+            return True
+        if self_tree is None:
+            return False
+        hb = self_tree.ray_cast(p, dd, self_m)
+        if hb[0] is None or (hg[0] is not None and hg[3] < hb[3]):
+            return False
+        on = tree.ray_cast(hb[0] + dd * 0.001, dd, self_m)[0] is not None
+        stats["self_blocked_rays"] += on
+        return on
+
     visible = []
     covered = set()
     for v in bm.verts:
         # the head is never touched; neither is the neck, where the layered
         # collars make the cover test fragile (a hollow neck shows as a sliver
         # of background between the shirt band and the jacket collar)
-        if suit_ops.dominant(v, dl, names, bones) in ("head", "neck_01"):
+        dom = suit_ops.dominant(v, dl, names, bones)
+        if dom in ("head", "neck_01"):
             visible.append(v)
             continue
+        reach = enc.get("m", 0.0) if enc_pre and dom and dom.startswith(enc_pre) else 0.0
+        reach = max(reach, o["hide_ray_m"])
         n = v.normal
         t = n.orthogonal().normalized()
         u = n.cross(t)
         dirs = [n] + [(n * math.cos(0.6) + (t * math.cos(a) + u * math.sin(a)) * math.sin(0.6))
                       for a in (0, math.pi / 2, math.pi, 3 * math.pi / 2)]
-        if all(tree.ray_cast(v.co + n * 0.001, dd, o["hide_ray_m"])[0] is not None for dd in dirs):
+        if all(blocked(v.co + n * 0.001, dd, reach) for dd in dirs):
             covered.add(v)
         else:
             visible.append(v)
@@ -573,4 +626,4 @@ def hide_body(b, o, occluders):
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     suit_ops.write_bm(bm, body)
     return {"object": body.name, "tris_before": before, "tris_after": budgets.tris(body),
-            "faces_deleted": len(gone)}
+            "faces_deleted": len(gone), **stats}

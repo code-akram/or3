@@ -2,7 +2,171 @@
 
 Goal (BRIEF, direction.md defect 7): turn the grey, boxy costume into a sharp, close-cut near-black three-piece that reads as black wool under the neon-noir hero light and the turntable. Everything is still built on the body by script; the GLB stays game-ready and the Cycles-only detail goes into the kept `.blend` after the export.
 
-The round-2 section comes first. Sections 1–9 after it are round 1 as reported on `suitD-v2c`; where they disagree, round 2 wins.
+The rounds come newest first: round 3, then round 2, then sections 1–9 (round 1, as reported on `suitD-v2c`). Where they disagree, the later round wins.
+
+## Round 3: v3e (from the review of v3b)
+
+The review of v3b (merged at 51a0e8b) asked for one last round of three items:
+
+1. **Collar edge (the priority).** The collar's jagged outer edge and the dark tab beside the neck show in every portrait. Make the edge a clean, smooth curve with thickness.
+2. **Waistcoat edge in the hero bust.** Give the front edge a thin highlight (a slightly rounded, bevelled edge plus the sheen) so the V reads in the lapels' shadow. Don't brighten the cloth.
+3. **Body patch in arm_raise.** A patch of body pokes 45 mm through the jacket in arm_raise. Delete or tuck the body faces fully covered by the jacket and shirt, if that's safe for the deformation.
+
+The final run is **`20261013T011529Z-suitD-v3e`**. It was built from 946033f on main 0954592, which includes the hero-stage rig changes, Track C round 4 and Track A.
+
+### R3.1 What changed, and the files touched
+
+**The collar** (`suit_neck.py build_jacket_collar`; `suit.py` DEFAULTS `jacket.collar`)
+
+- **The edge is faired** (`edge_fair_passes` 20).
+  - The edge row is smoothed 1-2-1 as angle, height and radius in the neck frame. The angle is unwrapped first, so the edge does not shrink round the neck. The collar points stay fixed.
+  - The fall rows follow the edge in proportion to their distance from the fold.
+  - Each point is then put back outside every layer beneath it:
+    - outside the stand (a new BVH of rows 0–4), because the fall must not cross its own stand;
+    - outside the block and the lapels, along the ray from the neck axis;
+    - `rest_m` off the nearest surface beneath, measured along that surface's normal. On the sloping shoulder the radial clearance alone let the fall cut into the jacket (q3, self-intersection 284).
+- **The edge is settled** (`edge_settle_passes` 30).
+  - The rest above lifts single points back over the lapels and the stand, which left bumps of up to 1.2 mm across the edge at the sides of the neck.
+  - Each settle pass smooths the height 1-2-1, moves the radius outward only, then rests again. The edge ends up lying over the bumps as one curve.
+- **The edge has thickness** (`edge_r_m` 1.25 mm, `under_m` 4 mm).
+  - The outer edge is now a rounded bead: two rows go round the edge (at 90° and 180°), then a lip turns 4 mm under. The edge is 2.5 mm thick and catches a highlight line.
+  - In v3b the edge was a single-sided lip row. It read as a hairline that flickered against the layers under it.
+  - Each end (from the collar point down to the notch) gets its own rounded strip, `collar_end_l` / `collar_end_r` (24 faces). The thickness therefore carries on round the point.
+- **The ends are held as built** (`hold_end`). The rest pass had snapped the collar point 7 mm up, off the lapel's rounded top edge, which kinked the point into a flap. The end path, from the notch to the collar point, now keeps its built position.
+- **The fold is faired** (`fold_fair_passes` 6).
+  - The stand and fold rows are smoothed along the collar, outside the end patches: height 1-2-1, radius outward only.
+  - The fold is the collar's top roll line, the part that shows above the shoulder in a front view. Its bumps fall from a 4.6 mm maximum (rms 1.45) to 2.3 mm (rms 0.53).
+- **The side fall is shorter:** `fall_side_m` 4.2 → 3.5 cm. At 4.2 cm the fall beside the neck stood out as a wing.
+- **Debug:** `SUIT_NECK_DUMP=<prefix>` writes the collar grid as JSON after the Coons patch and after the fairing. It is unset in builds.
+
+**The waistcoat edge** (`suit_inner.py front_panel(round_edge=)`; `suit.py` `waistcoat.edge_m`, `edge_press_m`)
+
+- The V's edge rolls from the front over a quarter round (radius 1.25 mm) to its apex. One extra column 2 mm in from the edge marks the pressed flat.
+- The rounded normals pick up the key and rim light, so a thin highlight line runs down the V in the lapels' shadow.
+- The material is unchanged; the cloth is not brightened.
+- The first version, in `suitD-v3c`, was a half round turned under. Its back faces looked backwards, so the deform rig's rest tuck (`deform_rig.tuck`) read 4 of them as pierced through the lapel. It sank them along −n by up to 3 cm, which made a dark spike beside the tie. The quarter round has no backward-facing normals: `pierced_at_rest` is 0 for the waistcoat.
+
+**The body under the jacket** (`suit.py hide_body`; DEFAULTS `hide_enclosed`, `hide_self_m`)
+
+- **Diagnosis.** The kept patch was a core of inner-arm and armpit vertices that the cone test called visible, plus the 3 cm margin round it.
+  - Their rays crossed the hollow under the arm and met the jacket 8–15 cm away, beyond `hide_ray_m` (6 cm).
+  - Other rays passed through the torso and met a garment 0.3–1 m away. The torso is not an occluder, and its own covered faces go.
+  - The shirt does not reach there; the jacket alone covers the armpit.
+- **Fix, part 1.** For vertices whose dominant bone is under `upperarm`, `clavicle` or `spine`, a cone ray may travel 20 cm before it meets a garment (`hide_enclosed`). The jacket closes round these parts; the only ways out are the collar, the cuffs and the hem.
+- **Fix, part 2.** A ray that meets the body before any garment counts as blocked if, carried on through the body, it ends on a garment within 1.5 m (`hide_self_m`). The line of sight then ends inside the suit.
+- **Unchanged:** the head and neck are never touched, and the 3 cm margin round any truly visible vertex stays.
+- **Result.** Arm and shoulder body vertices left after the hide fall from 164 to 18. The 18 are at the base of the neck, inside the neck's margin. Body tris go from 15912 to 15648, and the armpit patch is gone in the body-only renders.
+- **Deformation.** Body > jacket poke-through is 0 in every pose of Track F's `deform_test` (v3b: up to 45.8 mm).
+
+**Views** (`bench/m1/suit_views.py`): new `neck34`, `neck34r` and `neck_front_p` (perspective at 85 mm, 30 cm frame), and `cpoint_rx` (an extreme close-up of the right collar point).
+
+Files: `blender/character/suit.py`, `suit_neck.py`, `suit_inner.py` and `bench/m1/suit_views.py`.
+
+**Shared files: none edited in round 3.** `deform_rig.py` and `deform_correctives.py` are Track F's and were not touched.
+
+### R3.2 Measurements (`suitD-v3e`, direction config)
+
+| | v3b | v3e |
+|---|---|---|
+| collar outer edge | a single-sided lip row | a rounded bead 2.5 mm thick (radius 1.25 mm) with a 4 mm lip under it; rounded strips round both collar points |
+| collar fold line (top roll): bump across the curve between the end patches* | rms 1.45 mm, max 4.64 mm | rms 0.53 mm, max 2.28 mm |
+| collar outer edge: bump across the curve between the end patches* | rms 0.17 mm, max 0.66 mm | rms 0.17 mm, max 0.55 mm |
+| collar fall at the side of the neck | 4.2 cm | 3.5 cm |
+| `suit_collar` self-intersection (≤ 120) | 75 (shirt 42, jacket 30, tie 3) | 79 (shirt 42, jacket 34, tie 3); skin 0 px; backface px (closeup / front / 3/4 / profile) 107 / 242 / 153 / 192 → 110 / 242 / 147 / 86 |
+| waistcoat V edge | a 2.5 mm lip turned under | a quarter round, radius 1.25 mm, pressed flat 2 mm; `pierced_at_rest` 0 |
+| shirt in front of the waistcoat (`speck.py`) | 0 | 0 |
+| body tris after `hide_body` | 15912 | 15648; arm and shoulder remnant 164 → 18 vertices |
+| deform poke-through: rest / knee_up / arm_raise / head_turn / walk | 0 / 7 / 4 / 3 / 3 | 0 / 2 / 3 / 1 / 0 |
+| largest body > jacket poke-through | 45.8 mm (arm_raise) | none in any pose |
+| suit tris (GLB) | 32283 | 32619: jacket 15347 (+336 for the bead and the end strips); shirt, waistcoat, buttons, tie, shoes and trousers unchanged |
+| character total | 121351 tris, 83 bones | 121443 tris (≤ 150k), 83 bones (≤ 90), ≤ 4 weights per vertex, 0 glTF errors |
+| shirt:wool median luminance, neon (bust / body) | 39.25 / 36.88 | 37.41 / 36.32 |
+| shirt:wool median luminance, studio (bust / body) | 26.72 / 22.82 | 24.14 / 22.40 (target ≥ 20) |
+
+\* Measured on the scratch collar grids q4 (v3b's edge row and fold) and q22 (v3e's settings), dumped with `SUIT_NECK_DUMP`. The metric (`/tmp/suitwork/edgemetric.py`) is each point's distance off the cubic through its two neighbours on each side, across the curve. That cancels the collar's own curvature round the neck and any uneven spacing along it. The end patches are reported apart, because the collar point is a corner by design.
+
+The edge row was already within 0.7 mm of a smooth curve in v3b. What read as jagged was three other things:
+
+- the one-sided lip (a hairline with no thickness);
+- the bumpy fold line above it;
+- the ends: teeth near the point, and the 7 mm kink at the collar point.
+
+**Guards on `suitD-v3e`:**
+
+- `suit_check`: PASS
+- `suit_collar`: PASS
+- `suit_pose_test`: arms_up 94, kick 50, crouch 871, stress 1096 px (the same as v3b)
+- Track F's `deform_test`:
+  - rest 0
+  - knee_up 2: body > shirt 1.5 mm, body > trousers 5.1 mm
+  - arm_raise 3: body > shirt 2 at 5.1 mm, shirt > jacket 1 at 6.3 mm
+  - head_turn 1: body > shirt 1.5 mm
+  - walk 0
+
+The shirt's luminance ratio moves a little because the waistcoat's rounded edge and the jacket's bead add lit pixels to the wool. The material settings are the same as in v3b.
+
+### R3.3 Verdicts
+
+| item | verdict | evidence (in `suitD-v3e/suit_ba/`; left = v3b, right = v3e) |
+|---|---|---|
+| 1. Collar: jagged outer edge, dark tab beside the neck | **Edge fixed. Tab smaller and smooth, but still there.** The outer edge is a clean rounded curve with thickness. In the turntable, the hero bust and the 3/4 close-ups it reads as a rolled edge with a highlight along it. The steps and the hairline are gone, the collar point is clean, and the fold line above the shoulder is smooth. Seen from the front, the collar's side still shows as a dark shape beside the neck, where it lies over the trapezius on its way back. It is now a smooth, rounded collar side, not a ragged upright tab. Making it narrower would mean changing the collar's cut (the fall and the end path), which I did not attempt in this last round. | `crop_tt0_collar_x3.png`, `crop_tt0_collar.png`, `tt0_final.png`, `crop_hero_bust_collar_vest.png`, `neck34_studio.png`, `neck34_clay.png`, `neck34r_*.png`, `neck_front_*.png`, `cpoint_rx_*.png` |
+| 2. Waistcoat edge in the hero bust | **Done, subtle at full frame.** The V's edge is a rounded, pressed edge. In the neon close-up it shows a clear highlight band along the edge. In the Cycles hero bust it reads as a thin, continuous light line from under the lapel down to the top button, a little clearer than v3b's lip. The cloth is not brightened. | `crop_hero_bust_vest_edge_x3.png`, `vest_top_r_neon.png`, `vest_top_r_studio.png`, `vest_top_r_clay.png`, `hero_bust_final.png` |
+| 3. Body patch in arm_raise | **Fixed.** The armpit patch is gone from the body-only renders, and body > jacket is 0 in all five deform poses (v3b: 45.8 mm in arm_raise). The rest pose shows no holes. **One side effect, for Track F:** the small poke-through at the base of the neck, under the shirt collar's front, grew in arm_raise (v3b 1 vertex at 1.9 mm; v3c 0; v3d 6.9 mm; v3e 2 vertices at 5.1 mm). It shows as a small skin bulge at the collar's front in the arm_raise tiles. The rest geometry there is identical in all four builds, and so are the skin weights. What changes is Track F's `corr_arm_up_l` corrective: in v3b it moved the body there by 5.6 mm, and in v3e it moves the shirt by 15.3 mm and the body by 0. The corrective is baked from delta mush over the body mesh, so the body's new topology changes it. | `body_front.png`, `body_armpit.png`, `body_shoulder_front.png`, `deform_arm_raise.png`, `../deform-suitD/` |
+
+### R3.4 Evidence (`data/build/lookdev/`)
+
+- `20261013T003728Z-suitD-v3c`: the first round-3 build. It had the waistcoat spike (the half-round edge under the rest tuck). Its `suit_ba/v3b/` holds the v3b re-renders.
+- `20261013T010947Z-suitD-v3d`: the quarter-round edge, without the collar settle. Superseded.
+- **`20261013T011529Z-suitD-v3e`**: final. Built with `THREADS=3 KEEP_BLEND=1 bench/m1/lookdev.sh --config bench/m1/variants/direction.json suitD-v3e` from 946033f on main 0954592.
+
+Inside `suitD-v3e`:
+
+| dir | what |
+|---|---|
+| `suit_ba/` | before/after pairs, left = v3b, right = v3e.<br>Crops: `crop_tt0_collar_x3.png`, `crop_tt0_collar.png`, `crop_hero_bust_collar_vest.png`, `crop_hero_bust_vest_edge_x3.png`.<br>Cycles 256 samples: `tt0_final.png`, `hero_bust_final.png`.<br>Cycles preview: `tt0.png`, `tt45.png`, `hero_bust.png`.<br>EEVEE studio and clay: `neck_front`, `neck34`, `neck34r`, `neck_front_p`, `cpoint_rx`, `vest_top_r`.<br>Neon: `neck34`, `vest_top_r`.<br>Body only: `body_front.png`, `body_shoulder_front.png`, `body_armpit.png`.<br>Deform: `deform_arm_raise.png`, v3b's sheet above and v3e's below.<br>The v3b halves are in `suit_ba/v3b/`. They were re-rendered with today's hero rig, because main changed the lighting after v3b; the two sides of each pair are lit alike. |
+| `suit_final/` | Cycles at 256 samples: `hero_bust.png`, `turntable_tt0.png` |
+| `suit_hero/` | Cycles preview: hero bust, full, back, hands; turntable at 0°, 45°, 180°, 270° |
+| `suit_v3c/`, `suit_v3c_clay/`, `suit_v3c_neon/` | EEVEE close-ups: neck front, neck 3/4 both sides, neck front in perspective, notch, collar point, waistcoat top, torso, bust, front. The directory names come from the round-3 evidence script; the images are v3e's. |
+| `suit_body/` | the body alone (clay): front, back, shoulder, armpit |
+| `suit_lum/`, `suit_lum_studio/` | shirt:wool luminance (`lum.json`) |
+| `suit_check/`, `suit_collar/`, `suit_pose/` | the suit guards |
+| `deform-suitD/` | Track F's `deform_test` (rest, knee_up, arm_raise, head_turn, walk) |
+
+### R3.5 Iteration log (run → change → verdict)
+
+All scratch runs are under `/tmp/suitwork/`. They are no-head-refine builds with the drape off. "isect" is `suit_collar`'s gated self-intersection count (the limit is 120).
+
+| run | change | verdict |
+|---|---|---|
+| q0 | v3b's defaults | reference (isect 72): the edge is a one-sided lip with steps; a tab at each side of the neck |
+| q1, q2 | all the fall rows faired in the neck frame; a longer Coons patch at the ends (`patch_frac` 0.3) | the fall crossed its own stand (isect 159, backface px); 287; both dropped |
+| q3 | edge fairing and the bead, radial push only | isect 284: on the sloping shoulder the radial clearance let the fall cut into the jacket |
+| q4 | the bead only (1.25 mm radius, 4 mm lip) | the edge has thickness and a highlight (77) |
+| q7 | q4 + edge fairing (20 passes), the stand BVH and `rest_on` along the surface normal | the edge is one curve round the back; a flap at the collar point (77) |
+| q8 | 50 fairing passes | the side wing moved out (91); back to 20 |
+| q9–q12 | bead normals from one grid orientation; a tangent-based bead direction at the ends | the flap at the collar point stayed |
+| q13 | `hold_end`: the end path is not re-rested | the collar point is clean; the rest pass had lifted it 7 mm (74) |
+| q14 | `fold_fair_passes` 6 | the fold line behind and beside the neck is smooth (74) |
+| q15 | `fall_side_m` 4.2 → 3.5 cm | the wing beside the neck is smaller (74) |
+| q16 | + the rounded end strips and the waistcoat's rounded edge (a half round) | isect 74, 0 specks, jacket +336 tris |
+| q17, q18 | `hide_body`: a ray that meets the body before a garment is blocked when it carries on to one (within 6 cm, then at any range) | no change (164 → 163 vertices): the armpit core's rays cross the hollow under the arm and meet the jacket at 8–15 cm without touching the body |
+| q19 | + under the upper arm, clavicle and torso, a ray may travel 20 cm | the armpit patch is gone (164 → 18, those 18 at the neck base inside its margin). Scratch deform test: body > jacket in arm_raise 9 (112.5 mm) → 0 |
+| `suitD-v3c` | official build | the collar and the armpit as in q19. A dark spike beside the tie: the rest tuck sank 4 backward-facing vertices of the half-round edge by up to 3 cm |
+| q20 | the waistcoat's edge as a quarter round | 0 pierced in a replay of the tuck's test (`vpierce.py`), 0 specks, isect 74 |
+| `suitD-v3d` | official build of q20 | no spike; superseded by v3e |
+| q21, q22 | `edge_settle_passes` 10, 30 | the edge's largest bump 1.16 → 0.70 → 0.55 mm; isect 75, 76 |
+| `suitD-v3e` | final (946033f on main 0954592) | see R3.2–R3.3 |
+
+### R3.6 Branch
+
+`worktree-agent-a7cee946dd031f936` contains main 207d4df and adds four commits:
+
+- abb5ed0: the collar edge, the waistcoat's rounded edge and the armpit hide
+- a347bdb: the waistcoat edge as a quarter round
+- 892bb75: the collar edge settle
+- the report commit, which changes only this file
+
+`suitD-v3e` was built from 946033f, which is 892bb75 before the rebase onto 207d4df. The rebase brought in only main's hero-set change (`blender/hero/sets.py`, `hero-stage.md`); the suit code is identical.
 
 ## Round 2: v3 (from the review of v2c)
 

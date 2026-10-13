@@ -68,6 +68,7 @@ VIEWS = {
     "notch_r": ((-0.25, -1.0, 1.56), (-0.08, -0.13, 1.50), 0.13),   # the notch at the v3 gorge, wearer's right
     "notch_l": ((0.25, -1.0, 1.56), (0.08, -0.13, 1.50), 0.13),     # and left
     "cpoint_r": ((-0.2, -1.0, 1.62), (-0.11, -0.08, 1.55), 0.10),   # the right collar point and wing, front
+    "cpoint_rx": ((-0.25, -1.0, 1.62), (-0.11, -0.11, 1.53), 0.05),  # extreme close-up of the right collar point
     "vest_top_r": ((-0.25, -1.0, 1.53), (-0.05, -0.13, 1.50), 0.05),  # the waistcoat's edge beside the right lapel
     "lapel_edge": ((-0.9, -0.6, 1.45), (-0.07, -0.11, 1.40), 0.14),   # lapel edge thickness, raking
     "closeup_h": ((-0.63, -1.36, 1.58), (0.0, 0.0, 1.50), 0.42),   # the harness close-up's azimuth (25°), collar framing
@@ -112,6 +113,9 @@ PERSP = {
     "body_back": (180.0, (0.0, 0.0, 0.98), 2.15, 50.0, (768, 1024)),
     "bust": (30.0, (0.0, 0.0, 1.40), 0.80, 85.0, (900, 1024)),
     "bust_front": (0.0, (0.0, 0.0, 1.38), 0.80, 85.0, (900, 1024)),
+    "neck34": (30.0, (0.0, 0.0, 1.52), 0.30, 85.0, (900, 700)),       # the collar as the hero bust sees it
+    "neck34r": (-30.0, (0.0, 0.0, 1.52), 0.30, 85.0, (900, 700)),     # and from the other side
+    "neck_front_p": (0.0, (0.0, 0.0, 1.52), 0.30, 85.0, (900, 700)),  # the collar ends square on, in perspective
     "waist": (25.0, (0.0, 0.0, 1.05), 0.75, 85.0, (900, 1024)),
     "legs": (30.0, (0.0, 0.0, 0.45), 1.0, 85.0, (800, 1024)),
 }

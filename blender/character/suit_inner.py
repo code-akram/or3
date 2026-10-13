@@ -59,10 +59,12 @@ class Inner:
         return self.z_point + (self.z_side - self.z_point) * min(1.0, (ax - 0.045) / 0.08)
 
     def front_panel(self, G, name, z_rows, half_at, offset, cols, lip=0.0, tag=1,
-                    hem=None, uv0=0.0, clear=None, marks=False):
+                    hem=None, uv0=0.0, clear=None, marks=False, round_edge=0.0):
         """Two mirrored front panels (left, right) from the centre/V edge out to
         half_at(z) in x, lofted over the torso slices at `offset`. The V edge
-        is where half_at's inner bound starts: inner(z). Returns the grids."""
+        is where half_at's inner bound starts: inner(z). round_edge (with a
+        lip): the V edge is a pressed, rounded edge, a quarter round of radius lip/2,
+        the front flat to round_edge from it. Returns the grids."""
         grids = []
         for left in (True, False):
             s = 1 if left else -1
@@ -84,7 +86,27 @@ class Inner:
                         p = sb.offset_from(clear[0], p, n, clear[1])
                     pts.append(p)
                     uvs.append((uv0 + (0.4 * i / cols if left else 0.4 * (1 - i / cols)) , z - z_rows[0]))
-                if lip:
+                if lip and round_edge:
+                    # the V edge rolls over in a quarter round (cloth
+                    # thickness): a thin highlight line along the edge that
+                    # reads in the lapels' shadow, where the flat front is
+                    # black on the jacket's black. Not a half round turned
+                    # under: its back faces looked backwards, and the deform
+                    # rig's rest tuck read them as pierced through the lapel
+                    # and sank them 3 cm forward (a spike beside the tie)
+                    p0, p1 = pts[0], pts[1]
+                    n = Vector((math.cos(a_in), math.sin(a_in), 0.0))
+                    e = (p0 - p1) - n * (p0 - p1).dot(n)
+                    e = e.normalized()
+                    rr = 0.5 * lip
+                    c = p0 - n * rr
+                    ring = [c + n * (rr * math.cos(th)) + e * (rr * math.sin(th))
+                            for th in (math.pi / 2, math.pi / 4)]
+                    pts[1:1] = [p0 - e * round_edge]
+                    uvs[1:1] = [(uvs[0][0] + 0.002 * s, uvs[0][1])]
+                    pts[0:0] = ring
+                    uvs[0:0] = [(uvs[0][0] - 0.0007 * s * (2 - k), uvs[0][1]) for k in range(2)]
+                elif lip:
                     # an inner lip column at the V/centre edge (cloth thickness)
                     p0, p1 = pts[0], pts[1]
                     n = Vector((math.cos(a_in), math.sin(a_in), 0.0))
@@ -94,7 +116,7 @@ class Inner:
             g.fill(G.uv, G.tag, tag, flip=not left)
             grids.append(g)
             if marks:
-                c0 = 1 if lip else 0
+                c0 = (2 if round_edge else 1) if lip else 0
                 G.mark_column(tag, g, c0, "edge", inside_sign=1.0 if left else -1.0)
                 G.mark_row(tag, g, 0, "edge", cols=range(c0, len(g.rows[0])), inside_sign=1.0)
         return grids
@@ -398,8 +420,9 @@ class Inner:
             return (self.w_vest(z), min(jk.w_v(z) + margin, 0.13))
         # clear 4.5 mm, more than the 2.5 mm lip turned under at the V's edge
         # (at 3 mm the lip's edge sat up to 0.7 mm behind the shirt front)
-        fronts = self.front_panel(G, "front", rows, half, off, W["columns"] // 2, lip=0.0025, tag=1,
-                                  hem=self.vest_hem, clear=(inner_tree, 0.0045), marks=True)
+        fronts = self.front_panel(G, "front", rows, half, off, W["columns"] // 2, lip=W.get("edge_m", 0.0025), tag=1,
+                                  hem=self.vest_hem, clear=(inner_tree, 0.0045), marks=True,
+                                  round_edge=W.get("edge_press_m", 0.0))
         for g in fronts:
             for row in g.rows:
                 G.weight(row, sb.TORSO)
