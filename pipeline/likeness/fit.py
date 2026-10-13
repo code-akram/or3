@@ -4,7 +4,8 @@ jaw and expression.
 Every reference frame contributes its 2D MediaPipe landmarks (the points a MediaPipe landmark
 embedding maps onto the FLAME surface; contour points are not in such an embedding). The model:
 
-  shape beta (n_shape, shared, prior toward an initial code, e.g. a median regressor code),
+  shape beta (n_shape, shared, prior toward an initial code, e.g. a median regressor code;
+  the code's components past n_shape stay fixed at their initial values, see --tail),
   per frame: rotation (3), translation (3), jaw (3), expression psi (n_expr), log focal (1).
 
 Perspective camera with the principal point at the frame centre; a log-normal focal prior
@@ -322,7 +323,9 @@ def main(argv=None):
     ap.add_argument("--ref", help="reference dir from refboard.py board")
     ap.add_argument("--ids", default="", help="comma-separated frame ids")
     ap.add_argument("--init", default="", help="codes.npz from identity_codes.py (its 'median'); else zeros")
-    ap.add_argument("--n-shape", type=int, default=100)
+    ap.add_argument("--n-shape", type=int, default=100, help="leading shape components optimised")
+    ap.add_argument("--tail", choices=("keep", "drop"), default="keep",
+                    help="init-code components past --n-shape: held fixed (keep) or zeroed (drop)")
     ap.add_argument("--n-expr", type=int, default=20)
     ap.add_argument("--jaw-joint", type=int, default=2)
     ap.add_argument("--shape-prior", type=float, default=0.002, help="residual weight on (beta - init)")
@@ -345,12 +348,21 @@ def main(argv=None):
     ids = [int(x) for x in a.ids.split(",") if x.strip()]
     frames = load_frames(a.ref, ids, emb["mp_index"], a.weight_flat)
     beta0 = np.zeros(a.n_shape)
+    tail = np.zeros(0)
     if a.init:
         med = np.load(a.init)["median"]
         beta0[:min(a.n_shape, len(med))] = med[:a.n_shape]
+        if a.tail == "keep" and len(med) > a.n_shape:
+            # fold the fixed tail into the template: the fit and every mesh written below include it
+            tail = np.asarray(med[a.n_shape:m.n_shape], np.float64)
+            d = m.shapedirs[:, :, a.n_shape:a.n_shape + len(tail)] @ tail
+            m.v_template = m.v_template + d
+            mag = np.linalg.norm(d, axis=1) * 1000
+            print(f"[fit] tail of {len(tail)} components held fixed: vertex shift median {np.median(mag):.2f} mm, "
+                  f"p95 {np.percentile(mag, 95):.2f} mm, max {mag.max():.2f} mm")
     beta, per, rows, res, dt = run(m, emb, frames, beta0, a)
-    np.savez(a.out, beta=beta, beta0=beta0, per_frame=per, ids=np.array(ids), rows=json.dumps(rows),
-             cost=res.cost, args=json.dumps(vars(a)))
+    np.savez(a.out, beta=beta, beta0=beta0, beta_tail=tail, per_frame=per, ids=np.array(ids),
+             rows=json.dumps(rows), cost=res.cost, args=json.dumps(vars(a)))
     if a.obj:
         fl.write_obj(a.obj, m.shaped(beta), m.faces)
     if a.obj_init:
