@@ -17,10 +17,10 @@ if [[ ${1:-} == --login || ! -f $login ]]; then
   if [[ ${1:-} == --login ]]; then echo "Saved. The download can now run without you."; exit 0; fi
 fi
 
-# url-encode both fields; the login only travels through files and pipes, never argv
+# the download host refuses curl's default user agent; url-encode both fields; the login only travels through files and pipes, never argv
 cat "$login" \
   | python3 -I -c 'import sys,urllib.parse as u;a=sys.stdin.read().split("\n");print(u.urlencode({"username":a[0],"password":a[1]}),end="")' \
-  | curl -fL --data-binary @- -o "$zip" \
+  | curl -fL -A "Mozilla/5.0 (X11; Linux x86_64)" --data-binary @- -o "$zip" \
       'https://download.is.tue.mpg.de/download.php?domain=flame&sfile=FLAME2020.zip&resume=1'
 
 # a wrong login returns an HTML page, not a zip
