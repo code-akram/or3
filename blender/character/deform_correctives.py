@@ -16,12 +16,11 @@ For each corrective (one joint, one target pose, both sides):
 3. resolve the layers in that pose: an outer garment that an inner layer now
    pokes through is pushed out to a small clearance (shirt < tie < trousers <
    waistcoat < jacket); body skin that a garment covers in the rest pose and
-   now pokes out is pushed in (it is hidden anyway). "Covers" is decided at
-   rest with the same rule bench/m1/deform_test.py uses: the nearest surface
-   is on the right side AND a ray along the inner surface's own normal (or
-   the outer one's reversed normal) meets the other layer within
-   collide.cover_ray_m. A garment that is merely near (the jacket collar
-   7 cm from the throat) does not cover. Small attached meshes (buttons)
+   now pokes out is pushed in (it is hidden anyway). Skin counts as covered
+   with the rule bench/m1/deform_test.py uses: the garment's nearest surface
+   is outside it AND a ray along the skin normal meets the garment within
+   collide.cover_ray_m, so a garment that is merely near (the jacket collar
+   7 cm from the throat) does not cover it. Small attached meshes (buttons)
    follow the nearest point of their garment. Specs with self_collide
    (the fist) also resolve skin against skin: each digit against the palm
    and its neighbours, both sides giving way by half (pads compress);
@@ -321,17 +320,16 @@ class Baker:
                     continue
                 s, _, _ = _side_test(self.rest[outer], self.rest[inner], self.polys[inner],
                                      self.bfaces[inner], c["cover_m"])
-                # outer vertex outside the inner layer, and the inner layer
-                # really under it (along the outer vertex's reversed normal)
-                ray = _ray_hits(self.rest[outer], -self.rnrm[outer], self.rest[inner], self.polys[inner],
-                                c["cover_ray_m"])
-                cov[(inner, outer)] = (s > 0) & ray
+                # outer vertex outside the inner layer (garment over garment:
+                # the layers are built in order, and a loose skirt or flap
+                # stands well off what it covers, so no ray rule here)
+                cov[(inner, outer)] = s > 0
         if "body" in self.parts:
             for outer in BODY_UNDER:
                 if outer not in self.parts:
                     continue
                 s, _, _ = _side_test(self.rest["body"], self.rest[outer], self.polys[outer],
-                                     self.bfaces[outer], c["cover_m"])
+                                     self.bfaces[outer], c["body_cover_m"])
                 # body vertex inside the garment, and the garment really over
                 # it (a ray along the skin normal meets it): deform_test's rule
                 ray = _ray_hits(self.rest["body"], self.rnrm["body"], self.rest[outer], self.polys[outer],
@@ -580,7 +578,7 @@ DEFAULTS = {
     "cs_iters": {"body": 12, "garment": 8},
     "min_delta_m": 0.0002,
     "delta_sigma_m": 0.015,
-    "collide": {"cover_m": 0.05, "cover_ray_m": 0.04, "clear_m": 0.006, "smooth_iters": 2},
+    "collide": {"cover_m": 0.07, "body_cover_m": 0.05, "cover_ray_m": 0.04, "clear_m": 0.006, "smooth_iters": 2},
     "moved_rings": 4,
     "self_collide": {"iters": 12, "clear_m": 0.0008, "reach_m": 0.02, "root_m": 0.024, "root_pad_m": 0.008, "max_push_m": 0.008,
                      "fold_m": 0.02},
