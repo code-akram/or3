@@ -85,6 +85,12 @@ def build(b, frame, cfg):
     body = frame.body
     cx = frame.center.x
     spines = _spines(proxy, frame.skin_bvh, cx, cfg["bins"])
+    # A straight line through each spine (least squares), for `straighten`.
+    lines = {}
+    for side, (spine, _, _) in spines.items():
+        xs = np.array([s[0] for s in spine])
+        zs = np.array([s[2] for s in spine])
+        lines[side] = np.polyfit(xs, zs, 1) if len(xs) > 1 else (0.0, float(zs.mean()))
     mw = body.matrix_world
     head_i = body.vertex_groups["head"].index
     margin = cfg["margin_m"]
@@ -104,6 +110,13 @@ def build(b, frame, cfg):
         inner, outer = (x1, x0) if side < 0 else (x0, x1)
         along = min(max((p.x - inner) / (outer - inner), 0.0), 1.0)
         hh = cfg["half_height_m"][0] + (cfg["half_height_m"][1] - cfg["half_height_m"][0]) * along
+        # Shape: blend the proxy's arch toward a straight line, sit the
+        # inner head lower, and let the outer end slope down a little.
+        st = cfg.get("straighten", 0.0)
+        if st:
+            zc = zc * (1 - st) + float(np.polyval(lines[side], p.x)) * st
+        zc -= cfg.get("head_drop_m", 0.0) * (1 - smoothstep(0.0, 0.35, along))
+        zc -= cfg.get("outer_droop_m", 0.0) * smoothstep(0.6, 1.0, along)
         zc = zc + cfg["centre_up_m"]
         # the patch reaches select_m past the feather (the body is coarse
         # here: whole faces must be inside); the density map shapes the band
@@ -155,6 +168,16 @@ def build(b, frame, cfg):
     e1 = np.full(m, deg(g["elev1"])) + rng.normal(0, deg(g["elev_sigma"]) * 0.5, m)
     yaw = rng.normal(0, deg(g["yaw_sigma"]), m)
     curl = rng.normal(0, deg(g["curl_sigma"]), m)
+    # A few unruly hairs: longer, lifted and turned off the comb (own RNG).
+    ur = g.get("unruly")
+    if ur:
+        urng = np.random.default_rng(cfg["seed"] + 31)
+        sel = urng.random(m) < ur["share"]
+        n_ = int(sel.sum())
+        yaw[sel] += urng.normal(0, deg(ur["yaw_deg"]), n_)
+        e0[sel] += deg(ur["lift_deg"]) * urng.uniform(0.5, 1.0, n_)
+        e1[sel] += deg(ur["lift_deg"]) * 0.5 * urng.uniform(0.0, 1.0, n_)
+        L[sel] *= ur["length"]
     k = g["points"]
     pts = beard_groom.grow(pos, n, f["comb"], L, e0, e1, yaw, curl, k)
     gap = np.concatenate([[0.0], np.linspace(g["gap_m"][0], g["gap_m"][1], k - 1)])
@@ -169,6 +192,9 @@ def build(b, frame, cfg):
     # finer hairs along the thinning tail (full-width ones there read as a brush)
     t = np.clip((f["along"] - cfg["tail_start"]) / (1.0 - cfg["tail_start"]), 0, 1)
     rad *= (1 - hero.get("tail_fine", 0.0) * t * t * (3 - 2 * t))[:, None]
+    # coarser hairs at the inner heads
+    th = np.clip(1 - f["along"] / 0.3, 0, 1)
+    rad *= (1 + hero.get("head_coarse", 0.0) * th * th * (3 - 2 * th))[:, None]
     mat = beard_groom.hair_material("brows_hero", hero["material"])
     o = beard_groom.make_curves("brows_hero", pts, rad,
                                 {"melanin": mel, "redness": red,

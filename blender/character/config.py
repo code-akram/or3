@@ -208,11 +208,11 @@ DEFAULTS = {
             "sideburn_up_m": -0.004,   # cheek line start above ear centre
             "corner_back_m": 0.022,    # cheek line end: behind the lip front
             "moustache_m": 0.010,      # cheek line end above the upper lip
-            "cheek_dip_m": 0.02,       # cheek line sag under the cheekbone
-            "jaw_drop_m": 0.06,        # neckline start below ear centre
+            "cheek_dip_m": 0.014,      # cheek line sag under the cheekbone (unsculpted: sits high)
+            "jaw_drop_m": 0.07,        # neckline start below ear centre (grown in under the jaw)
             "neck_back_m": 0.012,      # ... behind the ear front
-            "throat_back_m": 0.045,    # neckline end behind the chin front
-            "under_chin_m": 0.018,     # neckline end below the chin
+            "throat_back_m": 0.055,    # neckline end behind the chin front
+            "under_chin_m": 0.026,     # neckline end below the chin
             "moustache_height_m": 0.012,  # moustache top over the upper lip
             "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare
             "lips_w": 0.5,             # body vertices over this `lips` weight are vermilion: no roots
@@ -227,30 +227,30 @@ DEFAULTS = {
             # Density across the line: 1 at in_m inside, line_density at the
             # line, 0 at out_m outside; stubble from stubble_in_m inside to
             # the patch edge.
-            "fade": {"in_m": 0.007, "moustache_in_m": 0.005, "out_m": 0.004, "neck_in_m": 0.014, "neck_out_m": 0.006,
+            "fade": {"in_m": 0.008, "moustache_in_m": 0.005, "out_m": 0.007, "neck_in_m": 0.014, "neck_out_m": 0.010,
                      "line_density": 0.12, "pow": 1.8, "line_length": 0.35,
                      "stubble_in_m": 0.004},
             # Edge band: from the outer fade to band_m inside the line, the
             # hero strands thin to `radius` x width and `length` x length.
-            "edge": {"band_m": 0.004, "radius": 0.55, "length": 0.7},
-            "line_wobble_m": 0.004,
+            "edge": {"band_m": 0.006, "radius": 0.55, "length": 0.7},
+            "line_wobble_m": 0.006,
             "edge_smooth_iters": 6,
-            # Hair length by zone (direction §2 C: cheeks 6-8, jaw 9-11,
-            # chin 12-15, soul patch 10, moustache 8-10 over the lip by 2 mm).
-            "length": {"cheek_m": 0.0075, "jaw_m": 0.0105, "chin_extra_m": 0.0055,
-                       "chin_radius_m": 0.03, "soul_m": 0.010, "soul_radius_m": 0.010,
-                       "moustache_m": 0.0095, "lip_overlap_m": 0.002, "under_below_mouth_m": 0.02, "neck_m": 0.009},
+            # Hair length by zone: a full, unsculpted 10-14 mm beard; the
+            # moustache covers the upper lip edge.
+            "length": {"cheek_m": 0.0125, "jaw_m": 0.0145, "chin_extra_m": 0.002,
+                       "chin_radius_m": 0.03, "soul_m": 0.012, "soul_radius_m": 0.010,
+                       "moustache_m": 0.013, "lip_overlap_m": 0.004, "under_below_mouth_m": 0.02, "neck_m": 0.0125},
             "comb": {"cheek_back": 0.3, "chin_forward": 0.3, "soul_forward": 0.8, "under_jaw_back": 0.6,
                      "moustache_down": 1.0, "moustache_side": 0.6, "philtrum_x_m": 0.006,
                      "smooth_iters": 3},
             # Strand growth (beard_groom.grow): exit angle over the skin
             # relaxing to the tip angle, yaw / curl spread, curly share.
-            "groom": {"per_cm2": 360, "points": 8, "root_sink_m": 0.0005,
-                      "elev0": 38, "elev1": 4, "elev1_under": 0, "elev_sigma": 10,
+            "groom": {"per_cm2": 360, "points": 9, "root_sink_m": 0.0005,
+                      "elev0": 38, "elev1": 4, "elev1_under": 0, "elev_sigma": 13,
                       "elev_chin": 12,  # extra exit angle at the chin (bulk, profile)
                       "elev_soul": 25,  # ... under the lower lip (the hairs fill the sulcus)
                       "elev0_moustache": 22, "elev1_moustache": -25,
-                      "yaw_sigma": 25, "curl_sigma": 12, "curl_share": 0.25,
+                      "yaw_sigma": 32, "curl_sigma": 14, "curl_share": 0.3,  # a little unkempt
                       "curl_radius_m": [0.008, 0.015], "curl_lift": 0.15,
                       "len_min": 0.7, "bend_pow": 1.0,
                       "gap_m": [0.0002, 0.0004],  # clearance over the skin, root -> tip
@@ -267,7 +267,11 @@ DEFAULTS = {
             # rendered as orange flecks).
             "tone": {"melanin": 0.996, "redness": 0.3, "sigma": 0.015,
                      "warm_share": 0.05, "warm": [0.96, 0.45],
-                     "grey_share": 0.025, "grey_extra": 0.05, "grey": [0.2, 0.15],
+                     # grey by zone: grey_share on the cheeks, more at the chin, the
+                     # mouth corners (moustache ends) and the sideburns
+                     "grey_share": 0.10, "grey_chin": 0.28, "grey_corner": 0.28, "grey_side": 0.14,
+                     "chin_grey_radius_m": 0.022, "corner_radius_m": 0.012, "corner_up_m": 0.004,
+                     "grey_extra": 0.05, "grey": [0.08, 0.0],  # silver, not yellow
                      "swatches": [[0.2, "#948e86"], [0.9, "#6a4a32"], [0.98, "#3e2e23"],
                                   [1.0, "#30241b"]],
                      "value_sigma": 0.3},
@@ -310,8 +314,11 @@ DEFAULTS = {
             "seed": 13,
             "proxy": "eyebrow",        # the fitted MPFB proxy used as the landmark, then dropped
             "bins": 10,                # spine samples along each brow
-            "half_height_m": [0.004, 0.002],  # band half-height at the head .. tail
-            "centre_up_m": 0.0005,     # band centre over the proxy's spine
+            "half_height_m": [0.005, 0.0026],  # band half-height at the head .. tail (thick)
+            "centre_up_m": 0.0,        # band centre over the proxy's spine
+            # shape: straight-ish (blend toward a line), low inner heads,
+            # a slight downward slope at the outer ends
+            "straighten": 0.6, "head_drop_m": 0.0015, "outer_droop_m": 0.0012,
             "margin_m": 0.002,         # feather past the band
             "select_m": 0.006,         # patch selection beyond the feather (density 0 there)
             "end_extend_m": 0.004,     # patch beyond the proxy's ends
@@ -327,7 +334,9 @@ DEFAULTS = {
             "top_soft": 0.5, "top_jag": 0.35,  # softer top falloff (in hh) and its irregular wobble
             "groom": {"per_cm2": 360, "points": 6, "root_sink_m": 0.0003,
                       "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
-                      "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4},
+                      "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4,
+                      # a few unruly hairs: turned and lifted off the comb, longer
+                      "unruly": {"share": 0.03, "yaw_deg": 35, "lift_deg": 20, "length": 1.35}},
             "tone": {"melanin": 0.995, "redness": 0.3, "sigma": 0.02,
                      "light_share": 0.06, "light_melanin": 0.94,  # some lighter brown hairs
                      "swatches": [[0.2, "#948e86"], [0.86, "#5a3e2a"], [0.97, "#2a1f18"],
@@ -335,6 +344,7 @@ DEFAULTS = {
                      "redness_ref": 0.45, "value_sigma": 0.25},
             "hero": {"radius_m": [0.000035, 0.000055], "tip_radius": 0.15,
                      "tail_fine": 0.35,  # strands up to 35 % finer along the tail
+                     "head_coarse": 0.35,  # ... and up to 35 % coarser at the inner heads
                      "material": {"roughness": 0.42, "radial_roughness": 0.55, "coat": 0.1,
                                   "root_dark": 0.04, "tip_alpha": 0.6, "tip_fade_from": 0.6},
                      "clump": {"shape": 0.3, "tip_spread": 0.0003, "guide_distance_m": 0.0018},

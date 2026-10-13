@@ -6,6 +6,39 @@ The baseline beard was a pasted, single-tone black patch with a hard outline, th
 
 Everything is placed off landmarks and by surface sampling: lip, ear, head and neck groups, profile lines, brow-proxy spines, and lid margins ray-cast on the final skin. So Track A's forms v1 → v2 change rebuilt the grooms with no edits.
 
+## v3 round 1 (film grooming for the fan build)
+
+Evidence:
+- Build: `data/build/lookdev/20261013T110608Z-fhv3-c2`, on main `4462ee6`, public config.
+- Hero rig (draft; portrait and eye shots, with crops): `data/build/hero/20261013T111052Z-fhv3-c2`.
+- Comparisons: `data/build/trackC/v3/`. "Before" is the v2 round 5b build (`…-fhv2-r5c`).
+
+Everything here is generic grooming, expressed as config keys and code. Nothing likeness-specific is in the repo, so the same keys can move into the private fan overlay unchanged if the review prefers that.
+
+| Change | Before → after |
+|---|---|
+| **Beard length** (full, unsculpted) | Cheek 7.5 → 12.5 mm, jaw 10.5 → 14.5 mm, chin 14.5 mm, moustache 9.5 → 13 mm, neck 9 → 12.5 mm. Built lengths: p10 8.3 mm, p50 10.5 mm, p90 12.6 mm. |
+| **Moustache over the lip** | It overhangs the vermilion by 4 mm (was 2 mm). |
+| **Soft cheek line** | The line sits higher (sag under the cheekbone 20 → 14 mm). Outer fade 4 → 7 mm, wobble 4 → 6 mm, edge band of finer, shorter hairs 4 → 6 mm. |
+| **Neck grown in** | The neckline starts lower and runs further back: jaw drop 60 → 70 mm, throat 45 → 55 mm, under the chin 18 → 26 mm. The neck fade is 10 mm, so the edge is ragged. |
+| **A little unkempt** | Yaw spread 25° → 32°, elevation spread 10° → 13°, curly share 0.25 → 0.3. One more point per strand. |
+| **Grey by zone** (`hair_beard.fields`, `tone.grey_*`) | 10 % on the cheeks, rising to 28 % at the chin and at the mouth corners (the moustache ends, Gaussian, 12 mm radius), 14 % at the sideburns. Overall 11.4 %. The grey hairs are silver (melanin 0.08, redness 0) rather than the old yellowish 0.2 / 0.15. Without `grey_chin` the old formula applies. |
+| **Coarseness** | The beard root radius (0.05–0.08 mm) stays coarser than the scalp's (0.045 mm). |
+| **Brows** (`brows.py`) | Thicker band: half-height 5 mm at the head, 2.6 mm at the tail (was 4 and 2). `straighten` 0.6 blends the proxy arch toward its least-squares line. The inner head sits 1.5 mm lower and the outer end slopes 1.2 mm down. The inner heads are up to 35 % coarser. 3 % of hairs are unruly: turned ±35°, lifted up to 20°, 1.35× longer. About 2,020 strands per side. |
+| **Refit robustness** (`beard_groom.SkinRefit`) | After the grooms follow a skin change, every strand point is pushed back to at least 0.1 mm over the new skin. A face-shape delta bigger than the refine's 2–3 mm then can't leave skin poking through the beard. On the public build it pushed 9,353 points, with a 2.6 mm maximum root move. |
+
+**Verdict.**
+- **Hero rig portrait** (`trackC/v3/v3c2_pcrop_cmp.png`, left v2, right v3): a full, unsculpted, near-black beard with silver salt-and-pepper, grown in under the jaw.
+- **Eye crop** (`trackC/v3/v3c2_eye_cmp.png`): heavy, straight, low brows.
+- **Turntable bust** (`trackC/v3/v3c2_bust_cmp.png`): a fuller, longer beard with a softer, higher cheek line and visible greying at the chin and moustache corners.
+- **135 mm close-up** (`tt_close/…aimeyes_frame0.13.png`, crops in `trackC/v3/v3c2_tt_crops.png`): strand-clean. The brow heads are heavy and low.
+
+**Weak spots.**
+- One brow's outer tail trails a few long wisps toward the temple: the unruly hairs plus the long tail. If the review finds that straggly, lower `groom.unruly.share`.
+- The game shells carry the grey as bright white flecks (`fh/game_turntable_bust.png`), because `albedo_gain` 1.6 lifts the grey swatch to near-white. The game grey needs its own lower gain.
+
+**Face-shape test pending.** Track A's private fan face hasn't landed yet, so the grooms haven't been tested on it. If the delta is applied in `head_edits`, before the `hair` step, the grooms are generated on the new face. If it is applied later, `facial_hair_refit` moves them and pushes strands clear of the new skin.
+
 ## Round 5b (hero beard, brow and lash weight without the shells)
 
 Evidence:
