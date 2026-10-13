@@ -270,8 +270,10 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
             # corners (moustache ends) and the sideburns
             ccx = c.x + side * (corner_x - c.x)
             dc = math.hypot(p.x - ccx, p.z - (slit_z + tn["corner_up_m"]))
-            near_corner = math.exp(-(dc / tn["corner_radius_m"]) ** 2) if p.y < frame.lips_min.y + 0.03 else 0.0
-            nc = math.exp(-((p - chin).length / tn["chin_grey_radius_m"]) ** 2)
+            # grey_pow > 2 flattens the bell, so the whole zone gets its share, not just the peak
+            gp = tn.get("grey_pow", 2.0)
+            near_corner = math.exp(-(dc / tn["corner_radius_m"]) ** gp) if p.y < frame.lips_min.y + 0.03 else 0.0
+            nc = math.exp(-((p - chin).length / tn["chin_grey_radius_m"]) ** gp)
             base = tn["grey_share"]
             out["grey"][v] = max(base + (tn["grey_chin"] - base) * nc,
                                  base + (tn["grey_corner"] - base) * near_corner,
@@ -398,6 +400,8 @@ def build(b, frame, cfg):
     if ec:
         e = np.clip(f["edge"], 0, 1)
         rad *= (ec["radius"] + (1 - ec["radius"]) * e)[:, None]
+    # grey hairs are coarser, so the salt-and-pepper survives distance and denoising
+    rad *= np.where(mel < 0.4, tone.get("grey_radius", 1.0), 1.0)[:, None]
     srad = np.linspace(1.0, hero["tip_radius"], sg["points"])[None, :] * \
         rng.uniform(*hero["radius_m"], sm)[:, None] * sg["radius_scale"]
     clump = np.clip(g["clump_base"] + g["clump_moustache"] * f["moustache"] + g["clump_chin"] * f["chin"], 0, 1)
