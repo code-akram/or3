@@ -75,6 +75,13 @@ VIEWS = {
     "collar_back": ((0.25, 1.0, 1.75), (0.0, 0.0, 1.52), 0.3),
     "collar_side": ((1.0, 0.0, 1.56), (0.0, 0.0, 1.56), 0.22),
     "neck_front": ((0.0, -1.0, 1.52), (0.0, 0.0, 1.52), 0.36),         # the collar ends and the shoulder line
+    "collar_rf": ((-0.07, -1.0, 1.56), (-0.07, 0.0, 1.56), 0.15),     # the right collar beside the neck, square on
+    "collar_lf": ((0.07, -1.0, 1.56), (0.07, 0.0, 1.56), 0.15),       # and the left
+    "collar_rs": ((-1.0, -0.25, 1.57), (-0.06, -0.04, 1.55), 0.17),   # the right collar from the side, a little forward
+    # the collar beside the neck along the hero cameras' rays: the turntable's
+    # tt0 (50 mm from 1.0 m high, 4.8 m off) and the hero bust (az 35, el 3)
+    "tt0_collar": ((0.0, -4.79, 1.0), (0.0, 0.0, 1.555), 0.24),
+    "bust_collar": ((0.955, -1.364, 1.437), (0.0, -0.03, 1.555), 0.24),
     "neck_top": ((0.0, -0.25, 2.4), (0.0, 0.0, 1.5), 0.45),            # from above: collar fall on the shoulders
     "armpit": ((-0.7, -0.8, 1.05), (-0.24, -0.02, 1.40), 0.32),       # the left scye from below the front
     "armpit_back": ((-0.7, 0.8, 1.05), (-0.24, 0.02, 1.40), 0.32),

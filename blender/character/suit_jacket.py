@@ -1039,6 +1039,27 @@ class Jacket:
         bones = sb.ARM[side] | {f"clavicle_{side}", "spine_03"}
         for row in g.rows:
             G.weight(row, bones)
+        rigid = J.get("end_rigid_m", 0.0)
+        if rigid:
+            # the sleeve end is a lined, stiff tube round the rigid shirt cuff:
+            # over its last end_rigid_m the hand's and fingers' share goes to
+            # the forearm (full over the last third), so the end rotates with
+            # the forearm and does not shear with the wrist
+            hand = f"hand_{side}"
+            chain = {G.gidx[hand]} | {G.gidx[b.name] for b in G.arm.data.bones[hand].children_recursive}
+            fore = G.gidx[f"lowerarm_{side}"]
+            CL, TL = axis(L)[:2]
+            for row in g.rows:
+                for v in row:
+                    f = smoothstep(((v.co - CL).dot(TL) + rigid) / (2 * rigid / 3))
+                    if f <= 0.0:
+                        continue
+                    moved = sum(x for k, x in v[G.dl].items() if k in chain) * f
+                    if moved <= 0.0:
+                        continue
+                    for k in [k for k, _ in v[G.dl].items() if k in chain]:
+                        v[G.dl][k] *= 1.0 - f
+                    v[G.dl][fore] = v[G.dl].get(fore, 0.0) + moved
         tag = TAG[f"sleeve_{side}"]
         mid = g.rows[len(g.rows) // 2]
         i_hind = max(range(n_cols), key=lambda i: mid[i].co.y)

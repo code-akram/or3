@@ -23,6 +23,7 @@ jacket stand (+ clearance) < jacket fall. Angles: a = atan2(y - cy, x), the
 front (-Y) is -pi/2, the wearer's left (+X) is 0, the back pi/2.
 """
 
+import itertools
 import math
 
 import numpy as np
@@ -553,8 +554,59 @@ def build_jacket_collar(jk, nf, J, tag):
         return resample(a, ja)[:-1] + resample(b, n - ja)
 
     th = J["thickness_m"]
+    knee_m = J.get("knee_m")
+
+    def need_at(a, z, body_clear=None):
+        """The stand's inner face must be at least this far out at (a, z)."""
+        bc = J["body_clear_m"] if body_clear is None else body_clear
+        return max(nf.shirt_outer(a, z - 0.002, z + 0.002) + J["shirt_clear_m"], nf.r_body(a, z) + bc)
+
+    def knee(p0, p1, w):
+        """The stand's middle row. knee_m set: a knee just above the shirt
+        band's base, so the stand runs over the shoulder to the band's base and
+        then lies on the band leaning in with it (a straight stand from the
+        seam stood out from the band by its base's flare, 1.5-2.5 cm at the
+        side of the neck: a crevice and a doubled edge in front views); far
+        enough out that both halves clear the shirt and the body. Below the
+        knee the body clearance ramps up from the seam's own (the block's,
+        ~5 mm) to body_clear_m: the full clearance from the seam up threw
+        short lower halves 1 cm out"""
+        mid = p0.lerp(p1, 0.5)
+        if knee_m is None or w >= 1.0:
+            return mid
+        a, z_s, r_s = nf.polar(p0)
+        z_f, r_f = p1.z, nf.polar(p1)[2]
+        if z_f - z_s < 0.004:
+            return mid
+        z_k = min(max(nf.zb(a) + knee_m, lerp(z_s, z_f, 0.25)), lerp(z_s, z_f, 0.65))
+        c_s = min(max(r_s - nf.r_body(a, z_s), 0.002), J["body_clear_m"])
+        r_k = need_at(a, z_k)
+        for t in (0.25, 0.5, 0.75):
+            r_k = max(r_k, (need_at(a, lerp(z_s, z_k, t), lerp(c_s, J["body_clear_m"], t)) - r_s * (1 - t)) / t,
+                      (need_at(a, lerp(z_k, z_f, t)) - r_f * t) / (1 - t))
+        return nf.point(a, z_k, r_k).lerp(mid, w)
+
+    def stand_r(z, p0, pk, p1, off=0.0):
+        """Radius at height z of the stand (seam -> knee -> fold) offset by
+        `off` along its normal in the (r, z) plane: the fall lies th off the
+        stand. (Radially, th was 2 mm off the knee's lower half, which lies
+        nearly flat on the trapezius where the seam swings out at the side
+        of the neck, and the fall's middle rows sank into it.)"""
+        pts = [(nf.polar(q)[2], q.z) for q in (p0, pk, p1)]
+        if off:
+            ns = []
+            for (ra, za), (rb, zb) in itertools.pairwise(pts):
+                L = math.hypot(rb - ra, zb - za) or 1e-9
+                ns.append(((zb - za) / L, -(rb - ra) / L))
+            nv = [ns[0], ((ns[0][0] + ns[1][0]) * 0.5, (ns[0][1] + ns[1][1]) * 0.5), ns[1]]
+            pts = [(r + n[0] * off, zz + n[1] * off) for (r, zz), n in zip(pts, nv)]
+        (r0, z0), (rk, zk), (r1, z1) = pts
+        if z <= zk:
+            return lerp(r0, rk, (z - z0) / max(zk - z0, 1e-6))
+        return lerp(rk, r1, (z - zk) / max(z1 - zk, 1e-6))
+
     cols = []
-    fold_z = []
+    fold_z, ws = [], []
     for i in range(N + 1):
         c = i / N
         p0 = top[i].co.copy()
@@ -571,15 +623,17 @@ def build_jacket_collar(jk, nf, J, tag):
             wd = smoothstep((df - cf) / (df - end_frac))
             z_f = lerp(z_f, max(z_s + J["stand_min_m"], z_f - J.get("drop_m", 0.0)), wd)
         z_f = lerp(z_f, z_s + 0.0015, w)
-        # the fold hugs the shirt collar at its own height; the stand (a straight
-        # line from the seam) stays outside the shirt and the body all the way
-        r_f = nf.shirt_outer(a, z_f - 0.015, z_f) + J["shirt_clear_m"]
-        r_f = max(r_f, nf.r_body_max(a, z_f - 0.01, z_f) + J["body_clear_m"])
-        for t in (0.2, 0.4, 0.6, 0.8):
-            z_t = lerp(z_s, z_f, t)
-            need = max(nf.shirt_outer(a, z_t - 0.002, z_t + 0.002) + J["shirt_clear_m"],
-                       nf.r_body(a, z_t) + J["body_clear_m"])
-            r_f = max(r_f, (need - r_s * (1 - t)) / t)
+        # the fold hugs the shirt collar at its own height (fold_win_m below it:
+        # the band leans in ~0.7 m/m at the side, so the old 15 mm window held
+        # the fold 1 cm off it); the stand stays outside the shirt and the
+        # body all the way: straight from the seam (the fold goes out until it
+        # clears) or, knee_m set, bent at a knee (knee(), the fold stays)
+        win = J.get("fold_win_m", 0.015)
+        r_f = nf.shirt_outer(a, z_f - win, z_f) + J["shirt_clear_m"]
+        r_f = max(r_f, nf.r_body_max(a, z_f - min(win, 0.01), z_f) + J["body_clear_m"])
+        if knee_m is None:
+            for t in (0.2, 0.4, 0.6, 0.8):
+                r_f = max(r_f, (need_at(a, lerp(z_s, z_f, t)) - r_s * (1 - t)) / t)
         r_f = lerp(r_f, r_s, w)
         if DEBUG and i % 6 == 0:
             print(f"[neck] i={i:2d} a={math.degrees(a):6.1f} seam z={z_s:.4f} r={r_s:.4f}  fold z={z_f:.4f} "
@@ -589,9 +643,12 @@ def build_jacket_collar(jk, nf, J, tag):
         p2 = nf.point(a, z_f + 0.6 * th * (1 - w), r_f + 0.5 * th * (1 - w))
         p3 = nf.point(a, z_f - 0.0005 * (1 - w), r_f + th * (1 - w))
         fold_z.append(z_f)
+        ws.append(w)
+        pk = knee(p0, p1, w)
         # natural fall: a radial profile at angle a, draped over the stand and
         # the block, monotone outward, cut at the fall width
-        width = max(lerp(J["fall_side_m"], J["fall_back_m"], nf.back(a)), (p1 - p0).length + J["seam_cover_m"])
+        width = max(lerp(J["fall_side_m"], J["fall_back_m"], nf.back(a)),
+                    (pk - p0).length + (p1 - pk).length + J["seam_cover_m"])
         prof = [(r_f + th, z_f - 0.0005)]
         L = 0.0
         z = z_f - 0.0005
@@ -600,8 +657,7 @@ def build_jacket_collar(jk, nf, J, tag):
             z -= 0.0008
             u = r_prev
             if z >= z_s:
-                t = (z - z_s) / max(z_f - z_s, 1e-6)
-                u = max(u, lerp(r_s, r_f, t) + th)
+                u = max(u, stand_r(z, p0, pk, p1, th) if knee_m is not None else stand_r(z, p0, pk, p1) + th)
             hit = under.ray_cast(nf.point(a, z, max(r_s - 0.02, 0.01)), Vector((math.cos(a), math.sin(a), 0)), 0.25)
             if hit[0] is not None:
                 u = max(u, nf.polar(hit[0])[2] + J["rest_m"])
@@ -610,7 +666,7 @@ def build_jacket_collar(jk, nf, J, tag):
             r_prev = u
         fall = resample([nf.point(a, zz, rr) for rr, zz in prof], NF)
         fall[0] = p3
-        cols.append([p0, p0.lerp(p1, 0.5), p1, p2] + fall)
+        cols.append([p0, pk, p1, p2] + fall)
 
     i_e = max(2, math.ceil(end_frac * N))
     # fair the stand and the fold along the collar (outside the end columns):
@@ -627,7 +683,7 @@ def build_jacket_collar(jk, nf, J, tag):
                 r = max(pol[i][2], (pol[i - 1][2] + 2 * pol[i][2] + pol[i + 1][2]) * 0.25)
                 cols[i][j] = nf.point(pol[i][0], z, r)
         for i in range(i_e - 1, N - i_e + 2):
-            cols[i][1] = cols[i][0].lerp(cols[i][2], 0.5)
+            cols[i][1] = knee(cols[i][0], cols[i][2], ws[i])
 
     # smooth the natural fall across columns (outside the end regions)
     for _ in range(3):
@@ -651,10 +707,14 @@ def build_jacket_collar(jk, nf, J, tag):
         T = [cols[i][4] for i in idx]
         if roll[left]:
             # the fold: up the roll line from the lapel's crest to the gorge
-            # point, then the neckline back to column i_b, by arc length; the
-            # stand rows of the end columns run from their seam point to it
-            T = resample(roll[left] + T, i_b)
-            for k, i in enumerate(idx[:-1]):
+            # point, then the neckline back to column i_e, by arc length; the
+            # stand rows of the end columns run from their seam point to it.
+            # Past i_e (patch_frac > end_frac) the columns keep their own
+            # stand and fold: resampled to i_b, the fold slid along the
+            # neckline and the straight stands crossed the fold rows of the
+            # next columns at the side of the neck
+            T = resample(roll[left] + T[:i_e + 1], i_e) + T[i_e + 1:]
+            for k, i in enumerate(idx[:i_e]):
                 p0 = cols[i][0]
                 cols[i][1] = p0.lerp(T[k], 0.4)
                 cols[i][2] = p0.lerp(T[k], 0.8)
@@ -810,6 +870,31 @@ def build_jacket_collar(jk, nf, J, tag):
                 d = nf.point(pol[i][0], z, r) - cols[i][je]
                 for j in range(5, je + 1):
                     cols[i][j] = rest_on(cols[i][j] + d * ((j - 4) / NF))
+    if knee_m is not None:
+        # the fall a collar thickness off the stand along the stand's normal
+        # (the radial pushes above keep it rest_m off radially, ~2 mm off the
+        # knee's lower half where it lies nearly flat on the trapezius at
+        # the side of the neck: the fall's middle rows crossed it)
+        sv = [cols[i][j] for j in range(3) for i in range(N + 1)]
+        sp = [[j * (N + 1) + i, j * (N + 1) + i + 1, (j + 1) * (N + 1) + i + 1, (j + 1) * (N + 1) + i]
+              for j in range(2) for i in range(N)]
+        st = BVHTree.FromPolygons(sv, sp)
+        held = 0
+        for i in range(N + 1):
+            if min(i, N - i) < i_e:
+                continue
+            for j in range(5, 4 + NF + 1):
+                q = cols[i][j]
+                hit = st.find_nearest(q, 0.02)
+                if hit[0] is None:
+                    continue
+                n = hit[1] if hit[1].dot(nf.radial(hit[0])) >= 0 else -hit[1]
+                h = (q - hit[0]).dot(n)
+                if h < th:
+                    cols[i][j] = q + n * (th - h)
+                    held += 1
+        if DEBUG:
+            print(f"[neck] fall held off the stand: {held}")
     _dump("final", cols, i_b)
     rows = [[cols[i][j] for i in range(N + 1)] for j in range(5 + NF)]
     if DEBUG:
