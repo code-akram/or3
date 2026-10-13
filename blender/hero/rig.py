@@ -74,6 +74,7 @@ HERO_E = 3.0
 HERO_EXPOSURE = -0.6
 HERO_LOOK = "AgX - Base Contrast"   # skin-direction.md: contrast via CDL power in the grade, not the look
 HERO_WB = 3900                       # skin-direction.md: white point (K) of the hero grade
+EYE_DIFFUSE = 0.3                    # the eye light is mostly a catchlight
 TT_E = 4.0
 TT_EXPOSURE = 0.0
 
@@ -327,7 +328,7 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(
             made[name].data.volume_factor = 0.35  # rims glow in the haze, not flood it
         if name == "eye":
             made[name].data.use_shadow = False
-            made[name].data.diffuse_factor = 0.3  # mostly a catchlight
+            made[name].data.diffuse_factor = EYE_DIFFUSE  # mostly a catchlight
         if name in flag:
             made[name].light_linking.receiver_collection = receivers(ch)
     return made
