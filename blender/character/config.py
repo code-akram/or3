@@ -316,11 +316,11 @@ DEFAULTS = {
             "edge_turn": 0.45,         # upper-edge hairs turn down, lower-edge up (x dz)
             "smooth_iters": 2,
             "top_soft": 0.5, "top_jag": 0.35,  # softer top falloff (in hh) and its irregular wobble
-            "groom": {"per_cm2": 185, "points": 6, "root_sink_m": 0.0003,
+            "groom": {"per_cm2": 240, "points": 6, "root_sink_m": 0.0003,
                       "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
                       "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4},
-            "tone": {"melanin": 0.975, "redness": 0.45, "sigma": 0.02,
-                     "light_share": 0.2, "light_melanin": 0.9,  # some lighter brown hairs
+            "tone": {"melanin": 0.982, "redness": 0.45, "sigma": 0.02,
+                     "light_share": 0.12, "light_melanin": 0.9,  # some lighter brown hairs
                      "swatches": [[0.2, "#948e86"], [0.86, "#5a3e2a"], [0.97, "#2a1f18"],
                                   [1.0, "#1e1712"]],
                      "redness_ref": 0.45, "value_sigma": 0.25},
@@ -335,7 +335,7 @@ DEFAULTS = {
                        "radius_scale": 1.0, "min_radius_px": 0.5,
                        "canopy_radius_m": 0.003, "canopy_pct": 85, "canopy_floor_m": 0.0005,
                        "shade": {"root": 0.7, "full_at": 0.7},
-                       "albedo_gain": 2.0, "saturation": 0.85, "cast_shadow": False, "strand_keep": 0.55,
+                       "albedo_gain": 1.8, "saturation": 0.85, "cast_shadow": False, "strand_keep": 0.55,
                        "roughness": 0.6, "specular": 0.25},
             "cards": {"per_side": 20, "spacing_m": 0.0025, "clump_radius_m": 0.0015,
                       "min_members": 3, "min_len_m": 0.004, "segments": 2,
