@@ -57,7 +57,7 @@ SHOTS = {
     # 5. Hands and cuff: 100 mm, the right hand at the left cuff, shoe and
     # trouser break in frame (a tall frame from the cuff to the floor).
     "hands": dict(cam="lens=100,az=28,h=0.8,aim=cuff_feet,frame=1.45,f=5.6", pose="cuff", res=POSTER, shift=0.0,
-                  shift_y=0.0, haze=0.006, rain=0, lights={"key": (KEY_K, 0.8, (0.3, 0.3), 55.0, 30.0, 1.5)}, ev=0.0),
+                  shift_y=0.1, haze=0.006, rain=0, lights={"key": (KEY_K, 0.8, (0.3, 0.3), 55.0, 30.0, 1.5)}, ev=0.0),
     # 6. Eye close-up: 135 mm, eyes and brow, gaze 5 deg off camera; the base
     # (skin-direction) key, eye light 0.3. f/4 on the near cornea
     # (skin-direction.md) from 0.73 m, ~7 mm in focus; §5's 0.4 m at f/4
