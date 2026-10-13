@@ -115,7 +115,8 @@ DEFAULTS = {
                "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
                "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.10, "light_melanin": 0.93,
                "lock_melanin_jitter": 0.012, "tint": None,
-               "coat": None, "radial_roughness": None},   # Chiang only (wet look: coat)
+               "coat": None, "radial_roughness": None,    # Chiang only (wet look: coat)
+               "fly_roughness": None},   # flyaway strands (curve attr `fly`) blend to this: dry strays on a wet groom
     "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
 }
 
@@ -633,7 +634,18 @@ def hair_material(gcfg):
     rough.inputs["To Min"].default_value = sc["roughness"][0]
     rough.inputs["To Max"].default_value = sc["roughness"][1]
     nt.links.new(info.outputs["Intercept"], rough.inputs["Value"])
-    nt.links.new(rough.outputs["Result"], bsdf.inputs["Roughness"])
+    if sc.get("fly_roughness") is None:
+        nt.links.new(rough.outputs["Result"], bsdf.inputs["Roughness"])
+    else:
+        fly = nt.nodes.new("ShaderNodeAttribute")
+        fly.attribute_type = "GEOMETRY"
+        fly.attribute_name = "fly"
+        mix = nt.nodes.new("ShaderNodeMix")
+        mix.data_type = "FLOAT"
+        nt.links.new(fly.outputs["Fac"], mix.inputs["Factor"])
+        nt.links.new(rough.outputs["Result"], mix.inputs["A"])
+        mix.inputs["B"].default_value = sc["fly_roughness"]
+        nt.links.new(mix.outputs["Result"], bsdf.inputs["Roughness"])
     nt.links.new(info.outputs["Random"], bsdf.inputs["Random"])
     nt.links.new(bsdf.outputs[0], out.inputs["Surface"])
     return mat
