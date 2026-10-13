@@ -2,7 +2,199 @@
 
 Goal (BRIEF, direction.md defect 7): turn the grey, boxy costume into a sharp, close-cut near-black three-piece that reads as black wool under the neon-noir hero light and the turntable. Everything is still built on the body by script; the GLB stays game-ready and the Cycles-only detail goes into the kept `.blend` after the export.
 
-The rounds come newest first: round 3, then round 2, then sections 1–9 (round 1, as reported on `suitD-v2c`). Where they disagree, the later round wins.
+The rounds come newest first: round 4, round 3, round 2, then sections 1–9 (round 1, as reported on `suitD-v2c`). Where they disagree, the later round wins.
+
+## Round 4: v3h (from the review of v3e)
+
+Round 3 was merged at b2ab739. The review asked for a small round 4. Two more items came in while it ran:
+
+1. **The collar beside the neck.** In `crop_tt0_collar_x3.png` the jacket collar still formed a lumpy, folded tab where it met the shirt collar at each side of the neck. The target is a clean stand that wraps the neck and lies flat on the shirt collar, with the roll line running on from the stand to the notch: no tab and no doubled edge.
+2. **The arm_raise shirt-collar bulge**, 5.1 mm in v3e (1.9 mm in v3b). Bring it back to 2 mm or less. Fix it on my side first (body hide, shirt weights). If the cause is Track F's `corr_arm_up_l`, change only its shape on the shirt, and say so.
+3. **Faceted cuffs** (added after main 9ac04e9). In `trackG/final4/hero_cuff.png` the shirt cuff ring read as a polygon. Make the cuff and sleeve openings read round at 100 % in a hand close-up, within the tri budget.
+4. **The cuff zigzag** (added after main 82d99a7). In `hero/…-main6-hands/hero_ready_side.png` the right shirt cuff folded into a jagged zigzag in high_ready. The cuff is stiff, interfaced cloth: it should stay round and turn with the forearm, not shear. A Track H pistol will sit in these hands soon.
+
+The final run is **`20261013T032928Z-suitD-v3h`**, built from 3c032bb on main 82d99a7 (Track G's hands and Track E's bladed high-ready included).
+
+### R4.1 What changed, and the files touched
+
+**The collar beside the neck** (`suit_neck.py build_jacket_collar`; `suit.py` DEFAULTS `jacket.collar`)
+
+*Diagnosis.* Cross sections of v3e in the neck frame showed where the tab came from.
+
+- The shirt band leans in toward the neck, by about 0.7 m per metre at the side.
+- The jacket's stand was a straight line from the seam to the fold. The fold took its radius from the widest shirt in the 15 mm below it, which is the band's flared base. That held the fold 1–2.5 cm off the band at the side of the neck.
+- In front views this showed as a hollow between the two collars, with the jacket's stand standing up beside it: the tab and the doubled edge.
+- The fold also dropped toward the gorge from 30 % of the way round (`drop_frac` 0.3). That held it low beside the neck, and the outer edge turned a corner where the end patch met the natural fall.
+
+*Fix.*
+
+- **The fold hugs the band at its own height** (`fold_win_m` 4 mm, was an implicit 15 mm). `shirt_clear_m` goes from 3 to 1.5 mm.
+- **The stand has a knee** (`knee_m` 3 mm, `knee()`).
+  - The stand's middle row is a knee 3 mm above the shirt band's base. The stand runs from the seam over the shoulder to the band's base, then up the band, leaning in with it.
+  - The knee goes far enough out that both halves clear the shirt and the body (`need_at()`).
+  - Below the knee the body clearance ramps from the seam's own (the block's, about 5 mm) up to `body_clear_m`.
+  - The fold fairing re-places the knee. The fall is draped a collar thickness off the bent stand, along its normal (`stand_r()`).
+- **The roll line peaks beside the neck** (`drop_frac` 0.3 → 0.2). The fold drops toward the gorge only in front of the side, so it runs down to the notch without a step.
+- **The end patch runs past the side** (`patch_frac` 0.2; it defaulted to `end_frac`, 0.09), so the outer edge is one curve from the collar point round the side.
+  - Only the end columns, up to `i_e`, are resampled onto the roll line. The columns past it keep their own stand and fold.
+  - Resampled all the way to `i_b`, the fold slid along the neckline and the straight end stands crossed the next columns' fold rows (q29, jacket self-intersection 68).
+- **The fall is held off the stand.** A last pass, after the edge settle, puts every fall point at least a collar thickness off the stand, along the stand's normal.
+  - Where the seam swings out at the side of the neck, the knee's lower half lies nearly flat on the trapezius.
+  - There the radial rest held the fall only about 2 mm off it. Fall rows 6–7 crossed it, which showed as a speck on the fall (q31).
+
+**The trapezius ring under the shirt** (`suit.py hide_body`; DEFAULTS `hide_enclosed.trim_edge`)
+
+- Under the enclosed bones (upper arm, clavicle, torso), a face that is covered all round now goes as soon as one of its vertices is past the 3 cm margin.
+- Kept whole, those faces left a ring of vertices 4–5 cm out on the trapezius. The nearest truly visible vertex was 47.9 mm away. They survived only because they shared faces with vertices inside the margin.
+- That ring is what `corr_arm_up_l` lifted 3.3 mm through the shirt in arm_raise (R4.4).
+- 52 faces go; the body goes from 15648 to 15544 tris. The head and neck rule and the margin itself are unchanged.
+
+**The cuffs and the sleeve ends** (`suit_inner.py build_cuffs`, `suit_build.py ring_points_smooth`, `suit_jacket.py` sleeve; DEFAULTS `shirt.cuff_*`, `jacket.sleeve`, `budgets`)
+
+- **The shirt was being decimated.** It had 2812 tris against a 2200 budget, so `budgets.decimate` collapsed it every build.
+  - The collapse ate the cuff rings first: 16 segments, with bands 2–3 mm wide. That is the polygon in `hero_cuff.png`.
+  - The shirt's collar was being decimated too.
+  - The shirt budget is now 3600, and the shirt ships undecimated (3580 tris).
+- **The cuff is round.**
+  - 48 segments (`cuff_segments`) round a closed Catmull-Rom curve through the sleeve end, instead of a straight resample of the sleeve's polygon.
+  - The outer edge is a quarter round of 1.2 mm (`cuff_edge_r_m`). It was a square corner.
+- **The cuff is rigid** (`cuff_rigid`).
+  - Every cuff vertex is weighted 1.0 to `lowerarm`. Track F's twist split then moves it onto the forearm twist bone, so the ring turns with the forearm as one piece.
+  - Weighted from the nearest skin, the cuff's reveal had taken up to 0.72 `hand` and 0.14 `thumb_01`, and it sheared into the zigzag when the wrist bent.
+- **The sleeve is rounder.** It has 40 columns, up from 28, so the end reads round. The jacket budget goes from 16000 to 18000; the jacket is 17747 tris.
+- **The sleeve end is rigid too** (`end_rigid_m` 4 cm).
+  - Over the last 4 cm, the hand's and fingers' share of the weights goes to the forearm: in full over the last 1.3 cm, eased in over the 2.7 cm above.
+  - The end had about 0.24 hand weight. It turns with the forearm round the rigid cuff and does not shear with the wrist.
+
+**Bench** (`bench/m1/suit_pose_test.py`; `suit_views.py`)
+
+- **`suit_pose_test`'s ID pass broke with the hand nails.** Track G added a 14th mesh, the nails.
+  - Adjacent IDs, 1/255 apart, decoded one low in the dark sRGB range. The background sphere counted as the body, and every pose read thousands of px "over rest".
+  - The IDs are now spread over the 8-bit range (`STEP`). The numbers below for v3f and v3h are both from the fixed tool.
+- **New views:**
+  - `tt0_collar` and `bust_collar`: the collar along the turntable's and the hero bust's camera rays;
+  - `collar_rf`, `collar_lf`: each side, square on;
+  - `collar_rs`: the right side from a little forward.
+
+Files: `blender/character/suit.py`, `suit_neck.py`, `suit_inner.py`, `suit_jacket.py`, `suit_build.py`; `bench/m1/suit_views.py`, `suit_pose_test.py`.
+
+**Shared files: none edited in round 4.** One experiment (R4.4) patched Track F's `deform_correctives.py` for a single labelled build. The patch was reverted straight after the build and is not committed.
+
+### R4.2 Measurements (direction config)
+
+| | v3e | v3h |
+|---|---|---|
+| gap from the shirt collar to the jacket collar's inner face, mean over the top 10 mm of the stand (`/tmp/suitwork/gap.py`; 0° = the wearer's left, 90° = back): side 0° / 180° | 9.1 / 9.1 mm | 3.6 / 3.6 mm |
+| the same, 20° / 160° (just behind the side, where the tab stood) | 13.7 / 13.9 mm | 4.2 / 4.4 mm |
+| the same, 40° / 140° · 60° / 120° · back 90° | 9.7 / 9.7 · 4.9 / 4.9 · 3.9 mm | 3.2 / 3.5 · 2.0 / 2.2 · 1.9 mm |
+| the same, −20° / 200° (the collar end, in front of the side) | 10.8 / 11.1 mm | 8.1 / 8.4 mm |
+| top of the jacket's stand at the side of the neck | z 1.588 | z 1.597 |
+| `suit_collar` self-intersection (≤ 120) | 79 (shirt 42, jacket 34, tie 3) | 86 (shirt 47, jacket 36, tie 3). Skin 0 px, all garment pairs 0, order 0. The shirt's +5 come from the undecimated shirt; v3f, with the decimated shirt, had 42 |
+| `suit_collar` backface px (closeup / front / 3/4 / profile) | 110 / 242 / 147 / 86 | 110 / 242 / 147 / 81 |
+| deform poke-through: rest / knee_up / arm_raise / head_turn / walk | 0 / 2 / 3 / 1 / 0 | 0 / 6 / 1 / 0 / 0 |
+| arm_raise body > shirt | 2 vertices, 5.1 mm | 1 vertex, **2.0 mm** (the right throat) |
+| arm_raise shirt > jacket (right clavicle) | 6.3 mm | none |
+| knee_up shirt > jacket | none | 5 vertices, 3.1 mm: the left cuff's thumb side against the jacket's skirt at the hip, where the hanging arm rests (R4.3, item 4) |
+| knee_up body > trousers (code unchanged) | 5.1 mm | 5.1 mm |
+| `suit_pose_test` px over rest (fixed tool), v3f → v3h: arms_up / kick / crouch / stress | 110 / 46 / 866 / 989 (v3f) | 110 / 36 / 840 / 955 |
+| shirt tris | 2199 (decimated from 2812) | 3580 (undecimated; the cuffs 48 round with a rounded edge) |
+| jacket tris | 15347 | 17747 (40-column sleeves) |
+| body tris after `hide_body` | 15648 | 15544 (52 trapezius faces trimmed) |
+| character total (main6 = main before this round, with the hands) | 123139 tris (main6) | 126872 tris (≤ 150k). 83 bones (≤ 90), ≤ 4 weights per vertex, 0 glTF errors. Hair +56, because its cards collide with the collar |
+| hands pierce (`hands_render --pierce`): cuff, ready | 0, 0 (main6) | 0, 0 |
+
+**Guards on `suitD-v3h`:** `suit_check` PASS, `suit_collar` PASS, `suit_pose_test` as above, and Track F's `deform_test` as above. The materials and the lighting are unchanged.
+
+### R4.3 Verdicts
+
+| item | verdict | evidence (in `suitD-v3h/suit_ba/`) |
+|---|---|---|
+| 1. The collar beside the neck | **Fixed, with a softer corner left on the outer edge.** In the turntable crop the upright ear and the hollow between the collars are gone on both sides. The jacket collar rises from the shoulder and lies against the shirt collar as one stand: the gap at the top of the stand is now 2–4.5 mm all round the back and sides (it was 4–14 mm). Its inner edge runs on into the lapel's roll line. There is no doubled edge. At the hero light the collar wraps the neck more tightly, and the roll line runs from behind the neck down to the notch. **What is left:** where the outer edge turns over the shoulder it still makes a corner, most visible on the left of the tt0 frame. At the hero light, on the far side of the neck, the same turn reads as a peak at the top of the roll. It is softer than v3e's tab and lies flat; it is not folded. Smoothing it means re-cutting the fall's outline at the side (`fall_side_m` against `fall_back_m`, and the end path), which I left. | `crop_tt0_collar_x3.png` (v3e above, v3h below), `crop_hero_bust_collar.png`, `crop_hero_bust_collar_x3.png`, `tt0_final.png`, `hero_bust_final.png`; studio and clay pairs `tt0_collar`, `bust_collar`, `collar_rf`, `collar_lf`, `neck34`, `neck34r`, `neck_front` |
+| 2. arm_raise shirt-collar bulge ≤ 2 mm | **Met, at 2.0 mm, on my side only.** The 3.3 mm trapezius poke is gone (the hide trim). The skin blob at the shirt collar's front in the arm_raise tile is gone. The one vertex left is at the right throat, at 2.0 mm; it is moved by Track F's `corr_arm_fwd_r`, not `corr_arm_up_l`. **I did not change any corrective's shape on the shirt.** The shirt does not move in either corrective, the body does, and the target was met without it. The cause, a correction to round 3 and a tested fix for Track F are in R4.4. | `deform_arm_raise.png` (v3e above, v3h below), `deform_arm_raise_shoulder_top_l.png`, `../deform-suitD/` |
+| 3. Faceted cuff and sleeve ends | **Fixed.** At 100 % and at 2x the cuff is a round ring with a rounded edge, and the sleeve end's rim is round. The polygon came mostly from the shirt's decimation (R4.1). | `hero_cuff.png` (left: `trackG/final4`, right: v3h), `crop_hero_cuff_x2.png`, `../suit_cuff/` |
+| 4. Cuff zigzag in high_ready | **Fixed.** Both cuffs stay round in high_ready and turn with the forearm; the wrist bends inside them. With 8 mm of ease round the wrist, the ring stands a little off the back of the bent wrist, as a stiff cuff does. **Side effect, for the record:** in knee_up the left cuff's thumb side now touches the jacket's skirt at the hip by 3.1 mm. The arm hangs against the hip there, and the cuff no longer bends away with the hand (v3f 0, v3g with the hand-weighted cuff 1.6 mm). It is hidden between the wrist and the skirt in the knee_up tiles. For Track H's pistol, the cuff and the last 4 cm of the sleeve now ride on the forearm only, and hand pierce is 0 in the cuff and ready poses. | `hero_ready_side.png`, `hero_ready.png` (left: main6's blend, right: v3h, both posed with today's high-ready), `../suit_ready/` |
+
+### R4.4 Item 2: cause, a correction to round 3, and a tested fix for Track F
+
+**Which vertices poke.** I used a copy of `deform_test` that prints the poking vertices (`/tmp/suitwork/deform_dbg2.py`). I ran it on v3f with the runtime rules cut down, so that each morph's share shows.
+
+| v3f body vertex (rest) | depth | cause | why it is there |
+|---|---|---|---|
+| left trapezius (0.134, −0.007, 1.558) and its neighbour | 3.3, 2.1 mm | `corr_arm_up_l`'s body shape moves it 8.2 mm; the shirt above moves 0.7 mm. With no morphs it does not poke | past the hide margin (47.9 mm from the nearest visible vertex); kept only through shared faces. **Fixed** by the hide trim |
+| right throat (−0.033, −0.072, 1.545) | 2.2 mm (v3h: its neighbour, 2.0 mm) | `corr_arm_fwd_r`'s body shape moves it 12.7 mm; the shirt there moves 0 | 12.8 mm from the neck's kept skin: inside the margin, so it cannot be hidden |
+| right trapezius (−0.107, −0.021, 1.564) | 1.6 mm | plain skinning (with no morphs too) | under 2 mm |
+
+**A correction to round 3.** R3.3 said that in v3e `corr_arm_up_l` "moves the shirt by 15.3 mm and the body by 0". That was wrong: I had read the offsets of the wrong mesh. In v3e that corrective moved the left throat skin by 30.7 mm (its neighbour by 15.3 mm), and the shirt there by about 0. Its largest body offset was 54.9 mm. The poke is the body being pushed out, not the shirt.
+
+**Why the throat moves (Track F's bake).**
+
+- `Baker._rest_cover` marks a body vertex as under a garment when the nearest garment point within `cover_m` (7 cm) lies on its inside (s < 0). There is no check that the garment is actually over the skin.
+- A replay of the test on v3e (`/tmp/suitwork/bakecover.py`) marked 40 front neck-base vertices under the jacket. For the ones it listed, the nearest jacket point was 67–69 mm away, with s between −0.2 and −5 mm.
+- In the pose, `collide` then pushes those vertices along −n of whichever jacket face is nearest. Near the neck that can be the folded collar, whose stand faces the neck. That means the throat skin is pushed out, through the shirt collar.
+- `deform_test` itself already rules such vertices out: a covered vertex must also hit the garment along its own normal.
+
+**Experiment** (`20261013T025101Z-suitD-v3f-fexp`, `/tmp/suitwork/fexp_patch.py`; reverted, not committed).
+
+- The same ray rule was added to `_rest_cover` for the body.
+- On v3f, `corr_arm_up_l`'s body shape fell from 94 vertices at up to 32.5 mm to 65 at up to 8.4 mm. Its body > jacket pushes fell from 11 to 5.
+- The right-throat poke went. The trapezius pair stayed (3.3 mm), as the table predicts; the hide trim deals with those.
+- In v3h, `corr_arm_up_l` still moves the body by up to 45.8 mm and `corr_arm_fwd_r` by up to 34.4 mm. The 2.0 mm is met, but only just.
+
+**Suggested for Track F:** require the ray hit in `_rest_cover` for the body, the rule `deform_test` already uses.
+
+### R4.5 Evidence (`data/build/lookdev/`)
+
+- `20261013T023414Z-suitD-v3f`: the collar fix alone, on main b2ab739. Its `suit_ba/` holds the v3e-vs-v3f collar pairs, and `suit_ba/v3e/` holds v3e's studio and clay views.
+- `20261013T025101Z-suitD-v3f-fexp`: v3f with Track F's cover test given the ray rule. Experiment only (R4.4).
+- `20261013T030630Z-suitD-v3g`: + the round cuffs, the undecimated shirt, the 40-column sleeves and the hide trim, on main 9ac04e9.
+- **`20261013T032928Z-suitD-v3h`**: final. It adds the rigid cuff and the forearm-rigid sleeve end, on main 82d99a7. Built with `THREADS=3 KEEP_BLEND=1 bench/m1/lookdev.sh --config bench/m1/variants/direction.json suitD-v3h`.
+
+Inside `suitD-v3h`:
+
+| dir | what |
+|---|---|
+| `suit_ba/` | before and after.<br>**The crops asked for:** `crop_tt0_collar_x3.png` (Cycles 256 spp, 3x; v3e above, v3h below), `crop_hero_bust_collar.png` and `crop_hero_bust_collar_x3.png` (the hero light, Cycles 256 spp; v3e left), `deform_arm_raise.png` (Track F's arm_raise sheets, v3e above, v3h below) with `deform_arm_raise_shoulder_top_l.png`.<br>**Full frames:** `tt0_final.png`, `hero_bust_final.png`.<br>**EEVEE studio and clay pairs:** `tt0_collar`, `bust_collar`, `collar_rf`, `collar_lf`, `neck34`, `neck34r`, `neck_front` (v3e left).<br>**Hands:** `hero_cuff.png`, `crop_hero_cuff_x2.png` (left: `trackG/final4`, the same tool at 32 spp, 800 px), `hero_ready_side.png`, `hero_ready.png` (left: main6's blend posed today, 16 spp, 720 px, as in `hero/…-main6-hands`). |
+| `suit_final/` | Cycles at 256 spp: `hero_bust.png`, `turntable_tt0.png` |
+| `suit_cuff/`, `suit_ready/` | `bench/m1/hands_render.py` (hero light): cuff, cuff_top; ready, ready_side. `suit_ready/main6/` is the before |
+| `suit_v5/`, `suit_v5_clay/` | EEVEE studio and clay views of v3h |
+| `suit_check/`, `suit_collar/`, `suit_pose/` | the suit guards |
+| `deform-suitD/` | Track F's `deform_test` (rest, knee_up, arm_raise, head_turn, walk) |
+
+### R4.6 Iteration log (run → change → verdict)
+
+The q runs are scratch builds under `/tmp/suitwork/`: no head refine, drape off. "isect" is `suit_collar`'s gated self-intersection count (the limit is 120).
+
+| run | change | verdict |
+|---|---|---|
+| q22 | v3e's defaults | reference (isect 76): the hollow and the upright stand beside the neck |
+| q24 | `fold_win_m` 4 mm + the knee | the fold lies on the band; the knee was thrown 1 cm out where the lower half is short (109) |
+| q25 | the clearance below the knee ramps up from the seam's own | fixed (79) |
+| q26 | `shirt_clear_m` 1.5 mm | kept (84) |
+| q27 | `drop_frac` 0.2 | the roll line peaks beside the neck, not in front of it (102) |
+| q28 | `patch_frac` 0.2 alone | tested alone (104); combined with q27 in q29 |
+| q29 | q27 + `patch_frac` 0.2 | one smooth diagonal from the collar point, but jacket self-intersection 68: the resample to `i_b` slid the fold and the straight end stands crossed it (110) |
+| q30 | `patch_frac` 0.25 | the hollow came back at the side (115); back to 0.2 |
+| q31 | the end columns resampled only to `i_e` | the stands no longer cross (92); a speck on the fall at the side, where fall rows 6–7 cross the knee's lower half |
+| q32 | a blend between the patch and the natural columns | no change (92); reverted |
+| q33 | the fall draped a thickness off the stand along its normal | the speck stayed (96) |
+| q34 | + the last pass that holds the fall off the stand | the speck is gone; isect 78, jacket 36 |
+| q35 | q34 as the DEFAULTS | 78 |
+| `suitD-v3f` | official build of the collar | item 1 as in R4.3. arm_raise body > shirt 3 at 3.3 mm |
+| v3f, rules cut down | `deform_test` with no morphs, with each morph alone, and with the body left out of `corr_arm_up_l` | the poking vertices and their causes, as in R4.4 |
+| `suitD-v3f-fexp` | Track F's cover test given the ray rule (experiment) | the body corrective max went from 32.5 to 8.4 mm and the throat poke went; the trapezius 3.3 mm stayed |
+| `hidewhy.py` | a replay of the hide test on v3f | the trapezius pair is 47.9 mm from the nearest visible vertex, kept only through shared faces |
+| `suitD-v3g` | + the hide trim, 48-segment cuffs, the undecimated shirt, 40-column sleeves | arm_raise 1 at 2.0 mm; the cuffs read round. knee_up shirt > jacket 1.6 mm (the cuff's thumb side, weighted to the thumb). The pose test read thousands of px: the ID bug, fixed |
+| `suitD-v3h` | + the rigid cuff and the forearm-rigid sleeve end; on main 82d99a7 | final; see R4.2 and R4.3 |
+
+### R4.7 Branch
+
+`worktree-agent-a7cee946dd031f936` contains main 82d99a7 and adds three commits:
+
+- 0af22f0: the collar beside the neck (v3f)
+- 3c032bb: the cuffs, the sleeves, the hide trim and the pose-test IDs (v3h)
+- the report commit, which changes only this file
+
+`suitD-v3h` was built from 3c032bb.
 
 ## Round 3: v3e (from the review of v3b)
 
@@ -111,7 +303,7 @@ The shirt's luminance ratio moves a little because the waistcoat's rounded edge 
 |---|---|---|
 | 1. Collar: jagged outer edge, dark tab beside the neck | **Edge fixed. Tab smaller and smooth, but still there.** The outer edge is a clean rounded curve with thickness. In the turntable, the hero bust and the 3/4 close-ups it reads as a rolled edge with a highlight along it. The steps and the hairline are gone, the collar point is clean, and the fold line above the shoulder is smooth. Seen from the front, the collar's side still shows as a dark shape beside the neck, where it lies over the trapezius on its way back. It is now a smooth, rounded collar side, not a ragged upright tab. Making it narrower would mean changing the collar's cut (the fall and the end path), which I did not attempt in this last round. | `crop_tt0_collar_x3.png`, `crop_tt0_collar.png`, `tt0_final.png`, `crop_hero_bust_collar_vest.png`, `neck34_studio.png`, `neck34_clay.png`, `neck34r_*.png`, `neck_front_*.png`, `cpoint_rx_*.png` |
 | 2. Waistcoat edge in the hero bust | **Done, subtle at full frame.** The V's edge is a rounded, pressed edge. In the neon close-up it shows a clear highlight band along the edge. In the Cycles hero bust it reads as a thin, continuous light line from under the lapel down to the top button, a little clearer than v3b's lip. The cloth is not brightened. | `crop_hero_bust_vest_edge_x3.png`, `vest_top_r_neon.png`, `vest_top_r_studio.png`, `vest_top_r_clay.png`, `hero_bust_final.png` |
-| 3. Body patch in arm_raise | **Fixed.** The armpit patch is gone from the body-only renders, and body > jacket is 0 in all five deform poses (v3b: 45.8 mm in arm_raise). The rest pose shows no holes. **One side effect, for Track F:** the small poke-through at the base of the neck, under the shirt collar's front, grew in arm_raise (v3b 1 vertex at 1.9 mm; v3c 0; v3d 6.9 mm; v3e 2 vertices at 5.1 mm). It shows as a small skin bulge at the collar's front in the arm_raise tiles. The rest geometry there is identical in all four builds, and so are the skin weights. What changes is Track F's `corr_arm_up_l` corrective: in v3b it moved the body there by 5.6 mm, and in v3e it moves the shirt by 15.3 mm and the body by 0. The corrective is baked from delta mush over the body mesh, so the body's new topology changes it. | `body_front.png`, `body_armpit.png`, `body_shoulder_front.png`, `deform_arm_raise.png`, `../deform-suitD/` |
+| 3. Body patch in arm_raise | **Fixed.** The armpit patch is gone from the body-only renders, and body > jacket is 0 in all five deform poses (v3b: 45.8 mm in arm_raise). The rest pose shows no holes. **One side effect, for Track F:** the small poke-through at the base of the neck, under the shirt collar's front, grew in arm_raise (v3b 1 vertex at 1.9 mm; v3c 0; v3d 6.9 mm; v3e 2 vertices at 5.1 mm). It shows as a small skin bulge at the collar's front in the arm_raise tiles. The rest geometry there is identical in all four builds, and so are the skin weights. What changes is Track F's `corr_arm_up_l` corrective: in v3b it moved the body there by 5.6 mm, and in v3e it moves the shirt by 15.3 mm and the body by 0 (wrong: the body moves, see R4.4). The corrective is baked from delta mush over the body mesh, so the body's new topology changes it. | `body_front.png`, `body_armpit.png`, `body_shoulder_front.png`, `deform_arm_raise.png`, `../deform-suitD/` |
 
 ### R3.4 Evidence (`data/build/lookdev/`)
 
