@@ -35,6 +35,16 @@ from .suit_build import TAU, lerp, smoothstep
 NECK = {"neck_01", "head"}
 UP = Vector((0, 0, 1))
 DEBUG = bool(__import__("os").environ.get("SUIT_NECK_DEBUG"))
+DUMP = __import__("os").environ.get("SUIT_NECK_DUMP")   # diagnosis: the jacket collar's grid as JSON
+
+
+def _dump(stage, cols, i_e):
+    if not DUMP:
+        return
+    import json
+    path = f"{DUMP}_{stage}.json"
+    with open(path, "w") as f:
+        json.dump({"i_e": i_e, "cols": [[[round(c, 5) for c in p] for p in col] for col in cols]}, f)
 
 
 def lowpass(vals, harmonics):
@@ -602,8 +612,24 @@ def build_jacket_collar(jk, nf, J, tag):
         fall[0] = p3
         cols.append([p0, p0.lerp(p1, 0.5), p1, p2] + fall)
 
+    i_e = max(2, math.ceil(end_frac * N))
+    # fair the stand and the fold along the collar (outside the end columns):
+    # each column's fold is the highest of its clearance needs, so single
+    # columns spiked out by up to 3 mm and the fold read as a sawtooth where
+    # the collar turns round the side of the neck. Height and radius 1-2-1
+    # at each column's own angle, the radius never below the column's own
+    # (the clearance), the stand's middle row back on its line
+    for _ in range(J.get("fold_fair_passes", 0)):
+        for j in (2, 3, 4):
+            pol = [nf.polar(cols[i][j]) for i in range(N + 1)]
+            for i in range(i_e - 1, N - i_e + 2):
+                z = (pol[i - 1][1] + 2 * pol[i][1] + pol[i + 1][1]) * 0.25
+                r = max(pol[i][2], (pol[i - 1][2] + 2 * pol[i][2] + pol[i + 1][2]) * 0.25)
+                cols[i][j] = nf.point(pol[i][0], z, r)
+        for i in range(i_e - 1, N - i_e + 2):
+            cols[i][1] = cols[i][0].lerp(cols[i][2], 0.5)
+
     # smooth the natural fall across columns (outside the end regions)
-    i_e = max(2, int(math.ceil(end_frac * N)))
     for _ in range(3):
         for j in range(5, 4 + NF + 1):
             co = [cols[i][j].copy() for i in range(N + 1)]
@@ -611,19 +637,23 @@ def build_jacket_collar(jk, nf, J, tag):
                 cols[i][j] = (co[i - 1] + 2 * co[i] + co[i + 1]) / 4
 
     # the front ends: a Coons patch between the end path (gorge point -> notch
-    # -> collar point), the fold curve, the natural column at i_e and an outer
-    # edge curve from the collar point to that column's edge
+    # -> collar point), the fold curve, the natural column at i_b and an outer
+    # edge curve from the collar point to that column's edge. i_b reaches past
+    # the side of the neck (patch_frac), so the outer edge is one curve from
+    # the collar point over the shoulder: a patch ending at i_e left the edge
+    # rising straight up from the point and turning out at a corner (a tab)
+    i_b = max(i_e, math.ceil(J.get("patch_frac", end_frac) * N))
     for left in (True, False):
-        idx = list(range(0, i_e + 1)) if left else list(range(N, N - i_e - 1, -1))
+        idx = list(range(0, i_b + 1)) if left else list(range(N, N - i_b - 1, -1))
         path = ends[left]
         Lc = resample_corner(path, len(path) - 2, NF)        # rows 4 .. 4 + NF
         Rc = [cols[idx[-1]][4 + j] for j in range(NF + 1)]
         T = [cols[i][4] for i in idx]
         if roll[left]:
             # the fold: up the roll line from the lapel's crest to the gorge
-            # point, then the neckline back to column i_e, by arc length; the
+            # point, then the neckline back to column i_b, by arc length; the
             # stand rows of the end columns run from their seam point to it
-            T = resample(roll[left] + T, i_e)
+            T = resample(roll[left] + T, i_b)
             for k, i in enumerate(idx[:-1]):
                 p0 = cols[i][0]
                 cols[i][1] = p0.lerp(T[k], 0.4)
@@ -632,11 +662,11 @@ def build_jacket_collar(jk, nf, J, tag):
         T[0] = Lc[0]
         Cp, E = Lc[-1], Rc[-1]
         Ep = cols[idx[-2]][4 + NF]
-        m1 = (E - Ep) * i_e * 0.6
+        m1 = (E - Ep) * i_b * 0.6
         m0 = (E - Cp)
         B = []
-        for k in range(i_e + 1):
-            t = k / i_e
+        for k in range(i_b + 1):
+            t = k / i_b
             h00, h10 = 2 * t ** 3 - 3 * t ** 2 + 1, t ** 3 - 2 * t ** 2 + t
             h01, h11 = -2 * t ** 3 + 3 * t ** 2, t ** 3 - t ** 2
             B.append(Cp * h00 + m0 * h10 + E * h01 + m1 * h11)
@@ -644,21 +674,28 @@ def build_jacket_collar(jk, nf, J, tag):
         if DEBUG and left:
             f = lambda p: f"({p.x:.3f},{p.y:.3f},{p.z:.3f})"
             print("[neck] end L: " + " ".join(f(p) for p in Lc))
-            print("[neck] end R(i_e={i_e}): " + " ".join(f(p) for p in Rc))
+            print(f"[neck] end R(i_b={i_b}): " + " ".join(f(p) for p in Rc))
             print("[neck] end T: " + " ".join(f(p) for p in T))
             print("[neck] end B: " + " ".join(f(p) for p in B))
         for k, i in enumerate(idx[:-1]):
-            u = k / i_e
+            u = k / i_b
             for j in range(NF + 1):
                 v = j / NF
                 p = (Lc[j] * (1 - u) + Rc[j] * u + T[k] * (1 - v) + B[k] * v
                      - (P00 * ((1 - u) * (1 - v)) + P10 * (u * (1 - v)) + P01 * ((1 - u) * v) + P11 * (u * v)))
                 cols[i][4 + j] = p
         notch[left] = path[-2]
+    _dump("coons", cols, i_b)
 
     # rest the fall on what is beneath it (block, lapels): outside by rest_m
     rested = 0
     for i in range(N + 1):
+        # hold_end: the end path (notch -> collar point) stays as built, a
+        # little proud of the lapel; snapped to the nearest surface, the
+        # collar point jumped 7 mm up off the lapel's rounded top edge and
+        # kinked the point
+        if J.get("hold_end") and i in (0, N):
+            continue
         for j in range(5, 4 + NF + 1):
             p = cols[i][j]
             hit = under.find_nearest(p, 0.03)
@@ -679,25 +716,32 @@ def build_jacket_collar(jk, nf, J, tag):
             elif snap > 0 and h < J.get("snap_max_m", 0.03):
                 cols[i][j] = p - n * ((h - J["rest_m"]) * snap)
                 rested += 1
+    def outside(p, trees=None):
+        """p, moved out along the ray from the neck axis to rest_m outside
+        every layer beneath (block, lapels; `trees`); (point, moved)."""
+        a, z, r = nf.polar(p)
+        d = Vector((math.cos(a), math.sin(a), 0.0))
+        o = nf.point(a, z, 0.01)
+        r_hit = None
+        for tree in trees or (under,):
+            travelled = 0.0
+            while travelled < r + 0.012:
+                h = tree.ray_cast(o + d * travelled, d, r + 0.012 - travelled)
+                if h[0] is None:
+                    break
+                travelled = (h[0] - o).length + 1e-4
+                r_hit = max(r_hit or 0.0, nf.polar(h[0])[2])
+        if r_hit is not None and r < r_hit + J["rest_m"]:
+            return nf.point(a, z, r_hit + J["rest_m"]), True
+        return p, False
+
     pushed = 0
     # and outside every layer beneath along the ray from the neck axis (the
     # nearest-point rest can pick the wrong layer where block and lapel cross)
     for i in range(N + 1):
         for j in range(5, 4 + NF + 1):
-            p = cols[i][j]
-            a, z, r = nf.polar(p)
-            d = Vector((math.cos(a), math.sin(a), 0.0))
-            o = nf.point(a, z, 0.01)
-            r_hit, travelled = None, 0.0
-            while travelled < r + 0.012:
-                h = under.ray_cast(o + d * travelled, d, r + 0.012 - travelled)
-                if h[0] is None:
-                    break
-                travelled = (h[0] - o).length + 1e-4
-                r_hit = nf.polar(h[0])[2]
-            if r_hit is not None and r < r_hit + J["rest_m"]:
-                cols[i][j] = nf.point(a, z, r_hit + J["rest_m"])
-                pushed += 1
+            cols[i][j], moved = outside(cols[i][j])
+            pushed += moved
     # the front ends' fall: the rest and the push move single points (teeth
     # along the notch and the outer edge); relax them over their neighbours,
     # then put them back outside the layers beneath
@@ -711,31 +755,112 @@ def build_jacket_collar(jk, nf, J, tag):
                     nb += [cols[i][j - 1], cols[i][j + 1]]
                 new[(i, j)] = cols[i][j] * 0.5 + sum(nb, Vector()) * (0.5 / len(nb))
         for (i, j), p in new.items():
-            a, z, r = nf.polar(p)
-            d = Vector((math.cos(a), math.sin(a), 0.0))
-            o = nf.point(a, z, 0.01)
-            r_hit, travelled = None, 0.0
-            while travelled < r + 0.012:
-                h = under.ray_cast(o + d * travelled, d, r + 0.012 - travelled)
-                if h[0] is None:
-                    break
-                travelled = (h[0] - o).length + 1e-4
-                r_hit = nf.polar(h[0])[2]
-            if r_hit is not None and r < r_hit + J["rest_m"]:
-                p = nf.point(a, z, r_hit + J["rest_m"])
-            cols[i][j] = p
+            cols[i][j] = outside(p)[0]
+    # fair the outer edge: one smooth curve from the collar point round the
+    # back. The per-column fall profiles and the end patch left it rising
+    # straight up from the collar point and turning out at a corner at the
+    # side of the neck (a tab), with single-column teeth. The edge row is
+    # smoothed (1-2-1) as angle, height and radius in the neck frame (no
+    # shrinking round the neck), the collar points held; the fall rows
+    # follow it in proportion to their distance from the fold, then go back
+    # outside the layers beneath
+    passes = J.get("edge_fair_passes", 0)
+    if passes:
+        je = 4 + NF
+        pol = [list(nf.polar(cols[i][je])) for i in range(N + 1)]
+        for i in range(1, N + 1):   # unwrap the angle along the edge
+            while pol[i][0] - pol[i - 1][0] > math.pi:
+                pol[i][0] -= TAU
+            while pol[i][0] - pol[i - 1][0] < -math.pi:
+                pol[i][0] += TAU
+        for _ in range(passes):
+            pol = [pol[0]] + [[(pol[i - 1][k] + 2 * pol[i][k] + pol[i + 1][k]) * 0.25 for k in range(3)]
+                              for i in range(1, N)] + [pol[N]]
+        # the stand (seam to fold) is beneath the fall too: the fall rows
+        # near the fold must not cross it where the edge moves
+        sv = [cols[i][j] for j in range(5) for i in range(N + 1)]
+        sp = [[j * (N + 1) + i, j * (N + 1) + i + 1, (j + 1) * (N + 1) + i + 1, (j + 1) * (N + 1) + i]
+              for j in range(4) for i in range(N)]
+        stand = BVHTree.FromPolygons(sv, sp)
+        def rest_on(q):
+            """rest_m off the nearest surface beneath, along its normal (the
+            radial push measures across a sloping shoulder, not off it)"""
+            hit = under.find_nearest(q, 0.03)
+            if hit[0] is None:
+                return q
+            bh = nf.tree.find_nearest(hit[0], 0.2)
+            out = (hit[0] - bh[0]) if bh[0] is not None else nf.radial(hit[0])
+            n = hit[1] if hit[1].dot(out) >= 0 else -hit[1]
+            h = (q - hit[0]).dot(n)
+            return q + n * (J["rest_m"] - h) if h < J["rest_m"] else q
+
+        for i in range(1, N):
+            d = nf.point(*pol[i]) - cols[i][je]
+            for j in range(5, je + 1):
+                cols[i][j] = rest_on(outside(cols[i][j] + d * ((j - 4) / NF), (under, stand))[0])
+    _dump("final", cols, i_b)
     rows = [[cols[i][j] for i in range(N + 1)] for j in range(5 + NF)]
     if DEBUG:
         for i in (0, 2, 4, 6, 9, 12):
             print(f"[neck] col {i:2d}: " + " ".join(f"({p.x:.3f},{p.y:.3f},{p.z:.3f})" for p in cols[i]))
 
-    # the edge turned under: a lip row
-    lip = []
+    je = 4 + NF
+    surf = [list(r) for r in rows]   # the collar's surface rows (seam .. outer edge)
+
+    def grid_n(i, j):
+        """The surface normal of the collar grid at (column i, row j), from
+        its own tangents: one orientation over the whole grid (a normal
+        taken toward the nearest body point flipped at single columns, and
+        the edge rolled up over the fall there instead of under it)"""
+        di = surf[j][min(i + 1, N)] - surf[j][max(i - 1, 0)]
+        dj = surf[min(j + 1, je)][i] - surf[max(j - 1, 0)][i]
+        n = di.cross(dj)
+        return n.normalized() if n.length > 1e-12 else nf.radial(surf[j][i]).normalized()
+
+    votes = 0
     for i in range(N + 1):
-        p, q = rows[-1][i], rows[-2][i]
-        a = nf.polar(p)[0]
-        lip.append(p + (q - p).normalized() * 0.003 - Vector((math.cos(a), math.sin(a), 0)) * 0.001)
-    rows.append(lip)
+        p = surf[je][i]
+        bh = nf.tree.find_nearest(p, 0.3)
+        out = (p - bh[0]) if bh[0] is not None else nf.radial(p)
+        votes += 1 if grid_n(i, je).dot(out) >= 0 else -1
+    gsign = 1.0 if votes >= 0 else -1.0
+
+    re = J.get("edge_r_m", 0.0)
+    corner = {}
+    if re:
+        # the outer edge is a rounded, pressed edge 2 * edge_r_m thick: the
+        # fall rolls over at the edge (a half round) into the under collar,
+        # which runs back under the fall (the single sheet's raw edge and a
+        # 1 mm lip read as a ragged paper edge in every portrait)
+        b90, b180, lip = [], [], []
+        for i in range(N + 1):
+            p = rows[-1][i]
+            n = grid_n(i, je) * gsign
+            # across the edge, outward, in the surface: square to the edge's
+            # own tangent (the last fall row can fold back past the edge near
+            # the collar point, which rolled the edge up into a flap)
+            di = (surf[je][min(i + 1, N)] - surf[je][max(i - 1, 0)]).normalized()
+            t = (n.cross(di) * gsign).normalized()
+            if i in (0, N):
+                # the collar point: the edge rounds the corner on the
+                # diagonal, shared with the point's own edge (below)
+                dj = (surf[je][i] - surf[je - 1][i]).normalized()
+                sd = dj.cross(n) * gsign * (-1.0 if i == 0 else 1.0)
+                t = (t + sd.normalized()).normalized()
+                corner[i == 0] = (n, t)
+            c = p - n * re
+            b90.append(c + t * re)
+            b180.append(c - n * re)
+            lip.append(c - n * re - t * J.get("under_m", 0.004))
+        rows += [b90, b180, lip]
+    else:
+        # the edge turned under: a lip row
+        lip = []
+        for i in range(N + 1):
+            p, q = rows[-1][i], rows[-2][i]
+            a = nf.polar(p)[0]
+            lip.append(p + (q - p).normalized() * 0.003 - Vector((math.cos(a), math.sin(a), 0)) * 0.001)
+        rows.append(lip)
 
     g = G.grid("collar")
     uvs = []
@@ -758,6 +883,43 @@ def build_jacket_collar(jk, nf, J, tag):
     for i in range(N + 1):
         for j in range(1, len(verts)):
             G.copy_weights(top[i], verts[j][i])
+    # the collar point's edge (notch -> collar point) rounded the same way
+    end_strips = 0
+    if re:
+        je = 4 + NF
+        for left in (True, False):
+            c0 = 0 if left else N
+            j_s = min(range(4, je + 1), key=lambda j: (verts[j][c0].co - notch[left]).length)
+            js = list(range(j_s, je + 1))
+            if len(js) < 2:
+                continue
+            band = [[], [], []]
+            for j in js:
+                v = verts[j][c0].co
+                n = grid_n(c0, j) * gsign
+                dj = (surf[min(j + 1, je)][c0] - surf[max(j - 1, 0)][c0]).normalized()
+                s = (dj.cross(n) * gsign * (-1.0 if left else 1.0)).normalized()
+                if j == je:   # the corner, as the outer edge rounds it
+                    n, s = corner[left]
+                c = v - n * re
+                band[0].append(c + s * re)
+                band[1].append(c - n * re)
+                band[2].append(c - n * re - s * J.get("under_m", 0.004))
+            ge = G.grid("collar_end_" + ("l" if left else "r"))
+            u_of = [uvs[j][c0] for j in js]
+            sgn = -1.0 if left else 1.0
+            ge.add_shared_row([verts[j][c0] for j in js], u_of)
+            for k, row in enumerate(band):
+                ge.add_row(row, [(u + sgn * 0.002 * (k + 1), v) for u, v in u_of])
+            # faces out: the first band's normal along (side + normal)
+            a0, a1, b0 = ge.rows[0][0].co, ge.rows[0][1].co, ge.rows[1][0].co
+            n0 = grid_n(c0, js[0]) * gsign
+            flip = (a1 - a0).cross(b0 - a0).dot((b0 - a0) + n0 * (2 * re)) < 0
+            ge.fill(G.uv, G.tag, tag, flip=flip)
+            for row in ge.rows[1:]:
+                for k, vv in enumerate(row):
+                    G.copy_weights(verts[js[k]][c0], vv)
+            end_strips += len(ge.faces)
     # the block / lapel beneath the fall: where it pokes through the fall
     # between the fall's vertices, press it under (it is hidden there)
     own = {v for row in verts for v in row}
@@ -786,8 +948,9 @@ def build_jacket_collar(jk, nf, J, tag):
         if -gap < h < 0.008 and lateral < 0.001:
             v.co = v.co - n * (h + gap)
             pressed += 1
-    G.mark_row(tag, g, len(verts) - 2, "edge", inside_sign=-1.0)
+    G.mark_row(tag, g, 4 + NF, "edge", inside_sign=-1.0)
     return g, {"collar_rested_verts": rested, "collar_pushed_verts": pushed, "block_pressed_verts": pressed,
+               "collar_end_strip_faces": end_strips,
                "fold_z_back": round(max(fold_z), 4),
                "notch_l": [round(x, 4) for x in notch[True]],
                "collar_point_l": [round(x, 4) for x in cpoint[True]]}
