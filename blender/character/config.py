@@ -214,11 +214,13 @@ DEFAULTS = {
             "throat_back_m": 0.055,    # neckline end behind the chin front
             "under_chin_m": 0.026,     # neckline end below the chin
             "moustache_height_m": 0.012,  # moustache top over the upper lip
-            "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare
+            "nose_clear_m": 0.004,     # above the lips, skin this far in front of them is nose: bare ...
+            "philtrum_free_m": 0.006,  # ... but only above this height over the lips (the philtrum keeps roots)
             "lips_w": 0.5,             # body vertices over this `lips` weight are vermilion: no roots
             "fade_m": 0.010,           # skin_tex.beard_depth: the skin's stubble shadow ramp past the margin
             "lip_band_m": 0.004,       # top band of the upper lip in the shell patch (no roots): moustache overhang
-            "lower_lip_root_m": 0.003,  # lip-group skin this far over the lower lip's bottom, facing forward: roots
+            "lower_lip_root_m": 0.0045,  # lip-group skin this far over the lower lip's bottom, facing forward: roots
+            "lower_lip_ny": -0.1,      # ... "facing forward": normal y under this
             "mouth_depth_m": 0.008,    # skin this far behind the lip front, inside the corners, facing back: mouth
             # Patch reaches this far past each line (cheek, neck, back,
             # moustache top): the stubble band.
@@ -227,31 +229,37 @@ DEFAULTS = {
             # Density across the line: 1 at in_m inside, line_density at the
             # line, 0 at out_m outside; stubble from stubble_in_m inside to
             # the patch edge.
-            "fade": {"in_m": 0.008, "moustache_in_m": 0.005, "out_m": 0.007, "neck_in_m": 0.014, "neck_out_m": 0.010,
+            # soft, grown-in cheek line: a long sparse outer fade; the moustache
+            # top keeps a short one (the nose is just above it)
+            "fade": {"in_m": 0.010, "moustache_in_m": 0.004, "out_m": 0.012, "moustache_out_m": 0.004,
+                     "neck_in_m": 0.014, "neck_out_m": 0.010,
                      "line_density": 0.12, "pow": 1.8, "line_length": 0.35,
                      "stubble_in_m": 0.004},
             # Edge band: from the outer fade to band_m inside the line, the
             # hero strands thin to `radius` x width and `length` x length.
-            "edge": {"band_m": 0.006, "radius": 0.55, "length": 0.7},
-            "line_wobble_m": 0.006,
+            "edge": {"band_m": 0.008, "moustache_band_m": 0.003, "radius": 0.55, "length": 0.7},
+            "line_wobble_m": 0.006, "moustache_wobble": 0.3,
+            # upper cheeks: thinner (min) and patchy for full_m inside the cheek line
+            "cheek_thin": {"full_m": 0.018, "min": 0.4, "patch": 0.6},
             "edge_smooth_iters": 6,
-            # Hair length by zone: a full, unsculpted 10-14 mm beard; the
-            # moustache covers the upper lip edge.
-            "length": {"cheek_m": 0.0125, "jaw_m": 0.0145, "chin_extra_m": 0.002,
+            # Hair length by zone: shorter on the cheeks, a hanging 2-3 cm
+            # chin; the moustache hangs over the upper lip edge.
+            "length": {"cheek_m": 0.009, "jaw_m": 0.012, "chin_extra_m": 0.012,
                        "chin_radius_m": 0.03, "soul_m": 0.012, "soul_radius_m": 0.010,
-                       "moustache_m": 0.013, "lip_overlap_m": 0.004, "under_below_mouth_m": 0.02, "neck_m": 0.0125},
-            "comb": {"cheek_back": 0.3, "chin_forward": 0.3, "soul_forward": 0.8, "under_jaw_back": 0.6,
-                     "moustache_down": 1.0, "moustache_side": 0.6, "philtrum_x_m": 0.006,
+                       "moustache_m": 0.014, "lip_overlap_m": 0.007, "philtrum_scale": 0.7, "under_below_mouth_m": 0.02, "neck_m": 0.0125},
+            "comb": {"cheek_back": 0.3, "chin_forward": 0.1, "soul_forward": 0.8, "under_jaw_back": 0.6,
+                     "moustache_down": 1.0, "moustache_side": 0.25, "philtrum_x_m": 0.006,
                      "smooth_iters": 3},
             # Strand growth (beard_groom.grow): exit angle over the skin
             # relaxing to the tip angle, yaw / curl spread, curly share.
             "groom": {"per_cm2": 360, "points": 9, "root_sink_m": 0.0005,
-                      "elev0": 38, "elev1": 4, "elev1_under": 0, "elev_sigma": 13,
-                      "elev_chin": 12,  # extra exit angle at the chin (bulk, profile)
+                      "elev0": 30, "elev1": -4, "elev1_under": 0, "elev_sigma": 13,  # lying down, not a block
+                      "elev_chin": 0,   # extra exit angle at the chin (0: the chin beard hangs)
                       "elev_soul": 25,  # ... under the lower lip (the hairs fill the sulcus)
                       "elev0_moustache": 22, "elev1_moustache": -25,
                       "yaw_sigma": 32, "curl_sigma": 14, "curl_share": 0.3,  # a little unkempt
                       "curl_radius_m": [0.008, 0.015], "curl_lift": 0.15,
+                      "yaw_moustache": 0.5, "curl_share_moustache": 0.1,
                       "len_min": 0.7, "bend_pow": 1.0,
                       "gap_m": [0.0002, 0.0004],  # clearance over the skin, root -> tip
                       "clump_base": 0.25, "clump_moustache": 0.35, "clump_chin": 0.25,
@@ -259,19 +267,19 @@ DEFAULTS = {
             "stubble": {"per_cm2": 60, "points": 3, "length_m": [0.001, 0.002],
                         "elev0": 35, "elev1": 20, "frizz": 0.3, "radius_scale": 0.8},
             # Under-coat (hero only): short hairs lying near the skin under the main mass.
-            "undercoat": {"per_cm2": 240, "length": [0.3, 0.55], "elev0": 14, "elev1": 2,
+            "undercoat": {"per_cm2": 240, "in_m": 0.012, "length": [0.3, 0.55], "elev0": 14, "elev1": 2,
                           "radius_scale": 0.9, "frizz": 0.3},
             # Tone: melanin / redness per strand (hero), with the game
             # palette interpolated by melanin (swatches, sRGB).
             # warm: a subtle brown variation (melanin 0.9 / redness 0.7
             # rendered as orange flecks).
-            "tone": {"melanin": 0.996, "redness": 0.3, "sigma": 0.015,
+            "tone": {"melanin": 0.99, "redness": 0.3, "sigma": 0.015,
                      "warm_share": 0.05, "warm": [0.96, 0.45],
                      # grey by zone: grey_share on the cheeks, more at the chin, the
                      # mouth corners (moustache ends) and the sideburns
-                     "grey_share": 0.10, "grey_chin": 0.28, "grey_corner": 0.28, "grey_side": 0.14,
+                     "grey_share": 0.10, "grey_chin": 0.30, "grey_corner": 0.30, "grey_side": 0.14,
                      "chin_grey_radius_m": 0.022, "corner_radius_m": 0.012, "corner_up_m": 0.004,
-                     "grey_extra": 0.05, "grey": [0.08, 0.0],  # silver, not yellow
+                     "grey_extra": 0.05, "grey": [0.06, 0.0],  # silver, not yellow
                      "swatches": [[0.2, "#948e86"], [0.9, "#6a4a32"], [0.98, "#3e2e23"],
                                   [1.0, "#30241b"]],
                      "value_sigma": 0.3},

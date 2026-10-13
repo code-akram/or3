@@ -88,11 +88,21 @@ def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose):
     lips, ears, head, neck_g = groups
     if w.get(ears, 0) > 0.2 or w.get(head, 0) + w.get(neck_g, 0) < 0.5:
         return -1.0, 0
-    if p.z > nose[1] and p.y < nose[0]:
+    # nose = (y, z[, z_sill]): skin in front of y and above z is nose. The
+    # optional third value lifts the test to the nose sill, so the philtrum
+    # under an overhanging nose (in front of the lips) keeps its roots.
+    if p.z > (nose[2] if len(nose) > 2 else nose[1]) and p.y < nose[0]:
         return -1.0, 0
-    ds = [(_line_dist(p, cheek, True), 0), (_line_dist(p, neck, False), 1), (back_y - p.y, 2)]
+    ds = [(_line_dist(p, neck, False), 1), (back_y - p.y, 2)]
     if p.y < cheek[0][0]:
+        # In front of the cheek line's front end (the mouth corner) the
+        # moustache top bounds the beard. The cheek line extrapolated across
+        # the philtrum sat a few mm over the lip and thinned the moustache to
+        # stubble wherever the lips sit lower or further forward (a reshaped
+        # face).
         ds.append((moustache_top - p.z, 3))
+    else:
+        ds.append((_line_dist(p, cheek, True), 0))
     return min(ds)
 
 
@@ -111,7 +121,8 @@ def region(b, frame, cfg, rng):
     wob, ph = cfg["line_wobble_m"], [rng.uniform(0, 6.3) for _ in range(3)]
     margins = (cfg["margin_m"], cfg["neck_margin_m"], cfg["back_margin_m"], cfg["moustache_margin_m"])
     moustache_top = frame.lips_max.z + cfg["moustache_height_m"]
-    nose = (frame.lips_min.y - cfg["nose_clear_m"], frame.lips_max.z)
+    nose = (frame.lips_min.y - cfg["nose_clear_m"], frame.lips_max.z,
+            frame.lips_max.z + cfg.get("philtrum_free_m", 0.0))
     dist, which = {}, {}
     for v in body.data.vertices:
         p = mw @ v.co
@@ -124,7 +135,9 @@ def region(b, frame, cfg, rng):
                 and p.y > frame.lips_min.y + cfg["mouth_depth_m"] and nrm.y > -0.2):
             d = -1.0
         if d > -1:
-            d += wob * (math.sin(p.z * 160 + ph[0]) + math.sin(p.y * 110 + ph[1])
+            # the moustache top is a short line over a ~12 mm moustache: a
+            # full-strength wobble there punches holes in it
+            d += wob * (cfg.get("moustache_wobble", 1.0) if k == 3 else 1.0) * (math.sin(p.z * 160 + ph[0]) + math.sin(p.y * 110 + ph[1])
                         + math.sin((p.x + p.z) * 260 + ph[2]) + 0.6 * math.sin((p.y - p.x) * 530 + ph[0])) / 3.6
         dist[v.index] = d
         which[v.index] = k
@@ -137,7 +150,7 @@ def region(b, frame, cfg, rng):
     r3 = mw.to_3x3()
     low_band = set(i for i in on_lips
                    if (mw @ body.data.vertices[i].co).z < frame.lips_min.z + cfg["lower_lip_root_m"]
-                   and (r3 @ body.data.vertices[i].normal).normalized().y < -0.3)
+                   and (r3 @ body.data.vertices[i].normal).normalized().y < cfg.get("lower_lip_ny", -0.3))
     on_lips -= low_band
     keep = set(i for i, d in dist.items() if d > -margins[which[i]] and i not in on_lips)
     # The top band of the upper lip joins the patch with no roots, so the
@@ -173,7 +186,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
     head_g = frame.body.vertex_groups["head"].index
     neck_g = frame.body.vertex_groups["neck_01"].index
     out = {k: {} for k in ("density", "stubble", "length_m", "comb", "grey", "neckw",
-                           "moustache", "under", "chin", "soul", "edge")}
+                           "moustache", "under", "chin", "soul", "edge", "depth", "line")}
+    ct = cfg.get("cheek_thin")
     eb = cfg.get("edge", {}).get("band_m", 0.0)
     down = Vector((0, 0, -1))
     for v in bm.verts:
@@ -185,6 +199,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
         if which == 3:  # the moustache is only ~12 mm tall: a shorter ramp fills it
             fin = fd.get("moustache_in_m", fin)
         fout = fd["neck_out_m"] if which == 1 else fd["out_m"]
+        if which == 3:
+            fout = fd.get("moustache_out_m", fout)
         if d >= 0:
             x = smoothstep(0, fin, d)
             dens = fd["line_density"] + (1 - fd["line_density"]) * x ** fd["pow"]
@@ -192,10 +208,20 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
         else:
             dens = fd["line_density"] * smoothstep(-fout, 0, d)
             lenf = fd["line_length"]
+        if ct and which == 0:
+            # Upper cheeks: thinner and patchy for cheek_thin.full_m inside
+            # the cheek line, so it grows in instead of ending in an edge.
+            u = smoothstep(0, ct["full_m"], d)
+            pn = 0.5 + 0.5 * (math.sin(p.x * 410 + 1.3) * math.sin(p.z * 370 + 0.4)
+                              + 0.5 * math.sin((p.y + p.z) * 690 + 2.1)) / 1.5
+            dens *= (ct["min"] + (1 - ct["min"]) * u) * (1 - ct["patch"] * (1 - u) * pn)
         out["density"][v] = 0.0 if bare[v] else dens
+        out["depth"][v] = d
+        out["line"][v] = float(which)
         # Edge band (moustache top, cheek line, neckline): 0 at the outer
         # fade, 1 band_m inside the line; the strands there are finer.
-        out["edge"][v] = smoothstep(-fout, eb, d) if eb > 0 else 1.0
+        ebv = cfg.get("edge", {}).get("moustache_band_m", eb) if which == 3 else eb
+        out["edge"][v] = smoothstep(-fout, ebv, d) if ebv > 0 else 1.0
         # Stubble: a band from just inside the line to the patch edge.
         m = margins[which]
         st = smoothstep(-m, -m * 0.35, d) * (1 - smoothstep(fd["stubble_in_m"], fd["stubble_in_m"] * 2, d))
@@ -220,10 +246,14 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
             L = max(L, ln["soul_m"] * near_soul + L * (1 - near_soul))
             if under:
                 L = min(L, ln["neck_m"] + ln["chin_extra_m"] * near_chin * 0.6)
-        out["length_m"][v] = max(L * (1.0 if moustache else lenf), 0.002)
         side = math.copysign(1.0, p.x - c.x)
+        phil = min(abs(p.x - c.x) / cb["philtrum_x_m"], 1.0)
         if moustache:
-            phil = min(abs(p.x - c.x) / cb["philtrum_x_m"], 1.0)
+            # shorter in the philtrum groove (the hairs there comb straight down)
+            pl = ln.get("philtrum_scale", 1.0)
+            L *= pl + (1 - pl) * phil
+        out["length_m"][v] = max(L * (1.0 if moustache else lenf), 0.002)
+        if moustache:
             g = Vector((side * phil * cb["moustache_side"], 0, 0)) + down * cb["moustache_down"]
         elif under:
             g = down + Vector((0, cb["under_jaw_back"], 0))
@@ -276,8 +306,10 @@ def grow_beard(roots, n, f, g, rng, frame):
     e1 = np.where(must, deg(g["elev1_moustache"]), np.where(under, deg(g["elev1_under"]), deg(g["elev1"])))
     e1 = e1 + rng.normal(0, deg(g["elev_sigma"]), m)
     yaw = rng.normal(0, deg(g["yaw_sigma"]), m)
+    # the moustache hangs: less sideways spread, so its hairs drop over the lip
+    yaw = np.where(must, yaw * g.get("yaw_moustache", 1.0), yaw)
     L = f["length_m"] * rng.uniform(g["len_min"], 1.0, m)
-    curly = rng.random(m) < g["curl_share"]
+    curly = rng.random(m) < np.where(must, g.get("curl_share_moustache", g["curl_share"]), g["curl_share"])
     R = rng.uniform(*g["curl_radius_m"], m)
     curl = np.where(curly, rng.choice([-1, 1], m) * L / R, rng.normal(0, deg(g["curl_sigma"]), m))
     pts = beard_groom.grow(roots, n, f["comb"], L, e0, e1, yaw, curl, g["points"], g["bend_pow"])
@@ -334,7 +366,12 @@ def build(b, frame, cfg):
     under = None
     if uc:
         urng = np.random.default_rng(cfg["seed"] + 201)
-        upos, un, uf = beard_groom.sample_roots(co, nrm, tris, F, uc["per_cm2"] * 1e4, urng)
+        # the under-coat stays well inside the cheek line and neckline (it
+        # would turn a soft edge into a solid one); the moustache keeps it
+        t_ = np.clip(F["depth"] / uc.get("in_m", 1e-6), 0, 1)
+        F["udens"] = F["density"] * np.where(F["line"] > 2.5, 1.0, t_ * t_ * (3 - 2 * t_))
+        upos, un, uf = beard_groom.sample_roots(co, nrm, tris, F, uc["per_cm2"] * 1e4, urng,
+                                                density_key="udens")
         upos = upos - un * g["root_sink_m"]
         ue = np.clip(uf["edge"], 0, 1)
         uf["length_m"] = uf["length_m"] * urng.uniform(*uc["length"], len(upos)) * \
