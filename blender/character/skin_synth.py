@@ -438,6 +438,12 @@ def synth_head(m, c, cl, cr):
     tint(crease, (0.90, 0.88, 0.88))                                     # dry creases darker
     border = gauss(lips - 0.25, 0.12) * (1 - lw) * smoothstep(-0.075, -0.068, h)
     tint(border * c["lip_border"], (1.04, 1.03, 1.02))
+    # expression lines in the colour too (forehead, frown, crow's feet,
+    # nasolabial): under even light the relief alone vanishes and the forehead
+    # reads as a blank slab; the groove floor is a touch darker and warmer
+    if c["line_albedo"] > 0:
+        groove_d = np.clip(-lines / (c["line_albedo_ref_mm"] * MM), 0, 1) * (1 - lips) * eyes_clear
+        tint(groove_d * c["line_albedo"], (0.80, 0.74, 0.72))
     # freckles and small blemishes: faint, sparse (no single eye-catching mark)
     frk = smoothstep(c["freckle_thr"], c["freckle_thr"] + 0.03, m.speck) * (0.5 * R["forehead"] + R["cheek"] + 0.8 * R["nose"] + 0.3 * R["temple"])
     tint(frk * c["freckles"], (0.88, 0.80, 0.76))
@@ -611,6 +617,7 @@ DEFAULT_HEAD = {
     "forehead_tint": (1.03, 1.02, 0.91),
     "crepe_mm": 0.02, "crepe_period": 0.0008,
     "cavity_scale": 0.0006, "cavity_albedo": 0.03,
+    "line_albedo": 0.0, "line_albedo_ref_mm": 0.3,   # expression lines darken the albedo (amount at ref depth); 0 = off
     "plane_paint": 0.06, "ao_in_albedo": 0.10,
     "rough": 0.47, "rough_tzone": 0.37, "rough_beard": 0.58, "rough_ears": 0.48, "rough_lips": 0.45,
 }
