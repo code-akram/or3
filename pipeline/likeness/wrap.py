@@ -15,8 +15,9 @@ Steps:
      target surface, each displacement field Laplacian-smoothed over the base mesh before it is
      applied (non-rigid ICP); ears, lips' inner rows and the eye sockets follow by smoothing;
   4. helpers: eye, teeth and tongue helpers move rigidly with the field at their centroids (eyes
-     stay spheres); hair, eyelash helpers and joint cubes take the field per vertex (inverse-
-     distance from the nearest skin vertices);
+     stay spheres), and the skin around each eyeball (the lids) moves with it (eye cores); hair,
+     eyelash helpers and joint cubes take the field per vertex (inverse-distance from the nearest
+     skin vertices);
   5. optional left/right symmetrisation; a smooth fade to zero from the jaw to the neck.
 
     python -I wrap.py --base base.npz --base-embedding emb.npz --target fit.obj \
@@ -200,6 +201,11 @@ def head_weight(base, co, neck_top, neck_bottom):
     return w
 
 
+def smoothstep(x, a, b):
+    t = np.clip((x - a) / (b - a), 0, 1)
+    return t * t * (3 - 2 * t)
+
+
 def mirror_map(co, tol=1e-4):
     tree = cKDTree(co)
     d, j = tree.query(co * np.array([-1, 1, 1]))
@@ -243,7 +249,7 @@ def wrap(base, lm_base, lm_target, TV, TF, trusted_tv=None, a=None):
         eye_y = 0.5 * (base.eye_l[1] + base.eye_r[1])
         cran = co[base.skin & (base.group("scalp") > 0.5) & (co[:, 1] - eye_y > a.hold_cranium_dy)]
         anchors = np.r_[anchors, cran[::max(1, len(cran) // 200)]]
-        notes["cranium_anchors"] = int(len(cran[::max(1, len(cran) // 200)]))
+        notes["cranium_anchors"] = len(cran[::max(1, len(cran) // 200)])
     X = np.r_[lm_base, anchors]
     Y = np.r_[lt - lm_base, np.zeros_like(anchors)]
     rbf = RBFInterpolator(X, Y, kernel="thin_plate_spline", smoothing=a.rbf_smoothing, degree=1)
@@ -285,19 +291,37 @@ def wrap(base, lm_base, lm_target, TV, TF, trusted_tv=None, a=None):
         cur[region] = cur[region] + step * w_head[region, None] * disp[region]
         notes[f"iter{it}_matched"] = int(ok.sum())
         notes[f"iter{it}_median_dist_mm"] = float(np.median(d[ok]) * 1000) if ok.any() else None
-    # 4. helpers
+    # 4. helpers. Rigid ones move with the field at their centroids. Then the eye cores: the target's
+    # lid margins border its (distrusted) eyeballs, so matches there are rejected as rim matches and
+    # the field at the base's lid margins is only extrapolated, which lifts the lids off the eye
+    # (a gap under the lower lid, exposed sclera at the outer corner). Skin within --eye-core-mm of
+    # an eyeball's surface takes that eyeball's rigid move, fading to the fitted field over
+    # --eye-fade-mm, so the lids keep their fit on the eye (lid shape is a separate edit).
     delta = cur - co
     delta[~region] = 0
     skin_idx = np.where(base.skin & region)[0]
-    for g in FIELD_HELPERS:
-        m = (base.group(g) > 0) & base.helper
-        if m.any():
-            delta[m] = idw(co[skin_idx], delta[skin_idx], co[m]) * w_head[m, None]
+    rigid = {}
     for g in RIGID_HELPERS:
         m = (base.group(g) > 0) & base.helper
         if m.any():
             c = co[m].mean(0, keepdims=True)
-            delta[m] = idw(co[skin_idx], delta[skin_idx], c, k=24)[0] * w_head[m].mean()
+            rigid[g] = (m, idw(co[skin_idx], delta[skin_idx], c, k=24)[0] * w_head[m].mean())
+    if a.eye_core_mm is not None:
+        for g in ("helper-l-eye", "helper-r-eye"):
+            if g in rigid:
+                m, mv = rigid[g]
+                c = co[m].mean(0)
+                s = np.linalg.norm(co - c, axis=1) - np.median(np.linalg.norm(co[m] - c, axis=1))
+                w = 1 - smoothstep(s, a.eye_core_mm / 1000.0, (a.eye_core_mm + a.eye_fade_mm) / 1000.0)
+                w *= base.skin & region
+                delta += w[:, None] * (mv - delta)
+                notes[f"eye_core_{g}_verts"] = int((w > 0).sum())
+    for g in FIELD_HELPERS:
+        m = (base.group(g) > 0) & base.helper
+        if m.any():
+            delta[m] = idw(co[skin_idx], delta[skin_idx], co[m]) * w_head[m, None]
+    for m, mv in rigid.values():
+        delta[m] = mv
     # 5. symmetrise
     if a.symmetrise:
         mm = mirror_map(co)
@@ -384,6 +408,10 @@ def main(argv=None):
     ap.add_argument("--hold-cranium-dy", type=float, default=0.05,
                     help="scalp vertices this far behind the eye line (m) anchor the coarse field at zero")
     ap.add_argument("--no-hold-cranium", dest="hold_cranium_dy", action="store_const", const=None)
+    ap.add_argument("--eye-core-mm", type=float, default=1.5,
+                    help="skin this close to an eyeball's surface (mm) moves rigidly with the eyeball")
+    ap.add_argument("--eye-fade-mm", type=float, default=8.0, help="fade from the eye core to the fitted field (mm)")
+    ap.add_argument("--no-eye-core", dest="eye_core_mm", action="store_const", const=None)
     ap.add_argument("--iters", type=int, default=5)
     ap.add_argument("--smooth", type=int, default=6)
     ap.add_argument("--step", type=float, default=0.8)
