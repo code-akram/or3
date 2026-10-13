@@ -16,6 +16,7 @@ Writes DIR/stage.json (per-shot render seconds, samples, pose logs).
 import argparse
 import json
 import os
+import resource
 import sys
 import time
 
@@ -29,6 +30,12 @@ from hero import poses, rig, sets, shots, wet  # noqa: E402
 
 TRANSIENT = ("hero_rig", "tt_rig", "tt_cyc", "hero_ground", "hero_haze", "hero_cams", "set_rain", "cal_cards",
              "hero_wet")
+
+
+def peak_mb():
+    """The process's peak resident memory so far, MB (monotonic: a shot's
+    value is the peak up to and including that shot)."""
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0)
 
 
 def clear_transient():
@@ -68,9 +75,10 @@ def render_crop(ch, name, spec, cam, out_dir, size=0.5):
         r.resolution_percentage = pct
     secs = round(time.perf_counter() - t, 1)
     w, h = round(r.resolution_x * size), round(r.resolution_y * size)
-    print(f"[stage] {name}_crop: {secs} s ({w}x{h} at 100 %)", flush=True)
+    mb = peak_mb()
+    print(f"[stage] {name}_crop: {secs} s ({w}x{h} at 100 %), peak {mb} MB", flush=True)
     return {"shot": name + "_crop", "seconds": secs, "crop_of": name, "res": [w, h], "pct": 100,
-            "samples": sc.cycles.samples}
+            "samples": sc.cycles.samples, "peak_mb": mb}
 
 
 def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
@@ -117,8 +125,9 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
     t = time.perf_counter()
     bpy.ops.render.render(write_still=True)
     secs = round(time.perf_counter() - t, 1)
-    print(f"[stage] {name}: {secs} s ({settings['samples']} spp, {res[0]}x{res[1]} @ {settings['pct']} %)",
-          flush=True)
+    mb = peak_mb()
+    print(f"[stage] {name}: {secs} s ({settings['samples']} spp, {res[0]}x{res[1]} @ {settings['pct']} %), "
+          f"peak {mb} MB", flush=True)
     extra = []
     if crop:
         c = render_crop(ch, name, spec, cam, out_dir)
@@ -127,7 +136,7 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
     return [{"shot": name, "seconds": secs, "exposure": rig.HERO_EXPOSURE + spec.get("ev", 0.0),
             "cam": spec["cam"], "pose": spec["pose"], "pose_log": ch.pose_log, "rain": n_rain,
             "beads": n_beads, "wet_hair": bool(spec.get("rain")) and wet_hair, "eyes_turned_deg": eyes,
-            "haze": spec.get("haze", 0.0), **settings}] + extra
+            "haze": spec.get("haze", 0.0), "peak_mb": mb, **settings}] + extra
 
 
 def render_turntable(ch, quality, out_dir, views, poses_, passes, recs=None, save=None):
@@ -167,8 +176,9 @@ def render_turntable(ch, quality, out_dir, views, poses_, passes, recs=None, sav
                 if restore:
                     restore()
                 recs.append({"file": "turntable/" + tag + ".png", "pose": pose, "view": view, "pass": kind,
-                             "seconds": secs, "samples": bpy.context.scene.cycles.samples, "pct": st["pct"]})
-                print(f"[stage] turntable {tag}: {secs} s", flush=True)
+                             "seconds": secs, "samples": bpy.context.scene.cycles.samples, "pct": st["pct"],
+                             "peak_mb": peak_mb()})
+                print(f"[stage] turntable {tag}: {secs} s, peak {peak_mb()} MB", flush=True)
                 if save:
                     save()
     for o, hid in hidden:
@@ -230,6 +240,16 @@ def main(argv):
            "skin_sss_added": skin_sss(ch) if a.skin_sss == "auto" else [],
            "shots": [], "turntable": []}
     names = shots.ORDER if a.shots == "all" else ([] if a.shots == "none" else a.shots.split(","))
+    # a second pass into an existing run dir (hero.sh --into, e.g. the
+    # turntable at a different thread count): keep the earlier records that
+    # this pass doesn't redo
+    prior_path = os.path.join(out, "stage.json")
+    prior = json.load(open(prior_path)) if os.path.exists(prior_path) else None
+    if prior:
+        rec["shots"] = [r for r in prior.get("shots", []) if r["shot"] not in names
+                        and r.get("crop_of") not in names]
+        rec["turntable"] = list(prior.get("turntable", []))
+        rec["passes"] = prior.get("passes") or [{k: prior.get(k) for k in ("threads", "total_s", "peak_mb")}]
     if names and a.set_kind == "alley":
         t = time.perf_counter()
         sets.alley()
@@ -246,6 +266,17 @@ def main(argv):
         render_turntable(ch, a.quality, out, a.tt_views.split(","), a.tt_poses.split(","),
                          a.tt_passes.split(","), recs=rec["turntable"], save=save)
     rec["total_s"] = round(time.perf_counter() - t0, 1)
+    rec["peak_mb"] = peak_mb()
+    if prior:
+        seen, tt = set(), []
+        for r in reversed(rec["turntable"]):      # a redone view replaces the earlier record
+            if r["file"] not in seen:
+                seen.add(r["file"])
+                tt.append(r)
+        rec["turntable"] = tt[::-1]
+        rec["passes"].append({"threads": rec["threads"], "total_s": rec["total_s"], "peak_mb": rec["peak_mb"]})
+        rec["total_s"] = round(sum(x.get("total_s") or 0 for x in rec["passes"]), 1)
+        rec["peak_mb"] = max(x.get("peak_mb") or 0 for x in rec["passes"])
     with open(os.path.join(out, "stage.json"), "w") as f:
         json.dump(rec, f, indent=1)
 

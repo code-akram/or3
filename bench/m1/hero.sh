@@ -19,6 +19,8 @@
 #     --paint F          painterly A/B strength (default 0.6; 0 = off)
 #     --crop LIST|close  also render a 100 % crop (half the frame each way) around the
 #                        eye / focus point of these shots ('close' = portrait,profile,hands,eye)
+#     --into RUN         add to an existing run dir (stage.json merged; e.g. the turntable
+#                        at another thread count)
 #     --wb K             grade white point in K (default: grade.py GRADE wb_kelvin, 3900; 0 = off;
 #                        with --regrade pass it as WB=K in the environment)
 #   bench/m1/hero.sh --regrade <run dir>     re-grade the EXRs and redraw the sheet
@@ -68,6 +70,7 @@ while [[ $# -gt 2 ]]; do
     --paint)   PAINT="$2"; shift 2 ;;
     --crop)    CROP="$2"; shift 2 ;;
     --wb)      export WB="$2"; shift 2 ;;
+    --into)    INTO="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -78,12 +81,13 @@ LABEL="${2:?label}"
 THREADS="${THREADS:-$([[ $QUALITY == final || $QUALITY == max ]] && echo 16 || echo 8)}"
 
 RUN="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
+[[ -n "${INTO:-}" ]] && RUN="$(cd "$INTO" && pwd)"   # add to an existing run (stage.json is merged)
 mkdir -p "$RUN"
 echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 T0=$(date +%s)
 "${BL[@]}" -t "$THREADS" --python "$REPO/blender/hero/stage.py" -- --in "$IN" --out "$RUN" \
   --quality "$QUALITY" --shots "$SHOTS" --set "$SET" --crop "$CROP" "${PCT[@]}" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
-  > "$RUN/stage.log" 2>&1 || STAGE_FAIL=1
+  >> "$RUN/stage.log" 2>&1 || STAGE_FAIL=1
 grep -E '^\[stage\]' "$RUN/stage.log" || true
 # grade and draw whatever was rendered, even after a failure or a kill
 [[ -f "$RUN/stage.json" ]] && grade_and_sheet "$RUN" "$PAINT"
