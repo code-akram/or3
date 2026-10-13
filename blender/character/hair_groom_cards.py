@@ -55,8 +55,13 @@ CARDS = {
     "flyaways": {"count": 40, "start": 0.35, "halfwidth_m": 0.0012},
     # One lock card per front fall (all its strands) under its sub-clump
     # cards, so a fall reads as a lock, not 2-3 thin strips.
-    "front_lock": {"width_pct": 95, "pad_m": 0.002, "inset_m": 0.0015, "cells": [6, 7]},
+    "front_lock": {"width_pct": 85, "pad_m": 0.0015, "inset_m": 0.0015, "cells": [6, 7],
+                   "max_halfwidth_m": 0.007},
     "ear_margin_m": 0.004, "ear_lateral_m": 0.035,   # cards whose path crosses an ear are dropped
+    # "box": card edges in the ear's box out to ear_lateral_m (tucked styles: nothing
+    # should hang over the ear); "ellipsoid": only a centreline inside the ear (hair
+    # draping over the ear is allowed); None: no test.
+    "ear_test": "box",
     "layer_shade": {"under": 0.8, "mid": 0.82, "top": 1.0, "front": 0.9, "fly": 0.85},
     "root_dark": 0.35, "root_v": 0.3, "lock_sigma": 0.15,
     # Cards rooted within `near_m` of the (recessed) hairline: little root
@@ -564,6 +569,15 @@ def build(b, frame, ccfg, g):
         tris[layer] = tris.get(layer, 0) + t
 
     def through_ear(p, start=2):
+        if cfg["ear_test"] is None:
+            return False
+        if cfg["ear_test"] == "ellipsoid":
+            C = p["C"][start:]
+            for ec, er in frame.ears:
+                q = (C - np.array(ec)) / (np.array(er) + cfg["ear_margin_m"])
+                if (np.linalg.norm(q, axis=1) < 1.0).any():
+                    return True
+            return False
         # The centreline and both card edges.
         c0, hw0 = p["C"][start:], p["hw"][start:, None]
         C = np.concatenate([c0, c0 + p["B"][start:] * hw0, c0 - p["B"][start:] * hw0])
@@ -593,7 +607,8 @@ def build(b, frame, ccfg, g):
         members = np.where((prim == pc) & (kind == 2))[0]
         if len(members) < 10:
             continue
-        p = clump_profile(frame, E, members, cloth_gap, fl["width_pct"], fl["pad_m"], cfg["min_halfwidth_m"])
+        p = clump_profile(frame, E, members, cloth_gap, fl["width_pct"], fl["pad_m"], cfg["min_halfwidth_m"],
+                          fl["max_halfwidth_m"])
         p["C"] = p["C"] - p["N"] * fl["inset_m"]
         p.update(members=members, kind="front", layer="front", hang=H[members].mean(0))
         count("front_lock", add_card(p, int(rng.choice(fl["cells"])), "front"))

@@ -7,7 +7,7 @@ nothing to metrics.json.
     blender -b -t 4 --factory-startup --python bench/m1/hair_inspect.py -- \
         RUN_DIR [--out DIR] [--res 1024] [--source glb|blend] \
         [--rig studio|hero|turntable] [--engine eevee|cycles] [--samples N] \
-        [--views a,b,c] [--tag NAME]
+        [--views a,b,c] [--tag NAME] [--hide-obj a,b] [--hide-mat NAME]
 
 --source blend needs RUN_DIR/character.blend (KEEP_BLEND=1): the card hair is
 hidden and the groom shown. Writes <out>/<tag><view>.png and
@@ -47,6 +47,7 @@ ENGINE = opt("--engine", "cycles" if SOURCE == "blend" else "eevee")
 SAMPLES = int(opt("--samples", "128" if ENGINE == "cycles" else "32"))
 TAG = opt("--tag", "")
 HIDE_MAT = opt("--hide-mat", "")  # debug: a material name made fully transparent
+HIDE_OBJ = [n for n in opt("--hide-obj", "").split(",") if n]  # objects hidden from the render
 # name: (azimuth deg from the character's front, elevation deg, frame height m, lens mm, anchor)
 ALL = {"front": (0, 0, 0.34, 85, "head"), "closeup": (25, 0, 0.34, 85, "head"),
        "side": (90, 0, 0.34, 85, "head"), "back34": (140, 0, 0.40, 85, "head"),
@@ -170,6 +171,9 @@ def main():
         for l in list(p.inputs["Alpha"].links):
             nt.links.remove(l)
         p.inputs["Alpha"].default_value = 0.0
+    for name in HIDE_OBJ:
+        if name in bpy.data.objects:
+            bpy.data.objects[name].hide_render = True
     rig = ch = None
     if RIG in ("hero", "turntable"):
         from hero import rig
