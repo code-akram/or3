@@ -128,7 +128,7 @@ DEFAULTS = {
         "buttons": 5,
         "margin_m": 0.05,       # front panel reaches this far outside the jacket's V
         "columns": 48, "row_m": 0.015,
-        # the V's edge: a pressed, rounded edge edge_m thick (a half round),
+        # the V's edge: a pressed, rounded edge (a quarter round of radius edge_m / 2),
         # the front flat to edge_press_m from it, so a thin highlight line
         # runs down the V in the lapels' shadow (the cloth is not brightened)
         "edge_m": 0.0025, "edge_press_m": 0.002,

@@ -63,7 +63,7 @@ class Inner:
         """Two mirrored front panels (left, right) from the centre/V edge out to
         half_at(z) in x, lofted over the torso slices at `offset`. The V edge
         is where half_at's inner bound starts: inner(z). round_edge (with a
-        lip): the V edge is a pressed, rounded edge, a half round `lip` thick,
+        lip): the V edge is a pressed, rounded edge, a quarter round of radius lip/2,
         the front flat to round_edge from it. Returns the grids."""
         grids = []
         for left in (True, False):
@@ -87,10 +87,13 @@ class Inner:
                     pts.append(p)
                     uvs.append((uv0 + (0.4 * i / cols if left else 0.4 * (1 - i / cols)) , z - z_rows[0]))
                 if lip and round_edge:
-                    # the V edge rolls over in a half round (cloth thickness)
-                    # into the lip: a thin highlight line along the edge that
+                    # the V edge rolls over in a quarter round (cloth
+                    # thickness): a thin highlight line along the edge that
                     # reads in the lapels' shadow, where the flat front is
-                    # black on the jacket's black
+                    # black on the jacket's black. Not a half round turned
+                    # under: its back faces looked backwards, and the deform
+                    # rig's rest tuck read them as pierced through the lapel
+                    # and sank them 3 cm forward (a spike beside the tie)
                     p0, p1 = pts[0], pts[1]
                     n = Vector((math.cos(a_in), math.sin(a_in), 0.0))
                     e = (p0 - p1) - n * (p0 - p1).dot(n)
@@ -98,11 +101,11 @@ class Inner:
                     rr = 0.5 * lip
                     c = p0 - n * rr
                     ring = [c + n * (rr * math.cos(th)) + e * (rr * math.sin(th))
-                            for th in (math.pi, 2 * math.pi / 3, math.pi / 3)]
+                            for th in (math.pi / 2, math.pi / 4)]
                     pts[1:1] = [p0 - e * round_edge]
                     uvs[1:1] = [(uvs[0][0] + 0.002 * s, uvs[0][1])]
                     pts[0:0] = ring
-                    uvs[0:0] = [(uvs[0][0] - 0.0007 * s * (3 - k), uvs[0][1]) for k in range(3)]
+                    uvs[0:0] = [(uvs[0][0] - 0.0007 * s * (2 - k), uvs[0][1]) for k in range(2)]
                 elif lip:
                     # an inner lip column at the V/centre edge (cloth thickness)
                     p0, p1 = pts[0], pts[1]
@@ -113,7 +116,7 @@ class Inner:
             g.fill(G.uv, G.tag, tag, flip=not left)
             grids.append(g)
             if marks:
-                c0 = (3 if round_edge else 1) if lip else 0
+                c0 = (2 if round_edge else 1) if lip else 0
                 G.mark_column(tag, g, c0, "edge", inside_sign=1.0 if left else -1.0)
                 G.mark_row(tag, g, 0, "edge", cols=range(c0, len(g.rows[0])), inside_sign=1.0)
         return grids
