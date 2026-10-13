@@ -46,9 +46,10 @@ SHOTS = {
                             "rim": (NEON["teal"], 2.5, (0.3, 1.5), 140.0, 15.0, 1.4),
                             "kicker": (NEON["magenta"], 0.35, (0.3, 1.2), -135.0, 20.0, 1.6)},
                     ev=0.4),
-    # 4. The draw: 35 mm 3/4 full body, camera at 1.2 m, high-ready; a hard
+    # 4. The draw: 35 mm full body, camera at 1.2 m near the eye-target line,
+    # bladed high-ready (the torso reads ~35 deg off the camera axis); a hard
     # 4,300 K source 0.2 m off the ground, low right (a headlight), magenta top.
-    "draw": dict(cam="lens=35,az=35,h=1.2,aim=body,frame=2.5,f=5.6", pose="ready", res=LAND, shift=0.0,
+    "draw": dict(cam="lens=35,az=5,h=1.2,aim=body,frame=2.5,f=5.6", pose="ready", res=LAND, shift=0.0,
                  flag=("eye",),
                  haze=0.012, rain=1600,
                  lights={"key": (4300, 1.0, (0.18, 0.12), -50.0, -22.0, 3.0), "wrap": None,

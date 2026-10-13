@@ -71,7 +71,7 @@ blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig
 | portrait (§5 #1) | 85 mm, f/2 on the near cornea, head and shoulders (0.42 m frame), ¾ (az 30), eyes on the upper third | stand (F `hero`), eyes to camera | base rig, rims 2.2 / 1.2, drizzle (700 streaks), haze 0.008, wet hair tips, 35 water beads per shoulder |
 | sign (#2), 1152x2048 poster | 50 mm f/4, full body, camera at 1.1 m | stand (F `hero`: left hand at the jacket button) | magenta key 1.2 x 0.4 m above-right 1.3, teal across the street 0.5, sodium 2,000 K 0.3, heavy rain (2,200), puddles |
 | profile (#3) | 100 mm f/2.8, bust profile | stand, head straight, chin 2–3° down | amber key 0.3, teal rim 2.5 from beyond the face, magenta kicker 0.35, wet tips, beads |
-| draw (#4) | 35 mm f/5.6, ¾ full body, camera at 1.2 m | ready (F `high_ready`, empty hands) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
+| draw (#4) | 35 mm f/5.6, full body, camera at 1.2 m near the eye-target line (az 5), so the bladed torso reads about 35° off the camera axis | ready (bladed `high_ready`, G's two-hand grip, empty hands) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
 | hands (#5), 1152x2048 poster | 100 mm f/5.6 from 6 m, camera at 0.8 m: from the cuff to the floor, so the shoe and trouser break are in frame; focus on the cuff | cuff (F `hero` body, E's arms: the right hand pinches the left shirt cuff) | key 0.8 |
 | eye (#6) | 135 mm at 0.73 m, f/4 (about 7 mm in focus) on the near cornea, eyes and brow | stand, gaze 5° off camera | base (skin-direction) key, eye light 0.3 |
 | bust | 50 mm f/2.8, ¾ | stand, eyes to camera | base rig + rims, wet tips, beads |
@@ -114,11 +114,20 @@ The shot list follows direction §5, plus the brief's bust, back and walk shots.
 
 ### Poses (`poses.py`) and Track F's runtime
 
-- `stand`, `ready` and `ready_low` are Track F's canonical `hero`, `high_ready` and `low_ready` (`blender/character/deform_poses.POSES`). `stand_profile` is F's `hero` with the head straight ahead and the chin 2–3° down. Every other deform_poses name works too, as does `f:<name>` for one shadowed by an E pose (`f:walk`).
+- `stand` and `ready_low` are Track F's canonical `hero` and `low_ready` (`blender/character/deform_poses.POSES`). `ready` is F/G's `high_ready`, **bladed** by `poses.bladed()` (see below). `stand_profile` is F's `hero` with the head straight ahead and the chin 2–3° down. Every other deform_poses name works too, as does `f:<name>` for one shadowed by an E pose (`f:walk`).
 - E's own solver poses stay available as `stand_e`, `ready_e`, `ready_low_e` and `walk`. F only has a walk as a deformation test pose, so the hero `walk` (¾ mid-stride, heel contact, push-off foot) is still E's.
 - **Every pose runs F's deformation runtime afterwards** (`poses.deform`, called by `poses.apply`, which `rig.pose` and `stage.py` both use). It sets the helper bones (twist split, deltoid and hip helpers, jacket-skirt follow) and the corrective shape keys from the armature's `deform_rules` property, or from `character.rig.json` next to the .blend. Shape keys that are not correctives keep their values; the reference runtime zeroes every key it doesn't drive. Builds from before F merged carry no rules, and the pose log says "no rules (helpers at bind)".
 - The log of each pose (source, active correctives with their weights) goes to `stage.json` / `rig.json`.
 - `bench/m1/deform_hero.py` (Track F's wrapper) is now redundant: it applies the same runtime a second time, which is idempotent.
+- **Bladed high-ready** (`poses.bladed`, applied to F/G's `high_ready` on the fly; deform_poses.py is untouched):
+  - The torso turns 32° to the character's right, spread pelvis 18°, spine_01 4°, spine_02 4°, spine_03 6° (`BLADE`), so the gun-side shoulder is back and the support shoulder forward.
+  - The neck and head take the turn back (45 % and 55 % + 4°), keeping the eyes on the target (−Y).
+  - Stagger: the support (left) foot is 0.45 m forward of the gun-side foot (foot_l y −0.155, foot_r y +0.294), and both knees are soft (calf flex 20° / 12°).
+  - The arms' IK offsets and poles and the hand orientations are chest-frame values, so they're turned back by the same 32° about the chest. G's grip geometry is preserved exactly: the same wrap log, with the gun hand on the sternum line in front of the face-target axis (hands at x ≈ 0, z 1.24–1.27).
+  - Measured (run `20261013T030500Z-readyx2`): chest yaw 31.9°, pelvis 18°, head 4.5° off the target line, and `hand_pose.pierce` 0 overlaps for both hands.
+- **Track G's hand settle** (`hand_pose.settle`) runs at the end of every pose through `poses._hands`, keyed by the stage name, its F pose and `HAND_FALLBACK`. That covers the stage-only poses: `walk` and `stand_profile` settle with G's `hero` entry, and E's solver poses likewise. `stand_profile` had a 25-triangle right-palm overlap without it, and the cleared hand moved 3.9 mm.
+- **Walk arm swing fixed**: the left arm used to swing forward with the left leg, and the wrists brushed the hips (palm overlaps). Now each arm swings against its leg (−0.18 / +0.16 m), with wrists 6 cm outside the shoulder line, and the overlaps are 0.
+- `ready_low` (F's `low_ready`, used by no shot) still overlaps: l palm 250 and thumb 97, r palm 96 triangles. Its IK targets put the two wrists 3 cm apart, and G has no settle entry for it (the high_ready wrap doesn't clear it). That's for F/G if the pose is wanted.
 - What broke with E's solver poses on the pre-F build (main2): in `ready`, the hands interpenetrate (a support hand wrapped around a closed hand needs contact, which pose data alone doesn't give), and the hands read as mittens or claws in every pose.
 
 ## Runs (evidence)
@@ -143,6 +152,10 @@ All under `data/build/hero/` in the main checkout. Builds come from `data/build/
 | `20261013T002500Z-shadowx` | same | shadow-cheek breakdown (each light group removed; fill / eye / wrap variants) |
 | **`20261013T002954Z-main5-sheet`** | same | **the full preview set under the skin-direction rig: 9 shots, 100 % crops of portrait / profile / hands / eye, turntable rest + stand at 4 views (beauty, clay, normal); `sheet.png`** |
 | `20261013T010935Z-main5-amber` | same | warmer set-only amber practicals vs the 3,900 K white point: sign, draw, back, walk |
+| `20261013T030500Z-readyx2`, `20261013T030500Z-readyx3` | **`20261013T025642Z-heroE-main6` (main 9ac04e9: G's hands, D suit round 3)** | bladed ready / walk / stand_profile / ready_low: `hand_pose.pierce`, chest, pelvis and head yaw, feet, hands (`readyx.json`) |
+| `20261013T030716Z-main6-draft` | same | the 9-shot draft sheet (16 spp, 25 %, 1.9 min at `-t 3`) |
+| **`20261013T031023Z-main6-draft50`** | same | **the same at 50 % plus 100 % crops of portrait / profile / hands / eye (10.1 min): the regression check** |
+| `20261013T033000Z-main6-hands` | same | G's `hands_render.py --pierce`: ready, ready_side, cuff, hero_r; pierce 0 / 0 in ready, cuff and stand |
 
 ## Render time per shot
 
@@ -196,6 +209,16 @@ For the owning tracks. The stage doesn't fix any of these.
   - The hands still read as mittens.
   - In `high_ready` the hands sit high and the stance is square.
 
+## Regression check on main 9ac04e9 (G's hands, D's suit round 3; run main6-draft50)
+
+Every shot was compared against main5-sheet. No regressions from the merge:
+- **portrait, eye, profile**: unchanged. The near-cornea focus and the eyes on the upper third hold.
+- **hands**: the black shard on the right knuckles is gone (G's settle). The right hand lies over the left wrist and cuff (the left cuff peeks out under its little finger), and the left hand is relaxed and curled. The fingers now read as fingers, not mittens. 0 overlaps.
+- **draw**: the bladed stance reads (support shoulder and foot forward, compact grip at the chest, eyes on target). Close up (`main6-hands/hero_ready_side.png`), the right shirt cuff folds into a jagged white zigzag at the wrist. It was already present in G's square high_ready (`trackG/ready2`), and the bladed forearm's larger twist makes it a bit sharper. It's for D/G and is invisible at the draw shot's scale.
+- **sign, bust, back**: the hands in the `hero` pose (left at the jacket button, right hanging) are clean. The suit's round-3 collar and waistcoat edges read smoothly, and nothing pokes through.
+- **walk**: the arm swing is now opposite the legs, with no hand/hip contact.
+- Still open (from main5, not regressions): A's skin relief, D's boxy shoulders and the hard lapel-roll highlights.
+
 ## Verdicts
 
 - **Shared rig + turntable**: done.
@@ -211,10 +234,10 @@ For the owning tracks. The stage doesn't fix any of these.
   - The eye close-up is shot from 0.73 m, not 0.4 m.
   - Under the sign uses F's `hero` (left hand at the button), so his weight is on the left.
   - The brief's bust, back and walk shots are added.
-- **Poses**: F's canonical poses plus the runtime in every render; E's walk and cuff arms.
+- **Poses**: F's canonical poses plus the runtime and G's hand settle in every render, and the bladed high-ready (`ready`) for the draw. E's walk (arm swing fixed) and cuff arms. 0 hand overlaps in every pose a shot uses.
 - **Evidence tooling**: `--crop` (100 % crops), `--pct`, `--wb`, `--regrade`. hero.sh always grades and draws the sheet, even after a failed stage.
 - **Final**: `--final` = 256 spp / 0.02 (accepted), projected at about 4 h for the full set at 16 threads; `--max` = 768 / 0.012. On hold until A's skin pass and D's last suit round are merged.
 
 ## Branch and commits
 
-`worktree-agent-a6abc868df2544cd8`, rebased on main ede62d6. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
+`worktree-agent-a6abc868df2544cd8`, rebased on main 9ac04e9. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.

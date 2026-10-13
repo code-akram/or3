@@ -344,10 +344,12 @@ def pose_walk(p):
     p.rot("spine_01", X, 3.0)     # slight forward lean
     p.plant(+1, (0.11, -0.47), yaw=6, heel=-12, pole=(0.1, -1, 0))
     p.plant(-1, (-0.10, 0.20), yaw=6, heel=28, pole=(-0.1, -1, 0))
-    # arms: right forward, left back
-    for s, fwd in ((+1, 0.16), (-1, -0.18)):
+    # arms swing opposite the legs: right arm forward, left arm back (the
+    # left leg leads); wrists a little out from the hips so the fingers
+    # clear the jacket skirt and trousers
+    for s, fwd in ((+1, -0.18), (-1, 0.16)):
         sh = p.head("upperarm" + _sfx(s))
-        wrist = Vector((sh.x + s * 0.03, sh.y - fwd, sh.z - 0.49 + abs(fwd) * 0.1))
+        wrist = Vector((sh.x + s * 0.06, sh.y - fwd, sh.z - 0.49 + abs(fwd) * 0.1))
         p.reach(s, wrist, pole=(s * 0.2, 1.0, -0.2), clavicle=3.0)
         p.hand(s, fingers=(-0.05, -0.15 - fwd * 0.6, -1.0), thumb=(0.0, -1.0, 0.0))
         p.curl(s, base=(16, 22, 28, 34), thumb=(6, 10, 10))
@@ -443,11 +445,65 @@ def _dp():
         return None
 
 
+# Bladed high-ready (hero `ready`): F/G's high_ready grip and hands, with the
+# torso turned BLADE_DEG to its right (gun-side shoulder back, support
+# shoulder forward), the support foot forward and the knees soft, and the head
+# turned back so the eyes stay on the target (-Y). The arms' IK targets,
+# poles and hand orientations (chest-frame values) are turned back by the
+# same angle about the chest, so the two-hand grip keeps G's geometry (the
+# support-hand wrap) and the gun stays on the eye-target line.
+BLADE = {"pelvis": -18.0, "spine_01": -4.0, "spine_02": -4.0, "spine_03": -6.0}
+BLADE_DEG = sum(BLADE.values())     # -32: the chest's turn
+
+
+def _rot_z(v, deg):
+    c, s_ = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    return [v[0] * c - v[1] * s_, v[0] * s_ + v[1] * c, v[2]]
+
+
+def bladed(spec):
+    """high_ready -> bladed high-ready (a deep copy; see BLADE)."""
+    spec = copy.deepcopy(spec)
+    b = spec["bones"]
+
+    def turn(bone, deg, keep=("flex", "tilt", "abduct")):
+        ops = [op for op in b.get(bone, []) if op[0] in keep]
+        b[bone] = ops + ([["turn", deg]] if deg else [])
+
+    for bone, deg in BLADE.items():
+        turn(bone, deg)
+    # eyes back on the target: neck and head take the chest's turn back
+    turn("neck_01", -0.45 * BLADE_DEG)
+    turn("head", -0.55 * BLADE_DEG - 4.0)
+    # stagger: support (left) foot forward, gun-side foot back, knees soft
+    b["thigh_l"] = [["flex", 16]]
+    b["calf_l"] = [["flex", 20]]
+    b["foot_l"] = [["flex", 6]]
+    b["thigh_r"] = [["flex", -10]]
+    b["calf_r"] = [["flex", 12]]
+    b["foot_r"] = [["flex", 4]]
+    # arms and hands: chest-frame values turned back by the chest's turn
+    # (values are written for the left side; the x mirror flips the sense)
+    for bone in ("upperarm_l", "upperarm_r", "hand_l", "hand_r"):
+        deg = (-1.0 if bone.endswith("_l") else 1.0) * BLADE_DEG
+        for op in b.get(bone, []):
+            v = op[1] if len(op) > 1 and isinstance(op[1], dict) else None
+            if v is None:
+                continue
+            if op[0] == "orient" and v.get("frame", "spine_03") == "spine_03":
+                v["fingers"], v["thumb"] = _rot_z(v["fingers"], deg), _rot_z(v["thumb"], deg)
+            elif op[0] == "ik" and v.get("to") == "spine_03":
+                v["offset"], v["pole"] = _rot_z(v["offset"], deg), _rot_z(v["pole"], deg)
+    return spec
+
+
 def _f_spec(name):
     """The deform_poses spec behind a stage pose name, or None."""
     dp = _dp()
     if dp is None:
         return None
+    if name == "ready" and "high_ready" in dp.POSES:
+        return bladed(dp.POSES["high_ready"])
     if name == "stand_profile":
         # the hero pose, head straight ahead and chin a little down (profile shot)
         spec = copy.deepcopy(dp.POSES["hero"])
@@ -527,7 +583,8 @@ def apply(arm, name):
     if spec is not None:
         _dp().apply_pose(arm, spec)
         bpy.context.view_layer.update()
-        src = "hero, head straight" if name == "stand_profile" else (F_POSES.get(name) or name.removeprefix("f:"))
+        src = ("hero, head straight" if name == "stand_profile" else "high_ready, bladed" if name == "ready"
+               else (F_POSES.get(name) or name.removeprefix("f:")))
         log = [f"pose {name}: deform_poses {src}"]
     else:
         if name not in POSES:
@@ -543,6 +600,12 @@ def apply(arm, name):
     return log + _hands(arm, name)
 
 
+# poses with no POSE_HANDS entry of their own: settle with this entry's
+# rules ("hero" = lift both hands out of foreign geometry)
+HAND_FALLBACK = {"walk": "hero", "stand_profile": "hero",
+                 "stand_e": "hero", "ready_low_e": "hero", "stand_profile_e": "hero"}
+
+
 def _hands(arm, name):
     """Track G hand finishing (character/hand_pose.py): finger shapes, hands
     lifted out of sleeves they were posed into, fingers curled to contact."""
@@ -550,5 +613,5 @@ def _hands(arm, name):
         from character import hand_pose
     except ImportError:
         return []
-    keys = (name, F_POSES.get(name), name.removeprefix("f:"))
+    keys = (name, F_POSES.get(name), name.removeprefix("f:"), HAND_FALLBACK.get(name))
     return hand_pose.settle(arm, keys, rerun=lambda: deform(arm))
