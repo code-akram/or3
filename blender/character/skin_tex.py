@@ -175,6 +175,24 @@ def _noises(specs):
                 mp.inputs["Scale"].default_value = spec[2]
                 nt.links.new(pos, mp.inputs["Vector"])
                 vec = mp.outputs[0]
+            if kind == "edge_aniso":                 # distorted, stretched Voronoi edge
+                dn = nt.nodes.new("ShaderNodeTexNoise")
+                dn.inputs["Scale"].default_value = spec[1]
+                dn.inputs["Detail"].default_value = 2.0
+                nt.links.new(pos, dn.inputs["Vector"])
+                off = nt.nodes.new("ShaderNodeVectorMath")
+                off.operation = "MULTIPLY_ADD"
+                nt.links.new(dn.outputs["Color"], off.inputs[0])
+                off.inputs[1].default_value = (spec[3] / spec[1],) * 3
+                off.inputs[2].default_value = (-0.5 * spec[3] / spec[1],) * 3
+                add = nt.nodes.new("ShaderNodeVectorMath")
+                add.operation = "ADD"
+                nt.links.new(pos, add.inputs[0])
+                nt.links.new(off.outputs[0], add.inputs[1])
+                mp = nt.nodes.new("ShaderNodeMapping")
+                mp.inputs["Scale"].default_value = spec[2]
+                nt.links.new(add.outputs[0], mp.inputs["Vector"])
+                vec = mp.outputs[0]
             if kind.startswith("noise"):
                 n = nt.nodes.new("ShaderNodeTexNoise")
                 n.inputs["Scale"].default_value = spec[1]
@@ -184,7 +202,7 @@ def _noises(specs):
                 nt.links.new(n.outputs["Fac"], comb.inputs[k])
             else:
                 n = nt.nodes.new("ShaderNodeTexVoronoi")
-                n.feature = "DISTANCE_TO_EDGE" if kind == "edge" else "F1"
+                n.feature = "DISTANCE_TO_EDGE" if kind in ("edge", "edge_aniso") else "F1"
                 n.inputs["Scale"].default_value = spec[1]
                 n.inputs["Randomness"].default_value = 1.0
                 nt.links.new(vec, n.inputs["Vector"])
@@ -236,7 +254,7 @@ def set_attr(me, name, values):
 class Maps:
     """Everything the synthesis needs for one texture (head or hands)."""
 
-    def __init__(self, size, P, N, T, cover, attrs1, attrs2, nA, nB, nC, nD, ao):
+    def __init__(self, size, P, N, T, cover, attrs1, attrs2, nA, nB, nC, nD, ao, nE=None, nF=None, nG=None):
         self.size = size
         self.P, self.N, self.T = P, N, T
         self.cover = cover[..., 0] > 0.5
@@ -247,6 +265,12 @@ class Maps:
         self.mot_mid, self.mot_low, self.broad = nB[..., 0], nB[..., 1], nB[..., 2]
         self.aniso_v, self.aniso_h, self.grain = nC[..., 0], nC[..., 1], nC[..., 2]
         self.speck, self.edge, self.vein_var = nD[..., 0], nD[..., 1], nD[..., 2]
+        nE = nE if nE is not None else np.full_like(nD, 0.5)
+        nF = nF if nF is not None else np.full_like(nD, 0.5)
+        self.hb, self.mel, self.lump = nE[..., 0], nE[..., 1], nE[..., 2]
+        self.peel, self.nose_f1, self.lipbump = nF[..., 0], nF[..., 1], nF[..., 2]
+        nG = nG if nG is not None else np.full_like(nD, 0.5)
+        self.hb_f1, self.hb_f2 = nG[..., 0], nG[..., 1]
         self.ao = ao[..., 0]
         # derivatives of P along the image axes (metres per texel)
         self.Pu = np.zeros_like(P)
@@ -457,6 +481,9 @@ def build(b):
         nB = bk.run("noiseB", _noises(ns["noiseB"]))
         nC = bk.run("noiseC", _noises(ns["noiseC"]))
         nD = bk.run("noiseD", _noises(ns["noiseD"]))
+        nE = bk.run("noiseE", _noises(ns["noiseE"]))
+        nF = bk.run("noiseF", _noises(ns["noiseF"]))
+        nG = bk.run("noiseG", _noises(ns["noiseG"]))
         ao = bk.run("ao", None, samples=int(c.get("ao_samples", 16)), bake_type="AO", down=int(c.get("ao_down", 2)))
     finally:
         bk.finish()
@@ -465,7 +492,7 @@ def build(b):
     for n in ("sk_lips", "sk_nails", "sk_ears", "sk_scalp", "sk_region"):
         me.attributes.remove(me.attributes[n])
 
-    maps = [Maps(bake_px[i], P[i], N[i], T[i], cover[i], a1[i], a2[i], nA[i], nB[i], nC[i], nD[i], ao[i]) for i in range(2)]
+    maps = [Maps(bake_px[i], P[i], N[i], T[i], cover[i], a1[i], a2[i], nA[i], nB[i], nC[i], nD[i], ao[i], nE[i], nF[i], nG[i]) for i in range(2)]
     cl, cr = head_refine.eye_centres(eyes) if eyes is not None else (np.array([0.03, -0.13, 1.72]), np.array([-0.03, -0.13, 1.72]))
     hc = dict(skin_synth.DEFAULT_HEAD)
     hc.update(c.get("head") or {})
@@ -489,6 +516,8 @@ def build(b):
         }
         # hero-only inputs: height in mm (lines; pores come from the shader), masks
         hero_in[key] = dict(imgs[key])
+        if "albedo_hero" in syn:            # no plane paint in the hero albedo
+            hero_in[key]["albedo"] = make_image(f"skin_{key}_hero_albedo", syn["albedo_hero"], True, out_dir)
         hero_in[key]["height_mm"] = make_float_image(f"skin_{key}_hero_height", syn["hgt_hero"] * 1000.0)
         hero_in[key]["mask_pores"] = make_image(f"skin_{key}_hero_pores", syn["mask_pores"], False, out_dir)
         hero_in[key]["mask_hero"] = make_image(f"skin_{key}_hero_masks", syn["mask_hero"], False, out_dir)
@@ -505,6 +534,7 @@ def build(b):
                            for k, v in (("head", head), ("hands", hands))},
              "albedo_mean_srgb": _mean_srgb(head["albedo"], maps[0].cover),
              "albedo_face_mean_srgb": _mean_srgb(head["albedo"], face),
+             "hero_albedo_face_mean_srgb": _mean_srgb(head["albedo_hero"], face),
              "roughness_mean": round(float(head["rough"][maps[0].cover].mean()), 3),
              "roughness_face_mean": round(float(head["rough"][face].mean()), 3) if face.any() else None,
              "hero_rest": rest is not None}
@@ -516,16 +546,20 @@ def build(b):
 # --- hero (Cycles only; wired after the GLB export) --------------------------------------------
 
 HERO = {
-    "sss_radius": (1.0, 0.25, 0.12), "sss_scale": 0.0025, "sss_ior": 1.4, "sss_anisotropy": 0.8,
+    "sss_radius": (1.0, 0.22, 0.10), "sss_scale": 0.0034, "sss_ior": 1.4, "sss_anisotropy": 0.8,
     "specular": 0.5, "ior": 1.4,
-    "coat": 0.04, "coat_oil": 0.11, "coat_roughness": 0.28,
+    "coat": 0.02, "coat_oil": 0.10, "coat_roughness": 0.28,
     "sheen": 0.1, "sheen_roughness": 0.4, "sheen_tint": (1.0, 0.93, 0.88),
-    "pore_scale": 1.6, "pore_dark": 0.02, "pore_rough": 0.12,
+    "pore_scale": 1.6, "pore_dark": 0.02, "pore_rough": 0.16,
+    # pores and micro relief go to a shading-normal bump (x micro_bump over the
+    # physical depth); each pore sits in a shallow funnel (dimple_r x its
+    # radius, dimple_depth x its depth). Head only: the hands keep 1.0 and no funnel.
+    "micro_bump": 1.5, "dimple_r": 2.6, "dimple_depth": 0.6,
     # cross-hatched tension furrows: line angle from horizontal (deg) and weight.
     # 0.5 mm spacing (the primary lines; the 0.15-0.3 mm secondary net is below
     # a pixel even in the 135 mm close-up, so the fine grain stands in for it)
-    "micro_mm": 0.035, "micro_period_mm": 0.5, "micro_dirs": ((38.0, 1.0), (-42.0, 0.9), (85.0, 0.5)),
-    "micro_width": 0.3, "micro_distort": 5.0, "micro_distort_scale": 0.5, "micro_break": 0.7,
+    "micro_mm": 0.025, "micro_period_mm": 0.5, "micro_dirs": ((38.0, 1.0), (-42.0, 0.9), (85.0, 0.5)),
+    "micro_width": 0.3, "micro_distort": 5.0, "micro_distort_scale": 0.5, "micro_break": 0.5,
     "micro_patch_scale": 700.0,
     "fine_mm": 0.004, "fine_scale": 20000.0,
     "rough_plateau": -0.03, "rough_furrow": 0.10,
@@ -594,7 +628,8 @@ def hero_material(name, im, hc, layers):
     rest = _node(nt, "ShaderNodeAttribute", -1500, -400, attribute_name="hero_rest", attribute_type="GEOMETRY")
     hgt = _node(nt, "ShaderNodeSeparateColor", -600, -400)
     nt.links.new(tex(im["height_mm"], -400).outputs["Color"], hgt.inputs[0])
-    total = hgt.outputs["Red"]
+    macro = hgt.outputs["Red"]
+    total = None                                     # micro height (mm): pores, cross-hatch, grain
     mp = _node(nt, "ShaderNodeSeparateColor", -600, -700)
     nt.links.new(tex(im["mask_pores"], -700).outputs["Color"], mp.inputs[0])
     y = -1000
@@ -613,7 +648,7 @@ def hero_material(name, im, hc, layers):
         mr.inputs["To Max"].default_value = 0.0
         nt.links.new(vo.outputs["Distance"], mr.inputs["Value"])
         pit = _math(nt, "MULTIPLY", mr.outputs["Result"], mp.outputs[ch], -600, y)
-        total = _math(nt, "SUBTRACT", total, pit, -300, y)
+        total = _math(nt, "MULTIPLY", pit, -1.0, -300, y) if total is None else _math(nt, "SUBTRACT", total, pit, -300, y)
         op = _node(nt, "ShaderNodeMapRange", -900, y - 120, interpolation_type="SMOOTHSTEP")
         op.inputs["From Min"].default_value = 0.0
         op.inputs["From Max"].default_value = r * 0.85
@@ -622,6 +657,17 @@ def hero_material(name, im, hc, layers):
         nt.links.new(vo.outputs["Distance"], op.inputs["Value"])
         o = _math(nt, "MULTIPLY", op.outputs["Result"], mp.outputs[ch], -600, y - 120)
         opening = o if opening is None else _math(nt, "MAXIMUM", opening, o, -450, y - 120)
+        # the funnel round the opening: a wider, shallow dimple, so a pore reads
+        # in a highlight at a distance where the opening itself is sub-pixel
+        if hc["dimple_depth"] > 0:
+            dm = _node(nt, "ShaderNodeMapRange", -900, y - 60, interpolation_type="SMOOTHSTEP")
+            dm.inputs["From Min"].default_value = 0.0
+            dm.inputs["From Max"].default_value = min(r * hc["dimple_r"], 0.5)
+            dm.inputs["To Min"].default_value = depth_mm * hc["pore_scale"] * hc["dimple_depth"]
+            dm.inputs["To Max"].default_value = 0.0
+            nt.links.new(vo.outputs["Distance"], dm.inputs["Value"])
+            total = _math(nt, "SUBTRACT", total, _math(nt, "MULTIPLY", dm.outputs["Result"], mp.outputs[ch], -600, y - 60),
+                          -300, y - 60)
         y -= 250
     # micro relief: the skin-tension cross-hatch (two distorted wave fields at
     # +-angle to the horizontal, narrow valleys at the wave minima), broken in
@@ -661,7 +707,8 @@ def hero_material(name, im, hc, layers):
         br.inputs["To Max"].default_value = 1.0
         nt.links.new(nz.outputs["Fac"], br.inputs["Value"])
         furrow = _math(nt, "MULTIPLY", _math(nt, "MULTIPLY", furrow, br.outputs["Result"], -600, y), micro_w, -450, y)
-        total = _math(nt, "SUBTRACT", total, _math(nt, "MULTIPLY", furrow, hc["micro_mm"], -300, y), -150, y)
+        fz = _math(nt, "MULTIPLY", furrow, hc["micro_mm"], -300, y)
+        total = _math(nt, "MULTIPLY", fz, -1.0, -150, y) if total is None else _math(nt, "SUBTRACT", total, fz, -150, y)
         y -= 250
     if hc["fine_mm"] > 0:
         fn = _node(nt, "ShaderNodeTexNoise", -1200, y)
@@ -669,7 +716,8 @@ def hero_material(name, im, hc, layers):
         fn.inputs["Detail"].default_value = 1.0
         nt.links.new(rest.outputs["Vector"], fn.inputs["Vector"])
         g = _math(nt, "MULTIPLY", _math(nt, "SUBTRACT", fn.outputs["Fac"], 0.5, -900, y), 2.0 * hc["fine_mm"], -750, y)
-        total = _math(nt, "SUBTRACT", total, _math(nt, "MULTIPLY", g, micro_w, -600, y), -300, y)
+        gz = _math(nt, "MULTIPLY", g, micro_w, -600, y)
+        total = _math(nt, "MULTIPLY", gz, -1.0, -300, y) if total is None else _math(nt, "SUBTRACT", total, gz, -300, y)
         y -= 250
     # colour: pore openings at most a couple of percent darker
     if opening is not None and hc["pore_dark"] > 0:
@@ -688,10 +736,20 @@ def hero_material(name, im, hc, layers):
     if furrow is not None and hc["rough_furrow"] > 0:
         rough = _math(nt, "ADD", rough, _math(nt, "MULTIPLY", furrow, hc["rough_furrow"], -250, 340), -100, 340)
     nt.links.new(rough, p.inputs["Roughness"])
+    # micro relief as a shading-normal bump, evaluated per shading point on
+    # the rest position (not texel-limited, not dicing-limited); the coat
+    # follows it, so pores and furrows break the highlights
+    if total is not None and hc["micro_bump"] > 0:
+        bump = _node(nt, "ShaderNodeBump", 100, -250)
+        bump.inputs["Strength"].default_value = 1.0
+        bump.inputs["Distance"].default_value = 0.001 * hc["micro_bump"]
+        nt.links.new(total, bump.inputs["Height"])
+        nt.links.new(bump.outputs["Normal"], p.inputs["Normal"])
+        nt.links.new(bump.outputs["Normal"], p.inputs["Coat Normal"])
     disp = _node(nt, "ShaderNodeDisplacement", 400, -400, space="WORLD")
     disp.inputs["Midlevel"].default_value = 0.0
     disp.inputs["Scale"].default_value = 0.001
-    nt.links.new(total, disp.inputs["Height"])
+    nt.links.new(macro, disp.inputs["Height"])
     nt.links.new(disp.outputs["Displacement"], out.inputs["Displacement"])
     m.max_vertex_displacement = 0.001
     return m
@@ -719,7 +777,8 @@ def hero(b):
     idx = [p.material_index for p in me.polygons]
     me.materials.clear()
     me.materials.append(hero_material("skin_head_hero", data["head"], hc, head_layers))
-    me.materials.append(hero_material("skin_hands_hero", data["hands"], hc, hands_layers))
+    me.materials.append(hero_material("skin_hands_hero", data["hands"], dict(hc, micro_bump=1.0, dimple_depth=0.0),
+                                      hands_layers))
     restore_indices(me, idx)
     if hc["displacement"]:
         mod = body.modifiers.new("hero_dice", "SUBSURF")
