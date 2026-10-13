@@ -322,7 +322,8 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
         comb = comb_dir(surf, ccfg, p, n, rng, side)
         tip = tip_base + rng.uniform(-1, 1) * length["jitter_m"]
         lay = rng.uniform(0, gcfg["layer_jitter_m"])
-        tuck = rng.random() < (tk["left"] if p[0] >= c.x else tk["right"])
+        share = tk["left"] if p[0] >= c.x else tk["right"]
+        tuck = True if share >= 1.0 else rng.random() < share   # no draw: v2 grooms unchanged
         s = hair_clumps.Strand(Vector(p), Vector(n), comb, tip, ccfg["max_len_m"],
                                lambda q, l, tuck=tuck: gravity(q, l, tuck), gcfg["gap_m"] + lay, {})
         s.tuck = tuck
