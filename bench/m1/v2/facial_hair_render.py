@@ -8,7 +8,9 @@ turntable rigs (blender/hero/rig.py), from a kept build .blend.
         [--res PX] [--samples N] [--engine cycles|eevee]
 
 mode hero: the strand grooms in `hero_only`, the game shells/cards hidden.
-mode game: the GLB geometry (shells, cards), the strands hidden. Cameras
+mode game: the GLB geometry (shells, cards), the strands hidden.
+mode stage: the strands, and the game meshes as the .blend leaves them (what
+blender/hero/stage.py renders). Cameras
 are placed off body landmarks (lips, chin, eyes, the beard's cheek line from
 the build stats), so they follow the head. Close-ups are ~0.05-0.1 mm/px.
 Writes DIR/<mode>_<light>_<view>.png and DIR/sheet_<mode>_<light>.png.
@@ -33,7 +35,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--in", dest="inp", required=True)
 ap.add_argument("--out", required=True)
 ap.add_argument("--light", default="hero", choices=["hero", "turntable", "both"])
-ap.add_argument("--mode", default="hero", choices=["hero", "game", "both"])
+ap.add_argument("--mode", default="hero", choices=["hero", "game", "both", "stage"])
 ap.add_argument("--views", default="bust,profile,moustache,cheek,chin,brow,eye")
 ap.add_argument("--res", type=int, default=768)
 ap.add_argument("--samples", type=int, default=64)
@@ -143,7 +145,9 @@ def set_mode(mode, view):
         for o in hero.all_objects:
             if o is not None and o.type == "CURVES":
                 facial = o.name.startswith(FACIAL_HERO)
-                o.hide_render = mode != "hero" or (not facial and view not in WIDE_VIEWS)
+                o.hide_render = mode not in ("hero", "stage") or (not facial and view not in WIDE_VIEWS)
+    if mode == "stage":  # the game meshes keep the .blend's render visibility (as the hero stage)
+        return
     for o in bpy.data.objects:
         if o.type == "MESH" and any(p in o.name for p in GAME_PARTS):
             o.hide_render = mode == "hero"

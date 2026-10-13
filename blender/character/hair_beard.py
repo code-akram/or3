@@ -173,7 +173,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
     head_g = frame.body.vertex_groups["head"].index
     neck_g = frame.body.vertex_groups["neck_01"].index
     out = {k: {} for k in ("density", "stubble", "length_m", "comb", "grey", "neckw",
-                           "moustache", "under", "chin", "soul")}
+                           "moustache", "under", "chin", "soul", "edge")}
+    eb = cfg.get("edge", {}).get("band_m", 0.0)
     down = Vector((0, 0, -1))
     for v in bm.verts:
         d, which = depth[v], line[v]
@@ -190,6 +191,9 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
             dens = fd["line_density"] * smoothstep(-fout, 0, d)
             lenf = fd["line_length"]
         out["density"][v] = 0.0 if bare[v] else dens
+        # Edge band (moustache top, cheek line, neckline): 0 at the outer
+        # fade, 1 band_m inside the line; the strands there are finer.
+        out["edge"][v] = smoothstep(-fout, eb, d) if eb > 0 else 1.0
         # Stubble: a band from just inside the line to the patch edge.
         m = margins[which]
         st = smoothstep(-m, -m * 0.35, d) * (1 - smoothstep(fd["stubble_in_m"], fd["stubble_in_m"] * 2, d))
@@ -282,6 +286,9 @@ def build(b, frame, cfg):
     pos, n, f = beard_groom.sample_roots(co, nrm, tris, F, g["per_cm2"] * 1e4, rng)
     # Roots sit a little inside the skin, so no strand starts in mid-air.
     pos = pos - n * g["root_sink_m"]
+    ec = cfg.get("edge", {})
+    if ec:
+        f["length_m"] = f["length_m"] * (ec["length"] + (1 - ec["length"]) * np.clip(f["edge"], 0, 1))
     pts, L = grow_beard(pos, n, f, g, rng, frame)
     k = g["points"]
     gap = np.concatenate([[0.0], np.linspace(g["gap_m"][0], g["gap_m"][1], k - 1)])
@@ -309,6 +316,12 @@ def build(b, frame, cfg):
     hero = cfg["hero"]
     mat = beard_groom.hair_material("beard_hero", hero["material"])
     rad = np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], len(pos))[:, None]
+    # Finer, shorter hairs in the edge band, so the line breaks up into a few
+    # thin hairs instead of ending in full-weight ones.
+    ec = cfg.get("edge", {})
+    if ec:
+        e = np.clip(f["edge"], 0, 1)
+        rad *= (ec["radius"] + (1 - ec["radius"]) * e)[:, None]
     srad = np.linspace(1.0, hero["tip_radius"], sg["points"])[None, :] * \
         rng.uniform(*hero["radius_m"], sm)[:, None] * sg["radius_scale"]
     clump = np.clip(g["clump_base"] + g["clump_moustache"] * f["moustache"] + g["clump_chin"] * f["chin"], 0, 1)
@@ -392,6 +405,10 @@ def build(b, frame, cfg):
                                     extra=extra if cd.get("count") else None)
     b.facial_refit.add("mesh", obj)
     b.cutouts.append("beard_export")
+    # The kept .blend renders the strands (hero stage); the baked game mesh
+    # stays in the GLB (the exporter ignores render visibility). Left
+    # visible, its alpha shells drew over the strands as dark speckle.
+    obj.hide_render = True
     r = lambda pts_: [[round(x, 4) for x in pt] for pt in pts_]
     cheek, neck, back_y = lines
     allg = np.concatenate([mel, smel])

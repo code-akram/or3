@@ -6,6 +6,63 @@ The baseline beard was a pasted, single-tone black patch with a hard outline, th
 
 Everything is placed off landmarks and by surface sampling: lip, ear, head and neck groups, profile lines, brow-proxy spines, and lid margins ray-cast on the final skin. So Track A's forms v1 → v2 change rebuilt the grooms with no edits.
 
+## Round 5 (export weights, hero beard edge)
+
+Evidence run: `data/build/lookdev/20261013T062839Z-fhv2-r5a`, built on main `c672cab`. Probe renders and crops are in `data/build/trackC/r5/`.
+
+### 1. Nondeterministic `neutral_bone` export (fixed)
+
+**Cause.** The bug is in `hair_groom_cards.transfer_normals`. It adds a temporary `_proxy_cards` vertex group to the scalp card vertices, then applies a Data Transfer modifier. Afterwards it removed the group with `obj.vertex_groups[vg.name]`. But `modifier_apply` replaces the mesh, and in Blender 5.x the mesh owns the vertex group list, so the Python `vg` reference dangles. Reading `vg.name` returned whatever group now occupied that memory.
+
+**Evidence.**
+- In skin23c, the group removed was the spring bone `hair_back_r_02`. Its cards were left weighted only to `_proxy_cards`, so the exporter added `neutral_bone`.
+- In the skin23c `.blend`, 483 `Human.hair_export` vertices are weighted only to `_proxy_cards`, the `hair_back_r_02` group is missing, and `_proxy_cards` is still there.
+- In the skin23c GLB, the same 483 vertices are weighted to `neutral_bone`.
+- A standalone repro (20 trials of the same group, modifier and apply sequence) read a wrong name (`g07`) in 1 of 20 trials.
+
+**Fix.**
+- **The bug:** `transfer_normals` keeps the group name as a string and removes the group by that name.
+- **Guard** (`export.write_glb`): the build now fails if any exported skinned mesh has a vertex with no weight on a deform bone, instead of silently shipping `neutral_bone`.
+
+**Proof** (`data/build/trackC/r5det_skin.txt`): three builds of the same commit (the r5a run, `trackC/r5det2` and `trackC/r5det3`) all export 83 joints with no `neutral_bone`. The `Human.hair_export` skin data hashes identically in all three (`4ed2ac1bc454bc84`), and that hash also matches the good skin23b build.
+
+**Side finding (not this track's mesh).** `Human.suit_shoes_export` skin data still differs between builds. 19 left-shoe vertices come out in a different order. All of them are weighted to real bones (`foot_l`, `calf_l`), so this is not a `neutral_bone` risk, but the shoe build is order-unstable.
+
+### 2. Beard, moustache and brows at hero distance
+
+**Cause of the speckle.** The kept `.blend` rendered the baked **game** meshes on top of the hero strands: the beard shells and cards, the brow shells and cards, and the lash strips. `blender/hero/stage.py` and `rig.py` render every visible mesh. The scalp cards were already hidden from renders (`hair.py`), but the facial-hair game meshes were not. Their alpha-tested slices drew as black blotches, and their warm palette (lifted 1.6× for the game) as orange flecks.
+
+The probe on the unchanged skin25 `.blend` shows this, with the same camera, light and groom:
+- `trackC/r5/stage_turntable_moustache.png`: the stage view, with the game meshes left as the `.blend` has them, shows the ink spatter.
+- `trackC/r5/hero_turntable_moustache.png`: with the game meshes hidden, the moustache reads as hair.
+
+| Change | Where |
+|---|---|
+| The beard, brow and lash game meshes get `hide_render = True`. The GLB still carries them, because the exporter ignores render visibility. | `hair_beard.py`, `brows.py`, `lashes.py` |
+| **Tapered strands:** the beard tip radius goes from 0.35 to 0.12 of the root. The strand material can fade its alpha toward the tip: the beard fades to 0.25 from 55 % along the strand, the brows to 0.35 from 60 %. | `config.py` (beard and brows `hero`), `beard_groom.hair_material` |
+| **Soft specular:** beard roughness 0.32 → 0.45 and radial roughness 0.35 → 0.6. Brows 0.3 → 0.42 and 0.35 → 0.55. | `config.py` |
+| **Edge band:** from the outer fade to 4 mm inside the line (the moustache top, cheek line and neckline), strands thin to 0.55× width and 0.7× length. The density falloff is softer: 0.12 at the line (was 0.15), with a power of 2.0 (was 1.6). | `hair_beard.fields`, `config.py` `beard.edge`, `beard.fade` |
+| **Red flecks gone:** the warm strands were melanin 0.9 with redness 0.7, which rendered orange. They are now melanin 0.95 with redness 0.5, a share of 0.1 (was 0.12): a subtle brown variation. | `config.py` `beard.tone` |
+| **Brow tails:** strands get up to 35 % finer along the thinning tail (`hero.tail_fine`). | `brows.py`, `config.py` |
+
+**Verdict at 100 %.**
+- **Track A's camera:** `tt_close/turntable_lens135_az20_el5_aimeyes_frame0.13.png` reproduces that exact frame through `rig.py` (64 samples). The moustache before and after is in `trackC/r5/r5_moust_cmp.png` (top: skin25, bottom: r5a). The ink spatter is gone. The moustache top and the cheek line are fine, sparse hairs with no flecks (`trackC/r5/r5_cheek_tt.png`). The brows are soft strands with a finer tail (`trackC/r5/r5_brow_tt.png`).
+- **Close-ups as the stage renders them:** `fh/stage_turntable_{moustache,cheek,brow,eye}.png`. The brows are no longer brushy.
+- **Cost:** at bust distance the beard is slightly lighter and browner than round 4, and the moustache noticeably lighter (`trackC/r5/r5_bust_cmp.png`, left round 4, right r5a; A's skin also changed). Under the bright turntable light the brows read mid-brown. If the review wants the weight back, the knobs are beard `groom.per_cm2` (200) and `tip_alpha`.
+- **Game:** the game meshes are unchanged apart from the tone. They are fine at bust distance (`fh/game_turntable_bust.png`). At 0.07 mm/px the shells are still blotchy (`fh/game_turntable_moustache.png`), as before, but they no longer show in hero renders.
+
+**Checks.**
+- glTF: 0 errors.
+- read40 eye band: 0.581 (0.598 in round 4).
+- Beard contrast: 0.897.
+- Brows: 1,051 and 1,021 strands per side.
+
+**Shared-file edits** (small and additive):
+- `config.py`: the beard `fade`, `edge`, `tone` and `hero` settings, and the brows `hero` settings.
+- `export.py`: `unweighted_verts` and the guard in `write_glb`.
+- `hair_groom_cards.py` (Track B's file): the fix in `transfer_normals`.
+- `bench/m1/v2/facial_hair_render.py`: a `--mode stage` option, which renders the strands with the game meshes as the `.blend` leaves them.
+
 ## Round 4 (brow weight back)
 
 Evidence run: `data/build/lookdev/20261012T235802Z-fhv2-full9`, built on main `81d0c14`. Renders are in `fh/`.
