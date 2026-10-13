@@ -59,11 +59,13 @@ SHOTS = {
     # trouser break in frame (a tall frame from the cuff to the floor).
     "hands": dict(cam="lens=100,az=28,h=0.8,aim=cuff_feet,frame=1.45,f=5.6", pose="cuff", res=POSTER, shift=0.0,
                   shift_y=0.1, haze=0.006, rain=0, lights={"key": (KEY_K, 0.8, (0.3, 0.3), 55.0, 30.0, 1.5)}, ev=0.0),
-    # 6. Eye close-up: 135 mm, eyes and brow, gaze 5 deg off camera; the base
-    # (skin-direction) key, eye light 0.3. f/4 on the near cornea
-    # (skin-direction.md) from 0.73 m, ~7 mm in focus; §5's 0.4 m at f/4
-    # would hold only 2 mm.
-    "eye": dict(cam="lens=135,az=8,el=0,aim=eyes,frame=0.13,f=4", pose="stand", res=LAND, shift=0.0, haze=0.0,
+    # 6. Eye close-up: 135 mm from 0.73 m, eyes and brow, gaze 5 deg off
+    # camera; the base (skin-direction) key, eye light 0.3. f/8 focused 6 mm in
+    # front of the near cornea (~14 mm in focus: far cornea -3 mm to +13 mm,
+    # the brow ridge is +19 mm, the nose +34 mm), so both eyes and the brows
+    # are crisp and the nose softens. skin-direction.md's f/4 on the cornea
+    # held ~7 mm and left the brows and forehead soft (main7 eye A/B).
+    "eye": dict(cam="lens=135,az=8,el=0,aim=eyes,frame=0.13,f=8,fo=6", pose="stand", res=LAND, shift=0.0, haze=0.0,
                 rain=0, gaze=5.0, neon=0.4,
                 lights={"eye": (6500, 0.3, (0.05, 0.05), 0.0, 0.0, None)}, ev=0.0),
     # brief: bust 3/4, back 3/4 (hair and suit back), walk.
