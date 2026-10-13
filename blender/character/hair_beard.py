@@ -182,6 +182,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
         # Beard density: 1 from fade_in inside the line, line_density at the
         # line, nothing beam_out outside it (the neckline fades wider).
         fin = fd["neck_in_m"] if which == 1 else fd["in_m"]
+        if which == 3:  # the moustache is only ~12 mm tall: a shorter ramp fills it
+            fin = fd.get("moustache_in_m", fin)
         fout = fd["neck_out_m"] if which == 1 else fd["out_m"]
         if d >= 0:
             x = smoothstep(0, fin, d)
@@ -312,6 +314,30 @@ def build(b, frame, cfg):
     mel, red = tones(len(pos), tone, rng, f["grey"])
     smel, sred = tones(sm, tone, rng, sf["grey"])
 
+    # Under-coat (hero only): short hairs lying close to the skin under the
+    # main mass, so the skin shows through only at the edge bands. Own RNG,
+    # so the main groom (and the game bake drawn from it) is unchanged.
+    uc = cfg.get("undercoat")
+    under = None
+    if uc:
+        urng = np.random.default_rng(cfg["seed"] + 201)
+        upos, un, uf = beard_groom.sample_roots(co, nrm, tris, F, uc["per_cm2"] * 1e4, urng)
+        upos = upos - un * g["root_sink_m"]
+        ue = np.clip(uf["edge"], 0, 1)
+        uf["length_m"] = uf["length_m"] * urng.uniform(*uc["length"], len(upos)) * \
+            ((ec["length"] + (1 - ec["length"]) * ue) if ec else 1.0)
+        ug = dict(g, elev0=uc["elev0"], elev1=uc["elev1"], elev0_moustache=uc["elev0"],
+                  elev1_moustache=uc["elev1"], elev_chin=0, elev_soul=0, curl_share=0.0)
+        upts, _ = grow_beard(upos, un, uf, ug, urng, frame)
+        beard_groom.collide(upts, frame.skin_bvh, gap)
+        umel, ured = tones(len(upos), tone, urng, uf["grey"])
+        urad = np.linspace(1.0, cfg["hero"]["tip_radius"], k)[None, :] * \
+            urng.uniform(*cfg["hero"]["radius_m"], len(upos))[:, None] * uc["radius_scale"]
+        if ec:
+            urad *= (ec["radius"] + (1 - ec["radius"]) * ue)[:, None]
+        under = ("under", upts, urad, {"melanin": umel, "redness": ured, "clump": np.zeros(len(upos)),
+                                       "frizz": np.full(len(upos), uc["frizz"])}, uf["neckw"], None)
+
     # Hero curves: beard and stubble, split by bone (head / neck_01).
     hero = cfg["hero"]
     mat = beard_groom.hair_material("beard_hero", hero["material"])
@@ -332,7 +358,7 @@ def build(b, frame, cfg):
              f["neckw"], hero),
             ("stubble", spts, srad, {"melanin": smel, "redness": sred,
                                      "clump": np.zeros(sm), "frizz": np.full(sm, sg["frizz"])},
-             sf["neckw"], None)):
+             sf["neckw"], None)) + ((under,) if under else ()):
         for bone, sel in (("head", nw < 0.5), ("neck_01", nw >= 0.5)):
             if not sel.any():
                 continue
@@ -345,6 +371,8 @@ def build(b, frame, cfg):
     ev_beard = np.zeros_like(pts)
     ev_stub = np.zeros_like(spts)
     for o, bone, sel, label in objs:
+        if label == "under":  # hero only, not baked
+            continue
         (ev_beard if label == "beard" else ev_stub)[sel] = beard_groom.strands(o)
     for o, bone, sel, label in objs:
         beard_groom.bind(b, o, bone)
@@ -415,6 +443,7 @@ def build(b, frame, cfg):
     stats.update({
         "base_tris": base_tris, "base_tris_before_decimate": base_before,
         "strands": int(len(pos)), "stubble_strands": int(sm),
+        "undercoat_strands": int(len(under[1])) if under else 0,
         "grey_share": round(float((allg < 0.4).mean()), 4),
         "grey_share_beard": round(float((mel < 0.4).mean()), 4),
         "length_mm": {"p10": round(float(np.percentile(L, 10)) * 1e3, 1),

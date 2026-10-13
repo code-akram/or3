@@ -6,6 +6,40 @@ The baseline beard was a pasted, single-tone black patch with a hard outline, th
 
 Everything is placed off landmarks and by surface sampling: lip, ear, head and neck groups, profile lines, brow-proxy spines, and lid margins ray-cast on the final skin. So Track A's forms v1 → v2 change rebuilt the grooms with no edits.
 
+## Round 5b (hero beard, brow and lash weight without the shells)
+
+Evidence:
+- Build: `data/build/lookdev/20261013T074008Z-fhv2-r5c`, on main `3efcf05`.
+- Hero rig (draft; portrait and eye shots, with 100 % crops): `data/build/hero/20261013T074447Z-fhv2-r5c`.
+- Comparisons: `data/build/trackC/r5c/`.
+
+Hiding the game shells (round 5) showed that the shells had been supplying most of the mass in every hero render. Without them, the hero strands alone read as light-brown stubble in the hero rig (main8). This round takes the weight from main7 and keeps the clean strand edges from main8.
+
+| Change | Before → after |
+|---|---|
+| **Beard density** | `groom.per_cm2` 200 → 360. That is 85,208 strands (was 43,388). |
+| **Beard under-coat** (new, hero only) | 240 roots/cm² of short hairs (0.3–0.55× the local length) lying close to the skin (exit angle 14°, tip angle 2°). That is 57,321 strands. They use their own RNG, so the main groom and the game bake are unchanged. |
+| **Beard strand width** | Root radius 0.04–0.07 mm → 0.05–0.08 mm. Tip 0.12 → 0.22 of the root. Tip opacity 0.25 → 0.6. |
+| **Beard tone** | Melanin 0.98 → 0.996 and redness 0.45 → 0.3: near-black and cool. The warm share drops from 0.1 to 0.05. |
+| **Moustache fill** | Its density ramp from the top line is 5 mm, so the 12 mm moustache is full below the soft band. It was under the 10 mm cheek ramp. The main fade is now 7 mm at a power of 1.8. The 4 mm edge band of finer, shorter hairs is unchanged. |
+| **Brows** | 240 → 360 roots/cm² (about 1,510 per side). Radius 0.03–0.045 mm → 0.035–0.055 mm. Melanin 0.995, redness 0.3, light share 0.12 → 0.06, tip opacity 0.5 → 0.6. |
+| **Upper lashes** | 190 → 240 per eye. Radius 0.04–0.05 mm → 0.045–0.06 mm, tip 0.2. Melanin 0.96 → 0.985, redness 0.35. |
+| **Game** | The bake draws a smaller share of the denser grooms, so the game meshes stay about as they were: beard `beard_keep` 0.6 → 0.33, brows `strand_keep` 0.55 → 0.37. |
+
+**Verdict.**
+- **Hero rig portrait** (`trackC/r5c/r5c_pcrop_cmp.png`, left main8, right r5c): the beard is a dense, near-black mass, with skin showing only at the soft cheek and moustache edges. The moustache is filled, and the brows are dark and dense.
+- **Hero rig eye** (`trackC/r5c/r5c_eye_cmp.png`): the brows are darker and denser, and the upper lash line is darker and denser. On the near eye the line is clearly stronger. The far eye's line is better but still the weaker of the two; if it needs more, the knobs are the upper lash `count` and `radius_m`.
+- **Turntable bust** (`trackC/r5c/r5c_bust_cmp.png`, left r5a, right r5c): dense, near-black and cool.
+- **135 mm close-up** (`tt_close/turntable_lens135_az20_el5_aimeyes_frame0.13.png`, crops in `trackC/r5c/r5c_tt_crops.png`): still strand-clean. The moustache top is fine hairs with no spatter, and the brows are dark brown-black with a soft top.
+- **Moustache close-up** (`fh/stage_turntable_moustache.png`): dense and clean, with a few grey glints from the existing 3 % grey share.
+- **Game bust** (`fh/game_turntable_bust.png`): about unchanged.
+
+**Checks.**
+- glTF: 0 errors.
+- read40 eye band: 0.586.
+- Beard contrast: 0.908.
+- Cost: the hero facial strands are about 3.3× round 5's, but they render only in hero shots.
+
 ## Round 5 (export weights, hero beard edge)
 
 Evidence run: `data/build/lookdev/20261013T062839Z-fhv2-r5a`, built on main `c672cab`. Probe renders and crops are in `data/build/trackC/r5/`.
