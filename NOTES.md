@@ -688,6 +688,13 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 
 ## Decision log
 
+### 2026-10-13 — m1 v2 hero character: final review set rendered
+- Eight implementation tracks (head and skin, scalp hair, facial hair, suit, hero stage, deformation, hands, pistol) are merged to `main`. The final review set (9 shots at 256 spp, 100 % crops, painterly variants, turntable) is in `data/build/hero/20261013T081828Z-main9-final/`. Status, weak spots and gates are in `HANDOFF.md`.
+- **Hero renders hide the game facial-hair shells.** Until 2026-10-13 every hero render drew the baked game beard, brow and lash meshes over the strand grooms, which caused the black "spatter". The strands now carry the mass alone (beard 360 roots/cm² plus an under-coat).
+- **Original pistol added** (NOTES §3 weapon): procedural, no real marks, hero build plus a 10.3k-tri game GLB, two-hand hold solved from the hand.
+- **Corrective coverage rule:** skin correctives only count skin as covered by a garment when the nearest-surface and normal-ray tests both hit within a few cm; garment-over-garment pairs keep the side test.
+- Open for the user: the likeness check on the face and the m1 look sign-off.
+
 ### 2026-10-12 — m1 v2: painterly realism, all compute local (user)
 - **Target**: painterly realism. That means realistic anatomy, skin, hair and materials, with the painted neo-noir finish in the textures around the face, the light and the grade. The bar is a believable AAA hero in a Cycles close-up. The run ends only when the user reviews the hero renders. Brief and direction: `bench/m1/v2/{BRIEF,direction}.md`.
 - **Compute: everything runs on this machine.** Rented GPU (RunPod) was dropped because of cost, and freestyle.sh was dropped as too small, CPU-only and discouraging batch work. Slow jobs (bakes, cloth sims, final renders) run overnight.

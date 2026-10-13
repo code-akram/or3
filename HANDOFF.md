@@ -1,4 +1,35 @@
-# Handoff: Phase 0 (m0) complete, waiting on user gates
+# Handoff: m1 v2 hero character rendered, waiting on the user's review
+
+_Updated 2026-10-13 by the m1 v2 orchestrator session. Sections 1–5 below are the earlier Phase 0 (m0) handoff and still apply._
+
+## m1 v2: where things stand
+
+The hero character is built, merged to `main` (4b2e49a and later) and rendered as a final review set. **The run waits on the user's review.**
+
+- **Final renders:** `data/build/hero/20261013T081828Z-main9-final/` (9 shots, 100 % crops, painterly variants, turntable in beauty, clay and normal; 256 spp). Build: `data/build/lookdev/20261013T081002Z-heroE-main9/` (`character.blend`, `character.glb`). The review page packages them (`data/build/review/m1v2/`).
+- **Rebuild and re-render:** `KEEP_BLEND=1 bench/m1/lookdev.sh --config bench/m1/variants/direction.json <label>`, then `bench/m1/hero.sh` (`--final`, `--shots`, `--into`; see `blender/hero/` and `bench/m1/v2/hero-stage.md`). Pass 1 took 91.5 min at 12–16 threads.
+- **Tracks, all merged** (reports in `bench/m1/v2/`): A head, skin, eyes (`head.md`); B scalp hair (`hair.md`); C beard, brows, lashes (`facial-hair.md`); D suit (`suit.md`); E hero stage (`hero-stage.md`); F deformation, 16 helper bones and 14 correctives (`deform.md`); G hands (`hands.md`); H original pistol (`pistol.md`). Direction: `BRIEF.md`, `direction.md`, `skin-direction.md`.
+- **Budgets:** character GLB 126,872 tris, 83 bones, 4 weights per vertex, 0 glTF errors; pistol GLB 10,266 tris, 0 errors.
+
+**User gates now open:**
+1. Likeness check on the face (NOTES §14: the face must stay original).
+2. Look sign-off for m1, or a list of what to change.
+3. Still pending from earlier: the m1 base approval, the Movieclips and ArcFace rulings, and audio round 2 listening (`data/build/audio`, served locally on port 8790 while the session runs).
+
+**Known weak spots** (candidates for a v3 round if the user wants one):
+- Skin reads smooth at portrait distance (pores are sub-pixel there; mid-scale relief carries it).
+- Suit wool reads soft and slightly rubbery; the far lapel in the portrait folds into a flat panel.
+- Magenta rim floods the hair on the shadow side.
+- Pistol hold: strong thumb about 4 cm short of the slide stop, pinky gap a third of a finger; one-handed holds (`walk+pistol`, `stand+pistol`) pierce and need their own muzzle-down hold.
+- Fist (no shot uses it): fingertip pads crumple and the thumb lies flat.
+- Game-GLB beard and brow shells are blotchy in extreme close-up; `Human.suit_shoes_export` vertex order is not build-stable (weights are fine).
+- read40 eye band 0.58 against the 0.75 bar (waived for v2; recalibrate under the game light).
+
+**Machine rules for agents** (learned the hard way: load hit 51): one Blender job per track at `-t 3`, at most two cloth sims, EEVEE or draft for iteration, and final renders only with nothing else running.
+
+---
+
+# Handoff (m0): Phase 0 complete
 
 _Written 2026-10-12 by the autonomous Phase 0 session. This is for the user and for any new Claude Code session picking up from here._
 
