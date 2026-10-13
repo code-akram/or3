@@ -172,7 +172,10 @@ def build(b, frame, cfg):
     ur = g.get("unruly")
     if ur:
         urng = np.random.default_rng(cfg["seed"] + 31)
-        sel = urng.random(m) < ur["share"]
+        # fewer toward the tail (there they trail off toward the temple)
+        tt = np.clip((f["along"] - ur.get("tail_from", 1.0)) / max(1.0 - ur.get("tail_from", 1.0), 1e-6), 0, 1)
+        share = ur["share"] * (1 - ur.get("tail_cut", 0.0) * tt * tt * (3 - 2 * tt))
+        sel = urng.random(m) < share
         n_ = int(sel.sum())
         yaw[sel] += urng.normal(0, deg(ur["yaw_deg"]), n_)
         e0[sel] += deg(ur["lift_deg"]) * urng.uniform(0.5, 1.0, n_)
