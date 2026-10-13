@@ -278,8 +278,8 @@ DEFAULTS = {
                      "warm_share": 0.05, "warm": [0.96, 0.45],
                      # grey by zone: grey_share on the cheeks, more at the chin, the
                      # mouth corners (moustache ends) and the sideburns
-                     "grey_share": 0.10, "grey_chin": 0.45, "grey_corner": 0.45, "grey_side": 0.14,
-                     "chin_grey_radius_m": 0.05, "corner_radius_m": 0.02, "corner_up_m": 0.004,
+                     "grey_share": 0.08, "grey_chin": 0.45, "grey_corner": 0.30, "grey_side": 0.08,
+                     "chin_grey_radius_m": 0.05, "corner_radius_m": 0.014, "corner_up_m": 0.004,
                      "grey_pow": 4,  # flat-topped zones (2: a plain bell)
                      "grey_extra": 0.05, "grey": [0.06, 0.0],  # silver, not yellow
                      "grey_radius": 1.25,  # grey hairs are coarser (hero radius scale): they read at a distance
