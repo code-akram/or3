@@ -197,6 +197,24 @@ def lip_seam(m, lips, ao, width_m):
     return gauss(d, width_m).astype(np.float32)
 
 
+def beard_lip_fill(m, lips, beard, band_m):
+    """0..1 over the skin between the beard and the vermilion where that gap is
+    narrower than band_m (3D: distance to the lips' 0.55 contour plus distance
+    to the beard's 0.5 contour), so the beard zone reaches the lip. Beard hairs
+    rooted at the gap comb away from it, and from the front the bare strip reads
+    as a pale rim around the lip; under a dense beard that skin is in shadow."""
+    out = np.zeros(lips.shape, np.float32)
+    ring = m.valid & (lips > 0.05)
+    if band_m <= 0 or not ring.any():
+        return out
+    lo, hi = m.P[ring].min(0) - 2 * band_m, m.P[ring].max(0) + 2 * band_m
+    box = m.valid & np.all((m.P > lo) & (m.P < hi), axis=-1)
+    skin = box & (lips < 0.55)
+    s = dist_to(m.P, box & (np.abs(lips - 0.55) < 0.1), skin) + dist_to(m.P, box & (beard > 0.5), skin)
+    out[skin] = smoothstep(1.5 * band_m, band_m, s[skin])
+    return out
+
+
 def lip_weight(m, lips, soft_m):
     """Lip colour weight 0..1. soft_m 0: from the lips group weight (its falloff
     is one edge ring, so the vermilion border is as hard as the mesh). soft_m > 0:
@@ -222,6 +240,8 @@ def synth_head(m, c, cl, cr):
     R = regions(fr, m)
     u, h, x = fr.u, fr.h, fr.x
     lips = R["lips"]
+    lip_fill = beard_lip_fill(m, lips, R["beard"], c["beard_to_lip_mm"] * MM)
+    R["beard"] = np.maximum(R["beard"], lip_fill)
     eyes_clear = smoothstep(0.012, 0.018, fr.eye_d)
 
     # ---------------------------------------------------------------- height
@@ -405,6 +425,7 @@ def synth_head(m, c, cl, cr):
     tint(stub * c["stubble"], (0.55, 0.52, 0.52))
     # lips: wind-dried, desaturated brick; vermilion border a touch lighter;
     # parting line dark, straighter at the corners (no pout)
+    tint(lip_fill * c["beard_lip_dark"], (0.62, 0.58, 0.58))            # shadowed skin under the beard, at the lip
     lipc = srgb_to_linear(HEX(c["lip"]))
     lw = lip_weight(m, lips, c["lip_soft_mm"] * MM) * c["lip_mix"]
     alb = alb * (1 - lw[..., None]) + lipc * lw[..., None]
@@ -561,6 +582,8 @@ DEFAULT_HEAD = {
     "lip_seam": 0.0, "lip_seam_mm": 0.7,     # darker line where the lips meet (amount, width); 0 = off
     "lip_soft_mm": 0.0,                      # vermilion border softness (3D, +-mm); 0 = the group falloff
     "lip_border": 0.6,                       # lighter skin rim just outside the vermilion
+    "beard_to_lip_mm": 0.0,                  # beard zone fills skin gaps to the vermilion narrower than this; 0 = off
+    "beard_lip_dark": 0.0,                   # extra shadow on that filled strip
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
