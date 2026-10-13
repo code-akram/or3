@@ -57,10 +57,25 @@ DEFAULTS = {
     "knn": 4,                  # guides blended per strand
     # Overrides of the hair_clumps march parameters for the groom guides.
     "march": {"cling": 0.0, "ear_margin_m": 0.008},
+    # Comb: "back" sweeps every root back from the part (v2 look); "part"
+    # lets the hair fall sideways off the part and down the sides (a hanging
+    # centre-part style): `side` out from the part, `back`, `drop`; roots
+    # facing forward comb `forward` and hold up (`front_hold`) until past
+    # the temple, where gravity starts between `fall_az_deg` (|azimuth|).
+    "comb": {"mode": "back", "side": 0.8, "back": 0.35, "drop": 0.35, "forward": 0.25,
+             "front_hold": 0.8, "fall_az_deg": [25.0, 50.0], "fall_above_ear_m": 0.06,
+             "hug": 0.0, "hug_above_ear_m": 0.0,   # pull back onto the skull while above the ear
+             "free_fall_m": None},   # gravity ramps to full over 4 cm from this length, everywhere
+    # Share of roots per side that tuck behind the ear (the rest drape over
+    # it, kept off by the ear collider). left = +x, the character's left.
+    "tuck": {"left": 1.0, "right": 1.0},
     "part_jitter_m": 0.002,    # the part line wanders this much (soft part)
     "part_push": 0.25,         # comb push away from the part (hair_clumps uses clumps.part_push)
     "part_width_m": 0.02,
     "part_lift_m": 0.004,      # strands next to the part rise a little before they fall
+    "part_lift_rise_m": None,  # rise length of that lift (None: the lift profile's rise_m)
+    "part_density": 0.0,       # extra root density at the part line (x within part_width_m)
+    "part_back_m": 0.03,       # ... from the front back to this far behind the head centre
     # Hairline: temples recede (two bays), the density ramps over the feather.
     "hairline": {"recess_m": 0.009, "recess_az_deg": 44, "recess_sigma_deg": 13,
                  "recess_above_ear_m": 0.025,
@@ -99,7 +114,8 @@ DEFAULTS = {
     "shader": {"model": "HUANG", "melanin": 0.985, "redness": 0.12,
                "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
                "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.10, "light_melanin": 0.93,
-               "lock_melanin_jitter": 0.012, "tint": None},
+               "lock_melanin_jitter": 0.012, "tint": None,
+               "coat": None, "radial_roughness": None},   # Chiang only (wet look: coat)
     "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
 }
 
@@ -231,6 +247,20 @@ def resample_np(pts, m):
 def comb_dir(surf, ccfg, p, nrm, rng, side=None):
     c = surf.c
     dx = p[0] - surf.part_x
+    cm = surf.cfg.get("comb", {})
+    gc = surf.cfg
+    if cm.get("mode") == "part":
+        sg = side if side else (1.0 if dx >= 0 else -1.0)
+        frontw = smoothstep(-0.2, -0.7, nrm[1])
+        # Next to the part the hair leaves it gently (part_ramp of the side
+        # comb at the part, full `part_width_m` away), so the part is a line.
+        near = smoothstep(0.0, gc["part_width_m"], abs(dx)) if nrm[2] > 0.5 else 1.0
+        ramp = cm.get("part_ramp", 1.0) + (1 - cm.get("part_ramp", 1.0)) * near
+        x = sg * (cm["side"] * ramp * (1 - cm.get("front_side_cut", 0.0) * frontw)
+                  + rng.uniform(-0.1, 0.1))
+        y = cm["back"] * (1 - frontw) - cm["forward"] * frontw
+        z = -cm["drop"] * (1 - cm["front_hold"] * frontw)
+        return Vector((x, y, z))
     on_top = nrm[2] > 0.5 and p[1] < c.y + 0.02
     gc = surf.cfg
     push = (math.copysign(gc["part_push"], dx if side is None or side == 0 else side)
@@ -257,10 +287,14 @@ def lift_profile(surf, gcfg, p, nrm, rng):
     fwd = rest - side
     amp = max(L["front_m"] * front, L["crown_m"] * top + L["side_m"] * side + L["back_m"] * back
               + L["front_m"] * fwd)
+    rise = L["rise_m"]
     if nrm[2] > 0.5 and p[1] < c.y + 0.02:
-        amp += surf.cfg["part_lift_m"] * math.exp(-abs(p[0] - surf.part_x) / 0.012)
+        near = math.exp(-abs(p[0] - surf.part_x) / 0.012)
+        amp += surf.cfg["part_lift_m"] * near
+        if surf.cfg.get("part_lift_rise_m") and near > 0.3:
+            rise = surf.cfg["part_lift_rise_m"] + (rise - surf.cfg["part_lift_rise_m"]) * (1 - near)
     amp *= 1 - L["jitter"] * rng.random()
-    return (amp, L["rise_m"], L["hold_m"], L["fall_m"], L["keep"])
+    return (amp, rise, L["hold_m"], L["fall_m"], L["keep"])
 
 
 def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
@@ -271,12 +305,25 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
     tip_base = frame.neck_z + (frame.shoulder_z - frame.neck_z) * length["f"]
     ear_back_y = frame.ears_max.y + 0.004
 
-    def gravity(p, s):
+    cm = gcfg["comb"]
+    part_mode = cm.get("mode") == "part"
+
+    def gravity(p, s, tuck=True):
         behind = smoothstep(c.y - 0.01, c.y + 0.06, p.y)
         low = smoothstep(frame.ears_min.z, frame.ears_min.z - 0.05, p.z)
-        if frame.near_ear(p) is not None and p.y < ear_back_y:
+        if tuck and frame.near_ear(p) is not None and p.y < ear_back_y:
             behind = 0.0
+        if part_mode:
+            # Hanging style: off the upper skull and past the temple, fall.
+            az = abs(surf.azimuth(tuple(p)))
+            side = (smoothstep(cm["fall_az_deg"][0], cm["fall_az_deg"][1], az)
+                    * smoothstep(frame.ears_max.z + cm["fall_above_ear_m"], frame.ears_max.z, p.z))
+            behind = max(behind, side)
+            if cm.get("free_fall_m") is not None:
+                behind = max(behind, smoothstep(cm["free_fall_m"], cm["free_fall_m"] + 0.04, s))
         return max(behind, low) * ccfg["gravity"]
+
+    tk = gcfg["tuck"]
 
     wv = ccfg["wave"]
     G, H, hang_pts = [], [], []
@@ -285,8 +332,14 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
         comb = comb_dir(surf, ccfg, p, n, rng, side)
         tip = tip_base + rng.uniform(-1, 1) * length["jitter_m"]
         lay = rng.uniform(0, gcfg["layer_jitter_m"])
-        s = hair_clumps.Strand(Vector(p), Vector(n), comb, tip, ccfg["max_len_m"], gravity,
-                               gcfg["gap_m"] + lay, {})
+        share = tk["left"] if p[0] >= c.x else tk["right"]
+        tuck = True if share >= 1.0 else rng.random() < share   # no draw: v2 grooms unchanged
+        s = hair_clumps.Strand(Vector(p), Vector(n), comb, tip, ccfg["max_len_m"],
+                               lambda q, l, tuck=tuck: gravity(q, l, tuck), gcfg["gap_m"] + lay, {})
+        s.tuck = tuck
+        if part_mode and cm.get("hug", 0.0) > 0:
+            s.hug = cm["hug"]
+            s.hug_above_z = frame.ears_max.z + cm["hug_above_ear_m"]
         s.lift = lift_profile(surf, gcfg, p, n, rng)
         s.wave = (wv["amp"] * rng.uniform(0.3, 0.6), rng.uniform(0, 6.3),
                   wv["period_m"] * rng.uniform(0.8, 1.25))
@@ -376,6 +429,7 @@ def front_fall_guides(frame, ccfg, gcfg, surf, rng, m):
 def sample_roots(surf, rng, n):
     """n roots with the hairline density ramp (feather band)."""
     h = surf.cfg["hairline"]
+    pd = surf.cfg.get("part_density", 0.0)
     P_all, N_all = [], []
     got = 0
     while got < n:
@@ -388,6 +442,11 @@ def sample_roots(surf, rng, n):
                 continue
             f = surf.feather(p)
             prob = h["feather_min"] + (1 - h["feather_min"]) * smoothstep(0.0, f, d) ** h["ramp_pow"]
+            if pd > 0:
+                # sample() is uniform: accept the rest at 1 / (1 + pd), the part line at 1.
+                near = (Nn[i][2] > 0.5 and p[1] < surf.c.y + surf.cfg.get("part_back_m", 0.03)
+                        and abs(p[0] - surf.part_x) < surf.cfg["part_width_m"])
+                prob *= 1.0 if near else 1.0 / (1.0 + pd)
             if r[i] < prob:
                 keep.append(i)
         P_all.append(P[keep])
@@ -558,6 +617,9 @@ def hair_material(gcfg):
     mel.attribute_name = "melanin"
     nt.links.new(mel.outputs["Fac"], bsdf.inputs["Melanin"])
     bsdf.inputs["Melanin Redness"].default_value = sc["redness"]
+    for key, name in (("coat", "Coat"), ("radial_roughness", "Radial Roughness")):
+        if sc.get(key) is not None and name in bsdf.inputs:
+            bsdf.inputs[name].default_value = sc[key]
     if sc.get("tint") and "Tint" in bsdf.inputs:
         h = sc["tint"].lstrip("#")
         bsdf.inputs["Tint"].default_value = tuple(

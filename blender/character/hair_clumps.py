@@ -124,6 +124,8 @@ class Strand:
         self.wave = (0.0, 0.0, 0.1)  # (amplitude, phase, period_m) of the hanging wave
         self.hug = 0.0  # pull toward the skin when hanging clear of it (front falls)
         self.flare = (1e9, 0.0)  # (after_m, strength): front falls curl away from the cheek
+        self.tuck = True  # steer behind the ear (False: drape over it, the ear collider only)
+        self.hug_above_z = -1e9  # hug only applies above this height (main strands: the skull)
         # Volume: extra stand-off from the skull along the strand,
         # (amplitude_m, rise_m, hold_m, fall_m, keep): 0 at the root, full
         # after rise_m, held, then decaying to keep x amplitude over fall_m.
@@ -166,7 +168,7 @@ def march(frame, s, step, turn, ear_margin, cloth_gap=0.0, tuck=0.0, tuck_z=-1e9
             radial = Vector((p.x - frame.center.x, p.y - frame.center.y, 0.0))
             if radial.length > 1e-6:
                 des = (des - radial.normalized() * (cling * w)).normalized()
-        ear = None if s.front_fall else frame.near_ear(p)
+        ear = None if (s.front_fall or not s.tuck) else frame.near_ear(p)
         if ear is not None and p.y < ear[0].y + ear[1].y + 0.004:
             # Above an ear and not yet behind it: keep going back, so the
             # strand tucks behind the ear instead of draping over it.
@@ -190,7 +192,7 @@ def march(frame, s, step, turn, ear_margin, cloth_gap=0.0, tuck=0.0, tuck_z=-1e9
         elif loc is not None and length >= s.flare[0] and s.flare[1] > 0:
             # The end of a front fall curls away from the cheek.
             des = (des + nrm * s.flare[1]).normalized()
-        elif loc is not None and s.hug > 0 and sd > off + 0.003:
+        elif loc is not None and s.hug > 0 and sd > off + 0.003 and p.z > s.hug_above_z:
             # Front falls drape against the temple and cheek rather than
             # hanging in the air in front of the face.
             des = (des - nrm * s.hug).normalized()
