@@ -267,7 +267,7 @@ The build is `20261013T081002Z-heroE-main9` (main 61726e1, C 5b). The pistol is 
     - Part sheen saturation: 0.75 → 0.39.
     - Teal-side hair: 0.46 → 0.17.
     - Teal cheek rim: 0.15 → 0.15. Magenta-side hair: 0.37 → 0.37.
-  - Private run: `private/likeness/hero/20261013T193536Z-fan-rim-teal` (`portrait_crop_vs_hairB-fan2.png`).
+  - Verified on a private fan-build run (not committed).
 - In back, the teal kicker dominates the hair once the magenta is gone.
 - Public evidence: `data/build/hero/20261013T125442Z-main10-rim-before50` and `20261013T125649Z-main10-rim-after50` (`rim_before_after.png`: portrait, profile and back).
 
