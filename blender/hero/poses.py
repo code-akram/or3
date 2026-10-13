@@ -409,10 +409,14 @@ def cuff_arms(p):
     wl = p.head("hand_l")
     f = (wl - p.head("lowerarm_l")).normalized()
     cuff = wl - f * 0.035
-    fr = Vector((0.55, -0.25, -0.8)).normalized()          # right hand: fingers left and down
-    p.reach(-1, cuff - fr * 0.085 + Vector((0.0, -0.015, 0.02)), pole=(-0.7, 0.4, -1.0))
-    p.hand(-1, fingers=(-fr.x, fr.y, fr.z), thumb=(0.0, -1.0, 0.2))
-    p.curl(-1, base=(42, 52, 62, 68), seg=(1.0, 1.2, 0.7), spread=0.0, thumb=(10, 22, 20))
+    # right hand in front of the left wrist, fingers across and wrapping the
+    # cuff from the front, thumb on top
+    fr = Vector((0.85, 0.2, -0.3)).normalized()
+    p.reach(-1, cuff - fr * 0.07 + Vector((0.0, -0.045, 0.0)), pole=(-0.7, 0.4, -1.0))
+    p.hand(-1, fingers=(-fr.x, fr.y, fr.z), thumb=(0.0, 0.15, 1.0))
+    p.curl(-1, base=(55, 62, 70, 75), seg=(1.0, 1.2, 0.7), spread=0.0, thumb=(10, 25, 20))
+    p.log.append(f"cuff: left wrist {tuple(round(v, 3) for v in wl)}, right wrist "
+                 f"{tuple(round(v, 3) for v in p.head('hand_r'))}")
 
 
 def pose_stand_profile(p):

@@ -89,9 +89,10 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
     cam["obj"].data.shift_y = spec.get("shift_y", 0.0)
     if set_kind == "alley":
         sets.turn(cam["az"] + spec.get("set_yaw", 15.0))
+        sets.neon(spec.get("neon", 1.0))
     lights = dict(spec.get("lights") or {})
     rig.hero_rig(ch, cam, lights=lights,
-                 flag=spec.get("flag", ("key", "fill", "eye")) if set_kind == "alley" else ())
+                 flag=spec.get("flag", ("key", "wrap", "fill", "eye")) if set_kind == "alley" else ())
     if set_kind == "void":
         rig.world()
         rig.void_floor()
@@ -207,12 +208,14 @@ def main(argv):
     ap.add_argument("--tt-poses", default=",".join(shots.TT_POSES))
     ap.add_argument("--tt-passes", default=",".join(shots.TT_PASSES))
     ap.add_argument("--set", dest="set_kind", choices=["alley", "void"], default="alley")
+    ap.add_argument("--pct", type=int, default=0, help="resolution %% override (e.g. 100 at preview samples)")
     ap.add_argument("--crop", default="none",
                     help="shots that also get a 100 %% crop (half the frame each way) around the eye or "
                          "focus point: a list, 'close' (shots.CLOSE) or 'none'")
     ap.add_argument("--skin-sss", choices=["auto", "off"], default="auto",
                     help="auto: fill in Cycles SSS when the build's skin has none (render-side)")
     a = ap.parse_args(argv)
+    rig.PCT = a.pct or None
     out = os.path.abspath(a.out)
     os.makedirs(os.path.join(out, "exr"), exist_ok=True)
     t0 = time.perf_counter()

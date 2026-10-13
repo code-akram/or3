@@ -422,6 +422,31 @@ def alley(haze_density=0.0):
     return col
 
 
+def neon(f=1.0):
+    """Scale the brightness of every emissive surface in the set (sign tubes,
+    lightboxes, lamp faces) to f times the built value; the spill lights stay
+    (they carry the coloured light on walls, ground and the character)."""
+    col = bpy.data.collections.get("set_alley")
+    if col is None:
+        return
+    seen = set()
+    for o in col.all_objects:
+        for s in getattr(o, "material_slots", []):
+            m = s.material
+            if not m or m.name in seen or not m.use_nodes:
+                continue
+            seen.add(m.name)
+            p = m.node_tree.nodes.get("Principled BSDF")
+            if p is None:
+                continue
+            sock = p.inputs["Emission Strength"]
+            if "base_emit" not in m:
+                if sock.default_value <= 0:
+                    continue
+                m["base_emit"] = sock.default_value
+            sock.default_value = m["base_emit"] * f
+
+
 def turn(yaw_deg):
     """Turn the alley about the character (z axis) so a camera at azimuth
     yaw_deg looks straight down it (a set cheat, like moving a flat)."""
