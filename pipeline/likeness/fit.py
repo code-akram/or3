@@ -328,8 +328,9 @@ def main(argv=None):
                     help="init-code components past --n-shape: held fixed (keep) or zeroed (drop)")
     ap.add_argument("--n-expr", type=int, default=20)
     ap.add_argument("--jaw-joint", type=int, default=2)
-    ap.add_argument("--shape-prior", type=float, default=0.002, help="residual weight on (beta - init)")
-    ap.add_argument("--expr-prior", type=float, default=0.003)
+    ap.add_argument("--shape-prior", type=float, default=0.1,
+                    help="residual weight on (beta - init), per unit sd, against residuals in IPD units")
+    ap.add_argument("--expr-prior", type=float, default=0.02)
     ap.add_argument("--jaw-prior", type=float, default=0.02)
     ap.add_argument("--lens-mm", type=float, default=75.0)
     ap.add_argument("--lens-sigma", type=float, default=0.7, help="log-space focal prior width")

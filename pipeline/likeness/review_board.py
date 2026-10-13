@@ -2,8 +2,11 @@
 aligned by a similarity transform on the iris centres to the same crop and pixel IPD; plus a
 blink sheet (shuffled thumbnails at fixed sizes) and a mirrored copy for the flip test.
 
-Rows come from a JSON spec; every image needs MediaPipe landmarks (refboard.py writes them for
-references; refboard.py measure --out-dir for renders):
+Rows come from a JSON spec; every image needs landmarks, MediaPipe 478 or detector five-point
+(refboard.py writes them for references; refboard.py measure --out-dir [--yunet] for renders).
+Alignment is "eyes" (the two iris centres to a fixed IPD) or "eye-mouth" (eye midpoint and mouth
+midpoint to a fixed vertical span; robust to yaw, so for three-quarter and profile rows), set
+by --align or per row ("align": "eye-mouth"):
 
     {"rows": [{"label": "front",
                "cells": [{"img": "ref/crops/015.jpg", "lm": "ref/crops/015_lm.npy", "title": "ref"},
@@ -23,17 +26,29 @@ import cv2
 import numpy as np
 
 IRIS_R, IRIS_L = 468, 473
+MOUTH_R, MOUTH_L = 61, 291
 
 
-def aligned(img_path, lm_path, cell, ipd_frac, eye_y=0.42, flip=False):
+def anchors(lm):
+    """(eye a, eye b, mouth corner a, mouth corner b) from a 478-point or a five-point set."""
+    lm = np.asarray(lm, np.float64)[:, :2]
+    if len(lm) >= 478:
+        return lm[IRIS_R], lm[IRIS_L], lm[MOUTH_R], lm[MOUTH_L]
+    return lm[0], lm[1], lm[3], lm[4]
+
+
+def aligned(img_path, lm_path, cell, ipd_frac, eye_y=0.42, flip=False, mode="eyes", em_frac=0.34):
     img = cv2.imread(str(img_path))
-    lm = np.load(lm_path)
-    a, b = lm[IRIS_R, :2].astype(np.float64), lm[IRIS_L, :2].astype(np.float64)
-    if a[0] > b[0]:
-        a, b = b, a
-    src = np.float64([a, b])
-    half = ipd_frac * cell / 2
-    dst = np.float64([[cell / 2 - half, eye_y * cell], [cell / 2 + half, eye_y * cell]])
+    a, b, ma, mb = anchors(np.load(lm_path))
+    if mode == "eye-mouth":
+        src = np.float64([(a + b) / 2, (ma + mb) / 2])
+        dst = np.float64([[cell / 2, eye_y * cell], [cell / 2, (eye_y + em_frac) * cell]])
+    else:
+        if a[0] > b[0]:
+            a, b = b, a
+        src = np.float64([a, b])
+        half = ipd_frac * cell / 2
+        dst = np.float64([[cell / 2 - half, eye_y * cell], [cell / 2 + half, eye_y * cell]])
     M, _ = cv2.estimateAffinePartial2D(src, dst)
     out = cv2.warpAffine(img, M, (cell, cell), flags=cv2.INTER_AREA, borderValue=(24, 24, 24))
     return out[:, ::-1].copy() if flip else out
@@ -50,7 +65,9 @@ def cmd_board(a):
     root = Path(a.spec).parent
     rows = []
     for row in spec["rows"]:
-        ims = [aligned(root / c["img"], root / c["lm"], a.cell, a.ipd_frac, flip=a.flip) for c in row["cells"]]
+        mode = row.get("align", a.align)
+        ims = [aligned(root / c["img"], root / c["lm"], a.cell, a.ipd_frac, flip=a.flip, mode=mode, em_frac=a.em_frac)
+               for c in row["cells"]]
         titles = [c.get("title", "") for c in row["cells"]]
         if row.get("overlay"):  # blend the unlabelled cells, then label everything
             i, j = row["overlay"]
@@ -99,6 +116,8 @@ def main(argv=None):
     b.add_argument("--cell", type=int, default=384)
     b.add_argument("--ipd-frac", type=float, default=0.30)
     b.add_argument("--flip", action="store_true", help="mirror every cell (flip test)")
+    b.add_argument("--align", choices=("eyes", "eye-mouth"), default="eyes")
+    b.add_argument("--em-frac", type=float, default=0.34, help="eye-to-mouth span, fraction of the cell")
     k = sub.add_parser("blink")
     k.add_argument("--spec", required=True)
     k.add_argument("--out", required=True)

@@ -124,8 +124,9 @@ def umeyama(src, dst, scale=True):
 def closest_on_mesh(V, F, P, k=12):
     """Closest points on triangle mesh (V, F) to points P, via candidate triangles around the k
     nearest vertices. Returns points, distances, triangle ids."""
-    tree = cKDTree(V)
-    _, nn = tree.query(P, k=k)
+    used = np.unique(F)                                 # only vertices of F (F may be a subset of faces)
+    tree = cKDTree(V[used])
+    _, nn = tree.query(P, k=min(k, len(used)))
     vf = [[] for _ in range(len(V))]
     for fi, t in enumerate(F):
         for x in t:
@@ -134,11 +135,20 @@ def closest_on_mesh(V, F, P, k=12):
     best_d = np.full(len(P), np.inf)
     best_f = np.zeros(len(P), np.int64)
     for i in range(len(P)):
-        cand = np.unique(np.concatenate([vf[j] for j in nn[i]]))
+        cand = np.unique(np.concatenate([np.asarray(vf[j], np.int64) for j in used[nn[i]]]))
         q, d = point_tri(P[i], V[F[cand]])
         j = int(np.argmin(d))
         best_p[i], best_d[i], best_f[i] = q[j], d[j], cand[j]
     return best_p, best_d, best_f
+
+
+def rim_faces(F):
+    """Faces of F touching a vertex on F's open boundary (an edge used by one face only)."""
+    e = np.sort(np.r_[F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]], axis=1)
+    uniq, cnt = np.unique(e, axis=0, return_counts=True)
+    bv = np.zeros(F.max() + 1, bool)
+    bv[uniq[cnt == 1].ravel()] = True
+    return bv[F].any(1)
 
 
 def point_tri(p, T):
@@ -223,10 +233,17 @@ def wrap(base, lm_base, lm_target, TV, TF, trusted_tv=None, a=None):
     notes["landmark_rms_before_mm"] = float(np.sqrt(((lt - lm_base) ** 2).sum(1).mean()) * 1000)
     w_head = head_weight(base, co, a.neck_top, a.neck_bottom)
     region = w_head > 0
-    # 2. coarse RBF with anchors where the field must vanish
+    # 2. coarse RBF with anchors where the field must vanish: below the neck fade, and (unless
+    # disabled) the scalp behind --hold-cranium-dy, so the face change decays into the base
+    # cranium instead of extrapolating over it (the face landmarks say nothing about the skull)
     anchors = co[(w_head == 0) & base.skin & (np.linalg.norm(co[:, :2], axis=1) < 0.3)
                  & (co[:, 2] > 0.5 * (base.eye_l[2] + base.eye_r[2]) - a.neck_bottom - 0.08)]
     anchors = anchors[::max(1, len(anchors) // 300)]
+    if a.hold_cranium_dy is not None:
+        eye_y = 0.5 * (base.eye_l[1] + base.eye_r[1])
+        cran = co[base.skin & (base.group("scalp") > 0.5) & (co[:, 1] - eye_y > a.hold_cranium_dy)]
+        anchors = np.r_[anchors, cran[::max(1, len(cran) // 200)]]
+        notes["cranium_anchors"] = int(len(cran[::max(1, len(cran) // 200)]))
     X = np.r_[lm_base, anchors]
     Y = np.r_[lt - lm_base, np.zeros_like(anchors)]
     rbf = RBFInterpolator(X, Y, kernel="thin_plate_spline", smoothing=a.rbf_smoothing, degree=1)
@@ -241,13 +258,18 @@ def wrap(base, lm_base, lm_target, TV, TF, trusted_tv=None, a=None):
         tv_ok = np.ones(len(TV), bool)
     tf_ok = tv_ok[TF].all(1)
     TFt = TF[tf_ok]
+    # a base vertex beyond the trusted target region finds its closest point on that region's rim;
+    # such matches drag skin (neck, cranium) onto the rim, so matches on the rim ring are rejected
+    rim = rim_faces(TFt)
+    notes["rim_faces"] = int(rim.sum())
     for it in range(a.iters):
         idx = np.where(trust)[0]
         q, d, fid = closest_on_mesh(TV, TFt, cur[idx])
         nb = base.normals(cur)[idx]
         tn = np.cross(TV[TFt[fid, 1]] - TV[TFt[fid, 0]], TV[TFt[fid, 2]] - TV[TFt[fid, 0]])
         tn /= np.maximum(np.linalg.norm(tn, axis=1, keepdims=True), 1e-12)
-        ok = (d < a.max_dist) & ((nb * tn).sum(1) > 0.5)
+        along = np.abs(((q - cur[idx]) * tn).sum(1))                  # offset along the target normal
+        ok = (d < a.max_dist) & ((nb * tn).sum(1) > 0.5) & ~rim[fid] & ((d < 1e-3) | (along > 0.8 * d))
         disp = np.zeros_like(co)
         has = np.zeros(len(co), bool)
         disp[idx[ok]] = q[ok] - cur[idx[ok]]
@@ -353,12 +375,15 @@ def main(argv=None):
     ap.add_argument("--target-frame", choices=["blender", "flame"], default="flame")
     ap.add_argument("--target-mask", default="", help=".npz with 'trusted' (bool per target vertex)")
     ap.add_argument("--flame-masks", default="", help="FLAME_masks.pkl: trusted = --trust regions minus --distrust")
-    ap.add_argument("--trust", default="face,forehead,nose,lips,eye_region,scalp")
+    ap.add_argument("--trust", default="face,forehead,nose,lips,eye_region")
     ap.add_argument("--distrust", default="left_eyeball,right_eyeball,left_ear,right_ear,neck,boundary")
     ap.add_argument("--metric", action="store_true", help="keep the target's absolute scale")
     ap.add_argument("--neck-top", type=float, default=0.13, help="full weight above this depth below the eyes (m)")
     ap.add_argument("--neck-bottom", type=float, default=0.21, help="zero weight below this depth (m)")
     ap.add_argument("--rbf-smoothing", type=float, default=1e-5)
+    ap.add_argument("--hold-cranium-dy", type=float, default=0.05,
+                    help="scalp vertices this far behind the eye line (m) anchor the coarse field at zero")
+    ap.add_argument("--no-hold-cranium", dest="hold_cranium_dy", action="store_const", const=None)
     ap.add_argument("--iters", type=int, default=5)
     ap.add_argument("--smooth", type=int, default=6)
     ap.add_argument("--step", type=float, default=0.8)
