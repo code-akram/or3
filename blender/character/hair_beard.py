@@ -90,9 +90,16 @@ def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose):
         return -1.0, 0
     if p.z > nose[1] and p.y < nose[0]:
         return -1.0, 0
-    ds = [(_line_dist(p, cheek, True), 0), (_line_dist(p, neck, False), 1), (back_y - p.y, 2)]
+    ds = [(_line_dist(p, neck, False), 1), (back_y - p.y, 2)]
     if p.y < cheek[0][0]:
+        # In front of the cheek line's front end (the mouth corner) the
+        # moustache top bounds the beard. The cheek line extrapolated across
+        # the philtrum sat a few mm over the lip and thinned the moustache to
+        # stubble wherever the lips sit lower or further forward (a reshaped
+        # face).
         ds.append((moustache_top - p.z, 3))
+    else:
+        ds.append((_line_dist(p, cheek, True), 0))
     return min(ds)
 
 
@@ -124,7 +131,9 @@ def region(b, frame, cfg, rng):
                 and p.y > frame.lips_min.y + cfg["mouth_depth_m"] and nrm.y > -0.2):
             d = -1.0
         if d > -1:
-            d += wob * (math.sin(p.z * 160 + ph[0]) + math.sin(p.y * 110 + ph[1])
+            # the moustache top is a short line over a ~12 mm moustache: a
+            # full-strength wobble there punches holes in it
+            d += wob * (cfg.get("moustache_wobble", 1.0) if k == 3 else 1.0) * (math.sin(p.z * 160 + ph[0]) + math.sin(p.y * 110 + ph[1])
                         + math.sin((p.x + p.z) * 260 + ph[2]) + 0.6 * math.sin((p.y - p.x) * 530 + ph[0])) / 3.6
         dist[v.index] = d
         which[v.index] = k
@@ -173,7 +182,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
     head_g = frame.body.vertex_groups["head"].index
     neck_g = frame.body.vertex_groups["neck_01"].index
     out = {k: {} for k in ("density", "stubble", "length_m", "comb", "grey", "neckw",
-                           "moustache", "under", "chin", "soul", "edge")}
+                           "moustache", "under", "chin", "soul", "edge", "depth", "line")}
+    ct = cfg.get("cheek_thin")
     eb = cfg.get("edge", {}).get("band_m", 0.0)
     down = Vector((0, 0, -1))
     for v in bm.verts:
@@ -185,6 +195,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
         if which == 3:  # the moustache is only ~12 mm tall: a shorter ramp fills it
             fin = fd.get("moustache_in_m", fin)
         fout = fd["neck_out_m"] if which == 1 else fd["out_m"]
+        if which == 3:
+            fout = fd.get("moustache_out_m", fout)
         if d >= 0:
             x = smoothstep(0, fin, d)
             dens = fd["line_density"] + (1 - fd["line_density"]) * x ** fd["pow"]
@@ -192,10 +204,20 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
         else:
             dens = fd["line_density"] * smoothstep(-fout, 0, d)
             lenf = fd["line_length"]
+        if ct and which == 0:
+            # Upper cheeks: thinner and patchy for cheek_thin.full_m inside
+            # the cheek line, so it grows in instead of ending in an edge.
+            u = smoothstep(0, ct["full_m"], d)
+            pn = 0.5 + 0.5 * (math.sin(p.x * 410 + 1.3) * math.sin(p.z * 370 + 0.4)
+                              + 0.5 * math.sin((p.y + p.z) * 690 + 2.1)) / 1.5
+            dens *= (ct["min"] + (1 - ct["min"]) * u) * (1 - ct["patch"] * (1 - u) * pn)
         out["density"][v] = 0.0 if bare[v] else dens
+        out["depth"][v] = d
+        out["line"][v] = float(which)
         # Edge band (moustache top, cheek line, neckline): 0 at the outer
         # fade, 1 band_m inside the line; the strands there are finer.
-        out["edge"][v] = smoothstep(-fout, eb, d) if eb > 0 else 1.0
+        ebv = cfg.get("edge", {}).get("moustache_band_m", eb) if which == 3 else eb
+        out["edge"][v] = smoothstep(-fout, ebv, d) if ebv > 0 else 1.0
         # Stubble: a band from just inside the line to the patch edge.
         m = margins[which]
         st = smoothstep(-m, -m * 0.35, d) * (1 - smoothstep(fd["stubble_in_m"], fd["stubble_in_m"] * 2, d))
@@ -334,7 +356,12 @@ def build(b, frame, cfg):
     under = None
     if uc:
         urng = np.random.default_rng(cfg["seed"] + 201)
-        upos, un, uf = beard_groom.sample_roots(co, nrm, tris, F, uc["per_cm2"] * 1e4, urng)
+        # the under-coat stays well inside the cheek line and neckline (it
+        # would turn a soft edge into a solid one); the moustache keeps it
+        t_ = np.clip(F["depth"] / uc.get("in_m", 1e-6), 0, 1)
+        F["udens"] = F["density"] * np.where(F["line"] > 2.5, 1.0, t_ * t_ * (3 - 2 * t_))
+        upos, un, uf = beard_groom.sample_roots(co, nrm, tris, F, uc["per_cm2"] * 1e4, urng,
+                                                density_key="udens")
         upos = upos - un * g["root_sink_m"]
         ue = np.clip(uf["edge"], 0, 1)
         uf["length_m"] = uf["length_m"] * urng.uniform(*uc["length"], len(upos)) * \
