@@ -278,6 +278,43 @@ The build is `20261013T081002Z-heroE-main9` (main 61726e1, C 5b). The pistol is 
   - az 80 is as clear as 90.
 - So the profile camera stays at az 90, with az 85 as a fallback if the final groom moves.
 
+## v3 rig fixes from the fan preview (main cbd0c4c)
+
+Three defects from the fan preview review came from the lights, not the character. Each was diagnosed by dropping one light at a time (64 spp crops, same build), then fixed and checked against the preview. Values are region means of the graded 8-bit image (R G B, HSV saturation).
+
+**Twins generalised** (`rig._split`, `rig.TWIN_GROUPS`). The hair rim's light-linking split now takes several groups per light:
+- The original lights everything except the twinned objects.
+- Each group gets its own twin at the same place, desaturated to its fraction of the original saturation at the same luminance, times an energy factor.
+- The groups:
+  - **hair**: every saturated rim or kicker, as before (`HAIR_RIM`, 40 %). Unchanged.
+  - **props**: every saturated hero light, at `PROP_SAT` = 15 %.
+  - **cloth** (the suit, not the shirt) and **skin** (the body mesh and vellus): opt-in per shot through the spec's `twin` key, `{group: (fraction, energy)}` or `{group: {light: (fraction, energy)}}`.
+
+**Pistol (draw).**
+- The plum slide is the default magenta rim. Without it the slide is (8, 8, 12); dropping the magenta top or the teal kicker changes nothing.
+- A metal slide is nearly all specular, so it takes the rim's colour outright.
+- With the props twin, the slide goes from (41, 25, 50) to (22, 30, 46), dark gunmetal. The grade's cool white point keeps the HSV saturation around 0.5 in the near-black.
+- The hand on the grip is unchanged at (41, 34, 39).
+
+**Profile.**
+- At az 140 the teal rim reached the forward-facing cheek plane through the gap under the hair lock. It blew out to a pale blob below the eye, (77, 81, 89).
+- At az 160 it grazes only the nose, brow and beard edge. Halving the rim at az 140 only dimmed the blob.
+- A skin twin (70 %, 0.8 energy) softens the brow ridge: saturation 0.33 → 0.25. The nose edge goes 0.25 → 0.23 at the same brightness.
+- **Left:** a faint pink tint under the eye, (79, 48, 52), which the blob used to cover. It is the set's magenta neon spill through the same hair gap:
+  - With the neon off it turns warm, (71, 45, 43).
+  - Neither a kicker skin twin nor moving the kicker to −155° changes it.
+  - Track B's re-grooming of that lock should close the gap. Otherwise the shot's `neon` can be dimmed.
+
+**Back.**
+- The jacket's plum edge is the magenta rim, and the elbow glint is the teal kicker; I confirmed both by dropping each light.
+- A cloth twin of both (30 %, 0.75 energy):
+  - Jacket edge: (45, 30, 54) → (29, 32, 46).
+  - Elbow glint: (2, 27, 39), saturation 0.93 → (10, 22, 34), saturation 0.69, now a dim grey-blue.
+  - Back centre: unchanged, (10, 13, 21) → (9, 13, 20).
+- The hair keeps its own twin.
+
+Not done here: cloth twins for the bust and walk shots (their far shoulder also takes the magenta rim), and set-light twins.
+
 ## What the stage shows about the character (main ede62d6, run main5-sheet)
 
 For the owning tracks. The stage doesn't fix any of these.

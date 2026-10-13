@@ -105,7 +105,7 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
         sets.turn(cam["az"] + spec.get("set_yaw", 15.0))
         sets.neon(spec.get("neon", 1.0))
     lights = dict(spec.get("lights") or {})
-    rig.hero_rig(ch, cam, lights=lights,
+    rig.hero_rig(ch, cam, lights=lights, twin=spec.get("twin"),
                  flag=spec.get("flag", ("key", "wrap", "fill", "eye")) if set_kind == "alley" else ())
     if set_kind == "void":
         rig.world()

@@ -361,41 +361,84 @@ def hair_objects(ch):
     return [o for o in ch.objs if o.name.startswith("hair_") or o.name.startswith("Human.hair")]
 
 
-def _split_hair(ch, col, light):
-    """Give `light` (a saturated rim) a hair twin; see HAIR_RIM."""
-    hair = hair_objects(ch)
-    if not hair:
-        return None
-    hc = bpy.data.collections.get("hero_hair") or bpy.data.collections.new("hero_hair")
-    for o in list(hc.objects):
-        hc.objects.unlink(o)
-    for o in hair:
-        hc.objects.link(o)
-    ex = bpy.data.collections.get("hero_nohair") or bpy.data.collections.new("hero_nohair")
-    for o in list(ex.objects):
-        ex.objects.unlink(o)
-    for o in hair:
-        ex.objects.link(o)
-    for co in ex.collection_objects:
-        co.light_linking.link_state = "EXCLUDE"
-    light.light_linking.receiver_collection = ex
-    c, k = hair_rim_colour(tuple(light.data.color))
-    twin = light.copy()
-    twin.data = light.data.copy()
-    twin.name = light.name + "_hair"
-    twin.data.color = c
-    twin.data.energy = light.data.energy * k
-    twin.light_linking.receiver_collection = hc
-    col.objects.link(twin)
-    return twin
+# The same split for the other things a saturated light turns the wrong
+# colour. Held props (the pistol): a metal slide is nearly all specular, so
+# it takes a magenta light's colour outright and reads plum instead of black;
+# every saturated hero light gets a props twin at PROP_SAT. Per shot (the
+# spec's "twin": {group: (saturation fraction, energy factor)}), the rim and
+# kicker can also get a cloth twin (the suit: a black jacket under the
+# magenta rim reads plum from behind) or a skin twin (a teal face rim that
+# blows out on the cheek plane in the profile).
+PROP_SAT = 0.15
 
 
-def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=()):
+def prop_objects(ch):
+    return [o for o in ch.objs if "hero_prop" in o]
+
+
+def cloth_objects(ch):
+    return [o for o in ch.objs if o.type == "MESH" and "suit_" in o.name and "shirt" not in o.name]
+
+
+def skin_objects(ch):
+    """The body mesh (head and hands skin) and the vellus on it."""
+    def skin(o):
+        return o.type == "MESH" and any(s.material and s.material.name.startswith(("skin_head", "skin_hands"))
+                                        for s in o.material_slots)
+    return [o for o in ch.objs if skin(o) or o.name.startswith("skin_vellus")]
+
+
+TWIN_GROUPS = {"hair": hair_objects, "props": prop_objects, "cloth": cloth_objects, "skin": skin_objects}
+
+
+def _receivers(name, objs, state):
+    """A light-linking receiver collection (outside the scene) holding objs,
+    each INCLUDE or EXCLUDE."""
+    rc = bpy.data.collections.get(name) or bpy.data.collections.new(name)
+    for o in list(rc.objects):
+        rc.objects.unlink(o)
+    for o in objs:
+        rc.objects.link(o)
+    for co in rc.collection_objects:
+        co.light_linking.link_state = state
+    return rc
+
+
+def _split(ch, col, light, groups):
+    """Split `light` (saturated) by light linking: the original lights all
+    but the groups' objects; per group (name, saturation fraction, energy
+    factor) a twin at the same place lights only that group, desaturated to
+    the fraction at the same luminance, times the energy factor. Returns
+    {group: twin}."""
+    parts = [(g, TWIN_GROUPS[g](ch), sat, k) for g, sat, k in groups]
+    parts = [p for p in parts if p[1]]
+    if not parts:
+        return {}
+    light.light_linking.receiver_collection = _receivers(
+        light.name + "_rx", [o for _, objs, _, _ in parts for o in objs], "EXCLUDE")
+    twins = {}
+    for g, objs, sat, k in parts:
+        c, f = hair_rim_colour(tuple(light.data.color), sat)
+        twin = light.copy()
+        twin.data = light.data.copy()
+        twin.name = light.name + "_" + g
+        twin.data.color = c
+        twin.data.energy = light.data.energy * f * k
+        twin.light_linking.receiver_collection = _receivers(twin.name + "_rx", objs, "INCLUDE")
+        col.objects.link(twin)
+        twins[g] = twin
+    return twins
+
+
+def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(), twin=None):
     """Build the base hero rig around the camera's subject (the head for
     head shots, the chest otherwise). `lights` overrides entries of
     HERO_LIGHTS; scale multiplies every power. `flag`: names of lights that
     light only the character (Cycles light linking, the render version of a
-    flag on a stand), so a camera-relative key does not wash the set."""
+    flag on a stand), so a camera-relative key does not wash the set.
+    `twin`: {"cloth" | "skin": (saturation fraction, energy factor)}, extra
+    twins of the saturated rim / kicker for this shot (see PROP_SAT); the
+    value can also be {"rim" | "kicker": (fraction, factor)} per light."""
     col = collection("hero_rig")
     spec = dict(HERO_LIGHTS)
     spec.update(lights or {})
@@ -424,10 +467,17 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(
             made[name].data.diffuse_factor = EYE_DIFFUSE  # mostly a catchlight
         if name in flag:
             made[name].light_linking.receiver_collection = receivers(ch)
-        elif HAIR_RIM and name in ("rim", "kicker") and _is_saturated(colour):
-            twin = _split_hair(ch, col, made[name])
-            if twin is not None:
-                made[name + "_hair"] = twin
+        elif _is_saturated(colour):
+            groups = [("props", PROP_SAT, 1.0)]
+            if name in ("rim", "kicker"):
+                if HAIR_RIM:
+                    groups.append(("hair", HAIR_RIM_SAT, 1.0))
+                for g, val in (twin or {}).items():
+                    val = val.get(name) if isinstance(val, dict) else val
+                    if val is not None:
+                        groups.append((g, val[0], val[1]))
+            for g, t in _split(ch, col, made[name], groups).items():
+                made[name + "_" + g] = t
     return made
 
 
