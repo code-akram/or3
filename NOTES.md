@@ -684,6 +684,9 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 - Keyboard Lock https://developer.chrome.com/docs/capabilities/web-apis/keyboard-lock
 - M4 Air throttling https://www.notebookcheck.net/The-passively-cooled-M4-SoC-makes-the-competition-look-old-Apple-MacBook-Air-13-M4-base-model-review.1002534.0.html
 
+**City (technique reference only)**
+- xikhar/cybercity https://github.com/xikhar/cybercity: rainy neon city in three r186 WebGPU/TSL. The licence is unclear (only `"license": "ISC"` in package.json, no LICENSE file), and the assets have no provenance, so study it and reimplement; copy nothing. Worth reading: `src/materials/wet.js` (porosity wetness, puddles, ripples), `signage/lights.js` (pool of ~200 sign lights → best N real lights, neon flicker), `weather/heightfield.js` (rain occlusion height map), `signage/batch.js` (sign batching), and `engine/PostFX.js` for pass order only (too heavy for M4 Air).
+
 ---
 
 ## Decision log
