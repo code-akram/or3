@@ -90,14 +90,23 @@ DEFAULTS = {
         # 2 * edge_r_m thick, the collar point's edge too; the
         # fold faired (fold_fair_passes); the end path held as built
         # (hold_end); the fall at the side 3.5 cm (4.2 stood out at the side
-        # of the neck as a wing)
+        # of the neck as a wing).
+        # Round 4, the collar beside the neck lies on the shirt collar: the
+        # fold hugs the band at its own height (fold_win_m below it; 15 mm
+        # held it 1-2.5 cm off the band, which leans in), the stand bent at a
+        # knee knee_m above the band's base (seam -> base over the shoulder,
+        # then up the band), shirt_clear_m 1.5 mm; the fold drops toward the
+        # gorge only in front of the side (drop_frac 0.2; 0.3 held it low
+        # beside the neck); the end patch runs past the side (patch_frac), so
+        # the outer edge is one curve from the collar point (no tab)
         "collar": {"reveal_back_m": 0.014, "reveal_side_m": 0.014, "stand_min_m": 0.006,
-                   "shirt_clear_m": 0.003, "body_clear_m": 0.012, "thickness_m": 0.004,
+                   "shirt_clear_m": 0.0015, "body_clear_m": 0.012, "thickness_m": 0.004,
                    "fall_back_m": 0.040, "fall_side_m": 0.035, "seam_cover_m": 0.008,
-                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.3, "drop_m": 0.025, "end_relax": 2,
+                   "rest_m": 0.0035, "fall_rows": 6, "end_frac": 0.09, "drop_frac": 0.2, "drop_m": 0.025, "end_relax": 2,
                    "gorge_seam_m": 0.030, "point_m": 0.028, "notch_deg": 30, "end_lift_m": 0.0015,
                    "edge_fair_passes": 20, "edge_r_m": 0.00125, "under_m": 0.004, "hold_end": True,
-                   "fold_fair_passes": 6, "edge_settle_passes": 30},
+                   "fold_fair_passes": 6, "edge_settle_passes": 30,
+                   "fold_win_m": 0.004, "knee_m": 0.003, "patch_frac": 0.2},
         "vents": "double", "vent_height_m": 0.20, "vent_x_frac": 0.55,
         "vent_lift_m": 0.004, "vent_underlap_m": 0.035,
         # sleeve: tapers from the bicep (top_r, at the armpit) to the cuff,
