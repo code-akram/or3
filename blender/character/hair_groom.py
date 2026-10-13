@@ -64,7 +64,8 @@ DEFAULTS = {
     # the temple, where gravity starts between `fall_az_deg` (|azimuth|).
     "comb": {"mode": "back", "side": 0.8, "back": 0.35, "drop": 0.35, "forward": 0.25,
              "front_hold": 0.8, "fall_az_deg": [25.0, 50.0], "fall_above_ear_m": 0.06,
-             "hug": 0.0, "hug_above_ear_m": 0.0},   # pull back onto the skull while above the ear
+             "hug": 0.0, "hug_above_ear_m": 0.0,   # pull back onto the skull while above the ear
+             "free_fall_m": None},   # gravity ramps to full over 4 cm from this length, everywhere
     # Share of roots per side that tuck behind the ear (the rest drape over
     # it, kept off by the ear collider). left = +x, the character's left.
     "tuck": {"left": 1.0, "right": 1.0},
@@ -72,6 +73,9 @@ DEFAULTS = {
     "part_push": 0.25,         # comb push away from the part (hair_clumps uses clumps.part_push)
     "part_width_m": 0.02,
     "part_lift_m": 0.004,      # strands next to the part rise a little before they fall
+    "part_lift_rise_m": None,  # rise length of that lift (None: the lift profile's rise_m)
+    "part_density": 0.0,       # extra root density at the part line (x within part_width_m)
+    "part_back_m": 0.03,       # ... from the front back to this far behind the head centre
     # Hairline: temples recede (two bays), the density ramps over the feather.
     "hairline": {"recess_m": 0.009, "recess_az_deg": 44, "recess_sigma_deg": 13,
                  "recess_above_ear_m": 0.025,
@@ -283,10 +287,14 @@ def lift_profile(surf, gcfg, p, nrm, rng):
     fwd = rest - side
     amp = max(L["front_m"] * front, L["crown_m"] * top + L["side_m"] * side + L["back_m"] * back
               + L["front_m"] * fwd)
+    rise = L["rise_m"]
     if nrm[2] > 0.5 and p[1] < c.y + 0.02:
-        amp += surf.cfg["part_lift_m"] * math.exp(-abs(p[0] - surf.part_x) / 0.012)
+        near = math.exp(-abs(p[0] - surf.part_x) / 0.012)
+        amp += surf.cfg["part_lift_m"] * near
+        if surf.cfg.get("part_lift_rise_m") and near > 0.3:
+            rise = surf.cfg["part_lift_rise_m"] + (rise - surf.cfg["part_lift_rise_m"]) * (1 - near)
     amp *= 1 - L["jitter"] * rng.random()
-    return (amp, L["rise_m"], L["hold_m"], L["fall_m"], L["keep"])
+    return (amp, rise, L["hold_m"], L["fall_m"], L["keep"])
 
 
 def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
@@ -311,6 +319,8 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
             side = (smoothstep(cm["fall_az_deg"][0], cm["fall_az_deg"][1], az)
                     * smoothstep(frame.ears_max.z + cm["fall_above_ear_m"], frame.ears_max.z, p.z))
             behind = max(behind, side)
+            if cm.get("free_fall_m") is not None:
+                behind = max(behind, smoothstep(cm["free_fall_m"], cm["free_fall_m"] + 0.04, s))
         return max(behind, low) * ccfg["gravity"]
 
     tk = gcfg["tuck"]
@@ -419,6 +429,7 @@ def front_fall_guides(frame, ccfg, gcfg, surf, rng, m):
 def sample_roots(surf, rng, n):
     """n roots with the hairline density ramp (feather band)."""
     h = surf.cfg["hairline"]
+    pd = surf.cfg.get("part_density", 0.0)
     P_all, N_all = [], []
     got = 0
     while got < n:
@@ -431,6 +442,11 @@ def sample_roots(surf, rng, n):
                 continue
             f = surf.feather(p)
             prob = h["feather_min"] + (1 - h["feather_min"]) * smoothstep(0.0, f, d) ** h["ramp_pow"]
+            if pd > 0:
+                # sample() is uniform: accept the rest at 1 / (1 + pd), the part line at 1.
+                near = (Nn[i][2] > 0.5 and p[1] < surf.c.y + surf.cfg.get("part_back_m", 0.03)
+                        and abs(p[0] - surf.part_x) < surf.cfg["part_width_m"])
+                prob *= 1.0 if near else 1.0 / (1.0 + pd)
             if r[i] < prob:
                 keep.append(i)
         P_all.append(P[keep])
