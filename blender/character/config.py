@@ -227,8 +227,8 @@ DEFAULTS = {
             # Density across the line: 1 at in_m inside, line_density at the
             # line, 0 at out_m outside; stubble from stubble_in_m inside to
             # the patch edge.
-            "fade": {"in_m": 0.010, "out_m": 0.004, "neck_in_m": 0.014, "neck_out_m": 0.006,
-                     "line_density": 0.12, "pow": 2.0, "line_length": 0.35,
+            "fade": {"in_m": 0.007, "moustache_in_m": 0.005, "out_m": 0.004, "neck_in_m": 0.014, "neck_out_m": 0.006,
+                     "line_density": 0.12, "pow": 1.8, "line_length": 0.35,
                      "stubble_in_m": 0.004},
             # Edge band: from the outer fade to band_m inside the line, the
             # hero strands thin to `radius` x width and `length` x length.
@@ -245,7 +245,7 @@ DEFAULTS = {
                      "smooth_iters": 3},
             # Strand growth (beard_groom.grow): exit angle over the skin
             # relaxing to the tip angle, yaw / curl spread, curly share.
-            "groom": {"per_cm2": 200, "points": 8, "root_sink_m": 0.0005,
+            "groom": {"per_cm2": 360, "points": 8, "root_sink_m": 0.0005,
                       "elev0": 38, "elev1": 4, "elev1_under": 0, "elev_sigma": 10,
                       "elev_chin": 12,  # extra exit angle at the chin (bulk, profile)
                       "elev_soul": 25,  # ... under the lower lip (the hairs fill the sulcus)
@@ -258,20 +258,23 @@ DEFAULTS = {
                       "frizz_base": 1.0},
             "stubble": {"per_cm2": 60, "points": 3, "length_m": [0.001, 0.002],
                         "elev0": 35, "elev1": 20, "frizz": 0.3, "radius_scale": 0.8},
+            # Under-coat (hero only): short hairs lying near the skin under the main mass.
+            "undercoat": {"per_cm2": 240, "length": [0.3, 0.55], "elev0": 14, "elev1": 2,
+                          "radius_scale": 0.9, "frizz": 0.3},
             # Tone: melanin / redness per strand (hero), with the game
             # palette interpolated by melanin (swatches, sRGB).
             # warm: a subtle brown variation (melanin 0.9 / redness 0.7
             # rendered as orange flecks).
-            "tone": {"melanin": 0.98, "redness": 0.45, "sigma": 0.015,
-                     "warm_share": 0.1, "warm": [0.95, 0.5],
+            "tone": {"melanin": 0.996, "redness": 0.3, "sigma": 0.015,
+                     "warm_share": 0.05, "warm": [0.96, 0.45],
                      "grey_share": 0.025, "grey_extra": 0.05, "grey": [0.2, 0.15],
                      "swatches": [[0.2, "#948e86"], [0.9, "#6a4a32"], [0.98, "#3e2e23"],
                                   [1.0, "#30241b"]],
                      "value_sigma": 0.3},
-            "hero": {"radius_m": [0.00004, 0.00007], "tip_radius": 0.12,
+            "hero": {"radius_m": [0.00005, 0.00008], "tip_radius": 0.22,
                      # soft specular; the ends fade to tip_alpha past tip_fade_from
                      "material": {"roughness": 0.45, "radial_roughness": 0.6, "coat": 0.1,
-                                  "root_dark": 0.06, "tip_alpha": 0.25, "tip_fade_from": 0.55},
+                                  "root_dark": 0.06, "tip_alpha": 0.6, "tip_fade_from": 0.55},
                      "clump": {"shape": 0.4, "tip_spread": 0.0004, "guide_distance_m": 0.004},
                      "frizz": {"distance_m": 0.0007, "shape": 0.6}},
             # Game shells: the decimated patch stacked along the normal at
@@ -284,7 +287,7 @@ DEFAULTS = {
                        # baked hairs are about 3x real width at this resolution: draw a
                        # share, lighter, and keep the stacked layers from self-shadowing
                        "albedo_gain": 1.6, "saturation": 0.8, "cast_shadow": False,
-                       "stubble_keep": 0.35, "beard_keep": 0.6,
+                       "stubble_keep": 0.35, "beard_keep": 0.33,
                        "uv": {"max_angle_deg": 120, "pad": 0.02, "origin_back_m": 0.0,
                               "origin_up_m": 0.0},
                        "roughness": 0.6, "specular": 0.25},
@@ -322,18 +325,18 @@ DEFAULTS = {
             "edge_turn": 0.45,         # upper-edge hairs turn down, lower-edge up (x dz)
             "smooth_iters": 2,
             "top_soft": 0.5, "top_jag": 0.35,  # softer top falloff (in hh) and its irregular wobble
-            "groom": {"per_cm2": 240, "points": 6, "root_sink_m": 0.0003,
+            "groom": {"per_cm2": 360, "points": 6, "root_sink_m": 0.0003,
                       "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
                       "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4},
-            "tone": {"melanin": 0.982, "redness": 0.45, "sigma": 0.02,
-                     "light_share": 0.12, "light_melanin": 0.9,  # some lighter brown hairs
+            "tone": {"melanin": 0.995, "redness": 0.3, "sigma": 0.02,
+                     "light_share": 0.06, "light_melanin": 0.94,  # some lighter brown hairs
                      "swatches": [[0.2, "#948e86"], [0.86, "#5a3e2a"], [0.97, "#2a1f18"],
                                   [1.0, "#1e1712"]],
                      "redness_ref": 0.45, "value_sigma": 0.25},
-            "hero": {"radius_m": [0.00003, 0.000045], "tip_radius": 0.15,
+            "hero": {"radius_m": [0.000035, 0.000055], "tip_radius": 0.15,
                      "tail_fine": 0.35,  # strands up to 35 % finer along the tail
                      "material": {"roughness": 0.42, "radial_roughness": 0.55, "coat": 0.1,
-                                  "root_dark": 0.04, "tip_alpha": 0.35, "tip_fade_from": 0.6},
+                                  "root_dark": 0.04, "tip_alpha": 0.6, "tip_fade_from": 0.6},
                      "clump": {"shape": 0.3, "tip_spread": 0.0003, "guide_distance_m": 0.0018},
                      "frizz": {"distance_m": 0.0004, "shape": 0.6}},
             "base_tris": 0,            # (unused; shells.base_tris)
@@ -342,7 +345,7 @@ DEFAULTS = {
                        "radius_scale": 1.0, "min_radius_px": 0.5,
                        "canopy_radius_m": 0.003, "canopy_pct": 85, "canopy_floor_m": 0.0005,
                        "shade": {"root": 0.7, "full_at": 0.7},
-                       "albedo_gain": 1.8, "saturation": 0.85, "cast_shadow": False, "strand_keep": 0.55,
+                       "albedo_gain": 1.8, "saturation": 0.85, "cast_shadow": False, "strand_keep": 0.37,
                        "roughness": 0.6, "specular": 0.25},
             "cards": {"per_side": 20, "spacing_m": 0.0025, "clump_radius_m": 0.0015,
                       "min_members": 3, "min_len_m": 0.004, "segments": 2,
@@ -360,15 +363,15 @@ DEFAULTS = {
         "lashes": {
             "seed": 17, "proxy": "eyelashes", "drop_proxy": True, "bins": 14, "points": 7,
             "margin_step_m": 0.0005, "margin_min_open_m": 0.0006, "margin_in_m": 0.0003,
-            "upper": {"count": 190, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.009, 0.0075],
+            "upper": {"count": 240, "length_m": [0.0045, 0.0075, 0.0095, 0.010, 0.009, 0.0075],
                       "curl_deg": 55, "forward": 0.8, "splay_deg": 6, "fan_deg": 40,
                       "row_jitter_m": 0.00025, "strip_cols": 8, "strip_forward_scale": 0.6},
             "lower": {"count": 60, "length_m": [0.0018, 0.0032, 0.0045, 0.0042, 0.003],
                       "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
                       "row_jitter_m": 0.0002, "strip_cols": 6, "radius_scale": 0.7},
-            # dark brown, not black; clumps of 3-5 (guide distance)
-            "melanin": 0.96, "redness": 0.45, "clump": 0.6, "gap_m": 0.00015,
-            "hero": {"radius_m": [0.00004, 0.00005], "tip_radius": 0.15,
+            # near-black brown, dense upper line (the hero lashes alone frame the eye); clumps of 3-5
+            "melanin": 0.985, "redness": 0.35, "clump": 0.6, "gap_m": 0.00015,
+            "hero": {"radius_m": [0.000045, 0.00006], "tip_radius": 0.2,
                      "material": {"roughness": 0.25, "radial_roughness": 0.3, "coat": 0.1,
                                   "root_dark": 0.0},
                      "clump": {"shape": 0.5, "tip_spread": 0.0001, "guide_distance_m": 0.0006}},
