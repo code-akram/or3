@@ -173,10 +173,13 @@ def dist_to(P, seeds, where, n_seed=3000, chunk=4096):
     out = np.full(where.shape, np.inf, np.float32)
     if seeds.sum() < 16 or not where.any():
         return out
-    Q = P[seeds].astype(np.float32)
+    # about the seeds' centre: |p|^2 + |q|^2 - 2 p.q in float32 at ~1.7 m from
+    # the origin loses ~0.6 mm, the scale of the lip edge itself
+    o = P[seeds].mean(0)
+    Q = (P[seeds] - o).astype(np.float32)
     Q = Q[::max(1, len(Q) // n_seed)]
     q2 = (Q * Q).sum(-1)
-    Pw = P[where].astype(np.float32)
+    Pw = (P[where] - o).astype(np.float32)
     d2 = np.empty(len(Pw), np.float32)
     for i in range(0, len(Pw), chunk):
         p = Pw[i:i + chunk]
