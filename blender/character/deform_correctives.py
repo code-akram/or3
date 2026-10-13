@@ -68,8 +68,8 @@ SPECS = [
     # weight, never ends with more compression than it tested. The pads,
     # the palm and the palmar crease give way, so the fingers close further.
     {"name": "corr_fist", "bone": "middle_02", "pose": "FIST_TIGHT", "ref": "hand",
-     "region": ("middle_01", 0.085), "meshes": ["body"], "self_collide": True, "power": 1.5,
-     "drive_pose": "FIST"},
+     "region": ("middle_01", 0.085), "meshes": ["body"], "self_collide": True, "power": 1.0,
+     "start": 0.45, "drive_pose": "FIST"},
 ]
 # skin parts of a hand for self_collide: part -> bone prefixes (side added)
 HAND_PARTS = {"palm": ("hand", "thumb_01"), "thumb": ("thumb_02", "thumb_03"),
@@ -522,6 +522,7 @@ class Baker:
         self.rt.apply(morphs=False)
         rule = {"type": "cone", "name": name, "bone": bone, "ref": ref,
                 "rest_dir": drt.bl_to_gl(d0), "target_dir": drt.bl_to_gl(t), "power": spec.get("power", 1.0),
+                "start": spec.get("start", 0.0),
                 "meshes": [self.parts[k].name for k in stats if k in self.parts],
                 "angle_deg": round(math.degrees(d0.angle(t)), 1)}
         return rule, stats
