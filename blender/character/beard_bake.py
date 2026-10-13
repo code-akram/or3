@@ -230,7 +230,16 @@ def build_shells(b, obj, bm, canopy, project, grooms, cfg, name, extra=None):
             bb = np.concatenate(b_all) + [x0, y0]
             tk = ts[k]
             shade = shade_cfg["root"] + (1 - shade_cfg["root"]) * min(tk / shade_cfg["full_at"], 1.0) ** 0.7
-            col = np.concatenate(c_all) * shade * cfg.get("albedo_gain", 1.0)
+            base = np.concatenate(c_all)
+            gain = np.full((len(base), 1), cfg.get("albedo_gain", 1.0))
+            if "grey_gain" in cfg:
+                # light (grey) strands get their own, lower lift: the dark
+                # strands' gain turns them into white flecks
+                lb = base @ np.array([0.2126, 0.7152, 0.0722])
+                lo, hi = cfg.get("grey_lum", [0.12, 0.25])
+                w = np.clip((lb - lo) / (hi - lo), 0, 1)[:, None]
+                gain = gain + (cfg["grey_gain"] - gain) * w
+            col = base * shade * gain
             # lifted warm strands go orange: pull the colour toward its value
             lum = (col @ np.array([0.2126, 0.7152, 0.0722]))[:, None]
             col = lum + (col - lum) * cfg.get("saturation", 1.0)

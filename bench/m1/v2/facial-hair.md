@@ -6,6 +6,14 @@ The baseline beard was a pasted, single-tone black patch with a hard outline, th
 
 Everything is placed off landmarks and by surface sampling: lip, ear, head and neck groups, profile lines, brow-proxy spines, and lid margins ray-cast on the final skin. So Track A's forms v1 → v2 change rebuilt the grooms with no edits.
 
+## v3 round 1b (game grey, brow tail)
+
+Evidence run: `data/build/lookdev/20261013T120128Z-fhv3-c4`, on main `583ded8`. Comparisons are in `data/build/trackC/v3/`.
+
+- **Game grey.** The shell bake now gives light strands their own brightness lift (`beard_bake`, `shells.grey_gain` 1.0 against `albedo_gain` 1.6). It blends in by each strand's linear luminance over `grey_lum` [0.12, 0.22], so the dark and warm strands keep the 1.6 lift. The grey now reads silver, not as white flecks: `v3c4_game_cmp.png` (left v3 round 1, right c4).
+  - A first pass at 0.7 (run `…-fhv3-c3`) made the grey nearly vanish at bust distance.
+- **Brow tail.** The unruly hairs now fade out from 55 % along the brow, and none remain at the tail (`groom.unruly.tail_from`, `tail_cut`). That alone did not remove the wisps (`…-fhv3-c3`). They were the sparse, full-length tail strands beyond the proxy's end. So the patch now reaches 2 mm past the end instead of 4 mm, and the tail hairs are 4.5 mm instead of 6 mm. At 135 mm, `v3c4_brow_cmp.png` (top v3 round 1, bottom c4) shows the long wisps toward the temple gone; the tail ends in short, fine hairs.
+
 ## v3 round 1 (film grooming for the fan build)
 
 Evidence:

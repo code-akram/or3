@@ -291,6 +291,8 @@ DEFAULTS = {
                        # baked hairs are about 3x real width at this resolution: draw a
                        # share, lighter, and keep the stacked layers from self-shadowing
                        "albedo_gain": 1.6, "saturation": 0.8, "cast_shadow": False,
+                       # grey strands (linear luminance over grey_lum) lifted less: silver, not white
+                       "grey_gain": 1.0, "grey_lum": [0.12, 0.22],
                        "stubble_keep": 0.35, "beard_keep": 0.33,
                        "uv": {"max_angle_deg": 120, "pad": 0.02, "origin_back_m": 0.0,
                               "origin_up_m": 0.0},
@@ -321,12 +323,12 @@ DEFAULTS = {
             "straighten": 0.6, "head_drop_m": 0.0015, "outer_droop_m": 0.0012,
             "margin_m": 0.002,         # feather past the band
             "select_m": 0.006,         # patch selection beyond the feather (density 0 there)
-            "end_extend_m": 0.004,     # patch beyond the proxy's ends
+            "end_extend_m": 0.002,     # patch beyond the proxy's ends (more trails wisps to the temple)
             "depth_tol_m": 0.015,      # skin within this y of the proxy (the face front only)
             "core": 0.35,              # |dz|/hh below this is full density
             "tail_start": 0.5, "tail_thin": 0.9,  # the tail thins to 1 - tail_thin
             "head_feather": 0.1,       # the head starts at half density, full after this
-            "length_m": [0.006, 0.008, 0.0085, 0.006],  # at along 0, 0.35, 0.7, 1
+            "length_m": [0.006, 0.008, 0.0085, 0.0045],  # at along 0, 0.35, 0.7, 1
             # comb by thirds (x outward, z up), blended
             "thirds": {"inner_up": 1.4, "inner_out": 0.6, "mid_up": 0.12, "tail_up": -0.35},
             "edge_turn": 0.45,         # upper-edge hairs turn down, lower-edge up (x dz)
@@ -336,7 +338,8 @@ DEFAULTS = {
                       "elev0": 22, "elev1": 4, "elev_sigma": 6, "yaw_sigma": 10, "curl_sigma": 15,
                       "len_min": 0.65, "gap_m": [0.00015, 0.0003], "clump": 0.3, "frizz": 0.4,
                       # a few unruly hairs: turned and lifted off the comb, longer
-                      "unruly": {"share": 0.03, "yaw_deg": 35, "lift_deg": 20, "length": 1.35}},
+                      "unruly": {"share": 0.03, "yaw_deg": 35, "lift_deg": 20, "length": 1.35,
+                                 "tail_from": 0.55, "tail_cut": 1.0}},  # none past the tail
             "tone": {"melanin": 0.995, "redness": 0.3, "sigma": 0.02,
                      "light_share": 0.06, "light_melanin": 0.94,  # some lighter brown hairs
                      "swatches": [[0.2, "#948e86"], [0.86, "#5a3e2a"], [0.97, "#2a1f18"],
