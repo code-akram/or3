@@ -48,6 +48,7 @@ render seconds, pose log). Import it from Python too:
 """
 
 import argparse
+import colorsys
 import json
 import math
 import os
@@ -307,6 +308,77 @@ def receivers(ch):
     return col
 
 
+# Hair rim (Track B's finding): the wet coat specular mirrors a magenta rim
+# at full saturation, which reads as magenta hair on the shadow side. A
+# magenta rim / kicker is split by light linking: the original lights
+# everything but the head hair; a twin at the same place lights only the hair,
+# its colour pulled toward white-violet to HAIR_RIM_SAT of the original
+# saturation, at the same luminance. Face, suit and set keep the full rim.
+HAIR_RIM = True
+HAIR_RIM_SAT = 0.4
+HAIR_RIM_TOWARD = (0.85, 0.80, 1.0)
+
+
+def _lum(c):
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def _is_magenta(colour):
+    if isinstance(colour, (int, float)):
+        return False
+    h, s, _ = colorsys.rgb_to_hsv(*colour)
+    return s > 0.3 and (h > 0.75 or h < 0.02)
+
+
+def hair_rim_colour(colour, sat=None):
+    """`colour` moved toward HAIR_RIM_TOWARD until its HSV saturation is
+    `sat` (default HAIR_RIM_SAT) of the original; returns (rgb, energy
+    factor that keeps the luminance)."""
+    sat = HAIR_RIM_SAT if sat is None else sat
+    s0 = colorsys.rgb_to_hsv(*colour)[1]
+    lo, hi = 0.0, 1.0
+    for _ in range(30):
+        t = (lo + hi) / 2
+        c = tuple(a + (b - a) * t for a, b in zip(colour, HAIR_RIM_TOWARD))
+        lo, hi = (t, hi) if colorsys.rgb_to_hsv(*c)[1] > sat * s0 else (lo, t)
+    c = tuple(a + (b - a) * hi for a, b in zip(colour, HAIR_RIM_TOWARD))
+    return c, _lum(colour) / _lum(c)
+
+
+def hair_objects(ch):
+    """The head hair: the strand groom and its scalp, or the hair cards."""
+    return [o for o in ch.objs if o.name.startswith("hair_") or o.name.startswith("Human.hair")]
+
+
+def _split_hair(ch, col, light):
+    """Give `light` (a magenta rim) a hair twin; see HAIR_RIM."""
+    hair = hair_objects(ch)
+    if not hair:
+        return None
+    hc = bpy.data.collections.get("hero_hair") or bpy.data.collections.new("hero_hair")
+    for o in list(hc.objects):
+        hc.objects.unlink(o)
+    for o in hair:
+        hc.objects.link(o)
+    ex = bpy.data.collections.get("hero_nohair") or bpy.data.collections.new("hero_nohair")
+    for o in list(ex.objects):
+        ex.objects.unlink(o)
+    for o in hair:
+        ex.objects.link(o)
+    for co in ex.collection_objects:
+        co.light_linking.link_state = "EXCLUDE"
+    light.light_linking.receiver_collection = ex
+    c, k = hair_rim_colour(tuple(light.data.color))
+    twin = light.copy()
+    twin.data = light.data.copy()
+    twin.name = light.name + "_hair"
+    twin.data.color = c
+    twin.data.energy = light.data.energy * k
+    twin.light_linking.receiver_collection = hc
+    col.objects.link(twin)
+    return twin
+
+
 def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=()):
     """Build the base hero rig around the camera's subject (the head for
     head shots, the chest otherwise). `lights` overrides entries of
@@ -341,6 +413,10 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(
             made[name].data.diffuse_factor = EYE_DIFFUSE  # mostly a catchlight
         if name in flag:
             made[name].light_linking.receiver_collection = receivers(ch)
+        elif HAIR_RIM and name in ("rim", "kicker") and _is_magenta(colour):
+            twin = _split_hair(ch, col, made[name])
+            if twin is not None:
+                made[name + "_hair"] = twin
     return made
 
 
