@@ -80,6 +80,10 @@ sc.world.color = (0, 0, 0)
 
 ids = {}
 mats_beauty = {}
+# ids spread over the 8-bit range: with the hand nails a 14th mesh came in,
+# and adjacent ids (1/255 apart) were confused in the dark sRGB range (the
+# background sphere counted as the body)
+STEP = max(1, 250 // (len(meshes) + 1))
 for i, o in enumerate(meshes):
     ids[o.name] = i + 1
     m = bpy.data.materials.new(f"id_{i}")
@@ -88,7 +92,7 @@ for i, o in enumerate(meshes):
     for n in list(nt.nodes):
         nt.nodes.remove(n)
     em = nt.nodes.new("ShaderNodeEmission")
-    v = (i + 1) / 255.0
+    v = (i + 1) * STEP / 255.0
     em.inputs[0].default_value = (v, v, v, 1.0)
     em.inputs[1].default_value = 1.0
     out = nt.nodes.new("ShaderNodeOutputMaterial")
@@ -134,7 +138,7 @@ def count_ids(px):
     # sRGB-encoded by the Standard transform: decode back to linear
     c = px[..., 0]
     lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
-    idx = np.rint(lin * 255).astype(int)
+    idx = np.rint(lin * 255 / STEP).astype(int)
     out = {}
     for name, i in ids.items():
         out[name] = int((idx == i).sum())

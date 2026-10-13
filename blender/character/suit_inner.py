@@ -319,17 +319,36 @@ class Inner:
             _, L = getattr(jk, f"sleeve_L_{side}")
             C, T, up, sd = axis(L)
             c = sum(ring, Vector()) / len(ring)
-            n = 16
-            pts16 = sb.ring_points_resample(ring, n)
+            # cuff_segments round a smooth curve through the sleeve end (16
+            # straight off it read as a polygon in the hand close-ups), and the
+            # outer edge a quarter round of cuff_edge_r_m (it was a square corner)
+            n = S.get("cuff_segments", 16)
+            base = sb.ring_points_smooth(ring, n) if n != 16 else sb.ring_points_resample(ring, n)
+            rv, e = S["cuff_reveal_m"], S.get("cuff_edge_r_m", 0.0)
+            prof = [(0.80, 0.0, -S["cuff_inside_m"]), (0.88, 0.0, 0.0)]
+            if e:
+                h = math.sqrt(0.5)
+                prof += [(0.88, 0.0, rv - e), (0.88, e * (1 - h), rv - e * (1 - h)), (0.88, e, rv)]
+            else:
+                prof += [(0.88, 0.0, rv)]
+            prof += [(0.80, 0.0, rv - 0.002)]
             g = G.grid(f"cuff_{side}")
-            for k, (scale, along) in enumerate(((0.80, -S["cuff_inside_m"]), (0.88, 0.0),
-                                                (0.88, S["cuff_reveal_m"]),
-                                                (0.80, S["cuff_reveal_m"] - 0.002))):
-                pts = [c + (p - c) * scale + T * along for p in pts16]
+            for k, (scale, inset, along) in enumerate(prof):
+                pts = [c + (p - c) * scale - (p - c).normalized() * inset + T * along for p in base]
                 g.add_row(pts + [pts[0].copy()], [(0.3 * i / n, 0.02 * k) for i in range(n + 1)])
             g.fill(G.uv, G.tag, 4, flip=True)   # the sleeve end's column order on both sides: faces out
+            # cuff_rigid: the cuff is stiff, interfaced cloth and rotates with
+            # the forearm as one ring (all on lowerarm; Track F's twist split
+            # moves it onto the forearm twist bone). Weighted from the nearest
+            # skin, the reveal took up to 0.7 hand and 0.14 thumb, and the
+            # ring sheared into a zigzag when the wrist bent (high_ready)
             for row in g.rows:
-                G.weight(row, sb.ARM[side])
+                if S.get("cuff_rigid"):
+                    for v in row:
+                        v[G.dl].clear()
+                        v[G.dl][G.gidx[f"lowerarm_{side}"]] = 1.0
+                else:
+                    G.weight(row, sb.ARM[side])
             G.mark_row(4, g, 2, "edge", inside_sign=-1.0, stitch_in_m=0.004)
 
     # --- tie ----------------------------------------------------------------------------------

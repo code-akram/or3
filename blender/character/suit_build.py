@@ -272,6 +272,22 @@ def ring_points_resample(points, n):
     return out
 
 
+def ring_points_smooth(points, n, sub=8):
+    """n points evenly spaced by arc length along the closed Catmull-Rom curve
+    through `points`: a ring finer than the polyline it follows without its
+    corners (a cuff resampled straight off the sleeve's 28-sided end kept the
+    sleeve's facets)."""
+    m = len(points)
+    dense = []
+    for i in range(m):
+        p0, p1, p2, p3 = (points[(i + k) % m] for k in (-1, 0, 1, 2))
+        for s in range(sub):
+            t = s / sub
+            dense.append(0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t * t
+                                + (3 * p1 - p0 - 3 * p2 + p3) * t * t * t))
+    return ring_points_resample(dense, n)
+
+
 def ring_points(cy, radii, z, a0, a1, n, ease=None):
     """n + 1 points on the slice profile from angle a0 to a1 (a1 > a0, may
     exceed TAU), at height z. ease(angle) adds to the radius."""

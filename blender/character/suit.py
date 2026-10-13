@@ -112,11 +112,14 @@ DEFAULTS = {
         # sleeve: tapers from the bicep (top_r, at the armpit) to the cuff,
         # never closer than ease_m to the arm (0.066 / 0.046 / 0.010 read as
         # thick tubes: 12 cm over a 30 cm bicep); rows 1.1 cm apart carry the
-        # modelled crook folds (suit_folds, 5 cm wavelength; 1.6 cm aliased them)
-        "sleeve": {"columns": 28, "row_m": 0.011, "band_m": 0.012, "ease_m": 0.008,
+        # modelled crook folds (suit_folds, 5 cm wavelength; 1.6 cm aliased them);
+        # 40 columns round (28 read as a polygon at the sleeve end in the hand
+        # close-ups); the last end_rigid_m rotate with the forearm, round the
+        # rigid shirt cuff
+        "sleeve": {"columns": 40, "row_m": 0.011, "band_m": 0.012, "ease_m": 0.008,
                    "top_r_m": 0.058, "cuff_r_m": 0.044, "past_wrist_m": 0.005,
                    "rope_m": 0.006, "head_rows": 7, "seam_out_m": 0.0025, "scye_half_w_m": 0.070,
-                   "elbow_blend_m": 0.04, "uv_circ_m": 0.36},
+                   "elbow_blend_m": 0.04, "uv_circ_m": 0.36, "end_rigid_m": 0.04},
         "pockets": {"flap_x0_m": 0.07, "flap_w_m": 0.16, "flap_h_m": 0.06,
                     "flap_below_button_m": 0.10,
                     "welt": {"from_roll_m": 0.095, "w_m": 0.105, "h_m": 0.024,
@@ -154,7 +157,11 @@ DEFAULTS = {
                          "flare": 0.35, "body_clear_m": 0.008, "overhang_m": 0.0,
                          "closure_overlap_rad": 0.06, "ring_columns": 20, "ring_open_rad": 0.30, "ring_to_deg": 115, "ring_drop_m": 0.012,
                          "ring_steps_m": [0.004, 0.009, 0.016, 0.026, 0.040], "ring_off_m": 0.0045},
+              # the cuff 48 round a smooth ring with a rounded edge (16 read as a
+              # polygon in the hand close-ups), rigid on the forearm (it sheared
+              # into a zigzag with the wrist; suit_inner.build_cuffs)
               "placket_w_m": 0.035, "cuff_reveal_m": 0.013, "cuff_inside_m": 0.02,
+              "cuff_segments": 48, "cuff_edge_r_m": 0.0012, "cuff_rigid": True,
               "front_into_band_m": 0.003, "band_inset_m": 0.002, "yoke": False},
     # four-in-hand (suit_neck.build_knot): width at its widest, height top to
     # the blade, depth off the band; taper = how much narrower the bottom is
@@ -268,8 +275,11 @@ DEFAULTS = {
                 "panel_rough": {"suit_jacket:2": -0.10, "suit_jacket:3": -0.05}},
     "textures": {"enabled": True, "wool_px": 2048, "vest_px": 1024, "shirt_px": 1024, "tie_px": 512,
                  "shoe_px": 1024, "seed": 3, "slope": 1.0},
-    # jacket and trousers raised (14000 / 4000) for the denser sleeve and knee rows
-    "budgets": {"jacket": 16000, "tie": 900, "waistcoat": 3000, "shirt": 2200,
+    # jacket and trousers raised (14000 / 4000) for the denser sleeve and knee rows;
+    # jacket 16000 -> 18000 for the 40-column sleeves; shirt 2200 -> 3600: the
+    # shirt (2812 tris) was being collapse-decimated to 2200, which faceted
+    # the cuff rings (and the collar), plus the 48-segment cuffs
+    "budgets": {"jacket": 18000, "tie": 900, "waistcoat": 3000, "shirt": 3600,
                 "trousers": 5000, "shoes": 5000},
     "hide_body": True,
     "hide_margin_m": 0.03,
@@ -281,7 +291,9 @@ DEFAULTS = {
     # itself before any garment (the inner arm facing the torso) counts as
     # blocked when, carried on through the body, it ends on a garment within
     # hide_self_m rather than leaving the suit
-    "hide_enclosed": {"bones": ["upperarm", "clavicle", "spine"], "m": 0.20},
+    # (trim_edge: there a covered face goes when one of its vertices is past
+    # the margin; see hide_body)
+    "hide_enclosed": {"bones": ["upperarm", "clavicle", "spine"], "m": 0.20, "trim_edge": True},
     "hide_self_m": 1.5,
 }
 
@@ -606,6 +618,7 @@ def hide_body(b, o, occluders):
 
     visible = []
     covered = set()
+    enclosed = set()
     for v in bm.verts:
         # the head is never touched; neither is the neck, where the layered
         # collars make the cover test fragile (a hollow neck shows as a sliver
@@ -623,6 +636,8 @@ def hide_body(b, o, occluders):
                       for a in (0, math.pi / 2, math.pi, 3 * math.pi / 2)]
         if all(blocked(v.co + n * 0.001, dd, reach) for dd in dirs):
             covered.add(v)
+            if enc_pre and dom and dom.startswith(enc_pre):
+                enclosed.add(v)
         else:
             visible.append(v)
     kd = sb.KDTree(len(visible))
@@ -630,7 +645,16 @@ def hide_body(b, o, occluders):
         kd.insert(v.co, i)
     kd.balance()
     drop = {v for v in covered if kd.find(v.co)[2] > o["hide_margin_m"]}
-    gone = [f for f in bm.faces if all(v in drop for v in f.verts)]
+    # trim_edge: under the enclosed bones a face covered all round goes as soon
+    # as one of its vertices is past the margin. Kept whole, those faces left a
+    # ring of vertices 4-5 cm out on the trapezius (the margin round the neck
+    # is 3 cm), which Track F's corr_arm_up_l lifted 3.3 mm through the shirt
+    # in arm_raise
+    trim = bool(enc.get("trim_edge"))
+    gone = [f for f in bm.faces
+            if all(v in drop for v in f.verts)
+            or (trim and all(v in covered for v in f.verts) and any(v in drop and v in enclosed for v in f.verts))]
+    stats["trim_edge_faces"] = sum(1 for f in gone if not all(v in drop for v in f.verts))
     bmesh.ops.delete(bm, geom=gone, context="FACES")
     bmesh.ops.delete(bm, geom=[v for v in bm.verts if not v.link_faces], context="VERTS")
     suit_ops.write_bm(bm, body)
