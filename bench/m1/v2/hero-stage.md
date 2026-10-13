@@ -73,7 +73,7 @@ blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig
 | profile (#3) | 100 mm f/2.8, bust profile | stand, head straight, chin 2–3° down | amber key 0.3, teal rim 2.5 from beyond the face, magenta kicker 0.35, wet tips, beads |
 | draw (#4) | 35 mm f/5.6, full body, camera at 1.2 m near the eye-target line (az 5), so the bladed torso reads about 35° off the camera axis | ready (bladed `high_ready`, G's two-hand grip, empty hands) | hard 4,300 K "headlight" 0.18 m source, low right, 1.0; magenta top 0.4 |
 | hands (#5), 1152x2048 poster | 100 mm f/5.6 from 6 m, camera at 0.8 m: from the cuff to the floor, so the shoe and trouser break are in frame; focus on the cuff | cuff (F `hero` body, E's arms: the right hand pinches the left shirt cuff) | key 0.8 |
-| eye (#6) | 135 mm at 0.73 m, f/4 (about 7 mm in focus) on the near cornea, eyes and brow | stand, gaze 5° off camera | base (skin-direction) key, eye light 0.3 |
+| eye (#6) | 135 mm at 0.73 m, f/8 focused 6 mm in front of the near cornea (about 14 mm in focus, from the far cornea to the brows), eyes and brow | stand, gaze 5° off camera | base (skin-direction) key, eye light 0.3 |
 | bust | 50 mm f/2.8, ¾ | stand, eyes to camera | base rig + rims, wet tips, beads |
 | back | 50 mm f/2.8, back ¾ (az 150): hair and suit back | stand | base rig + rims, wet tips, beads |
 | walk | 35 mm f/5.6, ¾ full body (az −35) | walk (mid-stride) | base rig + rims, rain |
@@ -81,7 +81,7 @@ blender -b -t 3 --factory-startup --python-exit-code 1 --python blender/hero/rig
 
 The shot list follows direction §5, plus the brief's bust, back and walk shots. Deviations:
 - **Under the sign** uses F's canonical `hero` pose, with the left hand at the jacket button (that is the "buttoning" read). Its weight is on the left leg, not §5's right.
-- **Eye close-up**: skin-direction.md sets f/4. At §5's 0.4 m, f/4 holds only about 2 mm in focus, so lids, lashes and skin would go soft. I shoot from 0.73 m (a 0.13 m frame), where f/4 holds about 7 mm.
+- **Eye close-up**: shot from 0.73 m (a 0.13 m frame) instead of §5's 0.4 m. skin-direction.md's f/4 holds about 7 mm there, which left the brows and forehead soft once A's pores landed. It's now f/8 with the focal plane 6 mm in front of the near cornea (`fo=6` in the camera spec), which holds about 14 mm. Measured depths relative to the near cornea: far cornea −3 mm, brow ridge +19 mm, nose +34 mm. Both eyes and the brows are crisp and the nose stays soft (main7 eye A/B below).
 - **Every head shot focuses on the near cornea**, the eyeball centre plus 12 mm toward the camera. Focusing on the centre (Track A's diagnosis) put the focal plane 12 mm behind the lashes.
 
 **Wet look (`wet.py`, render side, transient)**:
@@ -156,6 +156,9 @@ All under `data/build/hero/` in the main checkout. Builds come from `data/build/
 | `20261013T030716Z-main6-draft` | same | the 9-shot draft sheet (16 spp, 25 %, 1.9 min at `-t 3`) |
 | **`20261013T031023Z-main6-draft50`** | same | **the same at 50 % plus 100 % crops of portrait / profile / hands / eye (10.1 min): the regression check** |
 | `20261013T033000Z-main6-hands` | same | G's `hands_render.py --pierce`: ready, ready_side, cuff, hero_r; pierce 0 / 0 in ready, cuff and stand |
+| `20261013T061348Z-main7-before` | **`20261013T060824Z-heroE-main7` (main c672cab: A's pores and micro bump)** | portrait + eye at preview with 100 % crops, before the eye and fill tests |
+| `20261013T063000Z-main7-var`, `20261013T070500Z-main7-var2` | same | 100 % crops at preview: eye f/5.6 fo6, f/8 fo6, f/8 fo9, f/11 fo8; portrait without wrap, without fill, wrap 0.5 m, wrap raised to 45°/35°, without key, without eye light |
+| **`20261013T070829Z-main7-after`** | same | **eye at f/8 fo6, preview with its 100 % crop; `eye_before_after.png` (the portrait is unchanged: see before)** |
 
 ## Render time per shot
 
@@ -219,6 +222,30 @@ Every shot was compared against main5-sheet. No regressions from the merge:
 - **walk**: the arm swing is now opposite the legs, with no hand/hip contact.
 - Still open (from main5, not regressions): A's skin relief, D's boxy shoulders and the hard lapel-roll highlights.
 
+## Eye focus and portrait fill on main c672cab (A's pores)
+
+**Eye: changed to f/8, focus 6 mm in front of the cornea.** Sharpness is the Laplacian std (×1000) of the graded 100 % crop per region. The 2 % grain sets a floor of about 25 on flat skin.
+
+| Variant | near eye | near brow | far eye | far brow | forehead | nose |
+|---|---|---|---|---|---|---|
+| f/4 on the cornea (before) | 59.0 | 78.7 | 104.0 | 89.4 | 25.4 | 25.3 |
+| f/5.6, fo 6 | 44.4 | 87.5 | 81.3 | 106.3 | 26.4 | 27.7 |
+| **f/8, fo 6 (kept)** | **59.6** | **96.7** | **100.5** | **118.3** | 26.5 | 29.0 |
+| f/8, fo 9 | 47.1 | 90.0 | 76.9 | 113.4 | 26.8 | 30.3 |
+| f/11, fo 8 | 60.6 | 100.3 | 98.3 | 123.7 | 26.8 | 30.2 |
+
+- f/8 fo6 keeps both corneas as sharp as before and the brows gain 23–32 %. Brow hairs read as single hairs, and the lit temple shows A's pore stipple.
+- The glabella and nose (19–34 mm in front) stay soft, which is the intended gentle falloff.
+- f/11 is only marginally crisper and outside the requested range. Moving the focus further forward (fo 9) or opening up (f/5.6) softens the corneas.
+
+**Portrait: no change kept.** The nose-ridge highlight is not the fill's reflection:
+- Removing the wrap (A's "large fill", 1.5 m at 35°/10°) or the fill (2 m at −55°), shrinking the wrap to 0.5 m, or raising it to 45°/35° all leave the streak. Nose and forehead sharpness stays within ±1.5 of before.
+- Removing the key leaves a blue streak from the fill and wrap instead. A narrow ridge draws a line highlight from every source.
+- What hides the pore breakup on the nose is scale:
+  - At the portrait's framing (0.42 m frame) a 100 % pixel is 0.39 mm, so pores (0.1–0.3 mm) are sub-pixel.
+  - The nose is about 30 mm in front of the f/2 focal plane, so it's blurred by about 2 px.
+- Pore stipple can show only in the eye shot (0.12 mm/px), where it now does on the lit temple.
+
 ## Verdicts
 
 - **Shared rig + turntable**: done.
@@ -229,6 +256,7 @@ Every shot was compared against main5-sheet. No regressions from the merge:
   - The 3,900 K white point turned the alley teal and blue (main5-sheet). The set-only amber practicals are now pushed to compensate: amber neon (1.0, 0.30, 0.015), amber signs, bulkhead and sodium ×1.6 (`sets.AMBER_GAIN`), bulkhead 1,900 K, the near street lamp 4,500 → 3,200 K. The magenta / teal / amber triad is back (`20261013T010935Z-main5-amber`). Character light and white point are unchanged.
   - Limits: no rain motion blur, and the alley's far end is a flat emissive plane.
 - **Wet look**: done, render side: shoulder beads, wet strand tips, eyes to camera.
+- **Eye shot**: f/8 with split focus (cornea to brows); A's pores read at 100 %. **Portrait**: unchanged (the fill isn't the nose streak, and pores are sub-pixel at its scale).
 - **Grade**: done (white point, CDL power, saturation 0.97). The painterly A/B stays masked off the character (§4).
 - **Shot list**: all of §5 is covered, with deviations:
   - The eye close-up is shot from 0.73 m, not 0.4 m.
@@ -240,4 +268,4 @@ Every shot was compared against main5-sheet. No regressions from the merge:
 
 ## Branch and commits
 
-`worktree-agent-a6abc868df2544cd8`, rebased on main 9ac04e9. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
+`worktree-agent-a6abc868df2544cd8`, rebased on main c672cab. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.

@@ -457,15 +457,26 @@ def _parse_cam(spec):
     if spec.startswith("tt"):
         az = float(spec[2:] or 0)
         return (TT_LENS, az, ("h", 1.0), "body", TT_FRAME, None)
-    kv = dict(p.split("=") for p in spec.split(","))
+    kv = dict(p.split("=") for p in spec.split(","))   # fo: see camera()
     el = ("h", float(kv["h"])) if "h" in kv else float(kv.get("el", 0))
     return (float(kv.get("lens", 50)), float(kv.get("az", 0)), el, kv.get("aim", "head"),
             float(kv.get("frame", 0.5)), float(kv["f"]) if "f" in kv else None)
 
 
+def _cam_opt(spec, key, default=0.0):
+    """An optional numeric key of a custom camera spec (e.g. fo=4)."""
+    if "=" not in spec:
+        return default
+    kv = dict(p.split("=") for p in spec.split(","))
+    return float(kv.get(key, default))
+
+
 def camera(ch, spec, dof=True, focus="near_eye"):
     """Camera for a preset name, `tt<deg>` or a custom spec. Frame height is
-    measured at the aim point (vertical sensor fit, 24 mm full frame)."""
+    measured at the aim point (vertical sensor fit, 24 mm full frame).
+    Custom-spec `fo=<mm>` moves the focal plane that far toward the camera
+    from the near cornea (head shots), e.g. to split focus between the
+    cornea and the brow ridge."""
     lens, az, el, aim, frame_h, fstop = _parse_cam(spec)
     target = ch.aim(aim)
     dist = lens / 24.0 * frame_h
@@ -502,7 +513,7 @@ def camera(ch, spec, dof=True, focus="near_eye"):
         focus_pt = (ch.bone_head("hand_l") + ch.bone_head("hand_r")) * 0.5
     if dof and fstop:
         cd.dof.use_dof = True
-        cd.dof.focus_distance = (focus_pt - loc).length
+        cd.dof.focus_distance = (focus_pt - loc).length - _cam_opt(spec, "fo") / 1000.0
         cd.dof.aperture_fstop = fstop
         cd.dof.aperture_blades = 7
         cd.dof.aperture_ratio = 1.0
