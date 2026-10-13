@@ -222,6 +222,15 @@ Every shot was compared against main5-sheet. No regressions from the merge:
 - **walk**: the arm swing is now opposite the legs, with no hand/hip contact.
 - Still open (from main5, not regressions): A's skin relief, D's boxy shoulders and the hard lapel-roll highlights.
 
+## Render visibility (C round 5, main 3efcf05)
+
+The stage never un-hides geometry. Its character set (`rig._character_from_scene`) skips every object with `hide_render`. The only visibility it ever writes is `hide_render = True` (stray import helpers, and the alley during the turntable, restored after). Light linking uses that set, so hidden meshes are never receivers either.
+
+Checked on `20261013T071846Z-heroE-main8`:
+- The .blend hides `Human.beard_export`, `brows_export`, `eyelash_cards_export`, `eyes_hq_export` and `hair_export`.
+- None of them is in the character set, none is visible after pose plus rig, and none is a light-link receiver.
+- In `20261013T072432Z-main8-check` (`portrait_main7_vs_main8.png`), the black beard spatter is gone. Every hero render before main8 (main2 to main7) also drew the game shells over the strands.
+
 ## Eye focus and portrait fill on main c672cab (A's pores)
 
 **Eye: changed to f/8, focus 6 mm in front of the cornea.** Sharpness is the Laplacian std (×1000) of the graded 100 % crop per region. The 2 % grain sets a floor of about 25 on flat skin.
@@ -268,4 +277,4 @@ Every shot was compared against main5-sheet. No regressions from the merge:
 
 ## Branch and commits
 
-`worktree-agent-a6abc868df2544cd8`, rebased on main c672cab. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
+`worktree-agent-a6abc868df2544cd8`, rebased on main ddac8ac. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
