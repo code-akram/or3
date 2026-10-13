@@ -115,6 +115,14 @@ HERO_RIGHT_HAND = hand(20, 35, 15, thumb=(14, 12, 15), cascade=0.4, spread=-4.0,
 GRIP = hand(75, 85, 45, thumb=(25, 25, 25), index=(30, 25, 10), cascade=0.12)  # trigger finger along the frame
 SUPPORT_GRIP = hand(60, 75, 40, thumb=(8, 6, 6), cascade=0.2, thumb_abduct=-12)  # thumb forward along the strong hand
 FIST = hand(85, 95, 60, thumb=(40, 35, 30), cascade=0.08, thumb_abduct=-8)
+# the fist corr_fist is baked at (deform_correctives): FIST's finger curl
+# scaled per finger to where each fingertip has just met the palm (the
+# pinky, curled most by the cascade, gets there first; the thumb stays open). The
+# pads, the palm and the MCP crease give way, so hand_pose.settle can curl
+# the fingers on into the palm instead of stopping at the crease
+FIST_TIGHT_K = {"index": 0.88, "middle": 0.88, "ring": 0.85, "pinky": 0.72}
+FIST_TIGHT = {n: [[op, v * FIST_TIGHT_K[n.split("_")[0]]] for op, v in ops]
+              for n, ops in FIST.items() if not n.startswith("thumb")}
 BUTTON_HAND = hand(30, 50, 30, thumb=(25, 20, 15), cascade=0.3, spread=-3.0)
 
 ARMS_DOWN = {"upperarm_l": [["abduct", -36], ["flex", 4], ["twist", 5]],

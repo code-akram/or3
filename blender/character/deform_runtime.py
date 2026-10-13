@@ -32,8 +32,11 @@ translation stays the bind offset):
 Corrective morphs (morph target name = rule name; same weight on every mesh
 that carries a target of that name):
 
-    cone    {name, bone B, ref R, rest_dir d0, target_dir t, power p}
-            d = (R_R^-1 * R_B) * d0;  w = clamp(1 - angle(d, t) / angle(d0, t), 0, 1) ^ p
+    cone    {name, bone B, ref R, rest_dir d0, target_dir t, power p, start s (default 0)}
+            d = (R_R^-1 * R_B) * d0;  u = 1 - angle(d, t) / angle(d0, t)
+            w = clamp((u - s) / (1 - s), 0, 1) ^ p
+            (s > 0: no weight over the first part of the way, e.g. corr_fist
+            stays 0 in a relaxed or holding hand)
 
 three.js: compute these after mixer.update() and before render, in the order
 listed (helpers, then morph weights); set the helper bones' .quaternion and
@@ -77,11 +80,13 @@ def rotvec(v):
     return Quaternion(v / a, a)
 
 
-def cone_weight(d, d0, t, p=1.0):
+def cone_weight(d, d0, t, p=1.0, start=0.0):
     span = d0.angle(t)
     if span < 1e-6:
         return 0.0
     w = 1.0 - d.angle(t) / span
+    if start > 0.0:
+        w = (w - start) / (1.0 - start)
     w = max(0.0, min(1.0, w))
     return w ** p
 
@@ -152,7 +157,7 @@ class Runtime:
             d0 = gl_to_bl(m["rest_dir"]).normalized()
             t = gl_to_bl(m["target_dir"]).normalized()
             q = self.R(m["ref"]).inverted() @ self.R(m["bone"])
-            out[m["name"]] = cone_weight(q @ d0, d0, t, m.get("power", 1.0))
+            out[m["name"]] = cone_weight(q @ d0, d0, t, m.get("power", 1.0), m.get("start", 0.0))
         return out
 
     def apply(self, rig=None, morphs=True):
