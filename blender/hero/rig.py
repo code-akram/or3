@@ -308,14 +308,17 @@ def receivers(ch):
     return col
 
 
-# Hair rim (Track B's finding): the wet coat specular mirrors a magenta rim
-# at full saturation, which reads as magenta hair on the shadow side. A
-# magenta rim / kicker is split by light linking: the original lights
-# everything but the head hair; a twin at the same place lights only the hair,
-# its colour pulled toward white-violet to HAIR_RIM_SAT of the original
-# saturation, at the same luminance. Face, suit and set keep the full rim.
+# Hair rim (Track B's finding): the wet coat specular mirrors a saturated
+# rim at full saturation: magenta hair on the shadow side, a teal sheen on the
+# part. Every saturated rim / kicker (HSV saturation > HAIR_RIM_MIN_SAT) is
+# split by light linking: the original lights everything but the head hair; a
+# twin at the same place lights only the hair, desaturated to HAIR_RIM_SAT of
+# the original saturation at the same luminance. A magenta rim is pulled
+# toward white-violet (HAIR_RIM_TOWARD), any other hue toward white (its own
+# hue kept). Face, suit and set keep the full rim.
 HAIR_RIM = True
 HAIR_RIM_SAT = 0.4
+HAIR_RIM_MIN_SAT = 0.3
 HAIR_RIM_TOWARD = (0.85, 0.80, 1.0)
 
 
@@ -327,21 +330,29 @@ def _is_magenta(colour):
     if isinstance(colour, (int, float)):
         return False
     h, s, _ = colorsys.rgb_to_hsv(*colour)
-    return s > 0.3 and (h > 0.75 or h < 0.02)
+    return s > HAIR_RIM_MIN_SAT and (h > 0.75 or h < 0.02)
+
+
+def _is_saturated(colour):
+    """An RGB light colour (not a Kelvin temperature) above HAIR_RIM_MIN_SAT."""
+    if isinstance(colour, (int, float)):
+        return False
+    return colorsys.rgb_to_hsv(*colour)[1] > HAIR_RIM_MIN_SAT
 
 
 def hair_rim_colour(colour, sat=None):
-    """`colour` moved toward HAIR_RIM_TOWARD until its HSV saturation is
-    `sat` (default HAIR_RIM_SAT) of the original; returns (rgb, energy
-    factor that keeps the luminance)."""
+    """`colour` moved toward white-violet (magenta) or white (any other
+    hue) until its HSV saturation is `sat` (default HAIR_RIM_SAT) of the
+    original; returns (rgb, energy factor that keeps the luminance)."""
     sat = HAIR_RIM_SAT if sat is None else sat
+    toward = HAIR_RIM_TOWARD if _is_magenta(colour) else (1.0, 1.0, 1.0)
     s0 = colorsys.rgb_to_hsv(*colour)[1]
     lo, hi = 0.0, 1.0
     for _ in range(30):
         t = (lo + hi) / 2
-        c = tuple(a + (b - a) * t for a, b in zip(colour, HAIR_RIM_TOWARD))
+        c = tuple(a + (b - a) * t for a, b in zip(colour, toward))
         lo, hi = (t, hi) if colorsys.rgb_to_hsv(*c)[1] > sat * s0 else (lo, t)
-    c = tuple(a + (b - a) * hi for a, b in zip(colour, HAIR_RIM_TOWARD))
+    c = tuple(a + (b - a) * hi for a, b in zip(colour, toward))
     return c, _lum(colour) / _lum(c)
 
 
@@ -351,7 +362,7 @@ def hair_objects(ch):
 
 
 def _split_hair(ch, col, light):
-    """Give `light` (a magenta rim) a hair twin; see HAIR_RIM."""
+    """Give `light` (a saturated rim) a hair twin; see HAIR_RIM."""
     hair = hair_objects(ch)
     if not hair:
         return None
@@ -413,7 +424,7 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(
             made[name].data.diffuse_factor = EYE_DIFFUSE  # mostly a catchlight
         if name in flag:
             made[name].light_linking.receiver_collection = receivers(ch)
-        elif HAIR_RIM and name in ("rim", "kicker") and _is_magenta(colour):
+        elif HAIR_RIM and name in ("rim", "kicker") and _is_saturated(colour):
             twin = _split_hair(ch, col, made[name])
             if twin is not None:
                 made[name + "_hair"] = twin

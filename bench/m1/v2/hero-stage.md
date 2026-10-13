@@ -261,6 +261,13 @@ The build is `20261013T081002Z-heroE-main9` (main 61726e1, C 5b). The pistol is 
 | portrait, suit shoulder rim (public) | 0.40 | 0.39 |
 
 - The hair still takes the rim shape and the wet highlight, now violet-grey instead of magenta.
+- **Generalised (main a18c362)**: every saturated rim or kicker now gets a hair twin, not only the magenta ones. The test is HSV saturation above `HAIR_RIM_MIN_SAT` = 0.3; Kelvin lights are excluded.
+  - Magenta still goes toward white-violet. Other hues go toward white, keeping their own hue.
+  - This removes the teal kicker's sheen on the part. On the fan build's 100 % portrait crop, against Track B's `hairB-fan2` (before → after):
+    - Part sheen saturation: 0.75 → 0.39.
+    - Teal-side hair: 0.46 → 0.17.
+    - Teal cheek rim: 0.15 → 0.15. Magenta-side hair: 0.37 → 0.37.
+  - Private run: `private/likeness/hero/20261013T193536Z-fan-rim-teal` (`portrait_crop_vs_hairB-fan2.png`).
 - In back, the teal kicker dominates the hair once the magenta is gone.
 - Public evidence: `data/build/hero/20261013T125442Z-main10-rim-before50` and `20261013T125649Z-main10-rim-after50` (`rim_before_after.png`: portrait, profile and back).
 
@@ -355,4 +362,4 @@ Checked on `20261013T071846Z-heroE-main8`:
 
 ## Branch and commits
 
-`worktree-agent-a6abc868df2544cd8`, rebased on main bc983b6. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
+`worktree-agent-a6abc868df2544cd8`, rebased on main a18c362. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
