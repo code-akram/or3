@@ -208,8 +208,15 @@ def wrap(base, lm_base, lm_target, TV, TF, trusted_tv=None, a=None):
     t0 = time.time()
     co = base.co
     notes = {}
-    # 1. similarity
+    # 1. similarity, then drop landmark pairs that disagree (embedding or fit outliers) and refit
     s, R, t = umeyama(lm_target, lm_base, scale=not a.metric)
+    res = np.linalg.norm(lm_target @ (s * R).T + t - lm_base, axis=1)
+    keep = res < max(3.0 * np.median(res), a.outlier_mm / 1000.0)
+    lm_base, lm_target = lm_base[keep], lm_target[keep]
+    a._lm_tb = (a._lm_tb[0][keep], a._lm_tb[1][keep])
+    s, R, t = umeyama(lm_target, lm_base, scale=not a.metric)
+    notes["landmarks_used"] = int(keep.sum())
+    notes["landmarks_dropped"] = int((~keep).sum())
     TV = TV @ (s * R).T + t
     lt = lm_target @ (s * R).T + t
     notes["align_scale"] = float(s)
@@ -357,6 +364,7 @@ def main(argv=None):
     ap.add_argument("--step", type=float, default=0.8)
     ap.add_argument("--max-dist", type=float, default=0.015)
     ap.add_argument("--symmetrise", action="store_true")
+    ap.add_argument("--outlier-mm", type=float, default=4.0, help="landmark pairs off by more (after alignment) are dropped")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     if a.selftest:

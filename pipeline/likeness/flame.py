@@ -170,7 +170,5 @@ def load_embedding(path):
 
 def write_obj(path, v, faces):
     with open(path, "w") as f:
-        for p in v:
-            f.write(f"v {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n")
-        for t in faces + 1:
-            f.write(f"f {t[0]} {t[1]} {t[2]}\n")
+        f.writelines(f"v {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n" for p in v)
+        f.writelines(f"f {t[0]} {t[1]} {t[2]}\n" for t in faces + 1)

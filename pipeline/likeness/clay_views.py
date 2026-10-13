@@ -33,7 +33,7 @@ from mathutils.geometry import barycentric_transform, intersect_point_tri
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "blender", "hero"))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "blender"))
-import rig  # noqa: E402
+import rig
 
 
 def parse_views(spec):
@@ -53,6 +53,10 @@ def head_object():
 
 
 def opencv_camera(cam_obj, res):
+    """OpenCV intrinsics/extrinsics of the camera for the image actually written (the render
+    resolution percentage applied)."""
+    pct = bpy.context.scene.render.resolution_percentage / 100.0
+    res = (round(res[0] * pct), round(res[1] * pct))
     cd = cam_obj.data
     f = cd.lens / cd.sensor_height * res[1]          # vertical sensor fit
     K = [[f, 0.0, res[0] / 2.0], [0.0, f, res[1] / 2.0], [0.0, 0.0, 1.0]]
@@ -63,6 +67,7 @@ def opencv_camera(cam_obj, res):
 
 
 def cmd_render(a):
+    rig.PCT = 100                                    # the measurement image is the full resolution
     ch = rig.load_character(a.inp)
     rig.pose(ch, "rest")
     hide = [h for h in a.hide.split(",") if h]
@@ -140,6 +145,27 @@ def to_triangle(co, poly, p):
     return best[0], best[1]
 
 
+def triangulate(rays, p0, iters=5):
+    """Point nearest to a bundle of rays (origin, unit direction), iteratively reweighted
+    (Cauchy) so a view whose landmark disagrees counts less. Returns the point and the weighted
+    rms distance to the rays."""
+    p = np.asarray(p0, np.float64)
+    O = np.array([r[0] for r in rays])
+    D = np.array([r[1] for r in rays])
+    w = np.ones(len(rays))
+    for _ in range(iters):
+        A = np.zeros((3, 3))
+        b = np.zeros(3)
+        for o, d, wi in zip(O, D, w):
+            Pm = np.eye(3) - np.outer(d, d)
+            A += wi * Pm
+            b += wi * Pm @ o
+        p = np.linalg.solve(A, b)
+        r = np.array([np.linalg.norm((np.eye(3) - np.outer(d, d)) @ (p - o)) for o, d in zip(O, D)])
+        w = 1.0 / (1.0 + (r / 0.002) ** 2)
+    return p, float(np.sqrt((w * r ** 2).sum() / w.sum()))
+
+
 def cmd_embed(a):
     bpy.ops.wm.open_mainfile(filepath=os.path.abspath(a.inp))
     arm = next((o for o in bpy.context.scene.objects if o.type == "ARMATURE"), None)
@@ -151,6 +177,7 @@ def cmd_embed(a):
     bvh, _ = world_bvh(head)
     cams = json.load(open(os.path.join(a.views_dir, "cameras.json")))["views"]
     hits = {}                                         # mp index -> [(point, frontality, view)]
+    rays = {}                                         # mp index -> [(origin, direction)]
     for name, c in cams.items():
         lp = os.path.join(a.landmarks, f"{name}_lm.npy")
         if not os.path.exists(lp):
@@ -164,6 +191,7 @@ def cmd_embed(a):
         for i, (u, v) in enumerate(lm[:, :2]):
             d_cam = np.array([(u - K[0, 2]) / K[0, 0], (v - K[1, 2]) / K[1, 1], 1.0])
             d = Vector(c2w[:3, :3] @ d_cam).normalized()
+            rays.setdefault(i, []).append((np.array(origin), np.array(d)))
             loc, nrm, _, dist = bvh.ray_cast(origin, d)
             if loc is None:
                 continue
@@ -182,22 +210,31 @@ def cmd_embed(a):
     front = np.zeros(n)
     nviews = np.zeros(n, np.int64)
     off = np.full(n, np.nan)
+    tri_res = np.full(n, np.nan)
     for i, hs in hits.items():
         best = max(hs, key=lambda h: h[1])
         near = [h for h in hs if np.linalg.norm(h[0] - best[0]) < a.consistent_mm / 1000.0]
         w = np.array([h[1] ** 2 for h in near])
         p = (np.stack([h[0] for h in near]) * w[:, None]).sum(0) / w.sum()
+        if len(rays.get(i, ())) >= 3:
+            # triangulate the landmark from every view's ray (robust to grazing rays at lid and lip
+            # lines, where a surface hit can land inside the socket or the mouth), start at the hit
+            q, rr = triangulate(rays[i], p)
+            if rr < a.tri_max_mm / 1000.0:
+                p, tri_res[i] = q, rr
         loc, _, fidx, dist = bbvh.find_nearest(Vector(p))
         if loc is None:
             continue
         t, b = to_triangle(co, polys[fidx], loc)
-        tri[i], bary[i], valid[i] = t, b, True
+        # trusted: triangulated, or a surface hit that several views agree on
+        tri[i], bary[i], valid[i] = t, b, bool(np.isfinite(tri_res[i]) or len(near) >= 3)
         front[i], nviews[i], off[i] = best[1], len(near), dist
     np.savez(a.out, mp_index=np.arange(n), tri_verts=tri, bary=bary, valid=valid, frontality=front,
-             n_views=nviews, offset_m=off)
+             n_views=nviews, offset_m=off, triangulation_rms_m=tri_res)
     print(f"[embed] {valid.sum()} of {n} landmarks embedded; built-head vs base median gap "
           f"{np.median(gaps) * 1000:.2f} mm (p95 {np.percentile(gaps, 95) * 1000:.2f}); landmark-to-base offset "
-          f"median {np.nanmedian(off) * 1000:.2f} mm, max {np.nanmax(off) * 1000:.2f} mm", flush=True)
+          f"median {np.nanmedian(off) * 1000:.2f} mm, max {np.nanmax(off) * 1000:.2f} mm; triangulated "
+          f"{int(np.isfinite(tri_res).sum())} (ray rms median {np.nanmedian(tri_res) * 1000:.2f} mm)", flush=True)
 
 
 def main():
@@ -222,6 +259,7 @@ def main():
     e.add_argument("--base", required=True)
     e.add_argument("--out", required=True)
     e.add_argument("--consistent-mm", type=float, default=4.0)
+    e.add_argument("--tri-max-mm", type=float, default=3.0, help="use the triangulated point when its ray rms is below")
     a = ap.parse_args(argv)
     {"render": cmd_render, "embed": cmd_embed}[a.cmd](a)
 

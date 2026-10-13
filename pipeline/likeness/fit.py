@@ -31,7 +31,7 @@ from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import flame as fl  # noqa: E402
+import flame as fl
 
 IRIS_R, IRIS_L = 468, 473
 PER_FRAME_FIXED = 10          # rvec 3, tvec 3, jaw 3, log focal 1
@@ -170,7 +170,7 @@ def init_frame(lmodel, beta0, fr, lens_mm, nj):
     P = lmodel.points(beta0, np.zeros(lmodel.n_expr), np.zeros((nj, 3)))
     f = prior_focal(fr["wh"], lens_mm)
     K = np.array([[f, 0, fr["cx"]], [0, f, fr["cy"]], [0, 0, 1]], np.float64)
-    ok, rv, tv = cv2.solvePnP(P, fr["uv"].astype(np.float64), K, None, flags=cv2.SOLVEPNP_EPNP)
+    _ok, rv, tv = cv2.solvePnP(P, fr["uv"].astype(np.float64), K, None, flags=cv2.SOLVEPNP_EPNP)
     _, rv, tv = cv2.solvePnP(P, fr["uv"].astype(np.float64), K, None, rv, tv, True, flags=cv2.SOLVEPNP_ITERATIVE)
     fr["R0"] = fl.rodrigues(rv.ravel())[0]
     return np.r_[np.zeros(3), tv.ravel(), np.zeros(3), np.log(f), np.zeros(lmodel.n_expr)]

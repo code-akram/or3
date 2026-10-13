@@ -486,7 +486,7 @@ def table(rows, keys):
     for k in keys:
         vals = np.array([r[k] for r in rows])
         out[k] = {"median": round(float(np.median(vals)), 4), "iqr": [round(float(np.percentile(vals, 25)), 4),
-                  round(float(np.percentile(vals, 75)), 4)], "n": int(len(vals)), "def": RATIO_DEFS[k]}
+                  round(float(np.percentile(vals, 75)), 4)], "n": len(vals), "def": RATIO_DEFS[k]}
     return out
 
 
@@ -535,9 +535,9 @@ def cmd_measure(a):
         if res is None:
             print(f"[measure] no face: {p}", file=sys.stderr)
             continue
-        pts, bs, M = res
+        pts, _bs, M = res
         r = ratios_2d(pts)
-        yaw, pitch, roll = pose_from_matrix(M) if M is not None else (0, 0, 0)
+        yaw, pitch, _roll = pose_from_matrix(M) if M is not None else (0, 0, 0)
         r.update({"image": os.path.basename(p), "yaw": round(yaw, 1), "pitch": round(pitch, 1)})
         rows.append(r)
         np.save(Path(a.out_dir) / (Path(p).stem + "_lm.npy"), pts) if a.out_dir else None

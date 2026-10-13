@@ -50,14 +50,13 @@ def cmd_board(a):
     root = Path(a.spec).parent
     rows = []
     for row in spec["rows"]:
-        ims = []
-        for c in row["cells"]:
-            ims.append(label(aligned(root / c["img"], root / c["lm"], a.cell, a.ipd_frac, flip=a.flip),
-                             c.get("title", "")))
-        if row.get("overlay"):
+        ims = [aligned(root / c["img"], root / c["lm"], a.cell, a.ipd_frac, flip=a.flip) for c in row["cells"]]
+        titles = [c.get("title", "") for c in row["cells"]]
+        if row.get("overlay"):  # blend the unlabelled cells, then label everything
             i, j = row["overlay"]
-            ov = cv2.addWeighted(ims[i], 0.5, ims[j], 0.5, 0)
-            ims.append(label(ov, f"50 % {row['cells'][i].get('title', '')} / {row['cells'][j].get('title', '')}"))
+            ims.append(cv2.addWeighted(ims[i], 0.5, ims[j], 0.5, 0))
+            titles.append(f"50 % {titles[i]} / {titles[j]}")
+        ims = [label(im, t) for im, t in zip(ims, titles)]
         strip = np.hstack(ims)
         cv2.putText(strip, row.get("label", ""), (6, a.cell - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (80, 220, 255), 2)
         rows.append(strip)
