@@ -9,6 +9,7 @@
 
 # Pipeline build outputs (rebuildable; large ones ship as release artifacts)
 /data/build/
+/data/cache/
 
 # Media that should only ever come from /private/
 *.mp4
