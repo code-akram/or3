@@ -431,7 +431,7 @@ def synth_head(m, c, cl, cr):
     tint(stub * c["stubble"], (0.55, 0.52, 0.52))
     # lips: wind-dried, desaturated brick; vermilion border a touch lighter;
     # parting line dark, straighter at the corners (no pout)
-    tint(lip_fill * c["beard_lip_dark"], (0.62, 0.58, 0.58))            # shadowed skin under the beard, at the lip
+    tint(lip_fill * c["beard_lip_dark"], c["beard_lip_rgb"])               # shadowed skin under the beard, at the lip
     lipc = srgb_to_linear(HEX(c["lip"]))
     lw = lip_weight(m, lips, c["lip_soft_mm"] * MM) * c["lip_mix"]
     alb = alb * (1 - lw[..., None]) + lipc * lw[..., None]
@@ -589,7 +589,8 @@ DEFAULT_HEAD = {
     "lip_soft_mm": 0.0,                      # vermilion border softness (3D, +-mm); 0 = the group falloff
     "lip_border": 0.6,                       # lighter skin rim just outside the vermilion
     "beard_to_lip_mm": 0.0,                  # beard zone fills skin gaps to the vermilion narrower than this; 0 = off
-    "beard_lip_dark": 0.0,                   # extra shadow on that filled strip
+    "beard_lip_dark": 0.0,                   # extra shadow on that filled strip (amount) ...
+    "beard_lip_rgb": (0.62, 0.58, 0.58),     # ... and its full-strength multiplier (linear)
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
