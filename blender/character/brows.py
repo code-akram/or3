@@ -166,6 +166,9 @@ def build(b, frame, cfg):
     red = np.clip(tone["redness"] + rng.normal(0, tone["sigma"] * 0.5, m), 0, 1)
     hero = cfg["hero"]
     rad = np.linspace(1.0, hero["tip_radius"], k)[None, :] * rng.uniform(*hero["radius_m"], m)[:, None]
+    # finer hairs along the thinning tail (full-width ones there read as a brush)
+    t = np.clip((f["along"] - cfg["tail_start"]) / (1.0 - cfg["tail_start"]), 0, 1)
+    rad *= (1 - hero.get("tail_fine", 0.0) * t * t * (3 - 2 * t))[:, None]
     mat = beard_groom.hair_material("brows_hero", hero["material"])
     o = beard_groom.make_curves("brows_hero", pts, rad,
                                 {"melanin": mel, "redness": red,
@@ -227,6 +230,10 @@ def build(b, frame, cfg):
     stats = beard_bake.build_shells(b, obj, bm, canopy, project, [gr_bake], sh, "brows", extra=extra)
     b.facial_refit.add("mesh", obj)
     b.cutouts.append("brows_export")
+    # The kept .blend renders the strands (hero stage); the baked game mesh
+    # stays in the GLB (the exporter ignores render visibility). Left
+    # visible, its alpha shells drew over the strands as dark speckle.
+    obj.hide_render = True
     # Drop the MPFB proxy: the groom and its bake replace it.
     b.export_objs.remove(proxy)
     bpy.data.objects.remove(proxy, do_unlink=True)

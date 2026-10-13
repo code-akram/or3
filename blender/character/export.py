@@ -79,8 +79,29 @@ def _hero_only(o):
     return any(c.name == HERO_ONLY for c in o.users_collection)
 
 
+def unweighted_verts(b):
+    """Exported skinned meshes' vertices with no weight on a deform bone (the
+    glTF exporter would add a `neutral_bone` joint for them)."""
+    out = {}
+    for o in b.export_objs:
+        mod = next((m for m in o.modifiers if m.type == "ARMATURE"), None) \
+            if o.type == "MESH" and not _hero_only(o) else None
+        if mod is None or mod.object is None:
+            continue
+        deform = {bn.name for bn in mod.object.data.bones if bn.use_deform}
+        ok = {g.index for g in o.vertex_groups if g.name in deform}
+        n = sum(1 for v in o.data.vertices
+                if not any(e.group in ok and e.weight > 0 for e in v.groups))
+        if n:
+            out[o.name] = n
+    return out
+
+
 def write_glb(b, out):
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    bad = unweighted_verts(b)
+    if bad:
+        raise RuntimeError(f"unweighted vertices (would export neutral_bone): {bad}")
     bpy.ops.object.select_all(action="DESELECT")
     for o in b.export_objs:
         if not _hero_only(o):

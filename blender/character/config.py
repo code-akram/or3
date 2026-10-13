@@ -228,8 +228,11 @@ DEFAULTS = {
             # line, 0 at out_m outside; stubble from stubble_in_m inside to
             # the patch edge.
             "fade": {"in_m": 0.010, "out_m": 0.004, "neck_in_m": 0.014, "neck_out_m": 0.006,
-                     "line_density": 0.15, "pow": 1.6, "line_length": 0.35,
+                     "line_density": 0.12, "pow": 2.0, "line_length": 0.35,
                      "stubble_in_m": 0.004},
+            # Edge band: from the outer fade to band_m inside the line, the
+            # hero strands thin to `radius` x width and `length` x length.
+            "edge": {"band_m": 0.004, "radius": 0.55, "length": 0.7},
             "line_wobble_m": 0.004,
             "edge_smooth_iters": 6,
             # Hair length by zone (direction §2 C: cheeks 6-8, jaw 9-11,
@@ -257,15 +260,18 @@ DEFAULTS = {
                         "elev0": 35, "elev1": 20, "frizz": 0.3, "radius_scale": 0.8},
             # Tone: melanin / redness per strand (hero), with the game
             # palette interpolated by melanin (swatches, sRGB).
+            # warm: a subtle brown variation (melanin 0.9 / redness 0.7
+            # rendered as orange flecks).
             "tone": {"melanin": 0.98, "redness": 0.45, "sigma": 0.015,
-                     "warm_share": 0.12, "warm": [0.9, 0.7],
+                     "warm_share": 0.1, "warm": [0.95, 0.5],
                      "grey_share": 0.025, "grey_extra": 0.05, "grey": [0.2, 0.15],
                      "swatches": [[0.2, "#948e86"], [0.9, "#6a4a32"], [0.98, "#3e2e23"],
                                   [1.0, "#30241b"]],
                      "value_sigma": 0.3},
-            "hero": {"radius_m": [0.00004, 0.00007], "tip_radius": 0.35,
-                     "material": {"roughness": 0.32, "radial_roughness": 0.35, "coat": 0.1,
-                                  "root_dark": 0.06},
+            "hero": {"radius_m": [0.00004, 0.00007], "tip_radius": 0.12,
+                     # soft specular; the ends fade to tip_alpha past tip_fade_from
+                     "material": {"roughness": 0.45, "radial_roughness": 0.6, "coat": 0.1,
+                                  "root_dark": 0.06, "tip_alpha": 0.25, "tip_fade_from": 0.55},
                      "clump": {"shape": 0.4, "tip_spread": 0.0004, "guide_distance_m": 0.004},
                      "frizz": {"distance_m": 0.0007, "shape": 0.6}},
             # Game shells: the decimated patch stacked along the normal at
@@ -325,8 +331,9 @@ DEFAULTS = {
                                   [1.0, "#1e1712"]],
                      "redness_ref": 0.45, "value_sigma": 0.25},
             "hero": {"radius_m": [0.00003, 0.000045], "tip_radius": 0.15,
-                     "material": {"roughness": 0.3, "radial_roughness": 0.35, "coat": 0.1,
-                                  "root_dark": 0.04},
+                     "tail_fine": 0.35,  # strands up to 35 % finer along the tail
+                     "material": {"roughness": 0.42, "radial_roughness": 0.55, "coat": 0.1,
+                                  "root_dark": 0.04, "tip_alpha": 0.35, "tip_fade_from": 0.6},
                      "clump": {"shape": 0.3, "tip_spread": 0.0003, "guide_distance_m": 0.0018},
                      "frizz": {"distance_m": 0.0004, "shape": 0.6}},
             "base_tris": 0,            # (unused; shells.base_tris)

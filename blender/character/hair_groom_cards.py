@@ -390,18 +390,24 @@ def proxy_blob(points, pcfg):
 def transfer_normals(obj, blob, verts):
     """Data Transfer the blob's normals to obj's vertices `verts` (custom
     split normals), applied as the first modifier."""
-    vg = obj.vertex_groups.new(name="_proxy_cards")
+    name = "_proxy_cards"
+    vg = obj.vertex_groups.new(name=name)
     vg.add(list(verts), 1.0, "REPLACE")
     mod = obj.modifiers.new("proxy_normals", "DATA_TRANSFER")
     mod.object = blob
     mod.use_loop_data = True
     mod.data_types_loops = {"CUSTOM_NORMAL"}
     mod.loop_mapping = "POLYINTERP_NEAREST"
-    mod.vertex_group = vg.name
+    mod.vertex_group = name
     obj.modifiers.move(obj.modifiers.find(mod.name), 0)
     with bpy.context.temp_override(object=obj, active_object=obj, selected_objects=[obj]):
         bpy.ops.object.modifier_apply(modifier=mod.name)
-    obj.vertex_groups.remove(obj.vertex_groups[vg.name])
+    # Look the group up by its name string: modifier_apply replaces the mesh
+    # (which owns the vertex group list), so `vg` now dangles. Reading
+    # vg.name returned whichever group reused that memory, and removing
+    # that group (e.g. a hair spring bone) left its cards weighted only to
+    # `_proxy_cards`, so the exporter added `neutral_bone`.
+    obj.vertex_groups.remove(obj.vertex_groups[name])
 
 
 # ---------------------------------------------------------------- build

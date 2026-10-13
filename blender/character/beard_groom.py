@@ -324,7 +324,25 @@ def hair_material(name, cfg):
     nt.links.new(mul.outputs[0], add.inputs[1])
     nt.links.new(add.outputs[0], hb.inputs["Melanin"])
     nt.links.new(red.outputs["Fac"], hb.inputs["Melanin Redness"])
-    nt.links.new(hb.outputs[0], out.inputs["Surface"])
+    if cfg.get("tip_alpha", 1.0) < 1.0:
+        # Fade the strand toward its tip (opacity 1 up to tip_fade_from along
+        # the strand, tip_alpha at the end), so the ends taper in alpha as
+        # well as width instead of ending in a hard dot.
+        fade = nt.nodes.new("ShaderNodeMapRange")
+        fade.interpolation_type = "SMOOTHSTEP"
+        fade.inputs["From Min"].default_value = cfg.get("tip_fade_from", 0.5)
+        fade.inputs["From Max"].default_value = 1.0
+        fade.inputs["To Min"].default_value = 1.0
+        fade.inputs["To Max"].default_value = cfg["tip_alpha"]
+        nt.links.new(info.outputs["Intercept"], fade.inputs["Value"])
+        tr = nt.nodes.new("ShaderNodeBsdfTransparent")
+        mix = nt.nodes.new("ShaderNodeMixShader")
+        nt.links.new(fade.outputs["Result"], mix.inputs["Fac"])
+        nt.links.new(tr.outputs[0], mix.inputs[1])
+        nt.links.new(hb.outputs[0], mix.inputs[2])
+        nt.links.new(mix.outputs[0], out.inputs["Surface"])
+    else:
+        nt.links.new(hb.outputs[0], out.inputs["Surface"])
     return mat
 
 

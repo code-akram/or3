@@ -337,6 +337,10 @@ def build(b, frame, cfg):
     stats["tangent_guard"] = facial_hair.guard_tangents(obj, me.uv_layers[0].name, 2e-4, 2)
     b.facial_refit.add("mesh", obj)
     b.cutouts.append("eyelash_cards")
+    # The kept .blend renders the strands (hero stage); the baked game mesh
+    # stays in the GLB (the exporter ignores render visibility). Left
+    # visible, its alpha shells drew over the strands as dark speckle.
+    obj.hide_render = True
     if cfg.get("drop_proxy", True):
         b.export_objs.remove(proxy)
         bpy.data.objects.remove(proxy, do_unlink=True)
