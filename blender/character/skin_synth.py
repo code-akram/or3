@@ -15,7 +15,7 @@ Targets (bench/m1/v2/direction.md §2 Track A, §3; numbers are starting points)
              0.3-0.4 mm; cheeks 35/cm², 0.25-0.35 mm; forehead 20/cm²,
              0.15 mm), the hero shader evaluates the same layers on the rest
              position, so game and hero pores coincide; lines: two broken
-             forehead lines, a glabellar frown line on the left only, crow's
+             forehead lines, two soft glabellar frown furrows (left deeper), crow's
              feet (left set longer), under-eye lines, the nasolabial crease,
              lip creases, neck rings.
 
@@ -48,6 +48,13 @@ NOISE_SPECS = {
     "noiseC": (("noise_aniso", 900.0, (1.0, 1.0, 0.05)), ("noise_aniso", 900.0, (0.05, 1.0, 1.0)),
                ("noise", 3000.0, 2.0)),
     "noiseD": (("noise", 180.0, 4.0), ("edge", 300.0), ("noise", 40.0, 2.0)),
+    # skin-direction.md: haemoglobin 90/m, melanin 30/m, subdermal lumps 120/m
+    "noiseE": (("noise", 90.0, 2.0), ("noise", 30.0, 2.0), ("noise", 120.0, 1.0)),
+    # orange peel (Voronoi edge 350/m, 1.5:1 along x, distortion 1.5), nose and
+    # alar bumps (0.6 mm cells), 1.5 mm lip bumps
+    "noiseF": (("edge_aniso", 350.0, (0.667, 1.0, 1.0), 1.5), ("voronoi", 1667.0), ("noise", 650.0, 1.0)),
+    # fine-scale redness (capillary scale, 3-7 mm); the third channel is unused
+    "noiseG": (("noise", 150.0, 2.0), ("noise", 300.0, 2.0), ("noise", 450.0, 2.0)),
 }
 
 
@@ -183,6 +190,11 @@ def synth_head(m, c, cl, cr):
 
     k = c["wrinkle_scale"]
     lines = np.zeros(h.shape, np.float32)
+    shoulders = np.zeros(h.shape, np.float32)       # hero: rolled skin beside the lines
+
+    def shoulder(d):
+        """+1 on a ~1.5 mm band each side of a line (d = distance from it)."""
+        return gauss(d - 0.0013, 0.0006)
     # forehead: two broken lines, slightly tilted (asymmetry), arched, wavy;
     # breaks on the centimetre scale (low-frequency noise), depth varies
     for i, (hh, amp) in enumerate(((0.050, c["forehead_mm"]), (0.063, 0.8 * c["forehead_mm"]))):
@@ -191,12 +203,15 @@ def synth_head(m, c, cl, cr):
         brk = smoothstep(0.30, 0.48, m.mot_low if i == 0 else 1 - m.mot_low) * (0.55 + 0.45 * smoothstep(0.3, 0.6, m.broad))
         prof = 0.55 * groove(np.abs(b_), None, amp * MM * k, 0.0012, fade=None) \
             + 0.45 * groove(np.abs(b_), None, amp * MM * k, 0.0004, fade=None)
-        lines -= prof * smoothstep(0.050, 0.025, u) * R["forehead"] * brk
-    # glabellar frown line: left only (character's left, +x)
-    d, tt = polyline(x, h, [(0.0045, 0.006), (0.0060, 0.014)])
-    lines -= groove(d, tt, c["frown_mm"] * MM * k, 0.0005)
-    d, tt = polyline(x, h, [(-0.0045, 0.007), (-0.0055, 0.012)])
-    lines -= groove(d, tt, 0.25 * c["frown_mm"] * MM * k, 0.0005)
+        lmask = smoothstep(0.050, 0.025, u) * R["forehead"] * brk
+        lines -= prof * lmask
+        shoulders += shoulder(np.abs(b_)) * lmask
+    # glabellar frown furrows: soft, shallow and wide (no cut, no shoulders),
+    # the left one a little deeper; they blend out at both ends
+    d, tt = polyline(x, h, [(0.0045, 0.005), (0.0060, 0.015)])
+    lines -= groove(d, tt, c["frown_mm"] * MM * k, c["frown_w"], shoulder=0.0)
+    d, tt = polyline(x, h, [(-0.0045, 0.006), (-0.0055, 0.013)])
+    lines -= groove(d, tt, 0.5 * c["frown_mm"] * MM * k, c["frown_w"], shoulder=0.0)
     # crow's feet: radiating back from the outer canthus on the temple plane
     lat = smoothstep(0.044, 0.052, u)
     for side, longer in ((1.0, 1.3), (0.0, 1.0)):
@@ -208,6 +223,7 @@ def synth_head(m, c, cl, cr):
             p1 = (p0[0] - L * math.cos(a_), p0[1] + L * math.sin(a_) - 0.002)
             d, tt = polyline(fr.f, h, [p0, p1])
             lines -= groove(d, tt, c["crows_mm"] * MM * k, 0.0004, fade="end") * lat * sm
+            shoulders += 0.6 * shoulder(d) * (1 - np.clip(tt, 0, 1)) ** 0.8 * lat * sm
     # under-eye lines (fine, the lid-cheek junction)
     # (no raised shoulders: under the hero key a shouldered groove here caught
     # a bright rim along the lid-cheek junction)
@@ -230,16 +246,39 @@ def synth_head(m, c, cl, cr):
     # nasolabial crease along the fold (the form carries the fold)
     d, tt = polyline(u, h, [(0.017, -0.036), (0.022, -0.048), (0.027, -0.060), (0.030, -0.072)])
     lines -= groove(d, tt, c["nasolabial_mm"] * MM * k, 0.0007) * (1 - 0.6 * smoothstep(0.5, 1.0, tt))
+    shoulders += shoulder(d) * np.sin(np.pi * np.clip(tt, 0, 1)) ** 0.6
     # lip creases: vertical stretched noise on the vermilion
-    crease = smoothstep(0.58, 0.68, m.aniso_v) * smoothstep(0.3, 0.7, lips)
+    # lip ridges: vertical furrows ~0.8 mm apart, wandering, with ~1.5 mm
+    # lateral bumps between them
+    per = c["lip_ridge_spacing_mm"] * MM / fr.s
+    ridge = 0.5 + 0.5 * np.cos(2 * np.pi * x / per + 3.0 * (m.aniso_v - 0.5) * 2 * np.pi)
+    lipin = smoothstep(0.3, 0.7, lips)
+    crease = smoothstep(0.35, 0.0, ridge) * (0.55 + 0.9 * np.clip(m.lipbump - 0.3, 0, 0.5)) * lipin
     lines -= crease * c["lip_crease_mm"] * MM
+    lines += (m.lipbump - 0.5) * 2 * c["lip_bump_mm"] * MM * lipin
     # neck rings
     for hh, amp in ((-0.140, 0.18), (-0.155, 0.14)):
         b_ = h - (hh + 0.004 * (u / 0.04) ** 2)
         lines -= groove(np.abs(b_), None, amp * MM * k, 0.0009, fade=None) * smoothstep(-0.12, -0.13, h) \
             * smoothstep(-0.03, 0.0, fr.f) * smoothstep(0.05, 0.03, u)
     grain = (m.grain - 0.5) * c["grain_mm"] * MM * (1 - lips)
-    hgt_hero = (lines + grain).astype(np.float32)          # pores come from the hero shader
+    # ---- mid band (skin-direction.md, Track A 2): what makes the skin read
+    # at portrait distance. Lumps (6-15 mm), orange peel (2-4 mm cells along
+    # x), rolled line shoulders, nose and alar bumps, and a soft under-eye
+    # edge. Displaced in the hero, and in the game normal.
+    skin = (1 - lips) * eyes_clear * (1 - 0.8 * R["scalp"])
+    w_lump = np.clip(c["lump_cheek_mm"] * R["cheek"] + c["lump_forehead_mm"] * R["forehead"]
+                     + c["lump_undereye_mm"] * R["under_eye"], 0, None)
+    w_lump = np.maximum(w_lump, c["lump_face_mm"] * face)
+    mid = (m.lump - 0.5) * 2.5 * w_lump * MM * skin
+    w_peel = np.clip(R["cheek"] + R["nose"] + 0.8 * R["forehead"] + 0.8 * R["chin"] + 0.6 * face + 0.4 * R["neck"], 0, 1)
+    mid += (smoothstep(0.0, 0.5, m.peel) - 0.6) * c["peel_mm"] * MM * w_peel * skin   # soft round domes
+    mid += shoulders * c["shoulder_mm"] * MM * skin * k
+    nb = np.clip(1 - m.nose_f1 / 0.45, 0, 1) ** 2
+    mid += nb * c["nose_bump_mm"] * MM * np.clip(R["nose_tip"] + R["alar"] + 0.3 * R["nose"], 0, 1) * skin
+    edge = gauss(h - c["undereye_edge_h"], 0.0025) * gauss(u - 0.029, 0.009) * smoothstep(-0.03, 0.0, fr.f)
+    mid -= c["undereye_edge_mm"] * MM * edge * (1 - lips)
+    hgt_hero = (lines + grain + mid).astype(np.float32)    # pores come from the hero shader
     hgt_game = (hgt_hero - pores).astype(np.float32)
 
     cav = m.cavity(hgt_game)
@@ -259,9 +298,14 @@ def synth_head(m, c, cl, cr):
         nonlocal alb
         alb = alb * (1 + np.clip(w, 0, 1)[..., None] * (np.array(rgb, np.float32) - 1))
     z = c["zones"]
-    tint(R["forehead"] * z, (1.03, 1.02, 0.94))                  # yellower
-    red = np.clip(R["nose_tip"] + R["alar"] + R["apple"] * 0.9 + 0.35 * R["nose"], 0, 1)
-    tint(red * z, (1.10, 0.93, 0.91))                            # flush: nose, alar, apples
+    tint(R["forehead"] * z, c["forehead_tint"])                   # yellower
+    # flush: the nose tip and alar a deeper red, the apples a softer warm red
+    # (two hues, so nose and cheek read apart)
+    tint(np.clip(R["nose_tip"] + R["alar"] + 0.35 * R["nose"], 0, 1) * z, c["flush_nose"])
+    tint(R["apple"] * 0.9 * z, c["flush_apple"])
+    # smooth zone gradients: a broad cheek flush and a little warmth around the eyes
+    tint(R["cheek"] * z * c["flush_cheek_w"], c["flush_apple"])
+    tint(R["lid"] * z * 0.5, (1.04, 0.97, 0.97))
     tint(R["ears"] * z, (1.12, 0.92, 0.90))                      # ears reddened by cold
     tint(R["beard"] * c["beard_shadow"], (0.80, 0.84, 0.91))     # cool, darker beard zone
     tint(R["under_eye"] * c["under_eye"], (0.88, 0.85, 0.91))    # violet-brown circles
@@ -271,6 +315,34 @@ def synth_head(m, c, cl, cr):
     tint(R["temple"] * 0.6, (0.97, 0.97, 1.0))
     tint(R["scalp"] * 0.7, (0.94, 0.93, 0.95))
     tint(R["neck"] * 0.5, (0.98, 0.97, 0.97))
+    # haemoglobin blotching (5-15 mm): acts on G and B only; strong on the
+    # cheeks, nose, centre forehead and neck, faint elsewhere
+    hb_w = np.clip(R["cheek"] + R["nose"] + R["apple"] + R["forehead"] * gauss(u, 0.025) + R["neck"], 0, 1)
+    hb_w = c["hb_strong"] * hb_w + c["hb_weak"] * (1 - hb_w)
+    # a soft threshold, zero mean over the skin (the face keeps its mean
+    # colour); G and B absorb, R lifted by hb_r so a blotch reads as red, not dirt
+    hbf = smoothstep(c["hb_thr"] - c["hb_soft"], c["hb_thr"] + c["hb_soft"], m.hb)
+    sk = m.valid & (lips < 0.5) & (R["scalp"] < 0.5)
+    hb = (hbf - (float(hbf[sk].mean()) if sk.any() else 0.5)) * hb_w * (1 - lips)
+    alb *= 1 + hb[..., None] * np.array((c["hb_r"], -0.10 / 0.12, -1.0), np.float32)
+    # fine-scale redness (3-7 mm, capillary scale): most of the hue variation
+    # lives here, not in the broad blotches. Normalised to unit std over the
+    # skin, then a nearly luminance-neutral red/green swing (R up, G and B
+    # down), so it reads as uneven colour, not as dirt or a rash.
+    def zscore(a):
+        return (a - float(a[sk].mean())) / max(float(a[sk].std()), 1e-4) if sk.any() else a * 0
+    # continuous and low-contrast: smooth gradient noise (3-7 mm), symmetric,
+    # no threshold or one-sided curve, so it mottles and never forms flecks
+    fine = np.clip(zscore(0.6 * m.hb_f1 + 0.4 * m.hb_f2), -2.5, 2.5)
+    fw = np.clip(R["cheek"] + R["apple"] + R["nose"] + R["nose_tip"] + R["alar"] + R["ears"] + 0.6 * R["chin"]
+                 + 0.5 * R["neck"], 0, 1)
+    fw = (c["hb_fine_strong"] * fw + c["hb_fine_weak"] * (1 - fw)) * (1 - lips) \
+        * (1 - np.clip(1.5 * R["under_eye"], 0, 1)) * (1 - R["beard"])   # under-eye less saturated; none in the beard
+    alb *= 1 + (fine * fw)[..., None] * np.array(c["hb_fine_rgb"], np.float32)
+    # melanin drift (20-50 mm): +-6 % value, darker patches a touch yellower
+    mel = np.clip((m.mel - 0.5) * 2.5, -1, 1) * (1 - lips)
+    alb *= (1 - c["melanin"] * mel)[..., None]
+    tint(np.clip(mel, 0, 1), (1.02, 1.00, 0.95))
     # temple veins: faint blue wavy lines (~3 %)
     vein = smoothstep(0.06, 0.0, np.abs(m.aniso_h - 0.5)) * R["temple"] * smoothstep(0.4, 0.6, m.vein_var)
     tint(vein * c["veins"], (0.95, 0.97, 1.04))
@@ -299,7 +371,7 @@ def synth_head(m, c, cl, cr):
     L = np.array([0.0, -0.45, 1.0], np.float32)
     L /= np.linalg.norm(L)
     facing = np.clip((m.N * L).sum(-1), -1, 1)
-    alb *= (1 + c["plane_paint"] * facing)[..., None]
+    plane = (1 + c["plane_paint"] * facing)[..., None]          # game only; hero plane_paint 0
     # mouth corners: the baked occlusion pools in the commissures and, with the
     # corners set low, reads as a pout from the front; lift it there (and a
     # touch of value), so the mouth reads as a firm line, not a frown
@@ -309,7 +381,8 @@ def synth_head(m, c, cl, cr):
     ao_c = ao + (1 - ao) * c["corner_ao_lift"] * corner
     alb *= (1 - c["ao_in_albedo"] * (1 - ao_c))[..., None]
     tint(corner * c["corner_lift"], (1.06, 1.05, 1.05))
-    alb = np.clip(alb, 0, 1)
+    alb_hero = np.clip(alb * (1 + c["hero_plane_paint"] * facing)[..., None], 0, 1)
+    alb = np.clip(alb * plane, 0, 1)
 
     # ------------------------------------------------------------- roughness
     rough = np.full(h.shape, c["rough"], np.float32)
@@ -319,22 +392,30 @@ def synth_head(m, c, cl, cr):
     rough += 0.10 * R["under_eye"] + 0.02 * R["neck"]          # thin, dry under-eye skin
     rough += 0.08 * crepe                                       # crepe folds scatter the sheen
     rough += (m.mot_mid - 0.5) * 0.06 + pit * 0.10
+    # oiliness varies smoothly (the T-zone a little shinier, rough_tzone); any
+    # highlight breakup comes from the pores and micro relief, not from a mask
     lip_r = c["rough_lips"] + 0.12 * smoothstep(0.55, 0.72, m.aniso_v)
     rough = rough * (1 - lw) + lip_r * lw
-    # wet lid margin: the rim that touches the eye only, not the lid's front skin
-    lid = gauss(fr.eye_d - c["lid_margin_r"], 0.0004) * (1 - smoothstep(0.0164, 0.0170, fr.eye_d))
-    rough = rough * (1 - lid) + c["rough_lid"] * lid
+    # no wet band on the skin: the lid and under-eye skin lie within a
+    # millimetre of the eyeball radius over several millimetres, so any radial
+    # band spread gloss onto them (a wet crescent under the eye); the tear line
+    # against the eyeball is the hero meniscus (eyes_hq), the skin stays matte
     rough = np.clip(rough, 0.05, 1.0)
 
     # ------------------------------------------------------ hero detail masks
-    mask_pores = np.stack([w_nose, w_cheek, w_fore], -1).astype(np.float32)
+    # hero micro-detail masks: strong on the nose, cheeks and forehead, weak on
+    # the lids and lips, off under the beard
+    no_beard = 1 - 0.85 * smoothstep(0.2, 0.6, R["beard"])
+    mask_pores = (np.stack([w_nose, w_cheek, w_fore], -1) * no_beard[..., None]).astype(np.float32)
     oil = np.clip(R["tzone"] * 1.0 + 0.3 * R["cheek"], 0, 1) * (1 - lips) * (1 - np.clip(R["under_eye"] * 1.5, 0, 1))
+    oil = oil * (0.8 + 0.4 * m.mot_low)                       # ~2 cm, smooth: no edges inside a highlight
     fuzz = np.clip(R["cheek"] + 0.7 * R["ears"] + 0.5 * R["forehead"] + 0.4 * R["neck"], 0, 1) * (1 - R["beard"]) * (1 - lips)
     lid_clear = smoothstep(0.0168, 0.0178, fr.eye_d)          # micro relief up to the lid margin
-    micro = np.clip(0.6 + 0.4 * R["cheek"] - 0.3 * R["nose"] - 0.5 * R["scalp"], 0, 1) * (1 - lips) * lid_clear
+    micro = np.clip(0.6 + 0.4 * R["cheek"] - 0.3 * R["nose"] - 0.5 * R["scalp"], 0, 1) * (1 - lips) * lid_clear \
+        * no_beard * (1 - 0.5 * np.clip(R["lid"] * 1.5, 0, 1))
     mask_hero = np.stack([oil, fuzz, micro], -1).astype(np.float32)
-    return {"albedo": alb, "rough": rough, "hgt_game": hgt_game, "hgt_hero": hgt_hero, "occl": occl,
-            "mask_pores": mask_pores, "mask_hero": mask_hero}
+    return {"albedo": alb, "albedo_hero": alb_hero, "rough": rough, "hgt_game": hgt_game, "hgt_hero": hgt_hero,
+            "occl": occl, "mask_pores": mask_pores, "mask_hero": mask_hero}
 
 
 def synth_hands(m, c, hf, fingers):
@@ -427,12 +508,22 @@ DEFAULT_HEAD = {
     "freckle_thr": 0.80, "freckles": 0.22, "blemish": 0.5,
     "mottle_low": 0.10, "mottle_mid": 0.06,
     "pore_scale": 1.0, "grain_mm": 0.006,
-    "wrinkle_scale": 1.0, "forehead_mm": 0.30, "frown_mm": 0.30, "crows_mm": 0.15, "nasolabial_mm": 0.25, "lip_crease_mm": 0.08,
+    "wrinkle_scale": 1.0, "forehead_mm": 0.30, "frown_mm": 0.10, "frown_w": 0.0016, "crows_mm": 0.15, "nasolabial_mm": 0.25,
+    "lip_crease_mm": 0.12, "lip_ridge_spacing_mm": 0.8, "lip_bump_mm": 0.03,
+    # mid band (skin-direction.md Track A 2, 4)
+    "lump_cheek_mm": 0.25, "lump_forehead_mm": 0.22, "lump_undereye_mm": 0.15, "lump_face_mm": 0.10,
+    "peel_mm": 0.05, "shoulder_mm": 0.08, "nose_bump_mm": 0.06,
+    "undereye_edge_mm": 0.0, "undereye_edge_h": -0.0175,
+    # chromatic albedo (skin-direction.md Track A 1)
+    "hb_strong": 0.18, "hb_weak": 0.045, "hb_thr": 0.55, "hb_soft": 0.20, "hb_r": 0.7,
+    "hb_fine_strong": 0.020, "hb_fine_weak": 0.010, "flush_cheek_w": 0.6, "hb_fine_rgb": (1.6, -1.0, -1.1),
+    "melanin": 0.06, "hero_plane_paint": 0.0,
+    "flush_nose": (1.20, 0.89, 0.92), "flush_apple": (1.06, 0.95, 0.92),
+    "forehead_tint": (1.03, 1.02, 0.91),
     "crepe_mm": 0.02, "crepe_period": 0.0008,
     "cavity_scale": 0.0006, "cavity_albedo": 0.03,
-    "plane_paint": 0.06, "ao_in_albedo": 0.22,
-    "rough": 0.47, "rough_tzone": 0.40, "rough_beard": 0.58, "rough_ears": 0.48, "rough_lips": 0.45,
-    "lid_margin_r": 0.0162, "rough_lid": 0.2,
+    "plane_paint": 0.06, "ao_in_albedo": 0.10,
+    "rough": 0.47, "rough_tzone": 0.37, "rough_beard": 0.58, "rough_ears": 0.48, "rough_lips": 0.45,
 }
 
 DEFAULT_HANDS = {

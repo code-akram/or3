@@ -49,8 +49,9 @@ def hero(b):
     skin (subsurface, coat, sheen, displacement on an adaptive subdivision)
     and the hero eyes (refractive cornea, tear meniscus, caruncle) in the
     hero_only collection. The game materials stay in the GLB."""
-    from . import eyes_hq, skin_tex
+    from . import eyes_hq, skin_tex, skin_vellus
     skin_tex.hero(b)
+    skin_vellus.build(b)
     eyes_hq.hero(b)
     mouth_hero(b)
 
