@@ -37,7 +37,7 @@ objects. Config `rig.deform` (null switches it off); the defaults live in
      - Skirt weights by azimuth sector, ramped in below the pivot height.
      - The body gets the shoulder-cap rule only.
    - Every mesh is then pruned to 4 influences.
-3. **Correctives** (`deform_correctives`). There are 12 shape keys, one per
+3. **Correctives** (`deform_correctives`). There are 14 shape keys, one per
    side for each of these:
 
    | key | bake pose |
@@ -48,11 +48,23 @@ objects. Config `rig.deform` (null switches it off); the defaults live in
    | `corr_elbow` | elbow at 86° |
    | `corr_hip_fwd` | thigh at 95° |
    | `corr_knee` | knee at 120° |
+   | `corr_fist` (round 2, skin only) | the fist curl `FIST_TIGHT` |
 
    Each key is baked in its pose:
    - Take the skinned mesh, apply delta mush (Corrective Smooth) inside the
      joint region, then a layer-collision push (each outer garment clears the
      inner layers it covers at rest by 6 mm, and the body sinks under them).
+   - On the body, the delta mush only reaches skin the pose actually moves:
+     skin weighted to a bone whose skinning matrix changed, dilated 4 rings.
+     So an arm raise can no longer drag the throat (round 2).
+   - Skin counts as covered by a garment only when the garment's nearest
+     surface lies outside it within 5 cm *and* a ray along the skin's normal
+     meets that garment within 4 cm. This is the same rule
+     `deform_test` uses. Before round 2, the nearest-surface sign alone
+     marked throat skin 67–69 mm from the jacket collar as covered, and the
+     collision then pushed it out through the shirt collar (Track D's suit.md
+     R4.4). Garment over garment keeps the side test: a skirt or flap stands
+     well off what it covers.
    - Spatially smooth the garment deltas, so islands don't separate.
    - Inverse-skin the result to bind space: d = M⁻¹(Y − X).
    - Buttons follow the jacket.
@@ -76,9 +88,10 @@ is also the Blender reference implementation. Every frame in three.js, after
 - **`swing`**: `R_H = R_F · slerp(I, swing, f)`.
 - **`follow`** (the skirt): the source swing's rotation vector is split into
   flexion and abduction, each scaled by a signed gain.
-- **`cone`** (morphs):
-  `w = clamp(1 − ∠(d, t)/∠(d0, t), 0, 1)^p`, with d = the bone direction in
-  its ref frame. Write it to `morphTargetInfluences[morphTargetDictionary[name]]`
+- **`cone`** (morphs): `u = 1 − ∠(d, t)/∠(d0, t)`, then
+  `w = clamp((u − s)/(1 − s), 0, 1)^p`. Here d is the bone direction in its
+  ref frame, and `start` s is optional (default 0). `corr_fist` uses s = 0.45,
+  so a relaxed or holding hand gets none of it. Write it to `morphTargetInfluences[morphTargetDictionary[name]]`
   on every mesh that has a target with that name.
 
 All vectors are in glTF model space at the bind pose. Rotations are
@@ -218,6 +231,128 @@ Before/after strips (top = base, bottom = final) are in
   vertices). The tuck hides this now; the fit should be fixed at the source.
 - The lapel crumple and the jagged collar edge are in the rest mesh.
 - The body remnants under the right shoulder poke at rest.
+
+## Round 2 (main 416132c: G's hands, E's bladed stance, D's suit round 4)
+
+Final run: `data/build/lookdev/20261013T050241Z-deformF-r4`.
+
+- **Budgets:** 126 872 tris, 83 bones, 4 weights per vertex, 0 glTF errors.
+- **"Before"** (`deformF-dev/r2old`) is round 1's stage code run on the same
+  stage-less build (`20261013T035536Z-deformF-base3`).
+
+### 1. Corrective coverage rule (Track D, suit.md R4.4)
+
+**Change.** Two rules now limit what the body correctives can move:
+- **Cover:** skin counts as covered only when a ray along the skin normal also
+  meets the garment (above).
+- **Moved-skin mask:** the body delta mush only reaches skin the pose moves.
+
+**Result.** The arm correctives no longer move the body at all.
+
+| key | body offset before | body offset after |
+|---|---|---|
+| `corr_arm_up_l` | 75 vertices, up to 45.8 mm | none |
+| `corr_arm_fwd_r` | 82 vertices, up to 34.4 mm | none |
+| `corr_arm_down_r` | up to 8.3 mm | none |
+
+The garment shapes keep round 1's rule. `corr_hip_fwd` keeps its body
+shape (13 mm).
+
+**`deform_test`, before → after (pokes):**
+
+| pose | before | after | the remaining pokes |
+|---|---|---|---|
+| arm_raise | 1 at 2.0 mm | 2 at 1.6 mm | the right throat poke is gone; the 2 left are right-trapezius vertices from plain skinning (D's R4.4 table) |
+| head_turn | 0 | 1 at 2.4 mm | the left trapezius under the collar; round 1's `corr_arm_down` body shape used to tuck it in by accident |
+| hero | 1 | 1 | |
+| high_ready | 0 | 0 | |
+| crouch | 22 | 24 | |
+| knee_up | 6 | 6 | |
+| low_ready | 35 | 34 | |
+| relaxed, walk, twist, rest | 0 | 0 | |
+
+**`suit_pose_test`** on r4: arms_up 110, kick 36, crouch 840, stress 955 px
+over rest. These are D's v3h numbers. The tool imports the GLB without the
+runtime, so it can't see correctives.
+
+**Evidence:** `evidence/cmp_cover_neck.png` (before on top). The arm_raise
+shoulders and the head_turn, relaxed and hero necks look the same.
+
+**Rejected on the way:** applying the ray rule to garment pairs too. With
+inverted or off-standing jacket faces at the hip pocket, it dropped
+`corr_hip_fwd`'s 50 mm push and let the trousers through the jacket at
+the hip in hero, high_ready and low_ready (43–45 mm, 2–4 vertices).
+
+### 2. Fist corrective (Track G, hands.md)
+
+**Bake.** `corr_fist_{l,r}` is a skin-only key.
+- **Pose:** `deform_poses.FIST_TIGHT` is FIST's finger curl, scaled per finger
+  to where each fingertip has just met the palm: index and middle 0.88,
+  ring 0.85, pinky 0.72. The thumb stays open.
+- **Smoothing:** delta mush over the hand, except the fingertips (the nails
+  sit there) and the thumb.
+- **Skin-on-skin solve** (`HandSkin`, in `deform_correctives.py`):
+  1. Each digit is tested against the palm and its neighbours.
+  2. A digit counts as in contact by nearest-surface depth, and by triangle
+     overlap. The overlap test is the same one `hand_pose.settle` uses, and
+     it catches the palmar crease fold.
+  3. Both sides give way by half per pass, for 12 passes, capped at 8 mm per
+     vertex: the pads, the palm and the crease compress.
+
+**Driver.** The key is driven by `middle_02` in the hand frame, at full
+weight at the authored FIST (`drive_pose`), with `start` 0.45. So settle,
+which curls under the authored pose's weight, never ends with more
+compression than it tested. The key is 0 in the relaxed, cuff-hold and hero
+hands.
+
+**`hand_pose.settle` wrap in f:twist** (the fraction of FIST each finger
+reaches before first contact):
+
+| finger | before | after |
+|---|---|---|
+| index | 0.75 | 0.70 |
+| middle | 0.44 | **0.88** |
+| ring | 0.60 | **0.80** |
+| pinky | 0.63 | **0.72** |
+
+**`hands_render --pierce`** on r4: 0 in rest, stand, cuff, ready and
+f:twist.
+
+**Evidence** (`evidence/`):
+- `fist_before_after_clay.png` (back, palm and front; before on top).
+- `hands_after.png` (fist, fist palm, cuff, ready and hero_r, beauty). The
+  cuff, ready and hero_r hands are unchanged.
+
+**Verdict: improved, not finished.**
+- **Better:** the fingers now fold into the palm and read as a fist. Before,
+  the middle finger hung open as a claw.
+- **Still CG:**
+  - The fingertip pads where they meet the palm look crumpled.
+  - The thumb lies flat along the index instead of wrapping over the middle
+    phalanges. That is pose data, not the corrective.
+  - The back of the hand is still a little soft. The delta mush is inside
+    `corr_fist`; no separate dorsal key was kept. I tried splitting it out
+    (r2j): the dorsal-only key moved the dorsum by at most 2 mm, and the
+    contact-only key then stopped the middle finger at 0.35. So I merged
+    them back. I didn't render that split.
+  - The index ends 5 % looser than before. In the bake, its pad is pushed
+    toward where the thumb sits.
+- **Not measured:** own-palm contact after settle. G's pierce counts foreign
+  and adjacent-digit overlaps only.
+
+### Runs (`deformF-dev/`, stage on base3)
+
+| run | change | verdict |
+|---|---|---|
+| r2old | round 1's code | before |
+| r2a | ray cover rule, moved mask, first fist key | arm keys: body 0. Fist key does nothing: only the region was collided |
+| r2b–r2c | whole hand collided; HandSkin with the perpendicular-foot test | at FIST the tips sit 15 mm in the palm, beyond any pad: the pose is too deep |
+| r2d | bake at FIST × 0.85, 8 mm cap | middle wrap 0.44 → 0.50 only: settle stops at the palmar crease |
+| r2f–r2g | digit judged whole against the palm, plus a triangle-overlap test | middle 0.76, index 0.81; pinky 0.53 (its tip is deep) |
+| r2i–r2k | per-finger bake curl | middle 0.82, ring 0.80, pinky 0.71; thumb/index pierce 6–8 (weight rose after settle) |
+| r2l | full weight at FIST (`drive_pose`) | pierce 0; middle 0.88 |
+| r2m–r2n | ray rule taken off garment pairs | hero/high_ready trousers>jacket back to 0 |
+| r2o, r4 | `start` 0.45 | cuff pierce 0 (r3 had cuff r middle 4, pinky 6) |
 
 ## Iteration log
 
