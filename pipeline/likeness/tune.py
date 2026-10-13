@@ -22,7 +22,12 @@ left, +y backward, +z up; millimetres):
   stretch: vertical lengthening below landmark "at" by "factor" down to landmark "to" (what lies
            below "to" moves with it, down to landmark "carry_to" if given, then tapers to zero
            over "below_mm"); full in front of "fade_back_mm"[0] behind the eye line, none
-           behind [1].
+           behind [1];
+  relax:   after the other edits, the delta inside the falloff around "at" is blended toward its
+           Laplacian-smoothed self ("iters", default 30; "amount", default 1), so fine detail of the
+           base survives the wrap and the broad moves;
+  rigid:   likewise, but toward the delta's mean over the full-weight core, which then moves as one
+           piece (a nostril-and-alar block keeps the base's nostril shape).
 
     {"edits": [{"name": "narrower mouth", "at": 291, "move_mm": [-2.5, 0, 0], "radius_mm": 14, "mirror": true},
                {"name": "longer face", "type": "stretch", "at": 168, "to": 152, "factor": 0.05,
@@ -127,9 +132,37 @@ def weight(co, c, e):
     return wendland(np.maximum(rho - k, 0), 1.0 - k)
 
 
+POST = ("relax", "rigid")
+
+
+def relax(base, emb, delta, edits):
+    """Apply the "relax" and "rigid" edits to a delta. Inside each edit's falloff the skin delta is
+    blended toward its Laplacian-smoothed self ("relax", "iters" rounds over the skin graph) or toward
+    its mean over the full-weight core ("rigid": the core moves as one piece), so fine detail the base
+    had there (nostril openings, alar rims) comes back while the broad change is kept."""
+    out = delta.copy()
+    for e in edits:
+        lm = landmarks(base.co + out, emb)
+        c = lm[int(e["at"])]
+        if np.isnan(c).any():
+            raise ValueError(f"edit {e.get('name', e['at'])}: landmark {e['at']} is not embedded")
+        w = weight(base.co + out, c, e) * base.skin
+        if e["type"] == "rigid":
+            core = w > 0.999
+            if not core.any():
+                raise ValueError(f"edit {e.get('name', e['at'])}: empty core (raise core_mm / core_frac)")
+            target = np.broadcast_to(out[core].mean(0), out.shape)
+        else:
+            target = base.smooth(out, int(e.get("iters", 30)))
+        out += (w * float(e.get("amount", 1.0)))[:, None] * (target - out)
+    return out
+
+
 def edit_field(base, emb, co, edits):
     """Displacement field (V, 3) of the edits, evaluated on the current surface co: the skin and
-    field helpers take it per vertex, each rigid helper its mean over the helper's vertices."""
+    field helpers take it per vertex, each rigid helper its mean over the helper's vertices.
+    "relax" and "rigid" edits are not fields; relax() applies them to the edited delta."""
+    edits = [e for e in edits if e.get("type") not in POST]
     lm = landmarks(co, emb)
     movable = base.skin.copy()
     for g in wrap.FIELD_HELPERS:
@@ -193,7 +226,8 @@ def main(argv=None):
     if a.edits:
         edits = json.load(open(a.edits))["edits"]
         field = edit_field(base, emb, base.co + delta, edits)
-        new = delta + field
+        new = relax(base, emb, delta + field, [e for e in edits if e.get("type") in POST])
+        field = new - delta
         if a.symmetrise:                                       # average with the mirror image
             mm = wrap.mirror_map(base.co)
             ok = mm >= 0
