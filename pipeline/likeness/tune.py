@@ -13,12 +13,16 @@ the teeth and a lower-face stretch carries them. Two kinds, in the base frame (+
 left, +y backward, +z up; millimetres):
 
   move:    a smooth local move centred on an embedded landmark, or on the left eyeball centre with
-           "at": "eye" (Wendland C2 falloff to "radius_mm", full weight inside "core_mm"), optionally
+           "at": "eye" (Wendland C2 falloff to "radius_mm", full weight inside "core_mm"; or an
+           ellipsoid with "radius_mm": [x, y, z] and "core_frac"), optionally
            mirrored across the midline; a core larger than the eyeball moves the eye and its lids
            as one, so the lids keep their fit on the eye;
+  scale:   per-axis scaling about landmark "at" by "factor_xyz" (e.g. [-0.2, 0, 0] narrows a
+           region toward the midline without bunching it), weighted like a move;
   stretch: vertical lengthening below landmark "at" by "factor" down to landmark "to" (what lies
-           below "to" moves with it, then tapers to zero over "below_mm"); full in front of
-           "fade_back_mm"[0] behind the eye line, none behind [1].
+           below "to" moves with it, down to landmark "carry_to" if given, then tapers to zero
+           over "below_mm"); full in front of "fade_back_mm"[0] behind the eye line, none
+           behind [1].
 
     {"edits": [{"name": "narrower mouth", "at": 291, "move_mm": [-2.5, 0, 0], "radius_mm": 14, "mirror": true},
                {"name": "longer face", "type": "stretch", "at": 168, "to": 152, "factor": 0.05,
@@ -80,16 +84,22 @@ def one_field(base, lm, co, e):
         if np.isnan(top).any() or np.isnan(bot).any():
             raise ValueError(f"edit {name}: landmark not embedded")
         span = top[2] - bot[2]
+        carry = top[2] - lm[int(e["carry_to"])][2] if "carry_to" in e else span
         below = float(e.get("below_mm", 80)) / 1000.0
         s = top[2] - co[:, 2]                                  # depth below the top landmark
         amount = float(e["factor"]) * np.clip(s, 0, span)      # metres down
-        amount *= 1 - smoothstep(s, span, span + below)        # taper below the bottom landmark
+        amount *= 1 - smoothstep(s, carry, carry + below)      # taper below "carry_to" (default "to")
         eye_y = 0.5 * (base.eye_l[1] + base.eye_r[1])
         fb = np.asarray(e.get("fade_back_mm", [30, 80]), np.float64) / 1000.0
         amount *= 1 - smoothstep(co[:, 1] - eye_y, fb[0], fb[1])
         f = np.zeros_like(co)
         f[:, 2] = -amount
         return f
+    if e.get("type") == "scale":                               # per-axis scaling about a landmark
+        c = lm[int(e["at"])]
+        if np.isnan(c).any():
+            raise ValueError(f"edit {name}: landmark {e['at']} is not embedded")
+        return weight(co, c, e)[:, None] * (co - c) * np.asarray(e["factor_xyz"], np.float64)
     if e["at"] == "eye":                                       # the character's left eyeball centre
         c = co[(base.group("helper-l-eye") > 0) & base.helper].mean(0)
     else:
@@ -97,14 +107,24 @@ def one_field(base, lm, co, e):
     if np.isnan(c).any():
         raise ValueError(f"edit {name}: landmark {e['at']} is not embedded")
     mv = np.asarray(e["move_mm"], np.float64) / 1000.0
-    R = float(e["radius_mm"]) / 1000.0
-    core = float(e.get("core_mm", 0.0)) / 1000.0               # full weight inside, falloff outside
     centres = [(c, mv)] + ([(c * [-1, 1, 1], mv * [-1, 1, 1])] if e.get("mirror") else [])
     f = np.zeros_like(co)
     for cc, m in centres:
-        r = np.maximum(np.linalg.norm(co - cc, axis=1) - core, 0)
-        f += wendland(r, R - core)[:, None] * m
+        f += weight(co, cc, e)[:, None] * m
     return f
+
+
+def weight(co, c, e):
+    """Falloff of an edit around c: "radius_mm" a scalar (sphere; full weight inside "core_mm") or
+    an x, y, z triple (ellipsoid; full weight inside the "core_frac" fraction of it)."""
+    R = np.asarray(e["radius_mm"], np.float64) / 1000.0
+    if R.ndim == 0:
+        core = float(e.get("core_mm", 0.0)) / 1000.0
+        r = np.maximum(np.linalg.norm(co - c, axis=1) - core, 0)
+        return wendland(r, float(R) - core)
+    rho = np.linalg.norm((co - c) / R, axis=1)
+    k = float(e.get("core_frac", 0.0))
+    return wendland(np.maximum(rho - k, 0), 1.0 - k)
 
 
 def edit_field(base, emb, co, edits):
@@ -148,6 +168,7 @@ def main(argv=None):
     ap.add_argument("--calibrate", default="", help="measured ratios.json of a render of --calibrate-delta")
     ap.add_argument("--calibrate-delta", default="", help="the delta that render used (default: --delta)")
     ap.add_argument("--ref", default="", help="reference ratios.json (medians) for the % columns")
+    ap.add_argument("--symmetrise", action="store_true", help="average the edited delta with its mirror image")
     a = ap.parse_args(argv)
 
     base = wrap.Base(a.base)
@@ -173,6 +194,12 @@ def main(argv=None):
         edits = json.load(open(a.edits))["edits"]
         field = edit_field(base, emb, base.co + delta, edits)
         new = delta + field
+        if a.symmetrise:                                       # average with the mirror image
+            mm = wrap.mirror_map(base.co)
+            ok = mm >= 0
+            asym = np.abs(new[ok] - new[mm[ok]] * [-1, 1, 1]).max() * 1000
+            new[ok] = 0.5 * (new[ok] + new[mm[ok]] * [-1, 1, 1])
+            print(f"[tune] symmetrised {int(ok.sum())} verts (largest asymmetry was {asym:.2f} mm)")
         rows.append(("edited" + (" (cal)" if offset else ""), calibrated(base.co + new)))
         mv = np.linalg.norm(field, axis=1) * 1000
         print(f"[tune] {len(edits)} edits; field max {mv.max():.2f} mm, {int((mv > 0.1).sum())} verts over 0.1 mm")
