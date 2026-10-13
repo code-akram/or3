@@ -209,9 +209,15 @@ def beard_lip_fill(m, lips, beard, band_m):
         return out
     lo, hi = m.P[ring].min(0) - 2 * band_m, m.P[ring].max(0) + 2 * band_m
     box = m.valid & np.all((m.P > lo) & (m.P < hi), axis=-1)
-    skin = box & (lips < 0.55)
-    s = dist_to(m.P, box & (np.abs(lips - 0.55) < 0.1), skin) + dist_to(m.P, box & (beard > 0.5), skin)
-    out[skin] = smoothstep(1.5 * band_m, band_m, s[skin])
+    # the lip side counts as distance 0 to the lips, so the skin under a soft
+    # vermilion border (lip_soft_mm) is shadowed too and no light ring is left
+    # between the lip colour and the strip; the beard side by its 0.5 contour
+    # (dense seeds: a smooth edge where the beard is patchy)
+    d_lip = np.where(lips >= 0.55, 0.0, dist_to(m.P, box & (np.abs(lips - 0.55) < 0.1), box))
+    edge = box & (np.abs(beard - 0.5) < 0.15)
+    d_beard = dist_to(m.P, edge if edge.sum() >= 256 else box & (beard >= 0.5), box, n_seed=8000)
+    s = d_lip + np.where(beard >= 0.5, 0.0, d_beard)
+    out[box] = smoothstep(1.5 * band_m, band_m, s[box])
     return out
 
 
