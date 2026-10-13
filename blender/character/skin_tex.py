@@ -33,7 +33,7 @@ import time
 import bpy
 import numpy as np
 
-from . import head_refine, skin_synth
+from . import hand_detail, head_refine, skin_synth
 from .skin_synth import HEX, gauss, linear_to_srgb, smoothstep, srgb_to_linear  # noqa: F401 (eyes_hq uses them)
 
 # --- baking ----------------------------------------------------------------------------------
@@ -475,7 +475,9 @@ def build(b):
     hh = dict(skin_synth.DEFAULT_HANDS)
     hh.update(c.get("hands") or {})
     hh["base"] = c.get("base", hh["base"])
-    hands = skin_synth.synth_hands(maps[1], hh, head_refine.hand_frames(arm), head_refine.FINGERS)
+    # Track G hook: A's hand synthesis plus the hand detail layer (hand_detail.py)
+    hands = hand_detail.synth(maps[1], hh, head_refine.hand_frames(arm), head_refine.FINGERS,
+                              ((b.cfg.get("hands") or {}).get("detail")))
     out_dir = b.out_dir if c.get("save_maps") else None
     imgs, hero_in = {}, {"body": body.name, "cfg": c}
     for key, m, syn in (("head", maps[0], head), ("hands", maps[1], hands)):

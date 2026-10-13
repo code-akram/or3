@@ -24,6 +24,10 @@ positions):
               character's left = outward); _r bones mirror x.
               x is mirrored for _r.
     move      translate (pelvis): [x, y, z] metres, armature space
+    orient    (hands) {"fingers": [x,y,z], "thumb": [x,y,z], "frame": bone}:
+              the finger direction and thumb side of the hand in the rest
+              frame of `frame` (default spine_03), left-side values, x
+              mirrored for _r (Track G)
     side_l / side_r are written explicitly; `sym()` mirrors a left-side spec.
 
 Every op is applied about the bone head, in order, in the current (parent-
@@ -65,17 +69,35 @@ def sym(spec_l, extra=None):
     return out
 
 
-def hand(mcp, pip, dip, thumb=(10, 10, 10), spread=0.0, prefix_ops=None, index=None):
+# Track G (hands): a relaxed hand is not four copies of one finger. The curl
+# grows from index to pinky (cascade), the fingers fan a little at the
+# knuckles (spread, deg at the index; the ring and pinky go the other way)
+# and the thumb sits off the index (thumb_abduct: swing in the palm plane,
+# + = away from the fingers).
+CASCADE = {"index": -0.5, "middle": 0.0, "ring": 0.5, "pinky": 1.0}
+# The MPFB rest hand is splayed (index +8, ring -18, pinky -25 deg from the
+# middle-knuckle line, measured in the palm plane), so a natural hand needs a
+# negative spread: the fingers close up, the pinky keeps a small gap.
+SPREAD = {"index": 1.0, "middle": 0.0, "ring": -0.6, "pinky": -1.4}
+
+
+def hand(mcp, pip, dip, thumb=(10, 10, 10), spread=0.0, prefix_ops=None, index=None, cascade=0.0,
+         thumb_abduct=0.0):
     """Finger curl for one hand: {finger: [[flex, deg]]} (left names).
-    index: optional (mcp, pip, dip) for the index finger (trigger finger)."""
+    index: optional (mcp, pip, dip) for the index finger (trigger finger).
+    cascade: the curl of finger f is scaled by 1 + cascade * CASCADE[f]
+    (the middle finger keeps the given values). spread: MCP abduction (deg)
+    fanning the fingers, scaled per finger by SPREAD. The defaults give the
+    plain curl."""
     out = {}
     for f in FINGERS[1:]:
         m, p, d = (index if (f == "index" and index) else (mcp, pip, dip))
-        out[f"{f}_01_l"] = [["flex", m]]
-        out[f"{f}_02_l"] = [["flex", p]]
-        out[f"{f}_03_l"] = [["flex", d]]
+        k = 1.0 + cascade * CASCADE[f]
+        out[f"{f}_01_l"] = [["flex", m * k]] + ([["abduct", spread * SPREAD[f]]] if spread and SPREAD[f] else [])
+        out[f"{f}_02_l"] = [["flex", p * k]]
+        out[f"{f}_03_l"] = [["flex", d * k]]
     t1, t2, t3 = thumb
-    out["thumb_01_l"] = [["flex", t1]]
+    out["thumb_01_l"] = [["flex", t1]] + ([["abduct", thumb_abduct]] if thumb_abduct else [])
     out["thumb_02_l"] = [["flex", t2]]
     out["thumb_03_l"] = [["flex", t3]]
     return out
@@ -86,11 +108,14 @@ def side(spec_l, s):
     return {(k[:-2] + "_" + s if k.endswith("_l") else k): v for k, v in spec_l.items()}
 
 
-RELAXED_HAND = hand(18, 28, 12, thumb=(8, 10, 12))
-HERO_RIGHT_HAND = hand(20, 35, 15, thumb=(10, 12, 15))  # direction.md §2 Track F
-GRIP = hand(75, 85, 45, thumb=(25, 25, 25), index=(30, 25, 10))  # trigger finger along the frame
-SUPPORT_GRIP = hand(60, 75, 40, thumb=(20, 20, 20))
-FIST = hand(85, 95, 60, thumb=(35, 30, 30))
+# Hand values (Track G, bench/m1/v2/hands.md): cascades, spread and thumb
+# placement; the middle finger keeps the direction.md numbers.
+RELAXED_HAND = hand(16, 26, 12, thumb=(10, 10, 12), cascade=0.45, spread=-4.0, thumb_abduct=-12)
+HERO_RIGHT_HAND = hand(20, 35, 15, thumb=(14, 12, 15), cascade=0.4, spread=-4.0, thumb_abduct=-15)  # direction.md §2 Track F
+GRIP = hand(75, 85, 45, thumb=(25, 25, 25), index=(30, 25, 10), cascade=0.12)  # trigger finger along the frame
+SUPPORT_GRIP = hand(60, 75, 40, thumb=(8, 6, 6), cascade=0.2, thumb_abduct=-12)  # thumb forward along the strong hand
+FIST = hand(85, 95, 60, thumb=(40, 35, 30), cascade=0.08, thumb_abduct=-8)
+BUTTON_HAND = hand(30, 50, 30, thumb=(25, 20, 15), cascade=0.3, spread=-3.0)
 
 ARMS_DOWN = {"upperarm_l": [["abduct", -36], ["flex", 4], ["twist", 5]],
              "lowerarm_l": [["flex", -22]],
@@ -184,7 +209,7 @@ POSES = {
     "hero": {
         "bones": {
             **side(HERO_RIGHT_HAND, "r"),
-            **hand(30, 50, 30, thumb=(25, 20, 15)),
+            **BUTTON_HAND,
             "pelvis": [["tilt", 4], ["turn", -4]],
             "spine_01": [["tilt", -2]], "spine_02": [["tilt", -2], ["turn", 3]],
             "spine_03": [["flex", -5], ["tilt", -1], ["turn", 3]],
@@ -210,10 +235,15 @@ POSES = {
             "neck_01": [["flex", 2]], "head": [["flex", 4], ["turn", -4]],
             "thigh_l": [["flex", 12]], "calf_l": [["flex", 18]], "foot_l": [["flex", 6]],
             "thigh_r": [["flex", -4]], "calf_r": [["flex", 10]],
+            # hands (Track G): the strong hand as on a pistol grip (palm
+            # facing in, fingers forward and down along the grip angle, thumb
+            # up and forward); the support hand left of it, palm against the
+            # strong fingers, fingers wrapping down round them (contact by
+            # hand_pose: POSE_HANDS)
             "upperarm_r": [["ik", {"to": "spine_03", "offset": [0.03, -0.38, 0.12], "pole": [0.25, 0.2, -1]}]],
-            "hand_r": [["flex", -20], ["twist", -70]],
-            "upperarm_l": [["ik", {"to": "spine_03", "offset": [0.0, -0.36, 0.105], "pole": [0.25, 0.2, -1]}]],
-            "hand_l": [["flex", 10], ["twist", -50]],
+            "hand_r": [["orient", {"fingers": [-0.05, -0.90, -0.42], "thumb": [0.0, -0.42, 0.90]}]],
+            "upperarm_l": [["ik", {"to": "spine_03", "offset": [0.05, -0.37, 0.095], "pole": [0.25, 0.2, -1]}]],
+            "hand_l": [["orient", {"fingers": [-0.45, -0.62, -0.64], "thumb": [0.1, -0.85, 0.5]}]],
         },
         "ground": True,
         "view": 35,
@@ -241,6 +271,31 @@ POSES = {
 }
 
 HERO_POSES = ("hero", "high_ready")
+
+# Hand finishing after a pose (Track G, character/hand_pose.settle; the hero
+# stage calls it after every pose). Keys: hero-stage pose names or POSES
+# names. Per side: "shape" replaces the pose's finger curl with HAND_SHAPES
+# [name]; "clear" lifts the hand out of foreign geometry it was posed into
+# (another arm's sleeve or cuff, the torso, the other hand); "wrap" lists the
+# digits that curl to contact with what they hold (their whole curl scaled,
+# up to wrap_max); every hand gets the adjacent-digit spread check.
+HAND_SHAPES = {
+    "relaxed": RELAXED_HAND,
+    # right hand round the left cuff (hero-stage `cuff`, E's arms): fingers
+    # wrap the far side of the sleeve, the thumb lies along the top
+    "cuff_hold": hand(48, 62, 30, thumb=(22, 18, 12), cascade=0.35, spread=-3.0),
+}
+POSE_HANDS = {
+    "cuff": {"r": {"shape": "cuff_hold", "clear": True,
+                   "wrap": ("index", "middle", "ring", "pinky", "thumb"), "wrap_max": 1.4},
+             "l": {"shape": "relaxed", "clear": True}},
+    "hero": {"l": {"clear": True}, "r": {"clear": True}},
+    "high_ready": {"r": {}, "l": {"clear": True, "wrap": ("index", "middle", "ring", "pinky", "thumb"), "wrap_max": 1.3}},
+    "relaxed": {"l": {}, "r": {}},
+    # the fist closes on its own palm (the FIST curl drove the fingertips
+    # through the palm and out of the back of the hand)
+    "twist": {"l": {"wrap": ("index", "middle", "ring", "pinky"), "wrap_max": 1.0, "own_palm": True}, "r": {}},
+}
 
 
 # ---------------------------------------------------------------- engine
@@ -359,8 +414,11 @@ class Rig:
                 f, t, nrm = self.palm(s)
                 return f.cross(t).normalized()
             if any(base.startswith(f) for f in FINGERS):
+                # + = toward the thumb side (radial) on both hands (Track G:
+                # the palm normal alone turned the right hand's digits the
+                # other way; no pose used finger abduction before)
                 f, t, nrm = self.palm(s)
-                return nrm.copy()
+                return nrm * sg
         raise ValueError(f"no axis for {op} on {n}")
 
 
@@ -479,6 +537,8 @@ def apply_pose(arm, pose, rig=None):
                 cur = _cur_dir(arm, rig, n)
                 want = (_rel(arm, rig, rig.ref(n)) @ _mirror(Vector(val), n)).normalized()
                 M = _rot_about(M, pb.head.copy(), cur.rotation_difference(want).to_matrix())
+            elif op == "orient":
+                M = _orient(arm, rig, n, val, M)
             else:
                 ax = rig.axis(n, op)
                 ax = (_rel(arm, rig, rig.ref(n, op)) @ ax).normalized()
@@ -487,6 +547,32 @@ def apply_pose(arm, pose, rig=None):
     if spec.get("ground"):
         ground(arm, rig)
     return rig
+
+
+def _hand_frame_now(arm, s):
+    pbs = arm.pose.bones
+    h = pbs[f"hand_{s}"].head
+    f = (pbs[f"middle_01_{s}"].head - h).normalized()
+    t = pbs[f"index_01_{s}"].head - pbs[f"pinky_01_{s}"].head
+    t = (t - f * t.dot(f)).normalized()
+    return f, t
+
+
+def _orient(arm, rig, n, val, M):
+    """Track G: turn a hand so its finger direction (wrist -> middle knuckle)
+    and its thumb side (pinky -> index knuckle) point along val["fingers"]
+    and val["thumb"], given in the rest frame of val.get("frame", "spine_03")
+    (written for the left hand; x mirrored for _r)."""
+    s = _side(n)
+    ref = val.get("frame", "spine_03")
+    R = _rel(arm, rig, ref)
+    fd = (R @ _mirror(Vector(val["fingers"]), n)).normalized()
+    td = R @ _mirror(Vector(val["thumb"]), n)
+    td = (td - fd * td.dot(fd)).normalized()
+    f, t = _hand_frame_now(arm, s)
+    b0 = Matrix((f, t, f.cross(t))).transposed()
+    b1 = Matrix((fd, td, fd.cross(td))).transposed()
+    return _rot_about(M, arm.pose.bones[n].head.copy(), b1 @ b0.inverted())
 
 
 def ground(arm, rig):

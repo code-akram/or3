@@ -28,7 +28,7 @@ import bpy
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from character import (beard_groom, body, budgets, config, export, hair,  # noqa: E402
-                       head, rig, stats, suit)
+                       hand_nails, head, rig, stats, suit)
 from character.context import Build, Mpfb  # noqa: E402
 
 
@@ -92,6 +92,7 @@ def main():
     b.step("head_refine", head.refine)  # dense face/hands, skin and eye textures (hair/beard sampled the low-res body)
     b.step("facial_hair_refit", beard_groom.refit)  # beard/brows/lashes follow the refined skin
     b.step("rig_post", rig.post)
+    b.step("hand_nails", hand_nails.build)  # Track G: nail plates, weights copied after rig.post
     b.step("budgets", budgets.apply)
     b.step("fix_alpha", export.fix_alpha)
     s = b.step("stats", stats.collect)
@@ -100,6 +101,7 @@ def main():
     stem = out[:-4] if out.endswith(".glb") else out
     b.step("export_glb", export.write_glb, out)
     b.step("head_hero", head.hero)  # Cycles-only skin and eyes, after the GLB export (track A)
+    b.step("hand_nails_hero", hand_nails.hero)  # Cycles-only nail material (track G)
     b.step("suit_hero", suit.hero)  # hero-only (Cycles) suit detail: after the GLB, into the .blend only
     b.step("save_blend", export.save_blend, stem + ".blend")
 
