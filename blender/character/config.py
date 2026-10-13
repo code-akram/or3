@@ -231,16 +231,17 @@ DEFAULTS = {
             # the patch edge.
             # soft, grown-in cheek line: a long sparse outer fade; the moustache
             # top keeps a short one (the nose is just above it)
-            "fade": {"in_m": 0.010, "moustache_in_m": 0.004, "out_m": 0.012, "moustache_out_m": 0.004,
+            "fade": {"in_m": 0.015, "moustache_in_m": 0.004, "out_m": 0.012, "moustache_out_m": 0.004,
                      "neck_in_m": 0.014, "neck_out_m": 0.010,
-                     "line_density": 0.12, "pow": 1.8, "line_length": 0.35,
+                     "line_density": 0.08, "pow": 2.0, "line_length": 0.35,
                      "stubble_in_m": 0.004},
             # Edge band: from the outer fade to band_m inside the line, the
             # hero strands thin to `radius` x width and `length` x length.
-            "edge": {"band_m": 0.008, "moustache_band_m": 0.003, "radius": 0.55, "length": 0.7},
-            "line_wobble_m": 0.006, "moustache_wobble": 0.3,
+            "edge": {"band_m": 0.015, "moustache_band_m": 0.003, "radius": 0.55, "length": 0.7,
+                     "clump": 0.3},  # clump x this at the outer fade: the edge hairs stand apart
+            "line_wobble_m": 0.008, "moustache_wobble": 0.3,
             # upper cheeks: thinner (min) and patchy for full_m inside the cheek line
-            "cheek_thin": {"full_m": 0.018, "min": 0.4, "patch": 0.6},
+            "cheek_thin": {"full_m": 0.025, "min": 0.25, "patch": 0.7},
             "edge_smooth_iters": 6,
             # Hair length by zone: shorter on the cheeks, a hanging 2-3 cm
             # chin; the moustache hangs over the upper lip edge.
@@ -267,7 +268,7 @@ DEFAULTS = {
             "stubble": {"per_cm2": 60, "points": 3, "length_m": [0.001, 0.002],
                         "elev0": 35, "elev1": 20, "frizz": 0.3, "radius_scale": 0.8},
             # Under-coat (hero only): short hairs lying near the skin under the main mass.
-            "undercoat": {"per_cm2": 240, "in_m": 0.012, "length": [0.3, 0.55], "elev0": 14, "elev1": 2,
+            "undercoat": {"per_cm2": 240, "in_m": 0.02, "length": [0.3, 0.55], "elev0": 14, "elev1": 2,
                           "radius_scale": 0.9, "frizz": 0.3},
             # Tone: melanin / redness per strand (hero), with the game
             # palette interpolated by melanin (swatches, sRGB).
@@ -287,7 +288,7 @@ DEFAULTS = {
                      "value_sigma": 0.3},
             "hero": {"radius_m": [0.00005, 0.00008], "tip_radius": 0.22,
                      # soft specular; the ends fade to tip_alpha past tip_fade_from
-                     "material": {"roughness": 0.45, "radial_roughness": 0.6, "coat": 0.1,
+                     "material": {"roughness": 0.4, "radial_roughness": 0.6, "coat": 0.1, "random_roughness": 0.5,
                                   "root_dark": 0.06, "tip_alpha": 0.6, "tip_fade_from": 0.55},
                      "clump": {"shape": 0.4, "tip_spread": 0.0004, "guide_distance_m": 0.004},
                      "frizz": {"distance_m": 0.0007, "shape": 0.6}},
