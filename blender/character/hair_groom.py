@@ -96,6 +96,10 @@ DEFAULTS = {
     "frizz": {"distance_m": 0.0005, "shape": 0.6},
     "flyaways": {"share": 0.04, "distance_m": 0.010, "scale": 20.0, "shape": 0.4, "part_weight": 0.6},
     "trim": {"random": 0.05},
+    # Ragged ends: hanging strands lose up to `clump` of their length per
+    # secondary clump (locks end at different heights) plus up to `strand`
+    # per strand (tapered lock tips), cut from the tip. 0 = off.
+    "ends": {"clump": 0.0, "strand": 0.0, "min_hang_m": 0.04},
     "vellus": {"count": 1400, "length_m": [0.003, 0.006], "band_m": [-0.002, 0.006],
                "radius_m": 0.000018, "lift": 0.35, "melanin": 0.9},
     # Front falls (hair_clumps.march with fall gravity). side -1 = the
@@ -116,7 +120,7 @@ DEFAULTS = {
                "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.10, "light_melanin": 0.93,
                "lock_melanin_jitter": 0.012, "tint": None,
                "coat": None, "radial_roughness": None,    # Chiang only (wet look: coat)
-               "fly_roughness": None},   # flyaway strands (curve attr `fly`) blend to this: dry strays on a wet groom
+               "fly_roughness": None, "fly_melanin": None},   # flyaway strands (curve attr `fly`) blend to this: dry strays on a wet groom
     "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
 }
 
@@ -765,6 +769,19 @@ def build(b, frame, ccfg, gcfg_in):
     for fi, ff in enumerate(ffs):
         clump_w[ffid == fi] = ff["cfg"]["factor"] / cc["primary_factor"]
 
+    # Ragged ends: cut hanging strands back from the tip, per lock and per strand.
+    en = gcfg["ends"]
+    if en["clump"] > 0 or en["strand"] > 0:
+        cut_l = {int(q): rng.uniform(0, en["clump"]) for q in np.unique(sub)}
+        cut = np.array([cut_l[int(q)] for q in sub]) + rng.uniform(0, en["strand"], n)
+        for j in np.where((kind == 0) & (H[:, -1] > en["min_hang_m"]))[0]:
+            arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[j], axis=0), axis=1))])
+            # never cut into the part on the skull (before the hang point)
+            new_len = max(arc[-1] * (1 - cut[j]), arc[-1] - H[j, -1] + en["min_hang_m"])
+            sn = np.linspace(0.0, new_len, m)
+            H[j] = np.interp(sn, arc, H[j])
+            S[j] = np.stack([np.interp(sn, arc, S[j][:, k]) for k in range(3)], axis=1)
+
     # Lock wave in the hanging part, phase per primary clump.
     wv = gcfg["wave"]
     uniq = {int(p): (rng.uniform(*wv["amp_m"]), rng.uniform(*wv["period_m"]), rng.uniform(0, 6.3))
@@ -795,6 +812,8 @@ def build(b, frame, ccfg, gcfg_in):
     melanin = np.full(n, sh["melanin"])
     light = rng.random(n) < sh["light_share"]
     melanin[light] = sh["light_melanin"]
+    if sh.get("fly_melanin") is not None:
+        melanin[fly > 0] = sh["fly_melanin"]   # thin backlit strays: no warm glow
     # Value per lock (secondary clump): some locks catch more light.
     lj = {int(q): rng.uniform(-1, 1) * sh.get("lock_melanin_jitter", 0.0) for q in np.unique(sub)}
     melanin = np.clip(melanin - np.abs(np.array([lj[int(q)] for q in sub])), 0.0, 1.0)
