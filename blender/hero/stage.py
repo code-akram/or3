@@ -77,6 +77,7 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
     clear_transient()
     wet.restore(ch)
     ch.pose_log = poses.apply(ch.arm, spec["pose"])
+    rig.sync_props(ch)
     res = spec["res"]
     settings = rig.cycles(quality, res)
     cam = rig.camera(ch, spec["cam"])
@@ -142,6 +143,7 @@ def render_turntable(ch, quality, out_dir, views, poses_, passes, recs=None, sav
     recs = [] if recs is None else recs
     for pose in poses_:
         ch.pose_log = poses.apply(ch.arm, pose)
+        rig.sync_props(ch)
         for view in views:
             clear_transient()
             cam = rig.camera(ch, view, dof=False)

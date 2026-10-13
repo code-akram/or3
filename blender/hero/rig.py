@@ -229,7 +229,17 @@ def load_character(path):
 
 def pose(ch, name):
     ch.pose_log = poses.apply(ch.arm, name)
+    sync_props(ch)
     return ch.pose_log
+
+
+def sync_props(ch):
+    """Track H: a prop spawned by a pose (the held pistol, custom property
+    "hero_prop") joins the character: light flags, the IndexOB mask."""
+    for o in bpy.data.objects:
+        if "hero_prop" in o and o not in ch.objs:
+            ch.objs.append(o)
+            o.pass_index = 1
 
 
 # --------------------------------------------------------------- helpers

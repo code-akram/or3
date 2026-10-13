@@ -143,6 +143,10 @@ class Scene:
             if co is None:
                 continue
             near = np.linalg.norm(co - c, axis=1) < self.radius
+            if not o.vertex_groups:
+                # an unskinned prop on a bone (Track H's pistol): its big flat
+                # faces span past the radius, so all of it counts
+                near = np.ones(len(co), bool) if near.any() else near
             if not near.any():
                 continue
             dom = _dominant(o)
@@ -278,12 +282,14 @@ def apply_shape(arm, s, shape):
 
 
 # ---------------------------------------------------------------- settle
-def settle(arm, keys, rerun=None):
+def settle(arm, keys, rerun=None, spec=None):
     """Finish the hands for the first pose name in `keys` that has an entry in
     deform_poses.POSE_HANDS. rerun(): re-applies Track F's runtime (helper
-    bones follow the moved arm). Returns log lines."""
+    bones follow the moved arm). spec: an explicit POSE_HANDS-style entry
+    instead (Track H: a hand holding a prop). Returns log lines."""
     from . import deform_poses as dp
-    spec = next((dp.POSE_HANDS[k] for k in keys if k and k in dp.POSE_HANDS), None)
+    if spec is None:
+        spec = next((dp.POSE_HANDS[k] for k in keys if k and k in dp.POSE_HANDS), None)
     if spec is None:
         return []
     log = []
@@ -294,8 +300,9 @@ def settle(arm, keys, rerun=None):
         if hs is None:
             continue
         if hs.get("shape"):
-            apply_shape(arm, s, dp.HAND_SHAPES[hs["shape"]])
-            log.append(f"hand_{s}: shape {hs['shape']}")
+            named = isinstance(hs["shape"], str)     # a HAND_SHAPES name, or the shape itself (Track H)
+            apply_shape(arm, s, dp.HAND_SHAPES[hs["shape"]] if named else hs["shape"])
+            log.append(f"hand_{s}: shape {hs['shape'] if named else hs.get('shape_name', 'custom')}")
         wrap = hs.get("wrap") or ()
         # the authored curl of the wrapping digits; they open while the palm
         # is cleared (curled fingers would drag through what they hold)

@@ -45,6 +45,10 @@ SHOTS = {
     "cuff_top":     ("cuff", "shot", (-20.0, 10.0), 0.20, 100),
     "ready":        ("ready", "shot", (35.0, 5.0), 0.24, 100),
     "ready_side":   ("ready", "shot", (80.0, 0.0), 0.24, 100),
+    # Track H (the pistol in the hands): from the muzzle, the strong-hand side, above
+    "ready_front":  ("ready", "shot", (2.0, 4.0), 0.24, 100),
+    "ready_r":      ("ready", "shot", (-75.0, 5.0), 0.24, 100),
+    "ready_top":    ("ready", "shot", (20.0, 65.0), 0.24, 100),
     "fist_l":       ("f:twist", "l", (0.8, 0.4, 0.4), 0.18, 100),
 }
 DEFAULT = ["rest_back_l", "rest_palm_l", "hero_r", "cuff", "ready", "fist_l"]
@@ -113,6 +117,7 @@ def parse(argv):
     ap.add_argument("--pct", type=int, default=100)
     ap.add_argument("--passes", default="beauty")
     ap.add_argument("--pierce", action="store_true")
+    ap.add_argument("--pose", default="", help="pose for every shot instead of its own (e.g. ready+pistol1)")
     return ap.parse_args(argv)
 
 
@@ -127,7 +132,7 @@ def main(argv):
     rec = {"in": os.path.abspath(a.inp), "frames": [], "poses": {}}
     cur = None
     for shot in shots:
-        pose = SHOTS[shot][0]
+        pose = a.pose or SHOTS[shot][0]
         if pose != cur:
             rec["poses"][pose] = rig.pose(ch, pose)
             cur = pose

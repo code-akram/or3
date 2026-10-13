@@ -522,6 +522,7 @@ def _f_spec(name):
 def names():
     dp = _dp()
     out = list(POSES) + [n for n in list(F_POSES) + list(HYBRID) + ["stand_profile"] if n not in POSES]
+    out += ["ready+none", "ready+pistol1", "walk+pistol", "stand+pistol"]
     if dp is not None:
         out += [n for n in dp.POSES if n not in out] + ["f:" + n for n in dp.POSES]
     return out
@@ -568,7 +569,10 @@ def deform(arm):
 
 def apply(arm, name):
     """Pose the armature (F's canonical spec or E's solver), then run F's
-    deformation runtime; returns the log (source, missing bones, notes)."""
+    deformation runtime; returns the log (source, missing bones, notes).
+    `name` may carry a held prop (Track H): "walk+pistol"; "ready" holds the
+    pistol by default ("ready+none": empty hands)."""
+    name, hold = _hold(name)
     if name in HYBRID and _dp() is not None:
         base, arms = HYBRID[name]
         _dp().apply_pose(arm, base)
@@ -578,7 +582,7 @@ def apply(arm, name):
         p.log.insert(0, f"pose {name}: deform_poses {base} + hero/poses.py {arms}")
         log = p.log
         log.append(deform(arm))
-        return log + _hands(arm, name)
+        return log + _hands(arm, name, hold)
     spec = _f_spec(name)
     if spec is not None:
         _dp().apply_pose(arm, spec)
@@ -597,7 +601,7 @@ def apply(arm, name):
         p.log.append(f"pose {name}: ok (hero/poses.py)")
         log = p.log
     log.append(deform(arm))
-    return log + _hands(arm, name)
+    return log + _hands(arm, name, hold)
 
 
 # poses with no POSE_HANDS entry of their own: settle with this entry's
@@ -606,12 +610,72 @@ HAND_FALLBACK = {"walk": "hero", "stand_profile": "hero",
                  "stand_e": "hero", "ready_low_e": "hero", "stand_profile_e": "hero"}
 
 
-def _hands(arm, name):
+def _hands(arm, name, hold=None):
     """Track G hand finishing (character/hand_pose.py): finger shapes, hands
-    lifted out of sleeves they were posed into, fingers curled to contact."""
+    lifted out of sleeves they were posed into, fingers curled to contact.
+    Track H: a held prop is put on its grip socket first (and the support
+    hand on it, two-handed), the hands close on it (the prop's own settle
+    spec), then the prop places the digits it needs (pistol: the index along
+    the frame, the thumbs forward)."""
     try:
         from character import hand_pose
     except ImportError:
         return []
     keys = (name, F_POSES.get(name), name.removeprefix("f:"), HAND_FALLBACK.get(name))
-    return hand_pose.settle(arm, keys, rerun=lambda: deform(arm))
+    log, spec, after = _props(arm, name, hold or {}, keys)
+    log += hand_pose.settle(arm, keys, rerun=lambda: deform(arm), spec=spec)
+    for f in after:
+        log += f()
+    if after:
+        r = deform(arm)
+        log.append(f"after props: {r}")
+    return log
+
+
+# Track H (blender/props): props held by default in a stage pose, {side: prop}.
+# Any pose takes one with a suffix ("walk+pistol": a one-hand low carry);
+# "+none" drops it; "+pistol1" holds it one-handed in a TWO_HAND pose.
+# TWO_HAND: poses where the other hand supports it.
+HOLD = {"ready": {"r": "pistol"}}
+TWO_HAND = ("ready",)
+
+
+def _hold(name):
+    base, _, prop = name.partition("+")
+    if not prop:
+        return base, dict(HOLD.get(base, {}))
+    return base, ({} if prop == "none" else {"r": prop})
+
+
+def _props(arm, name, hold, keys):
+    """Show / hide the props, put the held ones on the hand's grip socket and
+    seat them on the palm (before the hand settle). Returns (log, settle spec
+    or None, callables to run after the settle)."""
+    try:
+        from props import pistol
+    except ImportError:
+        return ([f"props: not importable, {hold} not held"] if hold else []), None, []
+    mods = {"pistol": pistol}
+    log = []
+    for prop, mod in mods.items():
+        if prop not in (v.rstrip("1") for v in hold.values()):
+            mod.hide()
+    if not hold:
+        return log, None, []
+    dp = _dp()
+    base = next((dp.POSE_HANDS[k] for k in keys if k and k in dp.POSE_HANDS), None) if dp else None
+    spec = {k: v for k, v in (base or {}).items()}
+    after = []
+    for s, prop in hold.items():
+        mod = mods[prop.rstrip("1")]
+        other = "l" if s == "r" else "r"
+        two = name in TWO_HAND and not prop.endswith("1")
+        ob, lines = mod.hold(arm, s, rerun=lambda: deform(arm))
+        log += lines
+        # the holding hand settles first; a supporting hand is put on the
+        # prop after that, and settles in the prop's own pass
+        sup = spec.pop(other, None) if two else None
+        spec = {s: mod.hand_spec(s), **{k: v for k, v in spec.items() if k != s}}
+        after.append(lambda mod=mod, ob=ob, s=s, other=other, two=two, sup=sup:
+                     mod.finish_hold(arm, ob, s, other if two else None, sup, rerun=lambda: deform(arm)))
+    return log, spec, after
