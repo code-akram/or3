@@ -29,19 +29,19 @@ import time
 
 import bpy
 
-LOOK = "AgX - Medium High Contrast"
+LOOK = "AgX - Base Contrast"   # skin-direction.md: contrast from CDL power, not the look
 GRADE = {
     "bloom_threshold": 1.0, "bloom_strength": 0.35, "bloom_size": 0.55,
     "halation_threshold": 2.0, "halation_strength": 0.12, "halation_tint": (1.0, 0.32, 0.12),
     "dispersion": 0.008,
-    "slope": (1.02, 1.0, 0.97), "offset": (-0.0008, 0.0004, 0.0016), "power": (1.0, 1.0, 1.0),
+    "slope": (1.04, 1.0, 0.94), "offset": (-0.0008, 0.0004, 0.0016), "power": (1.08, 1.08, 1.08),
     "black_lift": 0.0011,
     "vignette_ev": -0.3,
     "grain": 0.02,
-    "saturation": 0.85,   # skin to <= 1.3x the turntable's saturation; neon stays saturated
+    "saturation": 0.97,
     # white point: the colour of a `wb_kelvin` blackbody is mapped to white
     # (None = the render's 6,500 K white). Shot-independent; see hero-stage.md.
-    "wb_kelvin": None,
+    "wb_kelvin": 3900,
     "paint_size": 5, "paint_sharpness": 0.4, "paint_eccentricity": 1.2, "paint_uniformity": 3,
 }
 

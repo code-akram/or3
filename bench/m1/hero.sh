@@ -7,7 +7,9 @@
 #   bench/m1/hero.sh [options] <character.blend|.glb> <label>
 #       -> $DATA/build/hero/<UTC>-<label>/
 #     --preview          (default) 50 % resolution, 64 spp adaptive
-#     --final            100 % (1920x1080, 1152x2048 poster, 1080x1620 turntable), 768 spp adaptive
+#     --final            100 % (1920x1080, 1152x2048 poster, 1080x1620 turntable), 256 spp adaptive 0.02
+#     --max              100 %, 768 spp adaptive 0.012 (single hero frames; ~3x --final)
+#     --pct N            resolution % override (e.g. --pct 100 at preview samples)
 #     --draft            25 %, 16 spp: a framing / pose check in a few seconds per shot
 #     --shots LIST       comma list from blender/hero/shots.py (default all), or none
 #     --no-turntable     skip the turntable
@@ -17,7 +19,8 @@
 #     --paint F          painterly A/B strength (default 0.6; 0 = off)
 #     --crop LIST|close  also render a 100 % crop (half the frame each way) around the
 #                        eye / focus point of these shots ('close' = portrait,profile,hands,eye)
-#     --wb K             grade white point in K (default: grade.py GRADE wb_kelvin; 0 = off)
+#     --wb K             grade white point in K (default: grade.py GRADE wb_kelvin, 3900; 0 = off;
+#                        with --regrade pass it as WB=K in the environment)
 #   bench/m1/hero.sh --regrade <run dir>     re-grade the EXRs and redraw the sheet
 #
 # Env: DATA (default <main checkout>/data), THREADS (default 16 for --final,
@@ -49,11 +52,13 @@ if [[ "${1:-}" == "--regrade" ]]; then
   exit 0
 fi
 
-QUALITY=preview; STAGE_FAIL=; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=(); CROP=none
+QUALITY=preview; STAGE_FAIL=; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=(); CROP=none; PCT=()
 while [[ $# -gt 2 ]]; do
   case "$1" in
     --preview) QUALITY=preview; shift ;;
     --final)   QUALITY=final; shift ;;
+    --max)     QUALITY=max; shift ;;
+    --pct)     PCT=(--pct "$2"); shift 2 ;;
     --draft)   QUALITY=draft; shift ;;
     --shots)   SHOTS="$2"; shift 2 ;;
     --no-turntable) TT=(); shift ;;
@@ -70,14 +75,14 @@ IN="$(realpath "${1:?usage: $0 [options] <character.blend> <label>}")"
 LABEL="${2:?label}"
 [[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "label: letters, digits, . _ - only" >&2; exit 2; }
 [[ -f "$IN" ]] || { echo "no such file: $IN" >&2; exit 2; }
-THREADS="${THREADS:-$([[ $QUALITY == final ]] && echo 16 || echo 8)}"
+THREADS="${THREADS:-$([[ $QUALITY == final || $QUALITY == max ]] && echo 16 || echo 8)}"
 
 RUN="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
 mkdir -p "$RUN"
 echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 T0=$(date +%s)
 "${BL[@]}" -t "$THREADS" --python "$REPO/blender/hero/stage.py" -- --in "$IN" --out "$RUN" \
-  --quality "$QUALITY" --shots "$SHOTS" --set "$SET" --crop "$CROP" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
+  --quality "$QUALITY" --shots "$SHOTS" --set "$SET" --crop "$CROP" "${PCT[@]}" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
   > "$RUN/stage.log" 2>&1 || STAGE_FAIL=1
 grep -E '^\[stage\]' "$RUN/stage.log" || true
 # grade and draw whatever was rendered, even after a failure or a kill

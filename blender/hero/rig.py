@@ -72,7 +72,8 @@ Z = Vector((0, 0, 1))
 # reads ~0.55 on the lit side under the hero key.
 HERO_E = 3.0
 HERO_EXPOSURE = -0.6
-HERO_LOOK = "AgX - Medium High Contrast"   # direction §5: contrast +15 %
+HERO_LOOK = "AgX - Base Contrast"   # skin-direction.md: contrast via CDL power in the grade, not the look
+HERO_WB = 3900                       # skin-direction.md: white point (K) of the hero grade
 TT_E = 4.0
 TT_EXPOSURE = 0.0
 
@@ -80,20 +81,20 @@ TT_EXPOSURE = 0.0
 # spec ratios the rims did not separate the hair edge from the black.
 # name: (colour or temperature K, ratio, shape (w, h m), azimuth deg from the
 # camera axis (+ = camera-left), elevation deg, distance m)
-# Key warmth: direction §5 says amber 3,000 K, but under the render's 6,500 K
-# white and AgX Medium High Contrast that put the skin at HSV saturation
-# 0.66-0.78 (orange-tan) where the turntable reads 0.30-0.39. The skin sits in
-# the toe of the AgX curve, where the channel ratios stretch, and the set
-# lights are not the cause (the void set is as orange). 5,000 K plus the
-# grade's 0.85 saturation gives 0.33-0.46: neutral-warm skin, while the neon
-# rims and signs keep the colour (deviation, see hero-stage.md).
-KEY_K = 5000
+# bench/m1/v2/skin-direction.md (binding, supersedes §5 where they differ):
+# a small key for skin relief, short lighting (55 deg camera-left lights the
+# far side of the 3/4 face), a soft same-colour wrap for the half-tones, the
+# magenta rim grazing the jaw and cheek edge, a hard 5 cm eye light. The key
+# stays §5's amber 3,000 K; the grade's 3,900 K white point (HERO_WB) makes it
+# read warm, not orange.
+KEY_K = 3000
 HERO_LIGHTS = {
-    "key":     (KEY_K, 1.00, (0.8, 0.8), 40.0, 25.0, 1.5),
-    "rim":     ((1.0, 0.18, 0.55), 1.40, (0.3, 1.5), -140.0, 25.0, 1.5),
+    "key":     (KEY_K, 1.00, (0.3, 0.3), 55.0, 30.0, 1.5),
+    "wrap":    (KEY_K, 0.25, (1.5, 1.5), 35.0, 10.0, 2.0),
+    "rim":     ((1.0, 0.18, 0.55), 1.40, (0.3, 1.5), -125.0, 20.0, 1.5),
     "kicker":  ((0.1, 0.8, 0.9), 0.80, (0.3, 1.2), 135.0, 15.0, 1.6),
     "fill":    ((0.55, 0.7, 1.0), 0.08, (2.0, 2.0), -55.0, -5.0, 2.5),
-    "eye":     (6500, 0.12, (0.1, 0.1), 0.0, 0.0, None),   # at the camera
+    "eye":     (6500, 0.08, (0.05, 0.05), 0.0, 0.0, None),   # at the camera
 }
 TT_LIGHTS = {
     "key":  (5600, 1.0, (1.2, 1.2), 45.0, 30.0, 2.5),
@@ -106,7 +107,7 @@ TT_LIGHTS = {
 #        frame height m, f-stop or None)
 CAMERAS = {
     "portrait": (85, 30, 2, "eyes", 0.42, 2.0),      # shot 1: rain portrait
-    "eye":      (135, 8, 0, "eyes", 0.075, 16.0),    # shot 6: eye close-up, 0.4 m
+    "eye":      (135, 8, 0, "eyes", 0.13, 4.0),      # shot 6: eye close-up, 0.73 m, f/4
     "bust":     (50, 35, 3, "chest", 0.80, 2.8),
     "full":     (50, 20, ("h", 1.1), "body", 2.25, 4.0),  # shot 2: under the sign
     "profile":  (100, 90, 0, "head", 0.55, 2.8),     # shot 3
@@ -119,7 +120,12 @@ EYE_FRONT = 0.012   # eyeball centre to the cornea front, m (focus point)
 QUALITY = {  # samples, adaptive threshold, resolution %
     "draft": (16, 0.1, 25),
     "preview": (64, 0.05, 50),
-    "final": (768, 0.012, 100),
+    # final: 256 spp to an adaptive 0.02, then OIDN. The face crop of the
+    # portrait at 768 / 0.012 cost 30x its preview (about 3.6 h for the frame
+    # at -t 3), which does not fit an overnight run of the full set; "max"
+    # keeps that setting for single hero frames.
+    "final": (256, 0.02, 100),
+    "max": (768, 0.012, 100),
 }
 
 
@@ -505,9 +511,13 @@ def camera(ch, spec, dof=True, focus="near_eye"):
 
 
 # --------------------------------------------------------------- render
+PCT = None   # resolution % override for every quality (stage/rig --pct)
+
+
 def cycles(quality="preview", res=(1920, 1080), samples=None, threads=0):
     sc = bpy.context.scene
     n, thr, pct = QUALITY[quality]
+    pct = PCT or pct
     r = sc.render
     r.engine = "CYCLES"
     r.resolution_x, r.resolution_y = res
@@ -713,6 +723,7 @@ def parse_args(argv):
     ap.add_argument("--pose", choices=poses.names(), default="rest")
     ap.add_argument("--quality", choices=sorted(QUALITY), default="preview")
     ap.add_argument("--samples", type=int, default=0)
+    ap.add_argument("--pct", type=int, default=0, help="resolution %% (default: the quality's)")
     ap.add_argument("--res", default="", help="WxH (default 1920x1080; turntable 1080x1620)")
     ap.add_argument("--passes", default="beauty", help="beauty,clay,normal")
     ap.add_argument("--haze", action="store_true", help="hero rig: 0.03/m haze box")
@@ -736,6 +747,8 @@ def _cams(arg, light):
 
 def main(argv):
     a = parse_args(argv)
+    global PCT
+    PCT = a.pct or None
     out = os.path.abspath(a.out)
     os.makedirs(out, exist_ok=True)
     t0 = time.perf_counter()
@@ -772,6 +785,10 @@ def main(argv):
                 vs = bpy.context.scene.view_settings
                 vs.exposure = a.exposure if a.exposure is not None else exposure
                 vs.look = HERO_LOOK if not tt else "None"
+                if hasattr(vs, "use_white_balance"):   # the hero grade's white point, for ungraded renders
+                    vs.use_white_balance = not tt
+                    if not tt:
+                        vs.white_balance_temperature = HERO_WB
                 restore = None
                 if kind in ("clay", "normal"):
                     restore = material_pass(ch, kind)
