@@ -56,8 +56,8 @@ GRIP_DEPTH = 51.0                   # backstrap to front strap, normal to the ax
 SLIDE_X = (0.0, 186.0)
 COMP_X = (186.6, 214.0)
 # slide cross-section (y, z): vertical sides, a steep chamfer, a narrow flat top
-SLIDE_YZ = [(-11.8, -12.0), (11.8, -12.0), (11.8, 8.5), (8.4, 15.2), (6.6, 17.0),
-            (-6.6, 17.0), (-8.4, 15.2), (-11.8, 8.5)]
+SLIDE_YZ = [(-11.8, -12.0), (11.8, -12.0), (11.8, 7.2), (7.9, 15.4), (5.9, 17.0),
+            (-5.9, 17.0), (-7.9, 15.4), (-11.8, 7.2)]
 FRAME_W = 10.6                      # frame half-width at the dust cover
 
 QUALITY = {
@@ -114,10 +114,13 @@ def _obj(name, bm, col):
 
 def _prism(name, poly2, a0, a1, col, axis):
     """Extrude a closed 2D polygon. axis 'y': poly in (x, z), extruded y a0..a1;
-    axis 'x': poly in (y, z), extruded x a0..a1. mm in, metres out."""
+    axis 'x': poly in (y, z), extruded x a0..a1; axis 'z': poly in (x, y),
+    extruded z a0..a1. mm in, metres out."""
     bm = bmesh.new()
 
     def P(p, a):
+        if axis == "z":
+            return (p[0] * MM, p[1] * MM, a * MM)
         return (a * MM, p[0] * MM, p[1] * MM) if axis == "x" else (p[0] * MM, a * MM, p[1] * MM)
     v0 = [bm.verts.new(P(p, a0)) for p in poly2]
     v1 = [bm.verts.new(P(p, a1)) for p in poly2]
@@ -312,15 +315,16 @@ def _smooth(e0, e1, x):
 def grip_w(t):
     """Grip half-width: a hair over the frame's width at the top (so the
     grip surface covers the frame side flush), flaring to the hand."""
-    return 10.72 + 4.78 * _smooth(-2.0, 16.0, t) + 0.35 * math.sin(math.pi * min(max((t - 10) / 44, 0), 1))
+    return 10.72 + 3.78 * _smooth(-2.0, 16.0, t) + 0.3 * math.sin(math.pi * min(max((t - 10) / 50, 0), 1))
 
 
 def grip_swell(t):
     """Palm swell: the backstrap bulges back (mm)."""
-    return 1.8 * math.sin(math.pi * min(max((t - 4.0) / 52.0, 0.0), 1.0))
+    return 1.8 * math.sin(math.pi * min(max((t - 4.0) / 59.0, 0.0), 1.0))
 
 
-STIPPLE_T = (3.0, 55.0)
+STIPPLE_T = (4.0, 61.0)                 # the stippled band (grip stations, mm)
+GRIP_END = 68.0                         # the grip's last station: the magwell from here
 # the receiver behind the trigger, under the slide: horizontal rings (z, back
 # x, front x (hidden in the frame), back and front corner radii)
 GRIP_TOP = [(-13.2, -1.0, 97.0, 5.0, 2.0), (-17.0, -1.2, 97.0, 6.0, 2.0), (-21.0, -1.4, 97.0, 7.0, 2.0),
@@ -328,7 +332,7 @@ GRIP_TOP = [(-13.2, -1.0, 97.0, 5.0, 2.0), (-17.0, -1.2, 97.0, 6.0, 2.0), (-21.0
 # then stations down the backstrap line: (t, how far the ring has turned from
 # horizontal to normal-to-the-axis)
 GRIP_T = [(2, 0.3), (5, 0.6), (8, 0.85), (11, 1), (14, 1), (17, 1), (21, 1), (25, 1), (29, 1), (33, 1), (37, 1),
-          (41, 1), (45, 1), (49, 1), (53, 1), (56, 1), (59, 1), (61, 1)]
+          (41, 1), (45, 1), (49, 1), (53, 1), (57, 1), (61, 1), (64, 1), (66, 1), (68, 1)]
 
 
 def _front_strap(b, u):
@@ -357,17 +361,15 @@ def grip_rings(q):
 
 
 def build_grip(col, q):
+    """The grip loft (with the undercut behind the trigger guard). Face
+    attribute 'stipple' = 1 marks the grip for the polymer shader, which
+    draws the stippled band (STIPPLE_T) and its border from the position, so
+    the panel edge is clean whatever the mesh."""
     ob = loft("grip", grip_rings(q), col)
-    # stipple panel: the faces between the stations inside STIPPLE_T, all round
+    boolean(ob, [_undercut(col, q)])
     me = ob.data
     att = me.attributes.new("stipple", "FLOAT", "FACE")
-    vals = []
-    co = np.array([v.co for v in me.vertices]) / MM
-    for p in me.polygons:
-        c = co[list(p.vertices)].mean(0)
-        t = (c[0] - GB0[0]) * GD[0] + (c[2] - GB0[1]) * GD[1]
-        vals.append(1.0 if STIPPLE_T[0] <= t <= STIPPLE_T[1] and len(p.vertices) == 4 else 0.0)
-    att.data.foreach_set("value", vals)
+    att.data.foreach_set("value", [1.0] * len(me.polygons))
     me.shade_smooth()
     return ob
 
@@ -382,6 +384,9 @@ BEAVERTAIL = [(1.0, -12.6, -33.0, 10.45), (-2.0, -12.6, -30.6, 10.4), (-4.5, -12
 def build_beavertail(col, q):
     rings = []
     for x, top, bot, w in BEAVERTAIL:
+        if x < 0:                               # a longer tang, its tip swept up a little
+            k = -x / 15.2
+            x, top, bot = x * 1.22, top + 1.2 * k * k, bot + 1.6 * k * k
         rb = min(w, (top - bot) / 2) * 0.95
         rings.append([(x, v, u) for u, v in _rrect(bot, top, w, rb, min(2.0, rb), q["corner"])])
     ob = loft("beavertail", rings, col)
@@ -390,31 +395,36 @@ def build_beavertail(col, q):
 
 
 def build_magwell(col, q):
+    """The flared magwell: a modest flare over the last 13 mm of the grip."""
     D = GRIP_DEPTH
+    t0 = GRIP_END - 5.0
+    w0 = grip_w(t0) + 0.25
     rings = []
-    for t in (56.0, 59.0, 62.0, 65.0, 67.5, 69.5):
-        f = ((t - 56.0) / 13.5) ** 1.6
-        rings.append(_ring(t, -0.6 - 1.8 * f, D + 0.9 + 5.2 * f, 15.75 + 2.2 * f, 11.5, 9.5, q["corner"]))
-    f = 1.0
-    u0, u1, w = -0.6 - 1.8 * f, D + 0.9 + 5.2 * f, 15.75 + 2.2 * f
-    rings.append(_ring(69.5, u0 + 1.6, u1 - 1.6, w - 1.6, 10.0, 8.0, q["corner"]))     # the mouth lip
-    rings.append(_ring(67.0, u0 + 3.2, u1 - 3.0, w - 3.4, 8.5, 6.5, q["corner"]))      # funnel in
-    rings.append(_ring(64.0, 1.2, D - 1.4, 12.2, 7.0, 5.5, q["corner"]))
+    for t in (t0, t0 + 3.0, t0 + 6.0, t0 + 9.0, t0 + 11.5, t0 + 13.5):
+        f = ((t - t0) / 13.5) ** 1.6
+        rings.append(_ring(t, -0.6 - 0.9 * f, D + 0.9 + 2.8 * f, w0 + 1.1 * f, 11.5, 9.5, q["corner"]))
+    u0, u1, w = -1.5, D + 3.7, w0 + 1.1
+    te = t0 + 13.5
+    rings.append(_ring(te, u0 + 1.4, u1 - 1.4, w - 1.4, 10.0, 8.0, q["corner"]))      # the mouth lip
+    rings.append(_ring(te - 2.5, u0 + 2.8, u1 - 2.6, w - 3.0, 8.5, 6.5, q["corner"]))  # funnel in
+    rings.append(_ring(te - 5.5, 1.2, D - 1.4, 11.6, 7.0, 5.5, q["corner"]))
     ob = loft("magwell", rings, col)
     ob.data.shade_smooth()
     return ob
 
 
 def build_basepad(col, q):
+    """The magazine's base pad: a 5.8 mm pad, flared a little past the magwell."""
     D = GRIP_DEPTH
+    t0 = GRIP_END + 8.8
     rings = [
-        _ring(69.8, 1.0, D - 2.0, 12.0, 7.0, 5.5, q["corner"]),        # the magazine body, in the mouth
-        _ring(70.4, 1.0, D - 2.0, 12.0, 7.0, 5.5, q["corner"]),
-        _ring(70.6, -0.4, D + 2.6, 14.6, 10.0, 8.0, q["corner"]),
-        _ring(71.2, -1.0, D + 3.4, 15.3, 10.5, 8.5, q["corner"]),
-        _ring(74.5, -1.7, D + 6.0, 16.0, 11.0, 9.0, q["corner"]),
-        _ring(76.9, -2.1, D + 7.4, 16.4, 11.2, 9.5, q["corner"]),
-        _ring(77.6, -1.5, D + 6.6, 15.7, 10.5, 8.8, q["corner"]),
+        _ring(t0, 1.0, D - 2.0, 11.4, 7.0, 5.5, q["corner"]),          # the magazine body, in the mouth
+        _ring(t0 + 0.6, 1.0, D - 2.0, 11.4, 7.0, 5.5, q["corner"]),
+        _ring(t0 + 0.8, -0.6, D + 1.8, 13.6, 10.0, 8.0, q["corner"]),
+        _ring(t0 + 1.4, -1.2, D + 2.8, 14.3, 10.5, 8.5, q["corner"]),
+        _ring(t0 + 4.2, -1.6, D + 3.8, 14.7, 11.0, 9.0, q["corner"]),
+        _ring(t0 + 5.3, -1.6, D + 4.0, 14.6, 11.0, 9.0, q["corner"]),
+        _ring(t0 + 5.8, -1.1, D + 3.4, 14.0, 10.5, 8.6, q["corner"]),
     ]
     ob = loft("basepad", rings, col)
     ob.data.shade_smooth()
@@ -446,13 +456,13 @@ def _serrations(col, xs, width, depth, lean, z0=-9.0, z1=16.0):
 
 def build_slide(col, q):
     sl = prism_yz("slide", SLIDE_YZ, *SLIDE_X, col)
-    cut = [_nose(col, 156.0, 186.0, 8.0, 3.0, s) for s in (1, -1)]
-    cut += [_corner(col, SLIDE_X[1], 17.0, 1.6), _corner(col, SLIDE_X[0], 17.0, 1.2)]
+    cut = [_nose(col, 150.0, 186.0, 10.0, 3.6, s) for s in (1, -1)]
+    cut += [_corner(col, SLIDE_X[1], 17.0, 2.6), _corner(col, SLIDE_X[0], 17.0, 1.4)]
     # rear cocking serrations (8, leaning forward) and front serrations (6)
     cut += _serrations(col, [12.0 + 4.6 * k for k in range(8)], 1.9, 1.15, -12.0)
     cut += _serrations(col, [128.0 + 4.6 * k for k in range(6)], 1.9, 1.15, -12.0)
     # ejection port: right side (-y), over the top to just past the centre line
-    cut.append(box(col, 70.0, 111.0, -30.0, 1.0, 3.0, 30.0, name="port"))
+    cut.append(box(col, 70.0, 111.0, -30.0, 3.4, 3.0, 30.0, name="port"))
     # optic cut: a flat pocket across the top, 3.4 mm down
     cut.append(box(col, 18.0, 60.0, -30.0, 30.0, 13.6, 30.0, name="optic"))
     # front sight trench (the blade sits in it, below the side walls)
@@ -463,11 +473,11 @@ def build_slide(col, q):
     cut.append(box(col, -2.0, 0.3, -7.3, 7.3, -9.6, 9.6, name="plate_recess"))
     cut.append(box(col, 49.6, 66.4, -14.0, -11.45, 2.8, 7.2, name="extractor_slot"))
     boolean(sl, cut)
-    return finish(sl, 0.45, q)
+    return finish(sl, 0.7, q)
 
 
-COMP_YZ = [(-11.3, -11.6), (11.3, -11.6), (11.3, 8.4), (8.1, 15.0), (6.4, 16.6),
-           (-6.4, 16.6), (-8.1, 15.0), (-11.3, 8.4)]
+COMP_YZ = [(-11.3, -11.6), (11.3, -11.6), (11.3, 7.2), (7.6, 15.0), (5.7, 16.6),
+           (-5.7, 16.6), (-7.6, 15.0), (-11.3, 7.2)]
 
 
 def _corner(col, x, z, leg, lean=45.0):
@@ -476,22 +486,28 @@ def _corner(col, x, z, leg, lean=45.0):
     return box(col, x - a / 2, x + a / 2, -30.0, 30.0, z - a / 2, z + a / 2, rot_y=lean, name="chamfer")
 
 
+def _port(col, x0, x1, w, r, z0=2.0, z1=30.0, seg=4):
+    """A top port: a rounded rectangle (x0..x1, |y| < w, corner radius r)
+    cut down from the top to z0."""
+    poly = _fillet([(x0, -w, r), (x1, -w, r), (x1, w, r), (x0, w, r)], seg)
+    return _prism("port", poly, z0, z1, col, "z")
+
+
 def build_comp(col, q):
     cp = prism_yz("comp", COMP_YZ, *COMP_X, col)
-    cut = [_nose(col, 196.0, 214.0, 5.5, 2.2, s) for s in (1, -1)]
-    cut.append(_corner(col, COMP_X[1], 16.6, 3.6))                     # top-front chamfer
-    for s in (1, -1):                                                   # machined side slots
-        y0, y1 = (10.2, 20.0) if s > 0 else (-20.0, -10.2)
-        cut.append(prism_xz("slot", [(190.8, -5.6, 3.2), (207.0, -5.6, 3.2), (207.0, 1.6, 3.2), (190.8, 3.6, 3.2)],
-                            y0, y1, col, q["fil"]))
+    cut = [_nose(col, 194.0, 214.0, 6.5, 2.6, s) for s in (1, -1)]
+    cut.append(_corner(col, COMP_X[1], 16.6, 3.8))                     # top-front chamfer
+    cut.append(_corner(col, COMP_X[1], -11.6, 2.2))                    # bottom-front chamfer
+    cut.append(_corner(col, COMP_X[0], 16.6, 1.2))                     # the joint to the slide
     cut.append(cyl(col, 184.0, 191.0, 6.95, n=q["cyl"]))                 # barrel in
-    cut.append(cyl(col, 190.4, 207.5, 7.4, n=q["cyl"]))                  # expansion chamber
-    cut.append(cyl(col, 207.0, 216.0, 5.1, n=q["cyl"]))                  # exit
-    cut.append(cyl(col, 212.6, 214.6, 5.1, n=q["cyl"], r1=6.2))          # exit chamfer
-    cut.append(box(col, 188.8, 195.6, -4.5, 4.5, 2.0, 30.0, name="port1"))
-    cut.append(box(col, 199.6, 205.4, -3.9, 3.9, 2.0, 30.0, name="port2"))
+    cut.append(cyl(col, 190.4, 209.0, 7.4, n=q["cyl"]))                  # expansion chamber
+    cut.append(cyl(col, 208.5, 216.0, 5.1, n=q["cyl"]))                  # exit
+    cut.append(cyl(col, 211.4, 214.6, 5.1, n=q["cyl"], r1=7.6))          # recessed crown
+    # three top ports, narrowing toward the muzzle
+    cut += [_port(col, 189.0, 194.2, 4.4, 1.4, seg=q["fil"]), _port(col, 196.4, 201.2, 4.0, 1.3, seg=q["fil"]),
+            _port(col, 203.4, 207.6, 3.5, 1.2, seg=q["fil"])]
     boolean(cp, cut)
-    return finish(cp, 0.45, q)
+    return finish(cp, 0.65, q)
 
 
 def build_barrel(col, q):
@@ -501,7 +517,7 @@ def build_barrel(col, q):
     cut = [cyl(col, 100.0, 192.0, 4.55, n=q["cyl"]),
            cyl(col, 189.4, 190.6, 4.55, n=q["cyl"], r1=5.7)]          # recessed crown chamfer
     boolean(b, cut)
-    return finish(b, 0.3, q)
+    return finish(b, 0.45, q)
 
 
 FRAME_XZ = [
@@ -509,9 +525,10 @@ FRAME_XZ = [
     (99.0, -26.6, 0), (97.5, -30.4, 1.5), (58.0, -30.4, 3.0),
     (52.0, -33.2, 0), (30.0, -34.0, 0), (2.0, -30.0, 0),                # inside the grip
 ]
-GUARD_OUT = [(56.0, -27.5, 0), (99.5, -27.5, 0), (99.8, -30.5, 0), (102.0, -50.8, 5.0), (98.5, -56.6, 4.0),
-             (52.0, -56.6, 5.0), (44.0, -52.0, 0), (45.6, -40.0, 0)]
-GUARD_IN = [(94.2, -30.1, 1.5), (95.6, -50.0, 3.4), (56.5, -51.4, 4.0), (44.0, -49.6, 0), (52.0, -30.1, 0)]
+GUARD_OUT = [(56.0, -27.5, 0), (100.0, -27.5, 0), (100.3, -30.5, 0), (103.6, -50.2, 3.0), (100.6, -56.4, 3.0),
+             (60.0, -59.2, 6.0), (47.0, -58.6, 0), (44.0, -50.0, 0), (45.6, -40.0, 0)]
+GUARD_IN = [(94.0, -31.0, 1.5), (95.6, -49.4, 3.4), (58.0, -51.6, 4.0), (46.0, -50.2, 0), (52.0, -31.0, 0)]
+UNDERCUT = ((46.0, -56.0), 3.0)         # behind the guard: the high grip's notch (centre x, z; radius)
 RAIL_YZ = [(-8.2, -26.0), (8.2, -26.0), (8.2, -27.4), (9.7, -28.5), (9.7, -29.5), (8.0, -31.3),
            (-8.0, -31.3), (-9.7, -29.5), (-9.7, -28.5), (-8.2, -27.4)]
 TRIGGER_XZ = [(61.0, -29.8, 0), (65.8, -29.8, 0), (67.8, -38.0, 8.0), (67.4, -46.5, 2.5), (65.6, -49.8, 1.2),
@@ -524,15 +541,20 @@ FRONT_SIGHT_XZ = [(167.5, 14.6, 0), (169.2, 23.0, 0.4), (180.8, 23.0, 0.6), (182
 PLATE_YZ = [(-9.0, 13.6), (9.0, 13.6), (8.25, 15.3), (7.15, 16.2), (-7.15, 16.2), (-8.25, 15.3)]
 
 
+def _undercut(col, q):
+    (x, z), r = UNDERCUT
+    return cyl(col, -20.0, 20.0, r, axis="y", c=(x, z), n=q["cyl"], name="undercut")
+
+
 def build_frame(col, q):
     fr = prism_xz("frame", FRAME_XZ, -FRAME_W, FRAME_W, col, q["fil"])
-    finish(fr, 0.8, q)
-    g = prism_xz("guard", GUARD_OUT, -5.4, 5.4, col, q["fil"])
-    boolean(g, [prism_xz("hole", GUARD_IN, -8.0, 8.0, col, q["fil"])])
-    finish(g, 1.9, q, segs=q["segs"] + 1)
+    finish(fr, 0.9, q)
+    g = prism_xz("guard", GUARD_OUT, -6.0, 6.0, col, q["fil"])
+    boolean(g, [prism_xz("hole", GUARD_IN, -8.0, 8.0, col, q["fil"]), _undercut(col, q)])
+    finish(g, 2.0, q, segs=q["segs"] + 1)
     rail = prism_yz("rail", RAIL_YZ, 110.0, 182.0, col)
     boolean(rail, [box(col, c - 1.6, c + 1.6, -12.0, 12.0, -32.0, -29.0) for c in (122.0, 134.0, 146.0, 158.0, 170.0)])
-    finish(rail, 0.35, q)
+    finish(rail, 0.5, q)
     inner = box(col, -1.0, 181.0, -8.6, 8.6, -12.9, -8.0, name="frame_rails")
     return [fr, g, rail, inner]
 
@@ -555,12 +577,12 @@ def build_slide_parts(col, q):
     cut = [box(col, 0.0, 20.0, -1.75, 1.75, 21.2, 30.0)]
     cut += [box(col, 2.0, 3.45, -10.0, 10.0, z - 0.25, z + 0.25) for z in (17.6, 18.7, 19.8, 20.9)]
     boolean(rs, cut)
-    finish(rs, 0.35, q)
+    finish(rs, 0.5, q)
     fs = prism_xz("front_sight", FRONT_SIGHT_XZ, -1.55, 1.55, col, q["fil"])
     boolean(fs, [box(col, 170.4, 179.6, -0.6, 0.6, 21.4, 30.0)])
-    finish(fs, 0.3, q)
+    finish(fs, 0.4, q)
     fib = finish(cyl(col, 170.0, 180.0, 0.82, c=(0.0, 21.6), n=max(12, q["cyl"] // 3), name="fibre"), 0.0, q)
-    plate = finish(prism_yz("optic_plate", PLATE_YZ, 18.6, 59.4, col), 0.3, q)
+    plate = finish(prism_yz("optic_plate", PLATE_YZ, 18.6, 59.4, col), 0.45, q)
     screws = []
     for x in (25.0, 53.0):
         s = cyl(col, 15.4, 16.45, 1.75, axis="z", c=(x, 0.0), n=max(16, q["cyl"] // 2), name="screw")
@@ -775,10 +797,21 @@ def mat_polymer(name="polymer"):
     P = _coords(nb)
     w, convex = _edge_wear(nb, P, radius_mm=0.9, amount=0.55, grain=0.2)
     att = nb.n("ShaderNodeAttribute", attribute_name="stipple", attribute_type="GEOMETRY")
-    mask = att.outputs["Fac"]
+    grip = att.outputs["Fac"]
+    # grip station t of the point (along the grip axis from the backstrap line)
+    sep = nb.n("ShaderNodeSeparateXYZ")
+    nb.set(sep.inputs[0], P)
+    t = nb.math("ADD", nb.math("MULTIPLY", nb.math("SUBTRACT", sep.outputs[0], GB0[0]), GD[0]),
+                nb.math("MULTIPLY", nb.math("SUBTRACT", sep.outputs[2], GB0[1]), GD[1]))
+    t0, t1, bw = STIPPLE_T[0], STIPPLE_T[1], 1.6
+    band = nb.math("MULTIPLY", nb.smooth(t0 + bw, t0 + bw + 0.3, t), nb.math("SUBTRACT", 1.0, nb.smooth(t1 - bw - 0.3, t1 - bw, t)))
+    outer = nb.math("MULTIPLY", nb.smooth(t0 - 0.3, t0, t), nb.math("SUBTRACT", 1.0, nb.smooth(t1, t1 + 0.3, t)))
+    mask = nb.math("MULTIPLY", band, grip)
+    border = nb.math("MULTIPLY", nb.math("SUBTRACT", outer, band), grip)     # the raised smooth frame
     h = _stipple_height(nb, P)
     mould = _noise(nb, P, 1.6, detail=4.0)
-    height = nb.math("ADD", nb.math("MULTIPLY", h, mask), nb.math("MULTIPLY", mould, 0.06))
+    height = nb.math("ADD", nb.math("MULTIPLY", nb.math("SUBTRACT", h, 0.35), mask), nb.math("MULTIPLY", mould, 0.06))
+    height = nb.math("ADD", height, nb.math("MULTIPLY", border, 0.9))
     b = nb.n("ShaderNodeBump", Strength=1.0, Distance=0.32 * MM)
     nb.set(b.inputs["Height"], height)
     base = nb.mix(w, _rgb(nb, (0.022, 0.022, 0.024)), _rgb(nb, (0.05, 0.05, 0.053)), "RGBA")
