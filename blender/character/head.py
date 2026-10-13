@@ -38,7 +38,8 @@ def refine(b):
     notes = head_refine.refine(b)
     if notes is None:
         return
-    from . import eyes_hq, skin_tex
+    from . import eyes_hq, hand_forms, skin_tex
+    hand_forms.apply(b)  # Track G: hand forms on the dense hands, before the skin bake
     skin_tex.build(b)
     eyes_hq.build(b)
 

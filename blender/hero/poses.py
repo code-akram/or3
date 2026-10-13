@@ -522,7 +522,7 @@ def apply(arm, name):
         p.log.insert(0, f"pose {name}: deform_poses {base} + hero/poses.py {arms}")
         log = p.log
         log.append(deform(arm))
-        return log
+        return log + _hands(arm, name)
     spec = _f_spec(name)
     if spec is not None:
         _dp().apply_pose(arm, spec)
@@ -540,4 +540,15 @@ def apply(arm, name):
         p.log.append(f"pose {name}: ok (hero/poses.py)")
         log = p.log
     log.append(deform(arm))
-    return log
+    return log + _hands(arm, name)
+
+
+def _hands(arm, name):
+    """Track G hand finishing (character/hand_pose.py): finger shapes, hands
+    lifted out of sleeves they were posed into, fingers curled to contact."""
+    try:
+        from character import hand_pose
+    except ImportError:
+        return []
+    keys = (name, F_POSES.get(name), name.removeprefix("f:"))
+    return hand_pose.settle(arm, keys, rerun=lambda: deform(arm))
