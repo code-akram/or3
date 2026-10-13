@@ -8,6 +8,9 @@
 #     --signoff        Cycles CPU 1024², 128 spp + OIDN instead of EEVEE 512², 16 samples
 #     --target DIR     score masks against DIR/<view>_mask.png
 #     --prev DIR|none  run to score against (default: the latest finished run)
+#     --fan FILE       private fan build (build_character.py --fan; also taken from
+#                      $FAN_CONFIG): the run goes to <main>/private/likeness/lookdev/,
+#                      never under data/ (bench/m1/v3/BRIEF.md)
 #   bench/m1/lookdev.sh --compare A B             side-by-side sheet + metrics diff
 #                                                 (A, B: run dirs or names under lookdev/)
 # Env: DATA (default: <main checkout>/data), THREADS (default 4; 16 for --signoff),
@@ -30,19 +33,26 @@ if [[ "${1:-}" == "--compare" ]]; then
   exit 0
 fi
 
-MODE=loop; CONFIG=(); TARGET=(); PREV=auto
+MODE=loop; CONFIG=(); TARGET=(); PREV=auto; FAN="${FAN_CONFIG:-}"
 while [[ $# -gt 1 ]]; do
   case "$1" in
     --signoff) MODE=signoff; shift ;;
     --config)  CONFIG=(--config "$(realpath "$2")"); shift 2 ;;
     --target)  TARGET=(--target "$(realpath "$2")"); shift 2 ;;
     --prev)    PREV="$2"; shift 2 ;;
+    --fan)     FAN="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
 LABEL="${1:?usage: $0 [options] <label>}"
 [[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "label: letters, digits, . _ - only" >&2; exit 2; }
 THREADS="${THREADS:-$([[ $MODE == signoff ]] && echo 16 || echo 4)}"
+FAN_ARG=()
+if [[ -n "$FAN" ]]; then
+  FAN_ARG=(--fan "$(realpath "$FAN")")
+  ROOT="$MAIN_ROOT/private/likeness/lookdev"   # private likeness content: never under data/
+  mkdir -p "$ROOT"
+fi
 
 # Latest finished run (timestamped dir with metrics.json), before this one starts.
 latest() { find "$ROOT" -mindepth 1 -maxdepth 1 -type d -name '2*Z-*' -exec test -f '{}/metrics.json' ';' -print | sort | tail -1; }
@@ -56,12 +66,12 @@ PREV_ARG=(); [[ -n "$P" ]] && PREV_ARG=(--prev "$P")
 RUN="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
 mkdir -p "$RUN"
 T0=$(date +%s.%N)
-echo "== lookdev $LABEL mode=$MODE threads=$THREADS prev=${P:+$(basename "$P")} loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
+echo "== lookdev $LABEL mode=$MODE threads=$THREADS${FAN:+ fan(private)} prev=${P:+$(basename "$P")} loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 
 blender -b -t "$THREADS" --factory-startup --python-exit-code 1 --python "$REPO/blender/build_character.py" -- \
   --system-assets "$DATA/raw/makehuman/makehuman_system_assets/unpacked" \
   --suit-assets "$DATA/raw/makehuman/suits01/unpacked" \
-  --out "$RUN/character.glb" "${CONFIG[@]}" > "$RUN/build.log" 2>&1 \
+  --out "$RUN/character.glb" "${CONFIG[@]}" "${FAN_ARG[@]}" > "$RUN/build.log" 2>&1 \
   || { echo "build failed: $RUN/build.log" >&2; tail -20 "$RUN/build.log" >&2; exit 1; }
 [[ -s "$RUN/character.glb" ]] || { echo "build wrote no character.glb: $RUN/build.log" >&2; tail -20 "$RUN/build.log" >&2; exit 1; }
 [[ "${KEEP_BLEND:-0}" == 1 ]] || rm -f "$RUN/character.blend"

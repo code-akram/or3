@@ -234,6 +234,43 @@ The build is `20261013T081002Z-heroE-main9` (main 61726e1, C 5b). The pistol is 
   - 256 spp with adaptive 0.02 converges well below its cap, and per-shot cost is about 6–9 min at 12 threads; the eye is the outlier at 19 min.
   - The turntable is about 75 s per view for all three passes.
 
+## v3 prep (main bc983b6)
+
+**Fan builds render privately.** See bench/m1/v3/BRIEF.md.
+- `bench/m1/lookdev.sh --fan FILE` (or `$FAN_CONFIG`) passes `--fan` to the build and puts the run under `<main>/private/likeness/lookdev/`.
+- `bench/m1/hero.sh` puts a fan build's runs under `<main>/private/likeness/hero/`. It detects a fan build from:
+  - a `"fan"` block in the build's `character.stats.json` config,
+  - an input under `private/`,
+  - `$FAN_CONFIG`, or `--fan`.
+- With `--into`, it refuses to write a fan render outside `private/`. The public flow is unchanged.
+- Tested at draft quality with A's test face delta plus B's hanging-groom hair overlay, merged into one private test config. The build and every render landed under `private/`, and nothing was added under `data/`.
+
+**Hair rim** (`rig.HAIR_RIM`, on by default; `hero.sh --no-hair-rim` turns it off). Track B found that the shadow-side magenta in the hair is the magenta rim mirrored in the wet coat specular.
+- Every magenta rim or kicker is now split by Cycles light linking:
+  - The original lights everything except the head hair (`hair_*` objects, excluded through its receiver collection).
+  - A twin at the same place lights only the hair. Its colour is pulled toward white-violet (0.85, 0.80, 1.0) until it has 40 % of the original saturation, with its power scaled to keep the luminance.
+  - For the sets' magenta (1.0, 0.06, 0.42) the twin is a light pink-violet.
+- Teal rims, face, suit and set are untouched.
+- Measured on the 50 % drafts (mean of a region, HSV saturation):
+
+| Region | before | after |
+|---|---|---|
+| portrait, shadow-side hair (public build main10) | 0.61 (27, 10, 23) | 0.36 (17, 14, 22) |
+| portrait, shadow-side hair (fan test build) | 0.63 | 0.33, same luminance |
+| portrait, cheek rim (public) | 0.47 | 0.46 |
+| portrait, suit shoulder rim (public) | 0.40 | 0.39 |
+
+- The hair still takes the rim shape and the wet highlight, now violet-grey instead of magenta.
+- In back, the teal kicker dominates the hair once the magenta is gone.
+- Public evidence: `data/build/hero/20261013T125442Z-main10-rim-before50` and `20261013T125649Z-main10-rim-after50` (`rim_before_after.png`: portrait, profile and back).
+
+**Profile with the hanging groom (fan test build)**: the eye still reads at az 90.
+- The near rope falls behind the eye, across the temple and the cheek.
+- I tested az 90, 80, 72, and 80 with el 6, as 100 % crops (private run `fan-profile-var`).
+  - Turning toward the front (az 72, or el 6) brings a rope across the eye.
+  - az 80 is as clear as 90.
+- So the profile camera stays at az 90, with az 85 as a fallback if the final groom moves.
+
 ## What the stage shows about the character (main ede62d6, run main5-sheet)
 
 For the owning tracks. The stage doesn't fix any of these.
@@ -318,4 +355,4 @@ Checked on `20261013T071846Z-heroE-main8`:
 
 ## Branch and commits
 
-`worktree-agent-a6abc868df2544cd8`, rebased on main 4b2e49a. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.
+`worktree-agent-a6abc868df2544cd8`, rebased on main bc983b6. Rig and stage code merged by the coordinator through 457d552. This report is the last commit.

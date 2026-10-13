@@ -229,10 +229,13 @@ def main(argv):
     ap.add_argument("--crop", default="none",
                     help="shots that also get a 100 %% crop (half the frame each way) around the eye or "
                          "focus point: a list, 'close' (shots.CLOSE) or 'none'")
+    ap.add_argument("--hair-rim", choices=["on", "off"], default="on",
+                    help="split magenta rims: a desaturated twin lights the hair (rig.HAIR_RIM)")
     ap.add_argument("--skin-sss", choices=["auto", "off"], default="auto",
                     help="auto: fill in Cycles SSS when the build's skin has none (render-side)")
     a = ap.parse_args(argv)
     rig.PCT = a.pct or None
+    rig.HAIR_RIM = a.hair_rim == "on"
     out = os.path.abspath(a.out)
     os.makedirs(os.path.join(out, "exr"), exist_ok=True)
     t0 = time.perf_counter()

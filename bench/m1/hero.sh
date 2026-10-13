@@ -6,6 +6,10 @@
 # Usage:
 #   bench/m1/hero.sh [options] <character.blend|.glb> <label>
 #       -> $DATA/build/hero/<UTC>-<label>/
+#       -> <main>/private/likeness/hero/<UTC>-<label>/ for a fan build (private: see
+#          bench/m1/v3/BRIEF.md). A fan build is detected from its stats.json
+#          (config has a "fan" block), from an input under private/, or from
+#          FAN_CONFIG / --fan; its runs never go under data/.
 #     --preview          (default) 50 % resolution, 64 spp adaptive
 #     --final            100 % (1920x1080, 1152x2048 poster, 1080x1620 turntable), 256 spp adaptive 0.02
 #     --max              100 %, 768 spp adaptive 0.012 (single hero frames; ~3x --final)
@@ -21,6 +25,8 @@
 #                        eye / focus point of these shots ('close' = portrait,profile,hands,eye)
 #     --into RUN         add to an existing run dir (stage.json merged; e.g. the turntable
 #                        at another thread count)
+#     --fan              treat the input as a fan build (private output); normally detected
+#     --no-hair-rim      magenta rims light the hair at full saturation (rig.HAIR_RIM off)
 #     --wb K             grade white point in K (default: grade.py GRADE wb_kelvin, 3900; 0 = off;
 #                        with --regrade pass it as WB=K in the environment)
 #   bench/m1/hero.sh --regrade <run dir>     re-grade the EXRs and redraw the sheet
@@ -54,6 +60,7 @@ if [[ "${1:-}" == "--regrade" ]]; then
   exit 0
 fi
 
+FAN=; HAIR_RIM=on
 QUALITY=preview; STAGE_FAIL=; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=(); CROP=none; PCT=()
 while [[ $# -gt 2 ]]; do
   case "$1" in
@@ -71,6 +78,8 @@ while [[ $# -gt 2 ]]; do
     --crop)    CROP="$2"; shift 2 ;;
     --wb)      export WB="$2"; shift 2 ;;
     --into)    INTO="$2"; shift 2 ;;
+    --fan)     FAN=1; shift ;;
+    --no-hair-rim) HAIR_RIM=off; shift ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -80,13 +89,22 @@ LABEL="${2:?label}"
 [[ -f "$IN" ]] || { echo "no such file: $IN" >&2; exit 2; }
 THREADS="${THREADS:-$([[ $QUALITY == final || $QUALITY == max ]] && echo 16 || echo 8)}"
 
+# Fan builds (private likeness content) render under private/, never data/.
+PRIVATE="$MAIN_ROOT/private"
+STATS="${IN%.*}.stats.json"
+if [[ -z "$FAN" ]]; then
+  [[ -n "${FAN_CONFIG:-}" || "$IN" == "$PRIVATE"/* ]] && FAN=1
+  [[ -f "$STATS" ]] && python3 -I -c 'import json,sys; sys.exit(0 if "fan" in json.load(open(sys.argv[1])).get("config", {}) else 1)' "$STATS" && FAN=1
+fi
+[[ -n "$FAN" ]] && ROOT="$PRIVATE/likeness/hero"
 RUN="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
 [[ -n "${INTO:-}" ]] && RUN="$(cd "$INTO" && pwd)"   # add to an existing run (stage.json is merged)
+if [[ -n "$FAN" && "$RUN" != "$PRIVATE"/* ]]; then echo "fan build: refusing to write outside $PRIVATE ($RUN)" >&2; exit 2; fi
 mkdir -p "$RUN"
-echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
+echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS${FAN:+ fan(private)} loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 T0=$(date +%s)
 "${BL[@]}" -t "$THREADS" --python "$REPO/blender/hero/stage.py" -- --in "$IN" --out "$RUN" \
-  --quality "$QUALITY" --shots "$SHOTS" --set "$SET" --crop "$CROP" "${PCT[@]}" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
+  --quality "$QUALITY" --shots "$SHOTS" --set "$SET" --crop "$CROP" --hair-rim "$HAIR_RIM" "${PCT[@]}" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
   >> "$RUN/stage.log" 2>&1 || STAGE_FAIL=1
 grep -E '^\[stage\]' "$RUN/stage.log" || true
 # grade and draw whatever was rendered, even after a failure or a kill
