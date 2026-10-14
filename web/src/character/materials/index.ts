@@ -309,7 +309,14 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const s2 = kk(P.u('hair.shift2'), P.u('hair.exponent2'));
     const atten = nl.mul(0.75).add(0.25).clamp(0, 1);
     // R: white, shifted to the root; TRT: the scatter tint (T9b; was sqrt(albedo), near grey on dark hair)
-    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${pre}.spec1`)).add(this.h.tint.mul(s2).mul(P.u(`${pre}.spec2`))).mul(this.h.specScale);
+    // T20: Fresnel on R (the cuticle reflection), relative to normal incidence: Schlick at the angle between
+    // L and the half vector, f0 of IOR 1.55. A light behind the hair (the studio rim, the hero rim / kicker)
+    // meets the fibres at grazing incidence and reflects ~4x what a front key does; the hero's Chiang R has it,
+    // Kajiya-Kay does not (Cycles per light: the rim lights 83-97 % of the crown / side / back hair).
+    const lh = L.dot(H).clamp(0, 1);
+    const fr = float(0.0465).add(float(0.9535).mul(float(1).sub(lh).pow(5))).div(0.0465);
+    const s1f = pre === 'hair' ? s1.mul(mix(float(1), fr, P.u('hair.fresnel'))) : s1;
+    const spec = P.u('hair.spec1Color').mul(s1f).mul(P.u(`${pre}.spec1`)).add(this.h.tint.mul(s2).mul(P.u(`${pre}.spec2`))).mul(this.h.specScale);
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
     // TT (T9b): light passing through the fibres toward the camera when the hair is backlit (the warm
     // glow on the hero's lengths under the rim; per-light Cycles frames put ~80 % of the hero hair's

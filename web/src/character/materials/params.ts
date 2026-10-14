@@ -136,6 +136,8 @@ export const DEFAULT_PARAMS = {
      * Chiang's radial-roughness factor at 0.5, path the atlas albedo's (hair_groom_cards CARDS.albedo.path). */
     fibreTint: 0,
     ttDepth: 0.0969,
+    /** T20: Fresnel on the R lobe (Schlick, IOR 1.55, relative to normal incidence), 0 = off (T9b-T16). */
+    fresnel: 0,
     /** T20: the baked directional hair occlusion (TEXCOORD_2 / _3 of v5 builds) on every light into the scalp
      * hair: 1 for the gameplay tier, where the deep shadow (hair.deepShadow) is off; 0 = off (hero tier). */
     dirOcclusion: 0,
