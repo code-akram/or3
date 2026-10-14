@@ -6,6 +6,7 @@
     python3 -I bench/m1/lookdev_report.py parity RUN [--cycles PARITY_HERO_DIR]
     python3 -I bench/m1/lookdev_report.py hairparity RUN [--engine F] [--lights key,fill,rim]
         [--portrait F --cycles-portrait EXR]
+    python3 -I bench/m1/lookdev_report.py strip RUN [--cycles HERO_DIR] [--out PNG]
 
 `parity` (T6) measures the engine against Cycles: shader-ball luminance ratios
 (RUN/cycles_balls.png vs RUN/game_balls.png, blender/lookdev_render.py
@@ -293,6 +294,8 @@ def engine_sheet(a):
         os.remove(p)
     parity_rows(a, run, out, W)
     print(f"-> {out}")
+    if a.cycles:
+        regression_strip(run, a.cycles)
 
 
 # ---------------------------------------------------------------- engine parity (T6)
@@ -861,6 +864,96 @@ def hair_parity(a):
     print(f"-> {out}")
 
 
+# ---------------------------------------------------------------- regression strip (T10)
+# checkpoint-2 §5 item 5: a fixed strip main9 -> int1 -> latest, each the Cycles face crop at
+# 100 % (hero portrait_crop.png) beside the engine portrait cut to the same rectangle, so a colour
+# drift (like the T9 hair warming) shows the day it happens. int1 has no Cycles hero of its own;
+# t8-v5 is the hero of the T8 build int1 merged. Paths relative to data/build.
+STRIP_FIXED = [
+    ("main9", "lookdev/20261013T081002Z-heroE-main9", "hero/20261013T081828Z-main9-final"),
+    ("int1", "lookdev/20261014T131343Z-int1-main", "hero/20261014T130129Z-t8-v5"),
+]
+# hero portrait_crop.png (blender/hero/stage.py render_crop: half the frame around the near eye)
+# sits at this rectangle of the 1920x1080 portrait for the hero camera (registered on t9b-b1).
+STRIP_CROP = "960,540,556,98"
+STRIP_W = 640
+
+
+def _strip_register(cyc, eng, w, h, x, y, reach=128):
+    """Where the Cycles crop sits in the engine portrait: normalised cross-correlation of log
+    luminance at quarter scale, within `reach` px of (x, y). The crop follows the near eye, which
+    moved between builds."""
+    import numpy as np
+
+    def lum(path, size):
+        raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-vf", f"scale={size[0]}:{size[1]}:flags=area",
+                              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+        return np.log(_lin_lum(np.frombuffer(raw, np.uint8).reshape(size[1], size[0], 3)) + 1e-3)
+    c, e = lum(cyc, (w // 4, h // 4)), lum(eng, (480, 270))
+    c = (c - c.mean()) / (c.std() + 1e-9)
+    best = (-2.0, x, y)
+    r = reach // 4
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            x0, y0 = x // 4 + dx, y // 4 + dy
+            if x0 < 0 or y0 < 0 or x0 + c.shape[1] > e.shape[1] or y0 + c.shape[0] > e.shape[0]:
+                continue
+            p = e[y0:y0 + c.shape[0], x0:x0 + c.shape[1]]
+            v = float(((p - p.mean()) / (p.std() + 1e-9) * c).mean())
+            if v > best[0]:
+                best = (v, x0 * 4, y0 * 4)
+    return best[1], best[2]
+
+
+def regression_strip(run, cycles, out=None, crop=STRIP_CROP):
+    """RUN/regression_strip.png (or `out`): main9, int1 and RUN (with the Cycles hero `cycles`),
+    one row each: Cycles crop | engine crop. Rows whose inputs are missing are skipped."""
+    build = os.path.dirname(os.path.dirname(os.path.abspath(run)))
+    stages = [(n, os.path.join(build, l), os.path.join(build, h)) for n, l, h in STRIP_FIXED]
+    stages.append(("latest " + os.path.basename(os.path.abspath(run)), os.path.abspath(run),
+                   os.path.abspath(cycles) if cycles else ""))
+    for _, l, h in stages:
+        if containment.is_private(l) or containment.is_private(h) or \
+                containment.likeness(load(os.path.join(l, "character.stats.json"))):
+            containment.assert_private(out or run, "regression strip with a private or likeness run")
+    w, h, x, y = (int(c) for c in crop.split(","))
+    inputs, chains, rows, labels = [], [], [], []
+    n = 0
+    for name, lk, hero in stages:
+        cyc, eng = os.path.join(hero, "portrait_crop.png"), os.path.join(lk, "game_portrait.png")
+        if not (os.path.exists(cyc) and os.path.exists(eng)):
+            print(f"strip: skip {name} (missing {cyc if not os.path.exists(cyc) else eng})")
+            continue
+        tags = []
+        rx, ry = _strip_register(cyc, eng, w, h, x, y)
+        for path, tag, vf in ((cyc, f"{name}  Cycles {os.path.basename(hero)}", f"scale={w}:{h}"),
+                              (eng, f"{name}  engine (crop at {rx},{ry})", f"scale=1920:1080,crop={w}:{h}:{rx}:{ry}")):
+            lp = os.path.join(os.path.dirname(out) if out else run, f"strip_{n}.txt")
+            with open(lp, "w") as f:
+                f.write(tag)
+            labels.append(lp)
+            inputs += ["-i", path]
+            chains.append(f"[{n}]{vf},scale={STRIP_W}:-2,{drawtext(lp, 16)}[s{n}]")
+            tags.append(f"[s{n}]")
+            n += 1
+        chains.append("".join(tags) + f"hstack[r{len(rows)}]")
+        rows.append(f"[r{len(rows)}]")
+    if not rows:
+        print("strip: nothing to draw")
+        return None
+    out = out or os.path.join(run, "regression_strip.png")
+    fc = ";".join(chains) + ";" + ("".join(rows) + f"vstack={len(rows)}" if len(rows) > 1 else rows[0] + "null")
+    ffmpeg([*inputs, "-filter_complex", fc, out])
+    for p in labels:
+        os.remove(p)
+    print(f"-> {out}")
+    return out
+
+
+def strip_cmd(a):
+    regression_strip(os.path.abspath(a.run), a.cycles, a.out, a.crop)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -891,9 +984,14 @@ def main():
     hp.add_argument("--portrait", help="Standard-view, post-off engine hero portrait in RUN")
     hp.add_argument("--cycles-portrait", help="Cycles parity portrait EXR (hero.sh --parity: exr/portrait.exr)")
     hp.add_argument("--out", help="output JSON (inside RUN)")
+    rs = sub.add_parser("strip", help="regression strip main9 -> int1 -> RUN, Cycles crop | engine (T10)")
+    rs.add_argument("run")
+    rs.add_argument("--cycles", help="hero stage dir of RUN (portrait_crop.png)")
+    rs.add_argument("--crop", default=STRIP_CROP, help="w,h,x,y of the Cycles crop in the 1920x1080 portrait")
+    rs.add_argument("--out", help="output PNG (default RUN/regression_strip.png)")
     a = ap.parse_args()
     {"finalize": finalize, "compare": compare, "engine": engine_sheet, "parity": parity_cmd,
-     "hairtest": hair_test_sheet, "hairparity": hair_parity}[a.cmd](a)
+     "hairtest": hair_test_sheet, "hairparity": hair_parity, "strip": strip_cmd}[a.cmd](a)
 
 
 if __name__ == "__main__":
