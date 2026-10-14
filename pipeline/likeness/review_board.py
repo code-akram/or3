@@ -20,10 +20,14 @@ by --align or per row ("align": "eye-mouth"):
 import argparse
 import json
 import random
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import containment  # noqa: E402
 
 IRIS_R, IRIS_L = 468, 473
 MOUTH_R, MOUTH_L = 61, 291
@@ -125,6 +129,7 @@ def main(argv=None):
     k.add_argument("--ipd-frac", type=float, default=0.30)
     k.add_argument("--seed", type=int, default=1)
     a = ap.parse_args(argv)
+    containment.assert_outputs(a, "out")
     {"board": cmd_board, "blink": cmd_blink}[a.cmd](a)
 
 

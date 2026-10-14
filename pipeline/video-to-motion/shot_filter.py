@@ -17,10 +17,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
+
+sys.path.append(str(Path(__file__).resolve().parent.parent / "likeness"))
+import containment  # noqa: E402
 
 
 def union_cuts(tn: list[list[int]], sd: list[list[int]], n: int, merge: int) -> list[int]:
@@ -81,7 +85,7 @@ def main() -> None:
     ap.add_argument("--min-luma", type=float, default=15.0)
     ap.add_argument("--min-lapvar", type=float, default=15.0, help="median Laplacian variance at 960 px width")
     a = ap.parse_args()
-    d = Path(a.shots_dir)
+    d = containment.assert_private(a.shots_dir, "shots_dir")
     js = json.loads((d / "shots.json").read_text())
     tn = [[s["start"], s["end"]] for s in js["transnetv2"]["shots"]]
     sd = js["pyscenedetect"]["shots"]

@@ -32,6 +32,9 @@ from scipy.spatial.transform import Rotation as R
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir from sys.path
 import foot_lock as fl  # noqa: E402
 
+sys.path.append(str(Path(__file__).resolve().parent.parent / "likeness"))
+import containment  # noqa: E402
+
 FPS = 30.0
 # SMPL-X / SMPL body kinematic tree (first 22 joints).
 PARENTS = [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19]
@@ -391,6 +394,7 @@ def main() -> None:
     ap.add_argument("--offset-sigma", type=float, default=1.0, help="temporal smoothing of the IK pin offsets (frames)")
     ap.add_argument("--drop-sigma", type=float, default=6.0, help="smoothing of the vertical root correction (frames)")
     a = ap.parse_args()
+    containment.assert_outputs(a, "motion_out", "vis_out")
     torch.set_num_threads(int(os.environ.get("OMP_NUM_THREADS", "4")))
 
     run = Path(a.run_dir)

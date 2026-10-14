@@ -1,9 +1,12 @@
 """Identity shape codes from reference frames with a MICA-class regressor (encoder only).
 
 Runs the ArcFace IResNet-100 backbone and the mapping network from a MICA-style checkpoint
-on 5-point-aligned 112 px face crops, and writes one shape code per frame (FLAME shape
-coefficients, 300-d) plus a weighted coordinate-wise median over a chosen neutral set.
-No FLAME decode happens here: decoding needs the FLAME model (see flame.py).
+on 5-point-aligned 112 px face crops, one shape code per frame (FLAME shape coefficients,
+300-d), and writes the weighted coordinate-wise median over a chosen neutral set. Only the median
+(what fit.py --init reads) and its frame ids and weights are written: the per-frame codes and the
+per-frame ArcFace embeddings (a face-recognition template) are not persisted. Outputs must be
+private (containment.py). No FLAME decode happens here: decoding needs the FLAME model (see
+flame.py).
 
 The network is defined here (same layer names as the checkpoint), so no third-party model code
 is imported or executed; the checkpoint loads with torch.load(weights_only=True) and an
@@ -27,6 +30,9 @@ import cv2
 import numpy as np
 import torch
 from torch import nn
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import containment  # noqa: E402
 
 # ArcFace 112x112 5-point template (InsightFace): image-left eye, image-right eye, nose tip,
 # image-left mouth corner, image-right mouth corner.
@@ -203,6 +209,9 @@ def main(argv=None):
     ap.add_argument("--weight-flat", type=float, default=2.0, help="weight = 1 + this * light flatness (0..1)")
     ap.add_argument("--save-aligned", default="", help="directory for the 112 px aligned crops (inspection)")
     a = ap.parse_args(argv)
+    containment.assert_private(a.out, "--out")
+    if a.save_aligned:
+        containment.assert_private(a.save_aligned, "--save-aligned")
     torch.set_num_threads(3)
 
     ref = Path(a.ref)
@@ -219,12 +228,7 @@ def main(argv=None):
         d.mkdir(parents=True, exist_ok=True)
         for i, c in zip(ids, crops):
             cv2.imwrite(str(d / f"{i:03d}.jpg"), c)
-    codes, embs = [], []
-    for k in range(0, len(crops), 8):
-        c, e = enc(crops[k:k + 8])
-        codes.append(c)
-        embs.append(e)
-    codes, embs = np.concatenate(codes), np.concatenate(embs)
+    codes = np.concatenate([enc(crops[k:k + 8])[0] for k in range(0, len(crops), 8)])
 
     by_id = {f["id"]: f for f in frames}
     if a.ids:
@@ -236,8 +240,7 @@ def main(argv=None):
     rows = [ids.index(i) for i in sel]
     w = np.array([1.0 + a.weight_flat * float(np.clip(by_id[i]["flat"], 0, 1)) for i in sel])
     median = weighted_median(codes[rows], w) if rows else np.zeros(codes.shape[1], np.float32)
-    np.savez(a.out, ids=np.array(ids), codes=codes, embeddings=embs, median_ids=np.array(sel, int),
-             median_weights=w, median=median)
+    np.savez(a.out, median_ids=np.array(sel, int), median_weights=w, median=median)
     if rows:
         d = np.linalg.norm(codes[rows] - median, axis=1)
         spread = np.linalg.norm(codes[rows] - codes[rows].mean(0), axis=1).mean()

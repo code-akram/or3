@@ -129,6 +129,10 @@ def main() -> None:
                     help="ViTPose on N evenly spaced frames of the selected track only; writes OUT/vitpose-probe.json "
                          "(mean body-joint confidence, a cheap pre-GVHMR visibility check) and stops")
     a = ap.parse_args()
+    sys.path.append(str(Path(__file__).resolve().parent.parent / "likeness"))
+    import containment  # outputs derive from film frames: private only (NOTES.md §14)
+
+    containment.assert_outputs(a, "out")
 
     for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS"):
         if os.environ.get(var) != str(a.threads):
