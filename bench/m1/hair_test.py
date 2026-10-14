@@ -957,7 +957,10 @@ def _png_write(path, rgb):
 
 def views_measure(results):
     d = os.path.join(OUT, HV_DIR)
-    out = results.get("views", {})
+    pre = opt("--engine-prefix", "lin_")   # another engine capture (e.g. a ?params= A/B): its own key
+    key = "views" if pre == "lin_" else "views_" + pre.rstrip("_")
+    out = dict(results.get(key, results.get("views", {})))
+    out["engine_prefix"] = pre
     per_view, pool = {}, {r: {"n": 0, "ye": 0.0, "yc": 0.0, "e": np.zeros(3), "c": np.zeros(3)}
                           for r in HV_REGIONS}
     for view in list(HV_VIEWS) + ["closeup"]:
@@ -992,7 +995,7 @@ def views_measure(results):
         lab = np.argmin(dist, -1)
         pure = (dist.min(-1) < 0.25) & (hm[..., 3] >= 0.9)
         lin = None
-        eng = os.path.join(d, f"lin_{view}.png")
+        eng = os.path.join(d, f"{pre}{view}.png")
         if os.path.exists(eng):
             px = pixels(eng)[..., :3]
             k = px.shape[0] // hm.shape[0]
@@ -1045,7 +1048,7 @@ def views_measure(results):
                           "scalp-hair meshes, albedo alpha >= hair.alphaTest; both alpha >= 0.5. Tone: pure "
                           "region pixels eroded 2 px inside the eroded game mask; engine lin_<view>.png "
                           "(Standard) / 2^exposure vs the Cycles scene-linear EXR."})
-    results["views"] = out
+    results[key] = out
 
 
 # ---------------------------------------------------------------- clay turntable

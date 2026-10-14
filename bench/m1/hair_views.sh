@@ -11,7 +11,8 @@
 #    hv_<view>_{cycles,hero,game}.exr
 # 2. engine_shots.mjs on RUN/hair_test/views: game_<view>.png (AgX) and lin_<view>.png (Standard)
 # 3. hair_test.py --parts views_measure -> RUN/hair_test/hair_test.json "views", hv_<view>_iou.png
-# Env: ENGINE_PORT (default 8798), ENGINE_CPUS (default 0-3), CYCLES_THREADS (default 6).
+# Env: ENGINE_PORT (default 8798), ENGINE_LOCK (flock file serialising browsers on that port, default
+# /tmp/or3-engine-<port>.lock), ENGINE_CPUS (default 0-3), CYCLES_THREADS (default 6).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 MEASURE=
@@ -32,7 +33,7 @@ PIN=()
 command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
 for pre in game_ lin_; do
   Q=(); [[ $pre == lin_ ]] && Q=(--query view_transform=standard)
-  nice -n 10 "${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$VD" --views three_quarter,profile,front,closeup \
+  flock "${ENGINE_LOCK:-/tmp/or3-engine-${ENGINE_PORT:-8798}.lock}" nice -n 10 "${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$VD" --views three_quarter,profile,front,closeup \
     --size 1024 --port "${ENGINE_PORT:-8798}" --prefix "$pre" "${Q[@]}" >> "$HT/views_engine.log" 2>&1 \
     || { echo "engine shots failed: $HT/views_engine.log" >&2; tail -20 "$HT/views_engine.log" >&2; exit 1; }
 done
