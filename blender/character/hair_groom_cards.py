@@ -87,7 +87,7 @@ CARDS = {
     "length": {"pct": 80, "under_pct": 70, "fade": 0.12},
     "segment_m": 0.024, "min_segments": 4, "max_segments": 16,
     "min_halfwidth_m": 0.0015, "width_pct": 90, "width_pad_m": 0.0015,
-    "tip_width": 0.7, "curve": 0.3, "root_w": [0.3, 0.85], "root_w_m": [0.005, 0.025],
+    "tip_width": 0.5, "curve": 0.3, "root_w": [0.3, 0.85], "root_w_m": [0.005, 0.025],
     "under": {"split": 2, "inset_m": 0.004, "width": 1.15, "max_halfwidth_m": 0.022, "start": 0.15,
               "max_segments": 14},
     # T15: fewer, thicker fly-aways (T9: 60 cards 1.2 mm wide with 3 strands each, too thin to read at
