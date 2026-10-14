@@ -313,6 +313,91 @@ class Maps:
         return lap
 
 
+# --- curvature (engine pre-integrated SSS, T6) -------------------------------------------------
+
+# Encoded mean curvature: v = clamp(kappa / CURV_KMAX, 0, 1), kappa in 1/m (convex > 0), so
+# v = 1 is a 1 cm radius and v = 0 flat or concave. The engine's SSS LUT (web/src/character/
+# materials/sss.ts) is indexed by the same v.
+CURV_KMAX = 100.0
+CURV_BLUR_M = 0.004      # curvature at the scale the hero SSS radii act on (3.4 / 0.75 / 0.34 mm)
+CURV_PX = {"head": 1024, "hands": 512}
+
+
+def _masked_blur(a, valid, r):
+    """Normalised separable box^3 blur of a over valid texels (radius r px)."""
+    r = max(1, int(round(r)))
+    w = valid.astype(np.float64)
+    num, den = a * w, w
+    for _ in range(3):
+        for ax in (0, 1):
+            num = _box1(num, r, ax)
+            den = _box1(den, r, ax)
+    return np.where(den > 1e-6, num / np.maximum(den, 1e-6), 0.0), den
+
+
+def _box1(x, r, ax):
+    pad = [(0, 0), (0, 0)]
+    pad[ax] = (r + 1, r)
+    c = np.cumsum(np.pad(x, pad, mode="edge"), axis=ax)
+    if ax == 0:
+        return (c[2 * r + 1:, :] - c[:-2 * r - 1, :]) / (2 * r + 1)
+    return (c[:, 2 * r + 1:] - c[:, :-2 * r - 1]) / (2 * r + 1)
+
+
+def curvature(m, out_px):
+    """Mean curvature of the baked surface (1/m, convex > 0) from the position
+    and smooth-normal bakes: k = 0.5 (dN/du . dP/du / |dP/du|^2 + same in v),
+    1 / r on a sphere of radius r. Blurred over CURV_BLUR_M, filled into the UV
+    margin, box-downsampled to out_px. Returns (encoded v in [0, 1], stats)."""
+    P, N = m.P.astype(np.float32), m.N.astype(np.float32)
+    ok = m.valid & m.cover
+    f0 = max(1, P.shape[0] // 2048)       # 4 mm curvature needs no 4k grid (and 4k float64 is GBs)
+    if f0 > 1:
+        s0 = P.shape[0] // f0
+        P = P[:s0 * f0, :s0 * f0].reshape(s0, f0, s0, f0, 3).mean(axis=(1, 3))
+        N = N[:s0 * f0, :s0 * f0].reshape(s0, f0, s0, f0, 3).mean(axis=(1, 3))
+        ok = ok[:s0 * f0, :s0 * f0].reshape(s0, f0, s0, f0).all(axis=(1, 3))
+    ok3 = ok.copy()
+    ok3[1:-1, :] &= ok[2:, :] & ok[:-2, :]
+    ok3[:, 1:-1] &= ok[:, 2:] & ok[:, :-2]
+    Pu = np.zeros_like(P)
+    Pv = np.zeros_like(P)
+    Nu = np.zeros_like(N)
+    Nv = np.zeros_like(N)
+    Pu[:, 1:-1] = (P[:, 2:] - P[:, :-2]) * 0.5
+    Pv[1:-1, :] = (P[2:, :] - P[:-2, :]) * 0.5
+    Nu[:, 1:-1] = (N[:, 2:] - N[:, :-2]) * 0.5
+    Nv[1:-1, :] = (N[2:, :] - N[:-2, :]) * 0.5
+    pu2 = (Pu * Pu).sum(-1)
+    pv2 = (Pv * Pv).sum(-1)
+    ok3 &= (pu2 > 1e-14) & (pv2 > 1e-14)
+    k = 0.5 * ((Nu * Pu).sum(-1) / np.maximum(pu2, 1e-14) + (Nv * Pv).sum(-1) / np.maximum(pv2, 1e-14))
+    k = np.clip(np.where(ok3, k, 0.0), -500.0, 500.0)
+    texel_m = float(np.median(np.sqrt(pu2[ok3]))) if ok3.any() else 1e-3
+    kb, den = _masked_blur(k, ok3, CURV_BLUR_M / max(texel_m, 1e-6))
+    # fill the margin outward (the runtime samples bilinear + mips across island edges)
+    filled, _ = _masked_blur(kb, den > 1e-3, 8)
+    kb = np.where(den > 1e-3, kb, filled)
+    f = kb.shape[0] // out_px
+    if f > 1:
+        kb = kb[:out_px * f, :out_px * f].reshape(out_px, f, out_px, f).mean(axis=(1, 3))
+    v = np.clip(kb / CURV_KMAX, 0.0, 1.0)
+    face = kb[kb != 0]
+    stats = {"px": int(v.shape[0]), "texel_mm": round(texel_m * 1000, 3), "blur_mm": CURV_BLUR_M * 1000,
+             "kmax_per_m": CURV_KMAX, "v_mean": round(float(v.mean()), 4),
+             "k_p50_per_m": round(float(np.percentile(face, 50)), 2) if face.size else None,
+             "k_p95_per_m": round(float(np.percentile(face, 95)), 2) if face.size else None}
+    return v, stats
+
+
+def write_curvature(out_dir, key, v):
+    """skin_<key>_curvature.png next to the GLB (grey, linear data, glTF row order)."""
+    from .export import _png_rgb8
+    name = f"skin_{key}_curvature.png"
+    _png_rgb8(os.path.join(out_dir, name), np.repeat(v[::-1, :, None], 3, axis=2))
+    return name
+
+
 # --- images and materials --------------------------------------------------------------------
 
 def make_image(name, rgb, srgb, out_dir=None):
@@ -522,6 +607,12 @@ def build(b):
         hero_in[key]["mask_pores"] = make_image(f"skin_{key}_hero_pores", syn["mask_pores"], False, out_dir)
         hero_in[key]["mask_hero"] = make_image(f"skin_{key}_hero_masks", syn["mask_hero"], False, out_dir)
     b.skin_hero = hero_in
+    curv = {}
+    if getattr(b, "out_dir", None):
+        for key, m in (("head", maps[0]), ("hands", maps[1])):
+            v, st = curvature(m, CURV_PX[key])
+            st["file"] = write_curvature(b.out_dir, key, v)
+            curv[key] = st
     sss = float(c.get("sss", 0.0))
     idx = [p.material_index for p in me.polygons]
     me.materials.clear()
@@ -537,7 +628,7 @@ def build(b):
              "hero_albedo_face_mean_srgb": _mean_srgb(head["albedo_hero"], face),
              "roughness_mean": round(float(head["rough"][maps[0].cover].mean()), 3),
              "roughness_face_mean": round(float(head["rough"][face].mean()), 3) if face.any() else None,
-             "hero_rest": rest is not None}
+             "hero_rest": rest is not None, "curvature": curv}
     b.notes["skin"] = stats
     print(f"[skin] done in {stats['seconds']} s", flush=True)
     return stats
