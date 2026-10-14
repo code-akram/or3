@@ -177,7 +177,7 @@ export const DEFAULT_PARAMS = {
   },
   eye: {
     albedoGain: 1.0,
-    corneaRoughness: 0.08, // T18: 0.04 -> 0.08 with the LTC catchlight (Cycles: film 0.04 + blur_glossy 0.5)
+    corneaRoughness: 0.18, // T18: 0.04 -> 0.18 with the LTC catchlight: the tear film plus the Cycles pixel filter / OIDN spread (portrait parity: catchlight 6 px vs Cycles 9-10; 0.08 left a hard 2x2 dot and a hard-edged square of the wrap)
     // shader-ball calibrated (T6): 1.0 put the area-light catchlight peak at 1.35x Cycles (coat f0 ~0.025 vs 0.04)
     corneaStrength: 0.7,
     /** Eye UV is a polar map: v from the back (0) to the cornea pole (1). Limbus and pupil rows. */
@@ -208,7 +208,7 @@ export const DEFAULT_PARAMS = {
     shellStrength: 1.0,
     meniscusSpec: 1.0,
     /** Radiance of the surroundings the wet eye reflects (x Fresnel x corneaStrength; emissive). */
-    envVeil: [0.05, 0.07, 0.12],
+    envVeil: [0.03, 0.035, 0.045], // 0.05/0.07/0.12 read as a blue crescent on the nasal limbus at 100 %
   },
   cloth: {
     albedoGain: 1.0,
