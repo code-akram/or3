@@ -327,6 +327,7 @@ class Maps:
 # through an attribute (offset-encoded, CRISP_ENC metres per unit) so the interpolation is exactly
 # the rasteriser's.
 CRISP_ENC = 0.02
+CRISP_MAX = 0.0008
 
 
 def _crisp_fields(st, co, nrm, ears_co):
@@ -355,7 +356,10 @@ def crisp_vertex(b, body, lab):
     ears = head_refine.group_weights(body, "ears") > 0
     sel = ((lab == "face") | (lab == "head")) & ~(head_refine.group_weights(body, "lips") > 0)
     s = _crisp_fields(st, co, nrm, co[ears]) * sel
-    b._crisp_ctx = {"st": st, "ears_co": co[ears], "mw_inv": np.array(body.matrix_world.inverted(), np.float64)}
+    mw = np.array(body.matrix_world, np.float64)
+    head_c = mw[:3, :3] @ co[sel].mean(0) + mw[:3, 3]
+    b._crisp_ctx = {"st": st, "ears_co": co[ears], "mw_inv": np.array(body.matrix_world.inverted(), np.float64),
+                    "head_c": head_c}
     return (0.5 + s / CRISP_ENC).astype(np.float32), sel.astype(np.float32)
 
 
@@ -369,7 +373,10 @@ def crisp_texels(b, m, a3, chunk=1_000_000):
     t = time.perf_counter()
     s_v = (a3[..., 0] - 0.5) * CRISP_ENC
     w = np.clip(a3[..., 1], 0, 1)
-    where = m.valid & (w > 1e-3)
+    # only texels on the head itself (some atlas texels far from it carry a stray selection weight
+    # with no field value: a 10 mm "residual" at the legs in the first bake)
+    head_c = np.asarray(ctx["head_c"], np.float32)
+    where = m.valid & (w > 1e-3) & (np.linalg.norm(m.P - head_c, axis=-1) < 0.17)
     mi = ctx["mw_inv"]
     P = m.P[where].astype(np.float64) @ mi[:3, :3].T + mi[:3, 3]
     N = m.N[where].astype(np.float64) @ mi[:3, :3].T
@@ -377,13 +384,30 @@ def crisp_texels(b, m, a3, chunk=1_000_000):
     a = np.empty(len(P), np.float64)
     for i in range(0, len(P), chunk):
         a[i:i + chunk] = _crisp_fields(ctx["st"], P[i:i + chunk], N[i:i + chunk], ctx["ears_co"])
-    out[where] = (w[where] * a - s_v[where]).astype(np.float32)
+    # bounded like the hero displacement (max_vertex_displacement 1 mm)
+    out[where] = np.clip(w[where] * a - s_v[where], -CRISP_MAX, CRISP_MAX).astype(np.float32)
     r = out[where]
     stats = {"texels": int(where.sum()), "seconds": round(time.perf_counter() - t, 1),
              "p1_mm": round(float(np.percentile(r, 1)) * 1000, 4), "p99_mm": round(float(np.percentile(r, 99)) * 1000, 4),
              "min_mm": round(float(r.min()) * 1000, 4), "max_mm": round(float(r.max()) * 1000, 4)}
     print(f"[skin] crisp band residual: {stats}", flush=True)
     return out, stats
+
+
+def eye_spheres(b, body, eyes):
+    """[(centre world, radius m)] of the globes the game ships: the sculpt layer's eye spheres
+    (head_sculpt eye_c, which eyes_hq ships), else a back-half sphere fit of the eye mesh."""
+    st = getattr(b, "sculpt_state", None)
+    mw = np.array(body.matrix_world, np.float64)
+    if st and st.get("eye_c"):
+        return [([float(x) for x in mw[:3, :3] @ np.asarray(c_, np.float64) + mw[:3, 3]], float(r_))
+                for c_, r_ in (st["eye_c"][1.0], st["eye_c"][-1.0])]
+    if eyes is None:
+        return None
+    from . import head_measure
+    E = np.array([(eyes.matrix_world @ v.co)[:] for v in eyes.data.vertices])
+    return [([float(x) for x in c_], float(r_)) for c_, r_ in
+            (head_measure.eye_sphere(E[E[:, 0] > 0]), head_measure.eye_sphere(E[E[:, 0] < 0]))]
 
 
 def save_cache(path, m, extra):
@@ -681,6 +705,8 @@ def build(b):
     hc.update(c.get("head") or {})
     hc["base"] = c.get("base", hc["base"])
     hc.setdefault("corners", mouth_corners(body))
+    if "eye_spheres" not in hc:
+        hc["eye_spheres"] = eye_spheres(b, body, eyes)
     if os.environ.get("SKIN_BAKE_CACHE"):
         save_cache(os.environ["SKIN_BAKE_CACHE"], maps[0],
                    {"cl": [float(x) for x in cl], "cr": [float(x) for x in cr], "hc": hc})

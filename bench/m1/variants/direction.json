@@ -92,7 +92,13 @@
      "lip_soft_mm": 0.6,
      "ao_in_albedo": 0.0,
      "socket_dark": 1.6,
-     "lid_dark": 1.3
+     "lid_dark": 1.3,
+     "orbit_dark": 1.0,
+     "orbit_rgb": [
+      0.72,
+      0.64,
+      0.7
+     ]
     }
    },
    "plane_sharp": 3.0,

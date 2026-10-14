@@ -93,7 +93,7 @@ def pits(f1, scale, r, texel_m, depth_mm):
 class Frame:
     """Face frame per texel (metres at the reference IPD)."""
 
-    def __init__(self, m, cl, cr):
+    def __init__(self, m, cl, cr, spheres=None):
         o = (cl + cr) * 0.5
         s = float(np.linalg.norm(cl - cr)) / 0.0616
         d = m.P - o
@@ -104,6 +104,14 @@ class Frame:
         self.h = d[..., 2] / s
         self.f = -d[..., 1] / s
         self.eye_d = np.minimum(np.linalg.norm(m.P - cl, axis=-1), np.linalg.norm(m.P - cr, axis=-1)) / s
+        if spheres:
+            # T12: distance from the shipped globe centres (the sculpt layer's 12 mm globes), mapped
+            # so the visible lid skin starts where it started on the MPFB eye the eye-region rings
+            # were tuned on (EYE_LID_REF). From the bake-time eye centroids the lid, socket and crepe
+            # rings sat 3-6 mm outside the lids.
+            d = np.min([np.linalg.norm(m.P - np.asarray(c_, np.float32), axis=-1) / (r_ + EYE_LID_GAP)
+                        for c_, r_ in spheres], axis=0)
+            self.eye_d = d * EYE_LID_REF / s
         self.front = np.clip(-m.N[..., 1], 0.0, 1.0)
 
 
@@ -152,6 +160,10 @@ def regions(fr, m):
     outside_eye = smoothstep(0.0158, 0.0168, fr.eye_d)
     r["socket"] = gauss(fr.eye_d - 0.019, 0.0055) * outside_eye * smoothstep(-0.01, 0.01, f)
     r["lid"] = gauss(fr.eye_d - 0.0175, 0.0022) * outside_eye * smoothstep(-0.003, 0.002, h)
+    # T12: both lids and the skin just round them (periorbital pigment, thin skin: the darker ring
+    # that keeps the eye band reading at a distance), the lower lid included
+    # (down to the lid margin, which sits within EYE_LID_GAP of the globe, inside outside_eye's edge)
+    r["orbit"] = gauss(fr.eye_d - 0.0175, 0.0035) * smoothstep(0.0150, 0.0158, fr.eye_d)
     r["roof"] = gauss(u - 0.031, 0.016) * gauss(h - 0.010, 0.0055) * smoothstep(-0.01, 0.01, f)
     r["temple"] = gauss(u - 0.060, 0.012) * gauss(h - 0.022, 0.018)
     r["chin"] = gauss(u, 0.016) * gauss(h + 0.108, 0.014) * fwd
@@ -244,8 +256,12 @@ def lip_weight(m, lips, soft_m):
     return out
 
 
+EYE_LID_REF = 0.0168     # eye_d where the visible lid skin starts on the v2 MPFB eye (outside_eye)
+EYE_LID_GAP = 0.0006     # the lid skin's stand-off over the shipped globe (head_sculpt clearance)
+
+
 def synth_head(m, c, cl, cr):
-    fr = Frame(m, cl, cr)
+    fr = Frame(m, cl, cr, c.get("eye_spheres"))
     R = regions(fr, m)
     u, h, x = fr.u, fr.h, fr.x
     lips = R["lips"]
@@ -399,7 +415,9 @@ def synth_head(m, c, cl, cr):
     cells = smoothstep(0.0, c["mid_cell_w"], m.mid_ff) - 1
     mid_tex = (c["mid_tex_mm"] * tex + c["mid_cell_mm"] * cells) * MM * w_mid
     mid += mid_tex
-    mid += c["crisp"] * m.crisp
+    # (not on the lids: the socket field's globe guard is steep there and the residual reads as a
+    # groove under the lower lid)
+    mid += c["crisp"] * m.crisp * smoothstep(0.0175, 0.0205, fr.eye_d)
     hgt_hero = (lines + grain + mid).astype(np.float32)    # pores come from the hero shader
     hgt_game = (hgt_hero - pores).astype(np.float32)
 
@@ -433,6 +451,7 @@ def synth_head(m, c, cl, cr):
     tint(R["under_eye"] * c["under_eye"], (0.88, 0.85, 0.91))    # violet-brown circles
     tint(R["socket"] * c["socket_dark"], (0.89, 0.86, 0.89))
     tint(R["lid"] * c["lid_dark"], (0.92, 0.88, 0.91))           # thin upper-lid skin, a little darker
+    tint(R["orbit"] * c["orbit_dark"], c["orbit_rgb"])
     tint(R["roof"] * c["socket_dark"], (0.88, 0.85, 0.88))       # under the brow shelf
     tint(R["temple"] * 0.6, (0.97, 0.97, 1.0))
     tint(R["scalp"] * 0.7, (0.94, 0.93, 0.95))
@@ -528,13 +547,15 @@ def synth_head(m, c, cl, cr):
     rough += (c["rough_ears"] - c["rough"]) * R["ears"]
     rough += 0.10 * R["under_eye"] + 0.02 * R["neck"]          # thin, dry under-eye skin
     rough += 0.08 * crepe                                       # crepe folds scatter the sheen
+    rough += c["rough_orbit"] * R["orbit"]                      # T12: dry, matte lid skin (no lid glint)
     rough += (m.mot_mid - 0.5) * 0.06 + pit * 0.10
     # T12: sheen structure (skin-direction.md: "one continuous sheen" is the top CG tell): oil and
     # dryness in ~8 mm patches and the ~2 mm texture (its hollows rougher, its domes glossier),
     # fine lines rougher; zero mean, so the regional means stay
-    rough += c["rough_patch"] * np.clip((m.lump - 0.5) * 3.0, -1, 1) * (1 - lips)
-    rough -= c["rough_mid"] * tex * w_mid
-    rough += c["rough_line"] * np.clip(-fine / (0.04 * MM), 0, 1)
+    struct = c["rough_patch"] * np.clip((m.lump - 0.5) * 3.0, -1, 1) * (1 - lips) - c["rough_mid"] * tex * w_mid \
+        + c["rough_line"] * np.clip(-fine / (0.04 * MM), 0, 1)
+    skin_px = m.valid & (lips < 0.5) & (R["scalp"] < 0.5)
+    rough += struct - (float(struct[skin_px].mean()) if skin_px.any() else 0.0)
     # oiliness varies smoothly (the T-zone a little shinier, rough_tzone); any
     # highlight breakup comes from the pores and micro relief, not from a mask
     lip_r = c["rough_lips"] + 0.12 * smoothstep(0.55, 0.72, m.aniso_v)
@@ -653,6 +674,8 @@ DEFAULT_HEAD = {
     "beard_lip_rgb": (0.62, 0.58, 0.58),     # ... and its full-strength multiplier (linear)
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
+    "orbit_dark": 0.0, "orbit_rgb": (0.86, 0.80, 0.84),      # T12 periorbital ring (both lids), 0 = off
+    "rough_orbit": 0.0,
     "scalp_dark": 1.0, "scalp_dark_from": 0.6, "scalp_dark_rgb": (0.78, 0.77, 0.82),  # 0 = off (v3)
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
     "freckle_thr": 0.80, "freckles": 0.22, "blemish": 0.5,
@@ -677,8 +700,8 @@ DEFAULT_HEAD = {
     # T12 mid band (0.5-3 mm) and sheen structure (0 turns each off)
     "crisp": 1.0,                               # sculpt crisp band residual (skin_tex.crisp_texels), x
     "pore_cluster": 0.5,                        # pore depth between the ~2 mm clusters, 1 - x
-    "mid_tex_mm": 0.035, "mid_cell_mm": 0.02, "mid_cell_w": 0.08,
-    "forehead_fine_mm": 0.05, "fine_line_w": 0.03, "crows_fine_mm": 0.06, "nasolabial_fine_mm": 0.05,
+    "mid_tex_mm": 0.06, "mid_cell_mm": 0.015, "mid_cell_w": 0.12,
+    "forehead_fine_mm": 0.08, "fine_line_w": 0.05, "crows_fine_mm": 0.08, "nasolabial_fine_mm": 0.05,
     "rough_patch": 0.05, "rough_mid": 0.04, "rough_line": 0.05,
     "rough": 0.47, "rough_tzone": 0.37, "rough_beard": 0.58, "rough_ears": 0.48, "rough_lips": 0.45,
 }
