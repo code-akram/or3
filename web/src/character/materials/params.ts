@@ -245,6 +245,48 @@ export const DEFAULT_PARAMS = {
   bounce: {
     gain: 1,
   },
+  /** T19 lighting and shadows (lighting.ts, contact.ts, stage.ts). The 0/1 switches are the per-feature
+   * toggles of the quality tiers (T24); "(setup)" = read when the lights are built (a view change), the
+   * rest are live uniforms. URL overrides: ?ltc=0 ?pcss=0 ?contact=0 ?specocc=0 ?sharemaps=0. */
+  light: {
+    /** (setup) hybrid LTC: every light an LTC rect of its Blender size (area specular, exact area
+     * irradiance) with its spot proxy's shadow; 0 = T10's shadowed spots (80 deg cone, point irradiance). */
+    ltc: 1,
+    /** (setup) the eye light reaches every material, as in Cycles (which ignores the light's diffuse
+     * factor 0.3: the grey chart measures it at full diffuse); 0 = T5-T16, the eyes only. */
+    eyeAll: 1,
+    /** (setup) twins sample their parent's depth map (one map per light); 0 = a map per twin (T10). */
+    shareMaps: 1,
+    /** (setup) shadow map size of every light, and the frame sphere's margin (fitShadow). */
+    mapSize: 2048,
+    fitMargin: 1.15,
+    /** (setup) PCSS on the parent lights; 0 = three's 5-tap PCF at a radius from the emitter size (T10). */
+    pcss: 1,
+    pcssTaps: 16,
+    pcssBlockerTaps: 12,
+    /** Emitter size scale, how far above a receiver the blocker search reaches (m), filter radius clamp
+     * (texels), depth bias (m) and the bias per metre of filter radius (receiver-plane stand-in). */
+    pcssScale: 1,
+    pcssSearch: 0.15,
+    pcssMinTexels: 1,
+    pcssMaxTexels: 40,
+    shadowBias: 0.0015,
+    slopeBias: 0.6,
+    /** (setup) normal offset of the receiver in the parent maps (m; T10 0.004). */
+    normalBias: 0.003,
+    /** Specular occlusion from the GTAO term (Lagarde): strength on the direct (x the light's AO weight)
+     * and indirect specular; (setup) 0 also skips the wrap. */
+    specOcclusion: 1,
+    /** Screen-space contact shadows of the key (contact.ts), on the GTAO prepass depth. contact (setup):
+     * on / off; steps (setup); distance (m) the ray marches toward a random point of the key's rect;
+     * thickness (m) an occluder is assumed to have; bias (m) along the normal; intensity. */
+    contact: 1,
+    contactSteps: 10,
+    contactDistance: 0.025,
+    contactThickness: 0.012,
+    contactBias: 0.0006,
+    contactIntensity: 1,
+  },
 };
 
 export type Params = typeof DEFAULT_PARAMS;

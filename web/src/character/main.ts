@@ -12,6 +12,10 @@
 //      with the rest of the post off) &lut=0 (analytic grade + three's AgX instead of Blender's baked LUTs)
 //      &bounce=0 (no set-bounce environment) &scene=chart (T16 grey chart under the hero rig: chart.glb next
 //      to engine_stage.json) &passcheck=1 (self-test of Output's pass hook, passcheck.ts)
+//      T19 lighting toggles (params block `light`, the quality tiers' switches): &ltc=0 (T10's shadowed spots
+//      instead of shadowed LTC rects) &pcss=0 (PCF) &contact=0 (no key contact shadows) &specocc=0 (no GTAO
+//      specular occlusion) &sharemaps=0 (a shadow map per twin) &eyeall=0 (the eye light on the eyes only)
+//      &timestamps=1 (trackTimestamp: __viewer.profile() per-pass GPU times; on with upload)
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
@@ -31,6 +35,8 @@ import type { GradeLutJson } from './grade';
 import { SceneAO } from './ao';
 import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
 import { FrameStats, textureBytes } from './hud';
+import { ContactShadows } from './contact';
+import { PassProfiler } from './profile';
 
 const q = new URLSearchParams(location.search);
 const hud = document.getElementById('hud') as HTMLDivElement;
@@ -119,6 +125,37 @@ async function loadTexture(url: string): Promise<THREE.Texture | null> {
 function areaMode(fallback: 'none' | 'all' = 'none'): 'none' | 'rims' | 'all' {
   const a = q.get('area');
   return a === 'none' || a === 'rims' || a === 'all' ? a : fallback;
+}
+
+/** T19: the URL switches of the `light` params block (read before the materials and lights are built). */
+function applyLightFlags(P: ParamStore): void {
+  const flag: [string, string][] = [
+    ['ltc', 'light.ltc'],
+    ['pcss', 'light.pcss'],
+    ['contact', 'light.contact'],
+    ['specocc', 'light.specOcclusion'],
+    ['sharemaps', 'light.shareMaps'],
+    ['eyeall', 'light.eyeAll'],
+  ];
+  for (const [k, path] of flag) if (q.get(k) === '0' || q.get(k) === '1') P.set(path, Number(q.get(k)));
+}
+
+/** ?area= wins; otherwise the hybrid LTC rects (light.ltc 1) or T10's spots. */
+function lightAreaMode(P: ParamStore): 'none' | 'rims' | 'all' {
+  return areaMode((P.get('light.ltc') as number) > 0 ? 'all' : 'none');
+}
+
+/** Labels for the per-pass profile (profile.ts): by render target, the shadow maps by their light. */
+function passLabel(stage: Stage) {
+  return (rt: THREE.RenderTarget | null, cam: THREE.Camera | null): string => {
+    const sh = cam ? stage.shadowCameraName(cam) : null;
+    if (sh) return `shadow map: ${sh}`;
+    if (!rt) return 'canvas';
+    const names = (rt.textures ?? [rt.texture]).map((t) => t.name).filter(Boolean);
+    if (names.includes('output')) return 'scene (MRT)';
+    if (names.length) return names.join('+');
+    return `rt ${rt.width}x${rt.height} ${rt.texture.type === THREE.UnsignedByteType ? 'rgba8' : 'half'}`;
+  };
 }
 
 /** ?aa= (T16): temporal (TRAA, hashed cards) by default; msaa for the parity stills. */
@@ -345,11 +382,16 @@ async function mainBalls(): Promise<void> {
   let overrides: unknown = paramJson;
   if (q.get('params')) overrides = JSON.parse(q.get('params')!);
   const P = new ParamStore(overrides);
+  applyLightFlags(P);
   const scene = new THREE.Scene();
   scene.add(gltf.scene);
   const mats = assignMaterials(gltf.scene, P, { weave, ...skinSidecars(P, curvHead, curvHands) }, true);
-  const stage = new Stage(stageData!, scene, mats.byName);
+  // T19: the stage gets the params (PCSS shadows, map size; the hair twins of the deep hair shadow are off
+  // here: no hair geometry), and ?lights=key renders the balls under one studio light (per-light parity)
+  const stage = new Stage(stageData!, scene, mats.byName, P);
+  stage.deepHair = false;
   stage.areaMode = areaMode('all');
+  if (q.get('lights')) stage.only = q.get('lights')!.split(',');
   stage.setup('front', 'neutral');
   output.setGrade(false, balls!.exposure);
   output.viewAgX.value = balls!.view_transform === 'AgX' ? 1 : 0;
@@ -399,6 +441,7 @@ async function mainChart(): Promise<void> {
   ]);
   if (!stageData) fatal('no engine_stage.json');
   const P = new ParamStore(q.get('params') ? JSON.parse(q.get('params')!) : paramJson);
+  applyLightFlags(P);
   const output = new Output(renderer, aa === 'msaa' ? 4 : 1, outputOptions(P, aa));
   if (lutJson) output.lut.load(lutJson);
   else state.warnings.push('no grade_lut.json: analytic grade + three AgX');
@@ -406,7 +449,7 @@ async function mainChart(): Promise<void> {
   scene.add(gltf.scene);
   const mats = assignMaterials(gltf.scene, P, {}, aa === 'msaa');
   const stage = new Stage(stageData!, scene, mats.byName, P);
-  stage.areaMode = areaMode();
+  stage.areaMode = lightAreaMode(P);
   stage.shadowFill = q.get('fillshadow') !== '0';
   if (q.get('lights')) stage.only = q.get('lights')!.split(',');
   const vs = stage.setup('portrait', 'hero');
@@ -449,7 +492,7 @@ async function main(): Promise<void> {
   const base = assetBase();
   const forceWebGL = q.get('gl') === '1';
   const upload = q.get('capture') === '1' && q.get('upload') === '1';
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload });
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || q.get('timestamps') === '1' });
   await renderer.init();
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
@@ -498,6 +541,7 @@ async function main(): Promise<void> {
     }
   }
   const P = new ParamStore(overrides);
+  applyLightFlags(P);
   const output = new Output(renderer, samples, outputOptions(P, aa));
   if (lutJson) output.lut.load(lutJson);
   else state.warnings.push('no grade_lut.json: analytic grade + three AgX (blender/hero/grade.py --lut)');
@@ -547,7 +591,15 @@ async function main(): Promise<void> {
     }
   }
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName, P);
-  stage.areaMode = areaMode();
+  stage.areaMode = lightAreaMode(P);
+  // T19: screen-space contact shadows of the key, a 'pre' pass on the GTAO prepass (contact.ts); the key's
+  // shadow node multiplies by it
+  const contact = sceneAO && (P.get('light.contact') as number) > 0 ? new ContactShadows(sceneAO, P, () => stage.keyLight()) : null;
+  if (contact) {
+    output.addPass(contact);
+    stage.contactNode = contact.node;
+  }
+  const profiler = new PassProfiler(renderer, passLabel(stage));
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
   stage.deepHair = q.get('hairshadow') !== '0' && !!(P.get('hair.deepShadow') as number);
   stage.shadowFill = q.get('fillshadow') !== '0';
@@ -745,6 +797,15 @@ async function main(): Promise<void> {
     grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)',
     bounce: bounceTex ? { gain: P.get('bounce.gain'), irradiance: bounceJson?.irradiance ?? null } : null,
     passes: output.passList.map((p) => `${p.stage}:${p.name}`),
+    lighting: {
+      ltc: stage.areaMode,
+      pcss: !!(P.get('light.pcss') as number),
+      contact: contact ? { steps: P.get('light.contactSteps'), distance_m: P.get('light.contactDistance'), last_ms: Math.round(contact.lastMs) } : null,
+      spec_occlusion: sceneAO && (P.get('light.specOcclusion') as number) > 0 ? P.get('light.specOcclusion') : 0,
+      share_maps: !!(P.get('light.shareMaps') as number),
+      eye_all: !!(P.get('light.eyeAll') as number),
+      map_size: P.get('light.mapSize'),
+    },
     fill_shadow: stage.shadowFill,
     frame: fs.summary(),
     first_frame_ms: Math.round(firstFrameMs),
@@ -808,6 +869,26 @@ async function main(): Promise<void> {
       }
       output.render(scene, camera, w, h, advanceRT);
       return true;
+    },
+    /** T19: per-pass GPU times of `frames` moving frames (shadow maps and AO every frame, as in motion) of
+     * a view at w x h after `warmup` frames (profile.ts; needs ?timestamps=1 for the GPU side). */
+    profile: async (view: ViewName, rig: RigName, w: number, h: number, frames = 6, warmup = 2, post = false) => {
+      setView(view, rig);
+      poseName = view === 'portrait' ? 'stand' : 'rest';
+      amount = 1;
+      applyPose();
+      setBeauty(post);
+      applyCamera(camera, stage.view!.camera, w, h);
+      const rt = new THREE.RenderTarget(w, h, { type: THREE.UnsignedByteType, depthBuffer: false });
+      const sync = () => renderer.readRenderTargetPixelsAsync(rt, 0, 0, 1, 1);
+      for (let i = 0; i < warmup; i++) {
+        output.render(scene, camera, w, h, rt);
+        await sync();
+      }
+      const res = await profiler.measure(() => output.render(scene, camera, w, h, rt), frames, sync);
+      rt.dispose();
+      resize();
+      return { view, rig, res: [w, h], post, stats: statsNow(), ...res };
     },
   };
   (window as unknown as { __viewer: typeof api }).__viewer = api;

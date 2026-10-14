@@ -17,12 +17,21 @@
 // cast no shadow in three, so the key / wrap / fill stay shadowed spots unless area=all; the rims and
 // kickers (0.3 x 1.2-1.5 m strips at 1.5 m) are where the spot's narrow, hard lobe was most wrong.
 // Measured: unshadowed rims leak under the jaw, so 'none' (shadowed spots) is the default; rims/all opt-in.
+//
+// T19 (lighting.ts): HYBRID LTC is the default (light.ltc 1, i.e. area 'all'): every light an LTC rect of its
+// Blender size, shadowed by an invisible spot proxy's depth map aimed at the view's frame (fitShadow), PCSS
+// filtered; a light's twins sample their parent's map (one map per light: hero 10 -> 5); the key's shadow
+// also takes the screen-space contact shadows (contact.ts). The eye light reaches every material at full
+// diffuse (light.eyeAll), as Cycles renders it: Cycles ignores the light's diffuse_factor 0.3 (the per-light
+// grey chart measures 1.06 x the full-diffuse prediction), and T5-T16 linked it to the eyes only, which
+// left the chart 2-11/255 low in G / B and the face without its frontal fill (t16-aa-post.md §3).
 import * as THREE from 'three/webgpu';
 import { lights as lightsNodeOf } from 'three/tsl';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
 import { groupOf, roleOf } from './materials';
 import type { ParamStore } from './materials/params';
-import { setupHairShadow } from './hairshadow';
+import { deepHairFilter, setupHairShadow } from './hairshadow';
+import { LinkedShadowNode, OwnedShadowNode, discDiameter, fitShadow, linkedShadow, pcssFilter } from './lighting';
 
 export interface StageCamera {
   position: number[];
@@ -199,6 +208,10 @@ export class Stage {
   private readonly floor: THREE.Mesh;
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xffffff, 0);
   private lights: { light: THREE.SpotLight | THREE.RectAreaLight; spec: StageLight }[] = [];
+  /** T19: the spot proxies that own a shadow map, by light name (the parents; twins link to them) */
+  private rigs = new Map<string, { proxy: THREE.SpotLight; size: number }>();
+  /** T19: the screen-space contact term (contact.ts ContactShadows.node), multiplied into the key's shadow */
+  contactNode: unknown = null;
   view: ViewSetup | null = null;
   shadowMapSize = 2048;
   /** Which lights become LTC rect lights: none (default: shadowed spots), the rims and kickers, or all. */
@@ -261,13 +274,112 @@ export class Stage {
       this.group.remove(light);
     }
     this.lights = [];
+    for (const { proxy } of this.rigs.values()) {
+      proxy.shadow.map?.dispose();
+      proxy.dispose();
+      this.group.remove(proxy, proxy.target);
+    }
+    this.rigs.clear();
+  }
+
+  /** The light whose shadow camera this is (profile.ts labels), or null. */
+  shadowCameraName(cam: THREE.Camera): string | null {
+    for (const [name, { proxy }] of this.rigs) if (proxy.shadow.camera === cam) return name;
+    return null;
+  }
+
+  /** The key light (the parent, not its hair twin), for the contact shadows; null when not built. */
+  keyLight(): THREE.Light | null {
+    return this.lights.find(({ spec }) => spec.name === 'key')?.light ?? null;
+  }
+
+  /** The sphere (centre, radius) holding the view's frame at the camera's target distance: the shadow
+   * frustums are fitted to it (lighting.ts fitShadow). */
+  private frameSphere(): { c: THREE.Vector3; R: number } {
+    const cam = this.view!.camera;
+    const pos = v3(cam.position);
+    const tgt = v3(cam.target);
+    const dist = pos.distanceTo(tgt);
+    const aspect = (cam.res[0] ?? 1) / (cam.res[1] ?? 1);
+    const span = 2 * dist * Math.tan((cam.vfov_deg * Math.PI) / 360);
+    const [fw, fh] = cam.sensor_fit === 'VERTICAL' ? [span * aspect, span] : aspect >= 1 ? [span, span / aspect] : [span * aspect, span];
+    const unit = cam.sensor_fit === 'VERTICAL' ? fh : Math.max(fw, fh);
+    const fwd = tgt.clone().sub(pos).normalize();
+    const right = fwd.clone().cross(new THREE.Vector3(0, 1, 0)).normalize();
+    const up = right.clone().cross(fwd).normalize();
+    const c = tgt.clone().addScaledVector(right, (cam.shift[0] ?? 0) * unit).addScaledVector(up, (cam.shift[1] ?? 0) * unit);
+    const margin = this.P ? (this.P.get('light.fitMargin') as number) : 1.15;
+    return { c, R: 0.5 * Math.hypot(fw, fh) * margin };
+  }
+
+  private param(path: string, fallback: number): number {
+    return this.P ? (this.P.get(path) as number) : fallback;
+  }
+
+  /** T19: the light's shadow: its own map from a spot proxy (parents, or any light when maps are not
+   * shared), or a link to its parent's map (twins). Sets light.shadow / castShadow. */
+  private attachShadow(l: THREE.SpotLight | THREE.RectAreaLight, s: StageLight, sphere: { c: THREE.Vector3; R: number }): string {
+    const base = s.name.replace(/_(hair|cloth|skin|props|beard)$/, '');
+    const hairTwin = /_hair$/.test(s.name) && this.deepHair && !!this.P;
+    const size = Math.max(s.size[0] ?? 0.3, 1e-3);
+    const disc = discDiameter(size, Math.max(s.size[1] ?? size, 1e-3));
+    const pcss = !!this.P && this.param('light.pcss', 0) > 0;
+    const parent = base !== s.name && this.param('light.shareMaps', 1) > 0 ? this.rigs.get(base) : undefined;
+    const L = l as unknown as { shadow: THREE.LightShadow; castShadow: boolean };
+    if (parent) {
+      const ts = linkedShadow(parent.proxy.shadow);
+      const tn = ts as unknown as { filterNode: unknown; shadowNode: unknown; radius: number };
+      if (hairTwin) tn.filterNode = deepHairFilter(this.P!);
+      else if (pcss) tn.filterNode = pcssFilter(this.P!, disc);
+      else ts.radius = Math.min(12, 1 + (Math.max(size, s.size[1] ?? size) / Math.max(v3(s.position).distanceTo(v3(s.target)), 1e-3)) * 6);
+      tn.shadowNode = new LinkedShadowNode(parent.proxy, ts, parent.proxy.shadow);
+      L.shadow = ts;
+      L.castShadow = true;
+      return hairTwin ? `deep (${base} map)` : `${pcss ? 'pcss' : 'pcf'} (${base} map)`;
+    }
+    const proxy = new THREE.SpotLight(0xffffff, 0);
+    proxy.name = `${s.name}_shadow`;
+    proxy.visible = false;
+    proxy.castShadow = false; // three's own ShadowNode is not made; OwnedShadowNode renders the map
+    proxy.position.copy(v3(s.position));
+    this.group.add(proxy, proxy.target);
+    const sh = proxy.shadow;
+    const ms = hairTwin && this.param('light.shareMaps', 1) <= 0 ? this.param('hair.shadowMapSize', 2048) : this.param('light.mapSize', this.shadowMapSize);
+    sh.mapSize.set(ms, ms);
+    fitShadow(proxy, sphere.c, sphere.R);
+    const sn = sh as unknown as { filterNode: unknown; shadowNode: unknown };
+    let label: string;
+    if (hairTwin) {
+      // a twin with its own map (light.shareMaps 0): T10's head-focused frustum
+      proxy.target.position.copy(v3(s.target));
+      proxy.angle = Math.min((80 * Math.PI) / 180, Math.atan(1.4 / Math.max(proxy.position.distanceTo(proxy.target.position), 1e-3)) + 0.2);
+      proxy.updateMatrixWorld();
+      proxy.target.updateMatrixWorld();
+      setupHairShadow(proxy, this.P!, v3(this.data.landmarks.head_mid));
+      label = `deep ${ms}`;
+    } else {
+      sh.bias = pcss ? 0 : -0.0004;
+      sh.normalBias = this.param('light.normalBias', 0.004);
+      if (pcss) sn.filterNode = pcssFilter(this.P!, disc);
+      else sh.radius = Math.min(12, 1 + (Math.max(size, s.size[1] ?? size) / Math.max(v3(s.position).distanceTo(v3(s.target)), 1e-3)) * 6);
+      label = `${pcss ? 'pcss' : 'pcf'} ${ms}`;
+    }
+    const own = new OwnedShadowNode(proxy);
+    const contact = s.name === 'key' && this.contactNode ? this.contactNode : null;
+    sn.shadowNode = contact ? (own as unknown as { mul(x: unknown): unknown }).mul(contact) : own;
+    if (contact) label += ' + contact';
+    this.rigs.set(s.name, { proxy, size: disc });
+    L.shadow = sh;
+    L.castShadow = true;
+    return label;
   }
 
   private isArea(s: StageLight): boolean {
-    if (this.areaMode === 'none' || s.name === 'eye') return false;
-    // the hair twins keep the Kajiya-Kay path (custom direct(); LTC would shade the cards as GGX)
-    if (/_hair$/.test(s.name)) return false;
+    if (this.areaMode === 'none') return false;
+    // T19: everything in 'all', the eye light and the hair twins too (the hair models' directRectArea
+    // shades the cards from the rect's form-factor point equivalent, never as GGX)
     if (this.areaMode === 'all') return true;
+    if (s.name === 'eye' || /_hair$/.test(s.name)) return false;
     return /^(rim|kicker)/.test(s.name);
   }
 
@@ -377,7 +489,10 @@ export class Stage {
     this.clearLights();
     const view = this.view!;
     const hero = view.rig === 'hero';
-    const specs = this.withHairTwins(hero ? this.heroLights(view.camera, this.eyesMid()) : this.data.lookdev.lights);
+    const all = this.withHairTwins(hero ? this.heroLights(view.camera, this.eyesMid()) : this.data.lookdev.lights);
+    // parents before their twins (a twin links to its parent's shadow map)
+    const isTwin = (n: string) => /_(hair|cloth|skin|props|beard)$/.test(n);
+    const specs = [...all.filter((x) => !isTwin(x.name)), ...all.filter((x) => isTwin(x.name))];
     const world = hero ? this.data.hero.world.color : this.data.lookdev.world.color.map((c) => c * this.data.lookdev.world.strength);
     const lw = Math.max(world[0]!, world[1]!, world[2]!, 1e-6);
     this.hemi.color.setRGB(world[0]! / lw, world[1]! / lw, world[2]! / lw);
@@ -388,45 +503,46 @@ export class Stage {
     const fa = hero ? [0.03, 0.03, 0.03] : this.data.lookdev.floor.albedo;
     fl.color.setRGB(fa[0]!, fa[1]!, fa[2]!);
     fl.roughness = hero ? 0.45 : this.data.lookdev.floor.roughness;
-    const head = v3(this.data.landmarks.head_mid);
+    const sphere = this.frameSphere();
     for (const s of specs) {
-      if (this.only && !this.only.includes(s.name.replace(/_(hair|cloth|skin|props)$/, ''))) continue;
-      if (this.isArea(s)) {
-        const r = this.rectLight(s);
-        this.group.add(r);
-        this.lights.push({ light: r, spec: s });
-        continue;
-      }
-      const l = new THREE.SpotLight(new THREE.Color().setRGB(s.color[0]!, s.color[1]!, s.color[2]!), s.power_w / Math.PI, 0, (80 * Math.PI) / 180, 1, 2);
-      l.name = s.name;
-      l.position.copy(v3(s.position));
-      l.target.position.copy(v3(s.target));
-      const d = l.position.distanceTo(l.target.position);
-      // AO weight (ao.ts): how much of the screen-space AO this light's direct diffuse takes; a big soft
-      // light (fill, wrap, rim strips) is what AO stands in for, the key's shadow map has its own occlusion
+      if (this.only && !this.only.includes(s.name.replace(/_(hair|cloth|skin|props|beard)$/, ''))) continue;
       const size = Math.max(s.size[0] ?? 0.3, s.size[1] ?? 0.3);
-      l.userData.aoWeight = Math.min(1, size / Math.max(d, 1e-3));
-      // shadows: the key always; the rims too (they only hit edges, which is exactly where a
-      // shadowless rim leaks through the head); T10: the fill and the hero wrap as well
-      if (this.castsShadow(s)) {
-        l.castShadow = true;
-        l.shadow.mapSize.set(this.shadowMapSize, this.shadowMapSize);
-        l.shadow.camera.near = Math.max(0.05, d - 2.5);
-        l.shadow.camera.far = d + 3;
-        l.shadow.bias = -0.0004;
-        l.shadow.normalBias = 0.004;
-        // penumbra from the emitter size (Blender area size): radius in shadow-map texels
-        l.shadow.radius = Math.min(12, 1 + (size / d) * 6);
-        // tighten the frustum on the subject
-        l.angle = Math.min((80 * Math.PI) / 180, Math.atan(1.4 / d) + 0.2);
-        if (this.deepHair && this.P && /_hair$/.test(s.name)) {
-          l.updateMatrixWorld();
-          l.target.updateMatrixWorld();
-          setupHairShadow(l, this.P, head);
-          l.userData.deepHair = true;
-        }
+      const d = v3(s.position).distanceTo(v3(s.target));
+      let l: THREE.SpotLight | THREE.RectAreaLight;
+      if (this.isArea(s)) {
+        l = this.rectLight(s);
+        this.group.add(l);
+      } else {
+        const sp = new THREE.SpotLight(new THREE.Color().setRGB(s.color[0]!, s.color[1]!, s.color[2]!), s.power_w / Math.PI, 0, (80 * Math.PI) / 180, 1, 2);
+        sp.name = s.name;
+        sp.position.copy(v3(s.position));
+        sp.target.position.copy(v3(s.target));
+        // the spot's own cone (T5-T10): tightened on the subject
+        if (this.castsShadow(s)) sp.angle = Math.min((80 * Math.PI) / 180, Math.atan(1.4 / Math.max(d, 1e-3)) + 0.2);
+        // AO weight (ao.ts): how much of the screen-space AO this light's direct diffuse takes; a big soft
+        // light (fill, wrap, rim strips) is what AO stands in for
+        sp.userData.aoWeight = Math.min(1, size / Math.max(d, 1e-3));
+        this.group.add(sp, sp.target);
+        l = sp;
       }
-      this.group.add(l, l.target);
+      // the emitter rect (contact.ts marches toward it): size and world orientation, both paths
+      l.userData.rectW = Math.max(s.size[0] ?? 0.3, 1e-3);
+      l.userData.rectH = Math.max(s.size[1] ?? s.size[0] ?? 0.3, 1e-3);
+      if ((l as THREE.RectAreaLight).isRectAreaLight) l.userData.rectQuat = l.quaternion.clone();
+      else {
+        const o = new THREE.Object3D();
+        o.position.copy(v3(s.position));
+        o.lookAt(v3(s.target));
+        // Object3D.lookAt points +z at the target; a rect shines along -z
+        o.rotateY(Math.PI);
+        l.userData.rectQuat = o.quaternion.clone();
+      }
+      // shadows (T19): every shadowed light from its spot proxy's map, the twins from their parent's
+      if (this.castsShadow(s)) {
+        const label = this.attachShadow(l, s, sphere);
+        l.userData.shadowLabel = label;
+        if (label.startsWith('deep')) l.userData.deepHair = true;
+      }
       this.lights.push({ light: l, spec: s });
     }
     this.link(hero);
@@ -440,7 +556,8 @@ export class Stage {
       const eye = roleOf(name) === 'eye';
       const use = this.lights
         .filter(({ spec }) => {
-          if (spec.name === 'eye') return hero && eye; // the eye light is a catchlight (diffuse 0.3 in Blender)
+          // the eye light: every material, as Cycles (T19, light.eyeAll); T5-T16: the eyes only (a catchlight)
+          if (spec.name === 'eye') return hero && (eye || this.param('light.eyeAll', 0) > 0);
           const r = spec.receivers;
           if (!r || r.mode === 'all') return true;
           const hit = r.groups.includes(g);
@@ -461,13 +578,13 @@ export class Stage {
       name: light.name,
       type: light.type,
       intensity: +light.intensity.toFixed(3),
-      shadow: light.castShadow ? (light.userData.deepHair ? `deep ${(light as THREE.SpotLight).shadow.mapSize.x}` : true) : false,
+      shadow: light.castShadow ? ((light.userData.shadowLabel as string | undefined) ?? true) : false,
     }));
   }
 
-  /** Shadow maps rendered per frame (each a pass over the casters). */
+  /** Shadow maps rendered per frame (each a pass over the casters): one per spot proxy (T19). */
   shadowMapCount(): number {
-    return this.lights.filter(({ light }) => light.castShadow).length;
+    return this.rigs.size;
   }
 }
 

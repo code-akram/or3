@@ -37,6 +37,13 @@ export class SceneAO {
   get normalTexture(): THREE.Texture {
     return this.prepass.texture;
   }
+  /** the prepass depth (float; T19 contact shadows march it) */
+  get depthTexture(): THREE.DepthTexture {
+    return this.prepass.depthTexture as THREE.DepthTexture;
+  }
+  /** the camera matrices the prepass was drawn with (T19 contact shadows reconstruct from them) */
+  readonly prepassProjection = new THREE.Matrix4();
+  readonly prepassProjectionInverse = new THREE.Matrix4();
   private readonly prepass: THREE.RenderTarget;
   private readonly node: SizedGTAO;
   private readonly trigger: THREE.QuadMesh;
@@ -115,6 +122,8 @@ export class SceneAO {
     r.setClearColor(0x000000, 0);
     r.setRenderTarget(this.prepass);
     r.render(scene, camera);
+    this.prepassProjection.copy(camera.projectionMatrix);
+    this.prepassProjectionInverse.copy(camera.projectionMatrixInverse);
     for (const [mesh, mat] of restore) mesh.material = mat;
     for (const o of hidden) o.visible = true;
     scene.background = bg;
