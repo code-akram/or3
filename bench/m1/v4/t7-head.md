@@ -67,7 +67,7 @@ All are on the still-nude base mesh at the build's measure step; each is the mea
 
 ## Metrics
 
-Before is the main direction build (`t7-base` config: `head_quick` q0, re-measured with this code). After is `20261014T115239Z-t7-v4`. The full lookdev reports `spec ... (0 out)`.
+Before is the main direction build (`t7-base` config: `head_quick` q0, re-measured with this code). After is `20261014T122918Z-t7-v5`, the final build (v4 had identical head numbers). The full lookdev reports `spec ... (0 out)`.
 
 | Measure | Target | Before (main) | After | L / R after |
 |---|---|---|---|---|
@@ -82,7 +82,7 @@ Before is the main direction build (`t7-base` config: `head_quick` q0, re-measur
 | lower-face index | 0.88 ± 0.04 | 0.898 | 0.845 | |
 | globe radius | 12 mm | 15.0 | 12.2 | |
 | read40 eye band (pass ≥ 75 %) | | 60 % | 71 % | |
-| ArcFace cosine vs the private reference median | ≤ 0.25 | 0.101 (EEVEE closeup), 0.064 (engine) | **0.049** (EEVEE closeup), **0.005** (engine) | |
+| ArcFace cosine vs the private reference median | ≤ 0.25 | 0.101 (EEVEE closeup), 0.064 (engine) | **0.045** (EEVEE closeup), **0.017** (engine) | |
 
 Notes on the "before" column:
 
@@ -93,15 +93,41 @@ Notes on the "before" column:
 Other build facts:
 
 - GLB has 126.9k tris, 0 validator errors.
-- The refine crisp band moves up to 1.49 mm on 1,266 verts.
+- The refine crisp band moves up to 1.49 mm on 1,268 verts.
 - The dense eye clearance pushed 144 verts.
 - The public delta was rebuilt automatically (9 s wrap): 433 shared landmarks, landmark rms 3.69 → 2.25 mm.
 
 ArcFace was run in private (the mica venv: `identity_codes.py compare --auto` against `private/likeness/ref`). It printed one scalar per image and wrote nothing.
 
+**Calibration: the 0.25 threshold is weak for renders.** For comparison, the private fan build's own closeup scores only 0.165 against the same reference. A render of a deliberate likeness stays under 0.25, so ArcFace on these renders says little; the public face's originality rests mainly on how it was authored (hand-chosen PCA coefficients, no photo input). Main's face scored 0.101 / 0.064, and T7 halves that.
+
 ## Fan build (numbers only)
 
-FANGATE
+The fan build composes: `fan.face_delta` replaces the identity layer, then the same sculpt layer applies.
+
+- The fan build must run **without** `direction.json`. Its delta was fitted on the default-config base, and with `direction.json` the base drifts 15.6 mm. Run without it, the drift is 1.7 mm, the same as before T7.
+- The eye block's lid-target loop is **off on the fan build** (`head.sculpt.eyes.lids_on_fan: false`). The globe resize and re-seat still apply. With the loop on, the fan palpebral width went to +37 %.
+- The nasal side fields stop above the alae. They had narrowed the fan alar width to −4.3 %.
+
+Likeness gate, the fan build's refboard ratios against the private reference, tolerance ±3 %. Before is `fan_final5` (main); after is `20261014T122817Z-t7-fan3`. Both are under `private/likeness/lookdev/`.
+
+| Ratio | Before (main) | After (T7) |
+|---|---|---|
+| bizygomatic | +0.3 % | −1.4 % |
+| bigonial | −0.4 % | −2.2 % |
+| mouth width | +0.2 % | −1.5 % |
+| nose length | +0.5 % | −2.8 % |
+| alar width | −1.1 % | **−3.0 %** (at the boundary) |
+| brow to pupil | +3.0 % | +1.6 % |
+| palpebral half-width | **+6.7 %** (already out) | **+9.0 %** |
+| lower face | −0.8 % | −0.1 % |
+
+Reading the table:
+
+- Of the checkpoint's named gate ratios, four are inside ±3 %: bizygomatic, mouth width, nose length and lower face.
+- Alar width sits on the edge.
+- The palpebral half-width was already out before T7. It moved 2.3 points further out because the 12 mm globe sits further forward.
+- The fix belongs in the fan block, not the shared layer: a fan-only `eyes` override, or refitting the fan delta on the sculpted base.
 
 ## Images (all public, under `data/build/lookdev/`)
 
@@ -109,8 +135,8 @@ FANGATE
 - `t7-compare/clay_turntable_before_after.png`: eight-view bald turntable, main vs T7.
 - `t7-compare/closeup_before_after.png`: EEVEE closeup.
 - `t7-compare/engine_closeup_before_after.png`: engine closeup. "Before" is `20261014T103057Z-t6-after`, the main face; the `t7-base` engine shots failed twice because port 8791 was busy with another browser.
-- `20261014T115239Z-t7-v4/sheet.png`: the lookdev sheet with the engine row. `game_closeup.png` and `game_portrait.png` are in the same dir.
-- `compare-20261014T101355Z-t7-base--20261014T115239Z-t7-v4/sheet.png`: lookdev compare.
+- `20261014T122918Z-t7-v5/sheet.png`: the lookdev sheet with the engine row. `clay/strip.png` and `clay/turntable.png` are in the same dir, and so are `game_closeup.png` and `game_portrait.png`.
+- `compare-20261014T101355Z-t7-base--20261014T115239Z-t7-v4/sheet.png`: lookdev compare, main vs v4. The head is the same as v5.
 
 The brow shelf, the zygomatic plane break (cheekbone corner over a submalar plane) and the jaw corner all read in the clay profile and low ¾.
 
@@ -123,7 +149,7 @@ The brow shelf, the zygomatic plane break (cheekbone corner over a submalar plan
 
    The aperture measure itself is fragile. The left eye proxy sits differently from its helper sphere, and over the tuning runs its measured aperture swung between 8.25 and 11.75 mm for small edits while the right stayed at 10.0. The loop drives the helper, not the fitted eye.
 3. **Teal crescents in the engine** under both irises, and small specks at the alar base. They do not appear in EEVEE.
-   - The specks came from the identity wrap pushing the alar-base skin behind the nostril's inner wall. The relax step around the alar base removed most of that.
+   - The specks came from the identity wrap pushing the alar-base skin behind the nostril's inner wall. The relax step around the alar base removed most of that, but v5's engine closeup still shows two specks.
    - The crescents come from the newly exposed lower-lid region. I could not trace which engine material draws teal. I checked the eye, skin, lash and beard textures and none contain teal. This needs the T6 viewer owner.
 4. **The gonial angle is a soft-tissue construction, not a cephalometric one.**
    - Hitting 115–120 needed the mandibular border dropped 16 mm below MediaPipe's frontal jaw contour at the corner, plus a 7.5 mm gonion push. The ICT components move a 3-point gonial angle only about 1° per σ.
@@ -134,8 +160,22 @@ The brow shelf, the zygomatic plane break (cheekbone corner over a submalar plan
    - Getting it into range also took the brow field to −0.5 mm, a slight push back. Brow overhang is 10.8 mm, against the look-spec §2.1 aim of 12. The checkpoint gate is ≥ 8.
 6. **No mid-frequency normal-map component.** The spec's "(b) a mid-frequency normal into `skin_head_normal`" would go through `skin_tex.py`, which T6 owns. The crisp band is geometry on the dense face instead.
 7. **The lower-face index (0.845) is at the low end of 0.88 ± 0.04.** The authored face is long but also wider at the cheeks (bizygomatic 142 mm).
-8. **The fan face's base drifted.** See the fan section.
+8. **Fan likeness gate.** The palpebral half-width is +9.0 %, and alar width is −3.0 %, on the boundary. See the fan section.
+9. **The landmark embedding is stale.** `data/build/identity/base_embedding.npz` was made on an earlier base, and the base has since drifted by up to 4.5 mm.
+   - A dry run of `bench/m1/identity.sh` re-landmarks the current base to within a median 0.63 mm of it, so the anchors still hold.
+   - Run `identity.sh` once after merging so the embeddings match.
+10. **Not mine, flagged:** `tools/hooks/check_staged.py` still allowlists `blender/character/head_fan.py`, which is now `head_layer.py`.
 
 ## Commits (branch `worktree-agent-ab7eb3a69fdee3a7c`)
 
-COMMITS
+All commits are on branch `worktree-agent-ab7eb3a69fdee3a7c`. Nothing is pushed or merged.
+
+- `bbd9ece`: wip. ICT-FaceKit public identity, `head_layer`, `head_sculpt`, new head measures.
+- `386affe`: sculpt tuning, the occluding-contour gonial measure, jaw features in `author_public`.
+- `22b4740`: the refine eye check by sphere centres, the ArcFace `compare` subcommand, ICT provenance and `CREDITS.md`.
+- `80f8843`: eye `forward_mm` 0.6, aperture 10.
+- `ae12b98`: alar-base relax in the public delta.
+- `2816cac`: sculpt on by default, dense eye clearance, infraorbital band 10–16 mm, brow −0.5.
+- `bd5519c`: `bench/m1/identity.sh` and `head_quick --blend` clay strip and turntable.
+- `64fbf0b`: the nasal sides stop above the alae, and lid targets apply to the public face only.
+- the final commit: this report.
