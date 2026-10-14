@@ -56,6 +56,9 @@ DEFAULTS = {
     "shoulder_drop_deg": 3.0,     # extra shoulder slope against the body's (fable 3.5)
     "back_shoulder_ease_cm": 0.6,
     "back_neck_rise_cm": 0.5,
+    "np_out_cm": 3.2,             # jacket neck point out from the neck base (clears the shirt collar)
+    "neck_scale": 1.15,           # neckline length over the quarter ellipse: the placed neckline rides
+                                  # out over the shirt collar (calibrated on spike sim2: placed/drafted 1.26)
     "pad_cm": 1.2,                # shoulder pad at the shoulder point (the runner builds the volume)
     "length_frac": 0.475,         # nape-to-hem = this x nape height (the classic rule is 0.5)
     "suppression": {"cb": 0.22, "back_side": 0.43, "side_front": 0.35},   # shares of the waist suppression
@@ -690,19 +693,30 @@ def draft(M, opts=None):
     Znpj = Zn + rb
     ac = np.array(M["acromion"]) * cm
     npt = np.array(M["neck_point"]) * cm
+    npt[0] += o["np_out_cm"]                 # the jacket's neck point, outside the shirt collar
     sp3 = ac + np.array([o["shoulder_out_cm"], 0, 0])
     sh_len3 = math.hypot(sp3[0] - npt[0], sp3[1] - npt[1])
     sp3[2] += o["pad_cm"] - math.tan(math.radians(o["shoulder_drop_deg"])) * sh_len3
-    Ls = 1.02 * float(np.linalg.norm(sp3 - np.array([npt[0], npt[1], Znpj])))
+    np3 = np.array([npt[0], npt[1], Znpj])
+    Ls = 1.02 * float(np.linalg.norm(sp3 - np3))
     Lsb = Ls + o["back_shoulder_ease_cm"]
 
-    neck = M["neck"] * cm
-    nb = neck / 5 + 0.2
+    # the jacket neckline round the eased neck: a quarter ellipse each side,
+    # lateral semi-axis to the jacket neck point, back/front semi-axes to the
+    # nape and the front neck (Ramanujan's perimeter)
+    cy = 0.5 * (M["nape"][1] + M["front_neck"][1]) * cm
+
+    def quarter(a, b):
+        h = ((a - b) / (a + b)) ** 2
+        return 0.25 * math.pi * (a + b) * (1 + 3 * h / (10 + math.sqrt(4 - 3 * h)))
+
+    nb = o["neck_scale"] * quarter(npt[0], M["nape"][1] * cm - cy + 0.8)
+    nf = o["neck_scale"] * quarter(npt[0], cy - M["front_neck"][1] * cm + 0.8)
     NPb = np.array([nb, y_back(Znpj)])
     nape = np.array([0.0, y_back(Zn)])
     y_spb = y_back(sp3[2])
     SPb = np.array([nb + math.sqrt(max(Lsb ** 2 - (y_spb - NPb[1]) ** 2, 1.0)), y_spb])
-    x_npf = Gc - (0.85 * M["neck_arc_front"] * cm + 1.0)
+    x_npf = Gc - 0.8 * nf
     NPf = np.array([x_npf, y_front(Znpj)])
     y_spf = y_front(sp3[2])
     SPf = np.array([x_npf - math.sqrt(max(Ls ** 2 - (y_spf - NPf[1]) ** 2, 1.0)), y_spf])
@@ -881,7 +895,8 @@ def draft(M, opts=None):
     ]
     frame = {"Gc": Gc, "Gw": Gw, "Gs": Gs, "Gh": Gh, "Yc": Yc, "Zc": Zc, "Zn": Zn, "Znpj": Znpj, "Zh": Zh,
              "kb": kb, "kf": kf, "ysc": ysc, "yw": yw, "ys": ys, "yh": yh, "y_btn": y_btn, "sigma": sig,
-             "x_bp": x_bp, "x_fp": x_fp, "x_bs": x_bs, "x_sf": x_sf, "sp3": sp3.tolist(),
+             "x_bp": x_bp, "x_fp": x_fp, "x_bs": x_bs, "x_sf": x_sf, "sp3": sp3.tolist(), "np3": np3.tolist(),
+             "neck_back_cm": nb, "neck_front_cm": nf,
              "shoulder_len": Ls, "armhole_len": AH, "sleeve": {"Wb": Wb, "We": We, "Wc": Wc, "hcap": hcap,
                                                                "v_el": v_el, "SL": SL, "uc": uc,
                                                                "uf0": uf0, "uh0": uh0, "up": up}}

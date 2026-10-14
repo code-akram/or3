@@ -258,22 +258,20 @@ class Placer:
                     dst.append(self.lower(x, y, kind))
 
         Yc = F["Yc"]
-        npx, npy = M["neck_point"][0], M["neck_point"][1]
+        np3 = np.array(F["np3"]) / 100.0
         sp3 = np.array(F["sp3"]) / 100.0
-        znp = F["Znpj"] / 100.0
         xt = M["torso_side_x"]
         yf, yb = M["arm_root_y"]
         za = M["armpit_z"]
         z_of = self.z_of[kind]
-        npo = self.o["np_out_m"]
-        mid_np_sp = 0.5 * (np.array([npx + npo, npy, znp]) + sp3)
+        mid_np_sp = 0.5 * (np3 + sp3)
         if kind == "back":
             ring_pts(np.linspace(0, F["x_bs"], 6), [Yc, Yc + 4, Yc + 9])
             ring_pts([0.0, 6.0, 12.0], [Yc - 5, Yc - 10])
             nape = D.anchors["nape"][1]
             src.append(tuple(nape)); dst.append((0.0, M["nape"][1] + g, M["nape"][2]))
             P = D.anchors["np_b"][1]
-            src.append(tuple(P)); dst.append((npx + npo, npy + 0.012, znp))
+            src.append(tuple(P)); dst.append(tuple(np3 + (0, 0.012, 0)))
             P = D.anchors["sp_b"][1]
             src.append(tuple(P)); dst.append(tuple(sp3 + (0, 0.012, 0.004)))
             P = 0.5 * (D.anchors["np_b"][1] + D.anchors["sp_b"][1])
@@ -286,7 +284,7 @@ class Placer:
             ring_pts(np.linspace(F["x_sf"], F["Gc"] + 2.0, 6), [Yc, Yc + 4, Yc + 9])
             ring_pts([F["Gc"] - 12.0, F["Gc"] - 6.0, F["Gc"], F["Gc"] + 2.0], [Yc - 5, Yc - 10])
             P = D.anchors["np_f"][1]
-            src.append(tuple(P)); dst.append((npx + npo, npy - 0.012, znp))
+            src.append(tuple(P)); dst.append(tuple(np3 + (0, -0.012, 0)))
             P = D.anchors["sp_f"][1]
             src.append(tuple(P)); dst.append(tuple(sp3 + (0, -0.012, 0.004)))
             P = 0.5 * (D.anchors["np_f"][1] + D.anchors["sp_f"][1])
@@ -912,8 +910,9 @@ def keep_geometry(C, X, name, weld=True, smooth=0):
             bm.verts.ensure_lookup_table()
             seam = {bm.verts[r] for r, g in groups.items() if len(g) > 1 and bm.verts[r].is_valid}
             band = set(seam)
-            for v in seam:
-                band.update(e.other_vert(v) for e in v.link_edges)
+            for _ in range(2):
+                for v in list(band):
+                    band.update(e.other_vert(v) for e in v.link_edges)
             band = [v for v in band if v.is_valid and not v.is_boundary]
             for _ in range(smooth):
                 bmesh.ops.smooth_vert(bm, verts=band, factor=0.5, use_axis_x=True, use_axis_y=True,
@@ -1006,8 +1005,7 @@ SPIKE = {
     "gap_m": 0.022,              # placement: off the body hull
     "min_clear_m": 0.012,
     "sleeve_gap_m": 0.002,
-    "np_out_m": 0.032,             # the jacket neck point out from the neck base (clears the shirt collar)
-    "seam_smooth": 3,
+    "seam_smooth": 6,
     "elbow_fillet_m": 0.08,
     "overlap_m": 0.006,
     "fold_lift_m": 0.006,
@@ -1017,12 +1015,12 @@ SPIKE = {
     "col_outer_m": 0.004, "friction": 5.0,
     "quality": 8, "collision_quality": 3, "cloth_dist_m": 0.004,
     "self_collision": True, "self_dist_m": 0.003,
-    "fabric": {"mass": 0.3, "tension": 40.0, "compression": 40.0, "shear": 30.0, "bending": 4.0,
-               "bending_canvas": 25.0, "air": 2.0, "sewing_max": 0.0},
+    "fabric": {"mass": 0.3, "tension": 40.0, "compression": 40.0, "shear": 30.0, "bending": 12.0,
+               "bending_canvas": 60.0, "air": 2.0, "sewing_max": 0.0},
     "sew_frames": 30, "gravity_ramp": 10, "settle_frames": 30,
-    "bent": {"frames": 30, "hold": 15, "flex_deg": 50.0, "elbow_deg": 35.0},
+    "bent": {"frames": 30, "hold": 15, "flex_deg": 35.0, "elbow_deg": 30.0},
     "colliders": ["shirt", "waistcoat", "trousers"],
-    "canvas": {"front_above_y": 45.0},
+    "canvas": {"hem_drop": 0.6},
 }
 
 
@@ -1060,17 +1058,20 @@ def main():
     t = time.perf_counter()
     C = build_cloth(D, M, BM, under_bvh, O)
     ob = make_cloth_object(C, "spike_cloth")
-    # canvassed zones bend stiffer: fronts above the pocket line, lapels, collar
+    # canvassed zones bend stiffer: the whole front (full canvas, feathered
+    # from the chest to the hem so the stiffness step does not hinge) and the collar
     vg = ob.vertex_groups.new(name="canvas")
+    y0, y1 = D.frame["yw"] - 6.0, D.frame["yh"]
     for n in C["names"]:
         I = C["info"][n]
         if I["kind"] == "front":
-            sel = np.nonzero(I["V"][:, 1] < D.frame["yw"])[0]
+            wv = 1.0 - O["canvas"]["hem_drop"] * sp.smoothstep((I["V"][:, 1] - y0) / (y1 - y0))
         elif I["kind"] == "collar":
-            sel = np.arange(len(I["V"]))
+            wv = np.ones(len(I["V"]))
         else:
             continue
-        vg.add([int(i + I["base"]) for i in sel], 1.0, "REPLACE")
+        for i, wi in enumerate(wv):
+            vg.add([int(i + I["base"])], float(wi), "REPLACE")
     tick("mesh_place", t)
     print(f"[spike] cloth verts {len(C['X'])} tris {len(C['T'])} sew edges {len(C['sew'])}", flush=True)
     np.savez_compressed(os.path.join(A.out_dir, "placed.npz"), X=C["X"], R=C["R"], T=C["T"],
