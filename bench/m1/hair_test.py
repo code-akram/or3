@@ -39,6 +39,11 @@ Parts:
   measure  the parity metrics again from the files, no rendering (a re-shot engine frame), with
          --cycles-ref DIR: the Cycles frame and region mask from another run's hair_test dir
          (valid while the hero grooms are unchanged, e.g. a game-bake-only change).
+  views  T15 head views (bench/m1/v4/t15-hair-volume.md): head-framed three-quarter / profile (+ the
+         closeup) viewer stage for engine_shots.mjs, Cycles hero frames, a hero hair mask by region
+         and the game hair mask (GLB cards with the viewer's cut-out); bench/m1/hair_views.sh runs it.
+  views_measure  silhouette IoU (hero vs game hair masks) and per-region (crown / side / back / front
+         falls) hair luminance and r/g, engine / Cycles, from those files and the engine frames.
   clay   a clay turntable of the groom (strands and head one matte grey, Cycles 24 spp +
          OIDN, 512², six azimuths, head framing to the collar) and the back view in the
          neutral test light with the shipped hair material.
@@ -680,6 +685,369 @@ def parity_measure_part(results):
         results["parity"]["cycles_ref"] = ref
 
 
+# ---------------------------------------------------------------- head views: silhouette + regions (T15)
+#
+# Track T15 (bench/m1/v4/t15-hair-volume.md). Head-framed three-quarter and profile cameras (85 mm,
+# HV_FRAME_H tall, the head-bone midpoint HV_DROP lower so the lengths over the shoulder are in
+# frame), plus the look-dev closeup. `views` writes a viewer stage (HV_DIR/engine_stage.json: the run's
+# stage with these cameras under the lookdev names three_quarter / profile, the asset files linked)
+# for engine_shots.mjs, and renders per view in Cycles:
+#   hv_<view>_cycles.{exr,png}  the hero strands under the studio rig (AgX png, scene-linear exr)
+#   hv_<view>_hero.exr         hero hair mask: the scalp groom as an emitter coloured by region
+#                              (curve attribute from each strand's root: crown, side, back, front
+#                              falls), every mesh a holdout; alpha = coverage
+#   hv_<view>_game.exr         game hair mask: the GLB's scalp-hair meshes (cap + cards) as an emitter
+#                              with the viewer's cut-out (albedo alpha >= HV_ALPHA_TEST, coverage
+#                              alpha), every other mesh a holdout
+# `views_measure` (no rendering) reads those and the engine frames HV_DIR/lin_<view>.png (Standard
+# view) and writes hair_test.json "views": silhouette IoU (hero vs game mask, alpha >= 0.5) per view,
+# and per region the hair-only luminance and r/g, engine / Cycles, on pixels that are hair in both
+# (the region's pure pixels, eroded 2 px, inside the eroded game mask), per view and pooled.
+HV_DIR = "views"
+HV_FRAME_H, HV_LENS, HV_DROP = 0.56, 85.0, 0.09
+HV_VIEWS = {"three_quarter": 40.0, "profile": 90.0, "front": 0.0}
+HV_ALPHA_TEST = 0.32            # web/src/character/materials/params.ts hair.alphaTest (read-only here)
+HV_REGIONS = ("crown", "side", "back", "front")
+HV_CODES = np.array([(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0)], dtype=np.float32)
+HV_ASSETS = ("character.glb", "character.rig.json", "character.stats.json", "material_params.json",
+             "suit_detail.json", "suit_twill_detail.png", "skin_head_curvature.png",
+             "skin_hands_curvature.png")
+
+
+def _gl(v):
+    return [round(float(v[0]), 6), round(float(v[2]), 6), round(float(-v[1]), 6)]
+
+
+def _bl(g):
+    return Vector((g[0], -g[2], g[1]))
+
+
+def hv_stage():
+    """The viewer stage for the head views (HV_DIR/engine_stage.json) and the Blender cameras
+    {view: (location, target)} in Blender space."""
+    with open(os.path.join(RUN, "engine_stage.json")) as f:
+        st = json.load(f)
+    hm = _bl(st["landmarks"]["head_mid"])
+    target = hm - Vector((0.0, 0.0, HV_DROP))
+    cams = {}
+    dist = (HV_FRAME_H * 0.5) / math.tan(math.atan(18.0 / HV_LENS))
+    for view, az in HV_VIEWS.items():
+        a = math.radians(az)
+        loc = target + Vector((math.sin(a), -math.cos(a), 0.0)) * dist
+        cams[view] = (loc, target.copy())
+        st["lookdev"]["cameras"][view] = {
+            "position": _gl(loc), "target": _gl(target), "up": [0, 1, 0], "lens_mm": HV_LENS,
+            "sensor_fit": "AUTO", "sensor_mm": 36.0,
+            "vfov_deg": round(math.degrees(2 * math.atan(18.0 / HV_LENS)), 6), "res": [1024, 1024],
+            "shift": [0.0, 0.0], "azimuth_deg": az, "frame_h_m": HV_FRAME_H}
+    c = st["lookdev"]["cameras"]["closeup"]
+    cams["closeup"] = (_bl(c["position"]), _bl(c["target"]))
+    st["t15_head_views"] = {"frame_h_m": HV_FRAME_H, "lens_mm": HV_LENS, "drop_m": HV_DROP,
+                            "views": HV_VIEWS}
+    d = os.path.join(OUT, HV_DIR)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "engine_stage.json"), "w") as f:
+        json.dump(st, f, indent=1)
+    for name in HV_ASSETS:
+        src, dst = os.path.join(RUN, name), os.path.join(d, name)
+        if os.path.exists(src) and not os.path.lexists(dst):
+            os.symlink(src, dst)
+    return cams
+
+
+def hv_camera(name, loc, target):
+    sc = bpy.context.scene
+    cd = bpy.data.cameras.new(name)
+    cd.lens = HV_LENS
+    cd.sensor_width = 36.0
+    cd.sensor_fit = "AUTO"
+    cd.clip_start = 0.01
+    cam = bpy.data.objects.new(name, cd)
+    sc.collection.objects.link(cam)
+    cam.location = loc
+    look_at(cam, target)
+    bpy.context.view_layer.update()
+    sc.camera = cam
+    return cam
+
+
+def _emit_mat(name, color=None, attr=None):
+    """An emitter: a constant colour, or the HV_CODES colour of the integer curve attribute `attr`."""
+    m_ = bpy.data.materials.new(name)
+    m_.use_nodes = True
+    nt = m_.node_tree
+    for n in list(nt.nodes):
+        nt.nodes.remove(n)
+    e = nt.nodes.new("ShaderNodeEmission")
+    o_ = nt.nodes.new("ShaderNodeOutputMaterial")
+    nt.links.new(e.outputs[0], o_.inputs[0])
+    if attr:
+        at = nt.nodes.new("ShaderNodeAttribute")
+        at.attribute_type = "GEOMETRY"
+        at.attribute_name = attr
+        ramp = nt.nodes.new("ShaderNodeValToRGB")
+        cr = ramp.color_ramp
+        cr.interpolation = "CONSTANT"
+        n = len(HV_CODES)
+        while len(cr.elements) < n:
+            cr.elements.new(0.5)
+        for i, el in enumerate(cr.elements):
+            el.position = i / n
+            el.color = (*HV_CODES[i], 1.0)
+        div = nt.nodes.new("ShaderNodeMath")
+        div.operation = "DIVIDE"
+        div.inputs[1].default_value = float(n)
+        add = nt.nodes.new("ShaderNodeMath")
+        add.operation = "ADD"
+        add.inputs[1].default_value = 0.5
+        nt.links.new(at.outputs["Fac"], add.inputs[0])
+        nt.links.new(add.outputs[0], div.inputs[0])
+        nt.links.new(div.outputs[0], ramp.inputs[0])
+        nt.links.new(ramp.outputs[0], e.inputs[0])
+    else:
+        e.inputs[0].default_value = (*(color or (1, 1, 1)), 1)
+    return m_
+
+
+def hv_regions(groom, arm):
+    """Per-curve region of the scalp groom from its root (point 1; point 0 is buried) relative to the
+    head-bone midpoint: front falls (kind 2) 3, crown (elevation >= 45 deg) 0, back (|azimuth| >= 120 deg
+    from the face) 2, else side 1. Stored as the curve attribute t15_region (FLOAT)."""
+    cv = groom.data
+    nc = len(cv.curves)
+    first = np.empty(nc, dtype=np.int32)
+    cv.curves.foreach_get("first_point_index", first)
+    pos = np.empty(len(cv.points) * 3, dtype=np.float32)
+    cv.points.foreach_get("position", pos)
+    pos = pos.reshape(-1, 3)
+    size = np.empty(nc, dtype=np.int32)
+    cv.curves.foreach_get("points_length", size)
+    root = pos[first + np.minimum(1, size - 1)]
+    mw = np.array(groom.matrix_world)
+    root = root @ mw[:3, :3].T + mw[:3, 3]
+    h = np.array(head_mid(arm))
+    v = root - h
+    el = np.degrees(np.arctan2(v[:, 2], np.hypot(v[:, 0], v[:, 1])))
+    az = np.degrees(np.arctan2(v[:, 0], -v[:, 1]))
+    reg = np.where(el >= 45.0, 0, np.where(np.abs(az) >= 120.0, 2, 1))
+    ka = cv.attributes.get("kind")
+    if ka is not None:
+        kind = np.empty(nc, dtype=np.int32)
+        ka.data.foreach_get("value", kind)
+        reg = np.where(kind == 2, 3, reg)
+    a = cv.attributes.get("t15_region") or cv.attributes.new("t15_region", "FLOAT", "CURVE")
+    a.data.foreach_set("value", reg.astype(np.float32))
+    cv.update_tag()
+    return {HV_REGIONS[i]: int((reg == i).sum()) for i in range(len(HV_REGIONS))}
+
+
+def views_test(results):
+    cams = hv_stage()
+    res = int(opt("--views-res", "1024"))
+    samples = int(opt("--views-samples", "48"))
+    # Game mask: the GLB, scalp hair meshes only (cap + cards), with the viewer's cut-out.
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.gltf(filepath=os.path.join(RUN, "character.glb"))
+    sc = bpy.context.scene
+    arm = next(o for o in sc.objects if o.type == "ARMATURE")
+    meshes = [o for o in sc.objects if o.type == "MESH" and o.parent == arm]
+    for o in sc.objects:
+        if o.type == "MESH" and o not in meshes:
+            o.hide_render = True
+    floor_z = floor_of(meshes)
+    hair = [o for o in meshes if "hair_export" in o.name]
+    for o in meshes:
+        if o not in hair:
+            o.is_holdout = True
+            continue
+        for i, mt in enumerate(o.data.materials):
+            img = None
+            for n in (mt.node_tree.nodes if mt and mt.node_tree else []):
+                if n.type == "TEX_IMAGE" and n.image is not None and (
+                        "albedo" in n.image.name or n.outputs["Alpha"].is_linked):
+                    img = n.image
+                    if "albedo" in n.image.name:
+                        break
+            m_ = bpy.data.materials.new(f"hv_cut_{i}")
+            m_.use_nodes = True
+            nt = m_.node_tree
+            for n in list(nt.nodes):
+                nt.nodes.remove(n)
+            out = nt.nodes.new("ShaderNodeOutputMaterial")
+            em = nt.nodes.new("ShaderNodeEmission")
+            tr = nt.nodes.new("ShaderNodeBsdfTransparent")
+            mix = nt.nodes.new("ShaderNodeMixShader")
+            nt.links.new(tr.outputs[0], mix.inputs[1])
+            nt.links.new(em.outputs[0], mix.inputs[2])
+            nt.links.new(mix.outputs[0], out.inputs[0])
+            if img is not None:
+                tx = nt.nodes.new("ShaderNodeTexImage")
+                tx.image = img
+                tx.extension = "EXTEND"
+                gt = nt.nodes.new("ShaderNodeMath")
+                gt.operation = "GREATER_THAN"
+                gt.inputs[1].default_value = HV_ALPHA_TEST
+                mul = nt.nodes.new("ShaderNodeMath")
+                mul.operation = "MULTIPLY"
+                nt.links.new(tx.outputs["Alpha"], gt.inputs[0])
+                nt.links.new(tx.outputs["Alpha"], mul.inputs[0])
+                nt.links.new(gt.outputs[0], mul.inputs[1])
+                nt.links.new(mul.outputs[0], mix.inputs[0])
+            else:
+                mix.inputs[0].default_value = 1.0
+            o.data.materials[i] = m_
+    cycles(res, 16, True)
+    sc.cycles.use_denoising = False
+    sc.view_settings.view_transform = "Standard"
+    sc.view_settings.exposure = 0.0
+    for view, (loc, tgt) in cams.items():
+        hv_camera(f"hv_{view}", loc, tgt)
+        save(os.path.join(OUT, f"hv_{view}_game.exr"), exr=True)
+    # Hero: the kept .blend, studio rig, same cameras.
+    arm = open_blend()
+    sc = bpy.context.scene
+    studio_lights(floor_z)
+    groom = bpy.data.objects.get("hair_groom")
+    counts = hv_regions(groom, arm)
+    cycles(res, samples, False)
+    sc.view_settings.exposure = STUDIO_EXPOSURE
+    for view, (loc, tgt) in cams.items():
+        hv_camera(f"hv_{view}", loc, tgt)
+        save(os.path.join(OUT, f"hv_{view}_cycles.exr"), exr=True)
+        save(os.path.join(OUT, f"hv_{view}_cycles.png"))
+    # Hero hair mask by region: the scalp groom an emitter, every mesh and other curve a holdout.
+    reg_mat = _emit_mat("hv_region", attr="t15_region")
+    for o in sc.objects:
+        if o.type == "MESH":
+            o.is_holdout = True
+        elif o.type == "CURVES" and not o.hide_render:
+            if o is groom:
+                o.data.materials.clear()
+                o.data.materials.append(reg_mat)
+            else:
+                o.is_holdout = True
+    fl = bpy.data.objects.get("lookdev_floor")
+    if fl:
+        fl.hide_render = True
+    sc.render.film_transparent = True
+    sc.cycles.samples = 16
+    sc.cycles.use_denoising = False
+    sc.view_settings.view_transform = "Standard"
+    sc.view_settings.exposure = 0.0
+    for view in cams:
+        sc.camera = bpy.data.objects[f"hv_{view}"]
+        save(os.path.join(OUT, f"hv_{view}_hero.exr"), exr=True)
+    results["views"] = {"render": {"res": res, "cycles_samples": samples, "frame_h_m": HV_FRAME_H,
+                                   "lens_mm": HV_LENS, "drop_m": HV_DROP, "views": HV_VIEWS,
+                                   "region_strands": counts}}
+    print(f"[hair_test] views rendered: {list(cams)} regions {counts}", flush=True)
+
+
+def _png_write(path, rgb):
+    """(h, w, 3) float 0..1, rows bottom-up (Blender order) -> PNG."""
+    h, w = rgb.shape[:2]
+    im = bpy.data.images.new(os.path.basename(path), w, h, alpha=True)
+    im.pixels.foreach_set(np.concatenate([np.clip(rgb, 0, 1), np.ones((h, w, 1))], 2)
+                          .astype(np.float32).ravel())
+    im.filepath_raw = path
+    im.file_format = "PNG"
+    im.save()
+    bpy.data.images.remove(im)
+
+
+def views_measure(results):
+    d = os.path.join(OUT, HV_DIR)
+    out = results.get("views", {})
+    per_view, pool = {}, {r: {"n": 0, "ye": 0.0, "yc": 0.0, "e": np.zeros(3), "c": np.zeros(3)}
+                          for r in HV_REGIONS}
+    for view in list(HV_VIEWS) + ["closeup"]:
+        fh, fg = os.path.join(OUT, f"hv_{view}_hero.exr"), os.path.join(OUT, f"hv_{view}_game.exr")
+        if not (os.path.exists(fh) and os.path.exists(fg)):
+            continue
+        hm, gm = pixels(fh), pixels(fg)
+        H, G = hm[..., 3] >= 0.5, gm[..., 3] >= 0.5
+        inter, union = int((H & G).sum()), int((H | G).sum())
+        rec = {"iou": round(inter / max(union, 1), 4), "hero_px": int(H.sum()), "game_px": int(G.sum()),
+               "game_over_hero_px": round(int(G.sum()) / max(int(H.sum()), 1), 3)}
+        # where they differ, by height thirds of the hero mask (top / mid / low: lengths over the shoulder)
+        rows = np.nonzero(H.any(1))[0]
+        if len(rows):
+            cuts = np.linspace(int(rows.min()), int(rows.max()) + 1, 4).round().astype(int)
+            th = {}
+            for name, a, b in (("low", cuts[0], cuts[1]), ("mid", cuts[1], cuts[2]), ("top", cuts[2], cuts[3])):
+                hh, gg = H[a:b], G[a:b]
+                th[name] = {"iou": round(int((hh & gg).sum()) / max(int((hh | gg).sum()), 1), 4),
+                            "game_only": int((gg & ~hh).sum()), "hero_only": int((hh & ~gg).sum())}
+            rec["thirds"] = th
+        # overlay: hero only red, game only green, both grey
+        ov = np.zeros(H.shape + (3,), np.float32)
+        ov[H & G] = 0.55
+        ov[H & ~G] = (0.9, 0.1, 0.1)
+        ov[G & ~H] = (0.1, 0.85, 0.2)
+        _png_write(os.path.join(OUT, f"hv_{view}_iou.png"), ov)
+        # regions: pure pixels of each code (colour / alpha within 0.25 of the code), eroded 2 px
+        a = np.maximum(hm[..., 3:4], 1e-6)
+        cn = hm[..., :3] / a
+        dist = np.linalg.norm(cn[..., None, :] - HV_CODES[None, None], axis=-1)
+        lab = np.argmin(dist, -1)
+        pure = (dist.min(-1) < 0.25) & (hm[..., 3] >= 0.9)
+        lin = None
+        eng = os.path.join(d, f"lin_{view}.png")
+        if os.path.exists(eng):
+            px = pixels(eng)[..., :3]
+            k = px.shape[0] // hm.shape[0]
+            lin = _srgb_decode(px)
+            if k > 1:
+                n_ = hm.shape[0]
+                lin = lin.reshape(n_, k, n_, k, 3).mean(axis=(1, 3))
+            lin = lin / 2.0 ** STUDIO_EXPOSURE
+        cyc = pixels(os.path.join(OUT, f"hv_{view}_cycles.exr"))[..., :3]
+        G2 = _erode(G, 2)
+        regs = {}
+        for i, rname in enumerate(HV_REGIONS):
+            m = _erode(pure & (lab == i), 2) & G2
+            if m.sum() < 30:
+                continue
+            c = cyc[m].sum(0)
+            r_ = {"px": int(m.sum()), "cycles_mean_lin": round(float(luma(cyc[m]).mean()), 5),
+                  "cycles_r_g": round(float(c[0] / max(c[1], 1e-9)), 3)}
+            if lin is not None:
+                e = lin[m].sum(0)
+                ye = float(luma(lin[m]).mean())
+                r_.update({"engine_mean_lin": round(ye, 5), "engine_r_g": round(float(e[0] / max(e[1], 1e-9)), 3),
+                           "lum_engine_over_cycles": round(ye / max(r_["cycles_mean_lin"], 1e-9), 3),
+                           "rg_engine_over_cycles": round(float(e[0] / max(e[1], 1e-9)) / max(r_["cycles_r_g"], 1e-9), 3)})
+                p = pool[rname]
+                p["n"] += int(m.sum())
+                p["ye"] += float(luma(lin[m]).sum())
+                p["yc"] += float(luma(cyc[m]).sum())
+                p["e"] += e
+                p["c"] += c
+            regs[rname] = r_
+        rec["regions"] = regs
+        per_view[view] = rec
+        print(f"[hair_test] views {view}: iou {rec['iou']} regions {regs}", flush=True)
+    pooled = {}
+    for rname, p in pool.items():
+        if p["n"] == 0:
+            continue
+        lum = (p["ye"] / p["n"]) / max(p["yc"] / p["n"], 1e-9)
+        rg = (p["e"][0] / max(p["e"][1], 1e-9)) / max(p["c"][0] / max(p["c"][1], 1e-9), 1e-9)
+        pooled[rname] = {"px": p["n"], "lum_engine_over_cycles": round(float(lum), 3),
+                         "rg_engine_over_cycles": round(float(rg), 3),
+                         "engine_r_g": round(float(p["e"][0] / max(p["e"][1], 1e-9)), 3),
+                         "cycles_r_g": round(float(p["c"][0] / max(p["c"][1], 1e-9)), 3),
+                         "within_15pct": bool(abs(lum - 1) <= 0.15 and abs(rg - 1) <= 0.15)}
+    out.update({"per_view": per_view, "regions_pooled": pooled,
+                "iou_three_quarter": per_view.get("three_quarter", {}).get("iou"),
+                "iou_profile": per_view.get("profile", {}).get("iou"),
+                "method": "hero mask: scalp groom strands as emitters (Cycles, meshes holdout); game mask: GLB "
+                          "scalp-hair meshes, albedo alpha >= hair.alphaTest; both alpha >= 0.5. Tone: pure "
+                          "region pixels eroded 2 px inside the eroded game mask; engine lin_<view>.png "
+                          "(Standard) / 2^exposure vs the Cycles scene-linear EXR."})
+    results["views"] = out
+
+
 # ---------------------------------------------------------------- clay turntable
 
 def clay_test(results):
@@ -743,7 +1111,8 @@ def main():
             results = json.load(f)
     results["run"] = os.path.basename(RUN)
     for part, fn in (("test", hair_test), ("beard", beard_test), ("parity", parity_test),
-                     ("measure", parity_measure_part), ("clay", clay_test)):
+                     ("measure", parity_measure_part), ("views", views_test),
+                     ("views_measure", views_measure), ("clay", clay_test)):
         if part in PARTS:
             fn(results)
             with open(jpath, "w") as f:
