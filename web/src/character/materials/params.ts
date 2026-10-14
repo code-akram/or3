@@ -90,8 +90,10 @@ export const DEFAULT_PARAMS = {
     /** Atlas gain: 1 (T9: no per-build decode fix or gain; the beard / brow atlases are sRGB-encoded
      * per-strand colour from the groom, as the scalp's). */
     albedoGain: 1.0,
-    spec1: 0.05,
-    spec2: 0.06,
+    // T9, closeup parity (beard-region linear luminance vs the hero strands): the lobes are the
+    // hair's (exponents), the gains lower: a dense short beard self-shadows (the cards do not)
+    spec1: 0.01,
+    spec2: 0.012,
     alphaTest: 0.22,
   },
   eye: {

@@ -310,7 +310,10 @@ DEFAULTS = {
             # from the strands it carries (beard_bake.build_groom_cards: per-strand
             # colour from melanin as the hero, tip alpha, flow / depth / ID / root-tip
             # maps in the GLB). Zones first (card_candidates): jaw fins, the
-            # moustache's lip edge, the chin; lying cards elsewhere.
+            # moustache's lip edge, the chin; lying cards elsewhere. albedo: the scalp's
+            # mapping (path 0.68) x gain 0.35, calibrated on the closeup parity (hair_test
+            # --parts parity, beard region 1.16x the hero at 0.35, 2.3x at 1 without
+            # specular): the hero beard's dense volume self-shadows, the cards do not.
             "game_cards": {"seed": 211, "count": 2048, "spacing_m": 0.0026, "clump_radius_m": 0.0022,
                            "min_members": 4, "min_len_m": 0.003, "segments": 3,
                            "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
@@ -321,7 +324,7 @@ DEFAULTS = {
                            "cell": [32, 128], "atlas_px": [2048, 4096], "ss": 2, "data_scale": 2,
                            "strand_px": 0.8, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
                            "flow_jitter_deg": 8,
-                           "albedo": {"radial_roughness": 0.6, "path": 0.68, "gain": 1.0,
+                           "albedo": {"radial_roughness": 0.6, "path": 0.68, "gain": 0.35,
                                       "random_color": 0.0, "value_sigma": 0.15},
                            "roughness": {"base": 0.55, "jitter": 0.12},
                            "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.3},
