@@ -17,6 +17,17 @@
 *.webm
 *.mov
 
+# Arrays, meshes and photos/renders: fitted shapes, face deltas, landmarks, embeddings,
+# reference crops and likeness renders are written as these (NOTES.md §14 rule 7).
+# None is tracked; a deliberate public one needs `git add -f` (tools/hooks/pre-commit still
+# refuses them under bench/).
+*.npz
+*.npy
+*.obj
+*.jpg
+*.jpeg
+*.exr
+
 # Model files
 *.pkl
 *.ckpt
