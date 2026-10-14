@@ -11,7 +11,7 @@ cameras.json (OpenCV K and world-to-camera per view).
 
 embed mode: cast each view's 2D landmarks (refboard.py measure --out-dir) onto the head surface,
 combine the views (most frontal hit, consistent hits averaged) and express every landmark on the
-base mesh dumped by the build (head_fan dump_base) as a triangle + barycentric coordinates.
+base mesh dumped by the build (head_layer dump_base) as a triangle + barycentric coordinates.
 
     blender -b ... --python clay_views.py -- embed --in RUN/character.blend --views-dir DIR \
         --landmarks LM_DIR --base base.npz --out embedding.npz

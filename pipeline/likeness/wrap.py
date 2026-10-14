@@ -1,7 +1,7 @@
 """Wrap the character's base mesh onto a target head surface: a per-vertex offset field for the
-build's optional face layer (blender/character/head_fan.py).
+build's optional face layer (blender/character/head_layer.py).
 
-Inputs: the base mesh dumped by the build (head_fan dump_base: coords, polygons, vertex groups,
+Inputs: the base mesh dumped by the build (head_layer dump_base: coords, polygons, vertex groups,
 eye centres), a landmark embedding on that base mesh (clay_views.py embed: MediaPipe index ->
 triangle + barycentrics), and a target mesh with its own embedding for the same landmark set
 (for a FLAME fit: the fitted neutral mesh and a MediaPipe landmark embedding for FLAME).

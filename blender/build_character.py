@@ -10,7 +10,7 @@ optional --config JSON override, then the legacy CLI flags). Run:
         --out           data/build/character/character.glb [--config cand.json] [--fan fan.json]
 
 --fan names an optional private layer: a JSON file whose "fan" block (paths relative to the
-file) feeds character/head_fan.py and whose optional "config" block is deep-merged over the build
+file) feeds character/head_layer.py and whose optional "config" block is deep-merged over the build
 config. Without it the build is unchanged. The FAN_CONFIG environment variable is not read here
 (bench/m1/lookdev.sh reads it and passes --fan). A build that carries likeness content (--fan, a
 "fan" block or a private/likeness/ path in the --config file, or a --config file under private/)
@@ -50,7 +50,7 @@ def parse_args():
     ap.add_argument("--suit-assets", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--config", help="JSON override, deep-merged over the defaults")
-    ap.add_argument("--fan", help="optional private layer; see character/head_fan.py")
+    ap.add_argument("--fan", help="optional private layer; see character/head_layer.py")
     # Legacy spike-1 flags; when given they override the config.
     ap.add_argument("--suit")
     ap.add_argument("--shoes")

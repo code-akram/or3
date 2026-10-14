@@ -1,0 +1,44 @@
+{
+ "$comment": "Public face identity (T7, bench/m1/v4/t7-head.md): ICT-FaceKit identity coefficients in sigma units, hand-chosen from the character brief (fable_review.md §3.4 and look-spec §1.2: strong supraorbital ridge, wide zygomatic arch over a square mandible, a long lower face, thin lips, ~45), using only the per-component effect table of `author_public.py features` and its least-norm `solve_targets` draft (no photo, no person as input). Components not listed are 0. The prior is ICT-FaceKit (USC ICT, MIT licence) at the commit in data/raw/ict-facekit/COMMIT. Read by pipeline/likeness/author_public.py wrap.",
+ "prior": "ICT-FaceKit",
+ "max_sigma": 2.5,
+ "coefficients": {
+  "0": -0.3,
+  "1": -0.4,
+  "2": 0.6,
+  "3": -0.5,
+  "4": 0.6,
+  "5": -1.5,
+  "6": 0.6,
+  "7": 0.5,
+  "8": 0.7,
+  "12": -0.8,
+  "19": 0.3,
+  "22": -0.4
+ },
+ "notes": {
+  "0": "-: slightly larger, jaw widens more than the cheeks",
+  "1": "-: brow forward",
+  "2": "+: zygomatic width and brow projection, thinner lips",
+  "3": "-: wider jaw angle, narrower mouth",
+  "4": "+: brow ridge forward, wider jaw angle, thinner lips",
+  "5": "-: eyes closer, forehead and cheek proportions toward the long-face targets",
+  "6": "+: narrower overall (cheeks back under the spec width)",
+  "7": "+: longer face",
+  "8": "+: thinner lips, chin forward",
+  "12": "-: brow forward",
+  "19": "+: narrower cheeks, wider mouth",
+  "22": "-: brow forward, forehead set back"
+ },
+ "solve_targets": {
+  "$comment": "feature: [target, weight] in the ICT frame (author_public.py ict_features); ratios scaled from the wrapped head's measured response so the build lands on look-spec §1.2 (bizygomatic/IPD, lower-face index 0.88, jaw/cheek 0.86)",
+  "eye_menton_zyg": [0.78, 100],
+  "jaw_cheek": [0.875, 100],
+  "zyg_ipd": [2.41, 40],
+  "brow_over_cornea": [13.0, 0.4],
+  "forehead_behind_brow": [11.0, 0.3],
+  "lip_height": [15.0, 0.3],
+  "nose_proj": [16.5, 0.3],
+  "chin_proj": [-3.0, 0.3]
+ }
+}
