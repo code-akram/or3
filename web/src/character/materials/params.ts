@@ -205,6 +205,40 @@ export const DEFAULT_PARAMS = {
   shirt: {
     fuzzStrength: 0.12,
   },
+  /** T16 temporal AA (output.ts, temporal.ts; ?aa=traa|taau|msaa at load). */
+  aa: {
+    /** hashed card coverage: 0 = the alpha-to-coverage step at alphaTest (parity with the MSAA path),
+     * 1 = the map alpha (fractional strand coverage) */
+    hairCoverage: 0,
+    /** current-frame weight floor (stock TRAA 0.05) and on hair pixels */
+    minWeight: 0.05,
+    hairMinWeight: 0.05,
+    /** variance-clip gamma on hair pixels: still, and moving (screen motion >> motionPx px / frame) */
+    hairGamma: 1.25,
+    hairGammaMoving: 0.75,
+    hairMotionPx: 1,
+    /** frames accumulated per still capture (progressive, then the EMA floor) */
+    stillFrames: 24,
+    /** taau render scale (?scale= at load overrides) */
+    scale: 0.75,
+  },
+  /** T16 thin-lens depth of field (dof.ts; beauty views of a camera with an f-stop). */
+  dof: {
+    on: 1,
+    /** CoC radius (px at the output height) that maps to 1 in the CoC texture */
+    maxPx: 64,
+    /** correction of the measured bokeh radius against the thin-lens formula (1 = the formula) */
+    radiusScale: 1,
+    /** near-field 16-tap max pass radius (fraction of the gather radius) */
+    maxPassScale: 1,
+    /** 1 = the gathers at full resolution */
+    fullRes: 0,
+  },
+  /** T16 set bounce: set_bounce.json (Cycles, the alley without the character) as the environment of the
+   * hero rig; gain 1 = Cycles' radiance as rendered. */
+  bounce: {
+    gain: 1,
+  },
 };
 
 export type Params = typeof DEFAULT_PARAMS;
