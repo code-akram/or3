@@ -69,10 +69,10 @@ export const DEFAULT_PARAMS = {
     /** Warm multiple-scattering body (T9b): a fully wrapped diffuse in the scatter tint, the albedo's
      * chroma ^ scatterSat at luminance 1; the TRT lobe (spec2) takes the same tint. */
     scatter: 0.004,
-    scatterSat: 0.5,
+    scatterSat: 0.4,
     /** TT (T9b): backlit transmission in the scatter tint: gain x the R-like cone (ttExponent) x the
      * forward-scattering azimuth term ((1 - Lp.Vp) / 2)^ttPow. */
-    tt: 0.15,
+    tt: 0.13,
     ttPow: 2.0,
     ttExponent: 16,
     /** T9, calibrated on the closeup parity (bench/m1/hair_test.py --parts parity: hair-region mean
@@ -86,10 +86,11 @@ export const DEFAULT_PARAMS = {
     // T9: 0.19 / 0.07 with the per-card layer scale (front locks 0.4, under 0.7): hair region 0.98x the hero,
     // but per light (hair_test --parity-lights, viewer ?lights=) key 2.1x, fill 3.0x, rim 0.52x: ~80 % of the
     // hero hair's closeup luminance is the rim's (TT / TRT through the fibres), the engine's was the key's
-    // white R. T9b, fitted per light with the TT lobe: R 0.05, TRT 0.01 (now in the unit-luminance scatter
-    // tint), TT 0.15, scatter 0.004 (hair region 1.10x, p50 / p90 / p99 and r/g close to Cycles).
-    spec1: 0.05,
-    spec2: 0.01,
+    // white R. T9b, fitted per light with the TT lobe, then trimmed on the hero portrait (hair beside the
+    // face 1.5x the Cycles hero relative to the forehead at R 0.05 / TT 0.15): R 0.035, TRT 0.007 (in the
+    // unit-luminance scatter tint), TT 0.13, scatter 0.004: hair region 0.94x, portrait hair 1.27x / 0.95x.
+    spec1: 0.035,
+    spec2: 0.007,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,
@@ -129,8 +130,9 @@ export const DEFAULT_PARAMS = {
     albedoGain: 1.0,
     spec1: 0.01,
     spec2: 0.002,
-    // the brow body: T9 brow region p50 0.08 vs 0.16 (Cycles), near-black strokes over skin
-    scatter: 0.012,
+    // the brow body: T9 brow region p50 0.08 vs 0.16 (Cycles), near-black strokes over skin; 0.01 with
+    // the T9b brow under-layer and finer strands: brow region 1.03x, p50 0.135 vs 0.161
+    scatter: 0.01,
     tt: 0.0,
     alphaTest: 0.22,
   },
