@@ -16,10 +16,18 @@ import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, LTC_Uv, mat3, diffuseColor, float, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, LTC_Uv, mat3, diffuseColor, faceDirection, float, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
+
+/** The interpolated vertex normal in view space, turned to the side being shaded. three's
+ * normalViewGeometry is NOT flipped on back faces (normalView is, for double-sided materials), so
+ * mixing the two, as the skin's per-channel normal blur does, put the red channel's N.L (blur 0.7)
+ * on the far side of the surface on every back-facing fragment: red went dark while green and blue
+ * stayed lit, and the folded lower lids and alar bases rendered teal (t7b). Every lighting term
+ * that uses the geometric normal takes this one. */
+const geometryNormal: N = normalViewGeometry.mul(faceDirection);
 type Std = THREE.MeshStandardMaterial & Partial<THREE.MeshPhysicalMaterial>;
 interface DirectInput {
   lightDirection: N;
@@ -137,10 +145,10 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     const { lightDirection: L, lightColor, reflectedLight } = input as DirectInput;
     const P = this.P;
     const blur = P.u('skin.normalBlur');
-    const nl = (b: N) => mix(normalView, normalViewGeometry, b).normalize().dot(L);
+    const nl = (b: N) => mix(normalView, geometryNormal, b).normalize().dot(L);
     const nl3 = vec3(nl(blur.x), nl(blur.y), nl(blur.z));
     // screen-space curvature (1/m), normalised so a ~5 cm radius reads 1
-    const curv = fwidth(normalViewGeometry).length().div(fwidth(positionView).length().max(1e-5)).mul(0.05).clamp(0, 1);
+    const curv = fwidth(geometryNormal).length().div(fwidth(positionView).length().max(1e-5)).mul(0.05).clamp(0, 1);
     const g = P.u('skin.curvatureGain');
     const wrap = P.u('skin.wrap').mul(mix(float(1).sub(g), float(1).add(g), curv));
     const diff = diffuseRamp(P, nl3.add(wrap).div(wrap.add(1)).max(0));
@@ -324,7 +332,7 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
     // iris / sclera: plain physical
     super.direct(input as never, builder as never);
     // cornea: a sharp GGX lobe on the geometric (eyeball) normal
-    const Ng = normalViewGeometry;
+    const Ng = geometryNormal;
     const r = float(this.P.u('eye.corneaRoughness')).clamp(0.02, 1);
     const s = BRDF_GGX({ lightDirection: L, f0: vec3(0.04), f90: float(1), roughness: r, normalView: Ng });
     reflectedLight.directSpecular.addAssign(lightColor.mul(Ng.dot(L).clamp()).mul(s).mul(this.P.u('eye.corneaStrength')));
@@ -334,7 +342,7 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
     const i = input as RectInput;
     super.directRectArea(input as never, builder as never);
     // the cornea's reflection of an area light is the light's shape: LTC GGX (f0 0.04) on the eyeball normal
-    const Ng = normalViewGeometry;
+    const Ng = geometryNormal;
     const V = positionViewDirection;
     const r = float(this.P.u('eye.corneaRoughness')).clamp(0.02, 1);
     const t1 = i.ltc_1.sample(LTC_Uv({ N: Ng, V, roughness: r })).toVar();
