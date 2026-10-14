@@ -44,6 +44,8 @@ upper_over_iris_mm of the iris and the fissure is aperture_mm; the lateral canth
 canthal_tilt_deg. Parameters only; no person is the reference.
 """
 
+import os
+
 import numpy as np
 
 from . import head_forms, head_layer, head_shape
@@ -54,7 +56,7 @@ DEFAULTS = {
     "embedding": "$DATA/build/identity/base_embedding.npz",
     "base_spacing_mm": 3.5,
     "fields": {
-        "brow": {"mm": 0.5, "neg_mm": 2.5, "pos_mm": 9.0, "depth_mm": 14.0},
+        "brow": {"mm": -0.5, "neg_mm": 2.5, "pos_mm": 9.0, "depth_mm": 14.0},
         "socket": {"mm": -1.0, "lower_mm": -4.0, "lower_r_mm": 16.0, "edge_mm": 2.0},
         "zygoma": {"mm": 2.5, "neg_mm": 3.0, "pos_mm": 6.0, "depth_mm": 14.0},
         "submalar": {"mm": -1.8, "neg_mm": 6.0, "pos_mm": 4.0, "depth_mm": 16.0},
@@ -361,7 +363,13 @@ def eye_block(obj, co, ecfg, notes):
     lo_t = up_t - float(ecfg["aperture_mm"]) * MM
     tgt = np.radians(float(ecfg["canthal_tilt_deg"]))
     lash = W_lash(W)
+    clear = float(ecfg.get("clearance_mm", 0.0)) * MM      # base-mesh clearance (off: head_refine's is on)
+    side_of = co[:, 0] > fr.origin[0]
+    npush_total = 0
     for it in range(4):
+        if clear > 0:
+            out, npush = clear_globes(obj, out, skin, lash, side_of, eye_c, clear)
+            npush_total += npush
         ap = fissures(obj, out, W, eye_c)
         cfg, done = {}, True
         for key in ("l", "r"):
@@ -389,8 +397,28 @@ def eye_block(obj, co, ecfg, notes):
         out = head_forms.lids(obj, out, fr, cfg, eye_c)
         keep = ~(skin | lash)
         out[keep] = lid_in[keep]
+    rep["clearance_pushed_verts"] = npush_total
     notes["eyes"] = rep
     return out
+
+
+def clear_globes(obj, out, skin, lash, side_of, eye_c, clear):
+    """Push outer lid/lash vertices that sit inside the (smaller, forward) globe out to its
+    surface + clear, so the eyeball does not show through the lids where the lid rotation and the
+    canthus move folded them inward. The lid's inner (conjunctival) face is left alone: pushed out,
+    it would drape over the cornea. Returns (coords, count)."""
+    nrm = head_forms.vertex_normals(obj, out)
+    n = 0
+    for key, side in (("l", 1.0), ("r", -1.0)):
+        cn, Rn = eye_c[key]
+        d = out - cn
+        r = np.linalg.norm(d, axis=1)
+        outer = (nrm * d).sum(1) / np.maximum(r, 1e-9) > 0.3
+        m_ = (skin | lash) & (side_of == (side > 0)) & (r < Rn + clear) & (d[:, 1] < 0.004) & outer
+        out = out.copy()
+        out[m_] = cn + d[m_] / r[m_, None] * (Rn + clear)
+        n += int(m_.sum())
+    return out, n
 
 
 def W_lash(W):
@@ -435,6 +463,12 @@ def setup(b, obj, co):
 def apply(b):
     """head.edit_base hook (after head_layer): the 'head_sculpt' shape key."""
     if b.cfg["head"].get("sculpt") is None:
+        return None
+    emb_path = head_layer.resolve(_cfg(b.cfg["head"]["sculpt"])["embedding"])
+    if not os.path.exists(emb_path):
+        print(f"[head_sculpt] warning: no landmark embedding at {emb_path} (bench/m1/identity.sh makes it); "
+              "sculpt layer skipped", flush=True)
+        b.notes["head_sculpt"] = {"skipped": "no embedding"}
         return None
     obj = b.basemesh
     co = head_shape._mix_coords(obj)
@@ -487,8 +521,8 @@ def refine(b, body, lab, eyes_obj):
         # the centre on a proxy with a cornea), against the helper spheres seen at edit_base
         to_body = body.matrix_world.inverted() @ eyes_obj.matrix_world
         E = np.array([(to_body @ v.co)[:] for v in eyes_obj.data.vertices])
-        cl = head_forms.fit_sphere(E[E[:, 0] > 0])[0]
-        cr = head_forms.fit_sphere(E[E[:, 0] < 0])[0]
+        cl, rl = head_forms.fit_sphere(E[E[:, 0] > 0])
+        cr, rr = head_forms.fit_sphere(E[E[:, 0] < 0])
         gap = max(np.linalg.norm(cl - st["eye_c"][1.0][0]), np.linalg.norm(cr - st["eye_c"][-1.0][0]))
         if gap > 0.004:
             return {"skipped": f"eye centres moved {gap * 1000:.1f} mm since edit_base"}
@@ -500,6 +534,20 @@ def refine(b, body, lab, eyes_obj):
     soft = fields(st["anchors"], co, nrm, st["eye_c"], ears, c["fields"], w)
     d = (sharp - soft) * sel[:, None]
     d[hr.group_weights(body, "lips") > 0] = 0.0
-    hr.set_coords(body, co + d)
-    mag = np.linalg.norm(d, axis=1)
-    return {"max_mm": round(float(mag.max()) * 1000, 2), "verts_over_0.1mm": int((mag > 1e-4).sum())}
+    new = co + d
+    # clearance on the dense face against the fitted eyes: subdivision shrinks the lids onto (and
+    # into) a 12 mm globe; an outer-skin vertex inside the eye would show the eyeball through it
+    npush = 0
+    if eyes_obj is not None:
+        clear = float(c["eyes"].get("dense_clearance_mm", 0.3)) * MM if c["eyes"] else 0.0003
+        for cen, R in ((cl, rl), (cr, rr)):
+            v = new - cen
+            r = np.linalg.norm(v, axis=1)
+            outer = (nrm * v).sum(1) / np.maximum(r, 1e-9) > 0.3
+            m_ = sel & outer & (r < R + clear) & (v[:, 1] < 0.004)
+            new[m_] = cen + v[m_] / r[m_, None] * (R + clear)
+            npush += int(m_.sum())
+    hr.set_coords(body, new)
+    mag = np.linalg.norm(new - co, axis=1)
+    return {"max_mm": round(float(mag.max()) * 1000, 2), "verts_over_0.1mm": int((mag > 1e-4).sum()),
+            "eye_clearance_pushed": npush}

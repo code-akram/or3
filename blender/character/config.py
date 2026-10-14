@@ -45,8 +45,8 @@ DEFAULTS = {
         # coefficients, bench/m1/variants/public_identity.json). A private fan block replaces it.
         "identity": None,
         # Bony structure fields + eye block on the base mesh (head_sculpt.DEFAULTS; {} = defaults),
-        # crisp band added in head_refine. null disables.
-        "sculpt": None,
+        # crisp band added in head_refine; on for every build (the fan build shares it). null disables.
+        "sculpt": {},
         # Post-staging refinement (head_refine.py, skin_tex.py, eyes_hq.py):
         # dense face + hands, re-fitted planes, sculpt forms, re-packed UVs,
         # generated 4k skin. null disables the whole stage.

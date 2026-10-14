@@ -341,7 +341,8 @@ def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
                              the mid-pupil line) ahead of the cornea apex, along -Y (metres)
     forehead_behind_brow_mm  the profile 25 mm above that rim point, behind it (+ = behind)
     orbit_recess_mm          cornea apex behind the rim line (supraorbital rim to infraorbital rim,
-                             the most forward skin 8-14 mm below the eye centre), at apex height
+                             the most forward skin 10-16 mm below the eye centre, below the lower
+                             lid of a 12 mm globe), at apex height
     eye_aperture_mm          palpebral fissure height through the pupil, seen from the front
     canthal_tilt_deg         lateral canthus above the medial one (+ = up-tilted)
     gonial_angle_deg         soft-tissue jaw angle (gonial_from_border on the jaw_border contour)
@@ -359,7 +360,7 @@ def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
         rows["globe_radius_mm"].append(r * 1000)
         zs, ys = _profile(skin, float(c[0]), c[2] - 0.03, c[2] + 0.065)
         up = (zs > c[2] + 0.006) & (zs < c[2] + 0.025) & np.isfinite(ys)
-        lo = (zs > c[2] - 0.014) & (zs < c[2] - 0.008) & np.isfinite(ys)
+        lo = (zs > c[2] - 0.016) & (zs < c[2] - 0.010) & np.isfinite(ys)
         if up.any() and lo.any():
             iS = np.nonzero(up)[0][np.argmin(ys[up])]
             iI = np.nonzero(lo)[0][np.argmin(ys[lo])]
