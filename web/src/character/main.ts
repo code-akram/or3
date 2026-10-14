@@ -4,6 +4,10 @@
 //
 // URL: character.html?asset=<dir under /asset/>&view=front|three_quarter|profile|closeup|portrait
 //      &rig=neutral|hero&turntable=1&pose=rest|stand|arms_up|...&amount=0..1&gl=1&dpr=1&params=<json>
+//      &area=none|rims|all&post=0&gaze=0&scene=balls
+//      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
+//      the page renders every view itself and POSTs the frames + timings to the loopback server of
+//      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -195,6 +199,85 @@ interface BallsJson {
 
 /** ?scene=balls: the shader-ball parity scene (blender/lookdev_render.py --shader-balls): the balls GLB
  * with the character's materials, the look-dev studio lights, the Blender camera, Standard view. */
+/** Device capture (?capture=1&upload=1): the page drives the views itself on this device's GPU and
+ * POSTs each frame (raw RGBA8 rows; the server writes the PNG) and a summary to /upload/ on the
+ * serving origin (engine_shots.mjs --serve, which accepts only these names and writes only into its
+ * one run dir). Then a timed loop of the portrait at the canvas size for frame / GPU times. */
+async function deviceCapture(
+  api: { capture: (v: ViewName, r: RigName, w: number, h: number, pose?: string, post?: boolean) => Promise<{ b64: string; ms: number; draw_calls: number; triangles: number }>; stats: () => unknown; setView: (v: ViewName, r: RigName) => void },
+  renderer: THREE.WebGPURenderer,
+  drawCanvas: () => void,
+): Promise<void> {
+  const views = (q.get('views') ?? 'front,three_quarter,profile,closeup,portrait').split(',').filter((v) => (VIEWS as readonly string[]).includes(v)) as ViewName[];
+  const size = Number(q.get('size') ?? 1024);
+  const [pw, ph] = (q.get('portrait') ?? '1920x1080').split('x').map(Number) as [number, number];
+  const post = async (name: string, body: BodyInit, headers: Record<string, string> = {}) => {
+    const r = await fetch(`/upload/${name}`, { method: 'POST', body, headers });
+    if (!r.ok) throw new Error(`upload ${name}: ${r.status}`);
+  };
+  const shots: unknown[] = [];
+  state.phase = 'uploading';
+  for (const v of views) {
+    for (const withPost of v === 'portrait' ? [false, true] : [false]) {
+      const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
+      const rig: RigName = v === 'portrait' ? 'hero' : 'neutral';
+      const t = performance.now();
+      const r = await api.capture(v, rig, w, h, undefined, withPost);
+      const bin = Uint8Array.from(atob(r.b64), (ch) => ch.charCodeAt(0));
+      const name = `game_${v}${withPost ? '_beauty' : ''}.png`;
+      await post(name, bin, { 'x-width': String(w), 'x-height': String(h), 'content-type': 'application/octet-stream' });
+      shots.push({ view: v, rig, post: withPost, file: name, res: [w, h], render_ms: r.ms, wall_ms: Math.round(performance.now() - t), draw_calls: r.draw_calls, triangles: r.triangles });
+      hud.textContent = `uploaded ${name}`;
+    }
+  }
+  // timed loop: the portrait at the canvas size, frame time (rAF to rAF) and GPU time (timestamp query)
+  const nPerf = Number(q.get('perf') ?? 120);
+  const frameMs: number[] = [];
+  const gpuMs: number[] = [];
+  api.setView('portrait', 'hero');
+  let last = performance.now();
+  for (let i = 0; i < nPerf; i++) {
+    await new Promise((res) => requestAnimationFrame(res));
+    drawCanvas();
+    try {
+      const g = await renderer.resolveTimestampsAsync('render');
+      if (typeof g === 'number' && g > 0) gpuMs.push(g);
+    } catch {
+      /* no timestamp-query on this adapter */
+    }
+    const now = performance.now();
+    if (i > 0) frameMs.push(now - last);
+    last = now;
+  }
+  const pct = (a: number[], p: number) => (a.length ? +[...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(p * a.length))]!.toFixed(2) : null);
+  let adapter: unknown = null;
+  try {
+    const a = await (navigator as unknown as { gpu?: { requestAdapter: () => Promise<{ info: Record<string, string> } | null> } }).gpu?.requestAdapter();
+    adapter = a ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null;
+  } catch {
+    adapter = null;
+  }
+  const summary = {
+    ok: true,
+    device_capture: true,
+    when: new Date().toISOString(),
+    user_agent: navigator.userAgent,
+    backend: state.backend,
+    adapter,
+    dpr: devicePixelRatio,
+    load: state.load,
+    verify: state.verify,
+    warnings: state.warnings,
+    facial_atlas: state.facialAtlas,
+    stats: api.stats(),
+    shots,
+    perf: { frames: frameMs.length, canvas: [canvas.width, canvas.height], frame_ms_p50: pct(frameMs, 0.5), frame_ms_p95: pct(frameMs, 0.95), gpu_ms_p50: pct(gpuMs, 0.5), gpu_ms_p95: pct(gpuMs, 0.95), gpu_samples: gpuMs.length },
+  };
+  await post('game_shots.json', JSON.stringify(summary, null, 1), { 'content-type': 'application/json' });
+  state.phase = 'uploaded';
+  hud.textContent = `done: ${shots.length} frames uploaded; frame p50 ${summary.perf.frame_ms_p50} ms, GPU p50 ${summary.perf.gpu_ms_p50} ms`;
+}
+
 async function mainBalls(): Promise<void> {
   const base = assetBase();
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL: q.get('gl') === '1', powerPreference: 'high-performance' });
@@ -261,7 +344,8 @@ async function main(): Promise<void> {
   const t0 = performance.now();
   const base = assetBase();
   const forceWebGL = q.get('gl') === '1';
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance' });
+  const upload = q.get('capture') === '1' && q.get('upload') === '1';
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload });
   await renderer.init();
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
@@ -586,6 +670,7 @@ async function main(): Promise<void> {
     firstFrameMs = performance.now() - t;
     state.ready = true;
     hud.textContent = 'capture mode';
+    if (upload) await deviceCapture(api, renderer, () => output.render(scene, camera, canvas.width, canvas.height, null));
     return;
   }
   renderer.setAnimationLoop(frame);

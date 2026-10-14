@@ -7,6 +7,11 @@
 //        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8791] [--timeout 600]
 //        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_] [--pose arms_up]
 //        [--balls auto|on|off]  shader-ball parity frame (game_balls.png) when RUN_DIR has shader_balls.json
+//   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8791] [--selftest]
+//        Device capture (the M4 Air): serve only, no browser. Open the printed URL on the device (through
+//        `ssh -N -L 8791:127.0.0.1:8791 <this host>`); the page renders every view on its own GPU and POSTs
+//        the frames and a summary back; the server writes them into RUN_DIR (whitelisted names only) and
+//        exits after game_shots.json. --selftest drives the same URL from local headless Chromium.
 //
 // Containment: the server exposes only web/dist-viewer and RUN_DIR (under /asset/), bound to 127.0.0.1, and
 // every output file goes into RUN_DIR. For a fan build RUN_DIR is the private run dir, so nothing
@@ -103,7 +108,46 @@ function send(res, code) {
   res.writeHead(code, { ...ISOLATION, 'content-type': 'text/plain' });
   res.end(String(code));
 }
+// ------------------------------------------------------------------ device upload (--serve)
+const serveMode = argv.includes('--serve');
+const UPLOAD_OK = /^game_(front|three_quarter|profile|closeup|portrait|portrait_beauty)\.png$|^game_shots\.json$/;
+const MAX_UPLOAD = 4096 * 4096 * 4;
+let uploadDone = null;
+const uploadFinished = new Promise((r) => (uploadDone = r));
+const uploaded = [];
+
+async function receive(req, res) {
+  const url = new URL(req.url, 'http://local');
+  const name = decodeURIComponent(url.pathname.slice('/upload/'.length));
+  if (!serveMode || !UPLOAD_OK.test(name)) return send(res, 403);
+  const chunks = [];
+  let n = 0;
+  for await (const c of req) {
+    n += c.length;
+    if (n > MAX_UPLOAD) return send(res, 413);
+    chunks.push(c);
+  }
+  const body = Buffer.concat(chunks);
+  if (name.endsWith('.png')) {
+    const w = Number(req.headers['x-width']);
+    const h = Number(req.headers['x-height']);
+    if (!(w > 0 && h > 0 && w <= 4096 && h <= 4096) || body.length !== w * h * 4) return send(res, 400);
+    await writeFile(join(build, name), png(w, h, body));
+  } else {
+    const j = JSON.parse(body.toString('utf8'));
+    j.build = build;
+    j.received = new Date().toISOString();
+    j.uploaded = [...uploaded];
+    await writeFile(join(build, name), JSON.stringify(j, null, 1));
+  }
+  uploaded.push(name);
+  console.error(`[engine_shots] received ${name} (${body.length} bytes)`);
+  send(res, 200);
+  if (name === 'game_shots.json') uploadDone(name);
+}
+
 const server = createServer((req, res) => {
+  if (req.method === 'POST' && req.url.startsWith('/upload/')) return void receive(req, res).catch(() => send(res, 500));
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405);
   serve(req, res).catch(() => send(res, 500));
 });
@@ -214,6 +258,28 @@ async function run(backend) {
   } finally {
     await browser.close();
   }
+}
+
+if (serveMode) {
+  const q = new URLSearchParams({ asset: '.', capture: '1', upload: '1', ui: '0', dpr: '1' });
+  for (const [k, v] of new URLSearchParams(extraQuery)) q.set(k, v);
+  const url = `http://127.0.0.1:${port}/character.html?${q}`;
+  console.log(`[engine_shots] serving ${build} on 127.0.0.1:${port}; open on the device:\n  ${url}`);
+  if (argv.includes('--selftest')) {
+    // stands in for the Air: the same URL in local headless Chromium (SwiftShader), short perf loop
+    const browser = await chromium.launch({ headless: true, channel: 'chromium', args: ARGS });
+    const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
+    page.on('pageerror', (e) => console.error(`pageerror: ${e.message}`.slice(0, 300)));
+    page.setDefaultTimeout(timeoutS * 1000);
+    await page.goto(`${url}&perf=3`, { waitUntil: 'load' });
+    await Promise.race([uploadFinished, new Promise((_, rej) => setTimeout(() => rej(new Error('selftest timeout')), timeoutS * 1000))]);
+    await browser.close();
+  } else {
+    await uploadFinished;
+  }
+  server.close();
+  console.log(JSON.stringify({ ok: true, device_capture: true, uploaded }, null, 1));
+  process.exit(0);
 }
 
 const result = { build, when: new Date().toISOString(), attempts: [] };
