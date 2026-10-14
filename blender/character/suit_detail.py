@@ -37,10 +37,10 @@ DEFAULTS = {
     "flap": {"thick_mm": 2.6, "lift_mm": 0.6, "corner_r_cm": 1.0, "h_cm": 0.5, "gap_cm": 0.08},
     "jet": {"thick_mm": 1.6, "lift_mm": 0.4},
     "welt": {"thick_mm": 2.8, "lift_mm": 0.5, "h_cm": 0.5},
-    "vent": {"height_cm": 22.0, "sleeve_cm": 10.5, "step_mm": 2.5, "band_cm": 1.5, "fade_cm": 3.0},
+    "vent": {"height_cm": 22.0, "sleeve_cm": 10.5, "step_mm": 3.5, "band_cm": 1.2, "fade_cm": 3.0},
     "button": {"front_diam_cm": 2.0, "front_thick_mm": 3.6, "cuff_thick_mm": 3.0, "stand_mm": 1.5,
                "seg": 32, "hole_r_frac": 0.05, "hole_at_frac": 0.12, "hole_depth_mm": 1.2},
-    "buttonhole": {"cord_r_mm": 0.75, "eye_r_mm": 1.6, "gap_mm": 0.6},
+    "buttonhole": {"cord_r_mm": 0.9, "eye_r_mm": 1.6, "gap_mm": 0.8},
 }
 
 
@@ -324,12 +324,12 @@ def button(c, n, u, diam_m, thick_m, o, seg=None):
     ha = o["hole_at_frac"] * diam_m
     ang = np.linspace(0, 2 * np.pi, seg, endpoint=False)
     outer = np.c_[np.cos(ang), np.sin(ang)] * Rc
-    hs = 10
+    hs = 12
     hang = np.linspace(0, 2 * np.pi, hs, endpoint=False)
     hc = [np.array((sx * ha, sy * ha)) for sx, sy in ((1, 1), (-1, 1), (-1, -1), (1, -1))]
     holes = [c2 + hr * np.c_[np.cos(hang), np.sin(hang)] for c2 in hc]
     sc = 1000.0                                     # triangulate in mm
-    V2, T, bids = cdt_patch(outer * sc, max(Rc * sc / 3, 0.4), [h_ * sc for h_ in holes])
+    V2, T, bids = cdt_patch(outer * sc, max(Rc * sc / 6, 0.3), [h_ * sc for h_ in holes])
     V2 = V2 / sc
     r = np.linalg.norm(V2, axis=1) / Rc
     rim_in = 0.7

@@ -1456,12 +1456,15 @@ def push_out(X, T, L, clear, iters):
         np.add.at(Nv, T[:, k], fn)
     Nv /= np.maximum(np.linalg.norm(Nv, axis=1, keepdims=True), 1e-12)
     for i, p in enumerate(X):
-        if L.signed(p)[0] >= 0:
-            continue
+        if L.signed(p)[0] >= 0 or not L.covered(p):
+            continue            # outside, or a misreading beside a garment's edge (no ray hit)
+        p0 = p
         for _ in range(20):
             p = p + Nv[i] * 0.001
             if L.signed(p)[0] >= clear:
                 break
+        else:
+            p = p0              # 2 cm out and still 'inside': not a crevice; leave it
         X[i] = p
         moved_any[i] = True
     return X, int(moved_any.sum())
@@ -1648,6 +1651,9 @@ def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
     lay = layer_sets(C)
     if lay is not None:
         S.layers = [(lay[0], lay[1], P["layer_gap_m"])]
+    # the button pair: the left front's button point stays in front of the right's (a plain
+    # distance constraint let the right front come through: run t13b-d2, 13.5 mm)
+    S.layer_force = [(np.array([bl]), np.array([br]), P["button_gap_m"])]
     # the placed garment, each sewn group at its mean (the reference for holds and self-contact)
     wm0, nw0 = weld_map(n0, C["sew"])
     Xm = np.zeros((nw0, 3))
@@ -1707,6 +1713,7 @@ def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
     S2.sdf = sdf
     if lay is not None:
         S2.layers = [(np.unique(wm[lay[0]]), np.unique(wm[lay[1]]), P["layer_gap_m"])]
+    S2.layer_force = [(np.array([int(wm[bl])]), np.array([int(wm[br])]), P["button_gap_m"])]
     if P["self_r"] > 0:
         skip2 = np.zeros(nw, bool)
         skip2[wm[skip0]] = True
