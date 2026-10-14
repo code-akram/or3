@@ -219,6 +219,7 @@ interface HairNodes {
   tangent: N; // view-space fibre tangent
   jitter: N; // per-strand shift jitter in [-1, 1]
   rough: N; // per-strand roughness (ORM G): scales the lobe exponents around hair.roughRef
+  specScale: N; // per-card specular scale (UV1 u: the baker's layer_spec), 1 when absent
 }
 
 class HairLightingModel extends THREE.PhysicalLightingModel {
@@ -255,7 +256,7 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const s2 = kk(P.u('hair.shift2'), P.u('hair.exponent2'));
     const atten = nl.mul(0.75).add(0.25).clamp(0, 1);
     const tint = diffuseColor.rgb.max(1e-4).sqrt();
-    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${this.prefix}.spec1`)).add(tint.mul(s2).mul(P.u(`${this.prefix}.spec2`)));
+    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${this.prefix}.spec1`)).add(tint.mul(s2).mul(P.u(`${this.prefix}.spec2`))).mul(this.h.specScale);
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
   }
 
@@ -305,6 +306,9 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     const c = mapRGBA(src);
     let col = c.rgb;
     if (this.vertexColors) col = col.mul(vertexColor().rgb);
+    // scalp cards: UV1 u carries the card layer's specular scale (hair_groom_cards layer_spec; T9 builds, which
+    // are the ones with the strand maps)
+    const specScale: N = opts.prefix === 'hair' && this.anisoMap ? uv(1).x : float(1);
     let ao: N = float(1);
     let tUV: N = vec2(0, 1); // along +v (root -> tip)
     let id: N = hash(uv().mul(4096).floor().x.add(uv().mul(4096).floor().y.mul(4096)));
@@ -324,7 +328,7 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     this.vertexColors = false; // folded into colorNode above
     // flow (UV space) through the exported tangent frame (glTF: +Y = the image's up = +v in Blender)
     const T = tangentView.mul(tUV.x).add(bitangentView.mul(tUV.y)).normalize().mul(P.u('hair.tangentSign'));
-    this.nodes = { tangent: T, jitter: id.mul(2).sub(1), rough };
+    this.nodes = { tangent: T, jitter: id.mul(2).sub(1), rough, specScale };
     this.normalNode = null; // shade the card as a fibre bundle: the smooth proxy normal from the GLB
     this.roughnessNode = rough;
     this.metalnessNode = float(0);

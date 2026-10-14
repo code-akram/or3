@@ -91,6 +91,9 @@ CARDS = {
     "ear_test": "box",
     "gap_m": 0.0012,                 # card vertices kept this far off the skin / suit (after GN)
     "layer_shade": {"under": 0.7, "mid": 0.88, "top": 1.0, "front": 0.85, "fly": 0.95, "hairline": 1.0},
+    # specular scale per layer, in UV1 u ("strand"; the viewer multiplies both lobes by it): the
+    # front locks are flat, unoccluded cards facing the camera and read as white ribbons at full
+    "layer_spec": {"front": 0.4, "under": 0.7},
     "lock_sigma": 0.08,
     "top_lift": {"pct": 80, "max_m": 0.012},
     "material": {"roughness": 0.55, "specular": 0.25},
@@ -282,7 +285,7 @@ def cap_mesh(b, frame, ccfg, g):
     sector_l = bm.verts.layers.int.new("sector")
     for f in bm.faces:
         for loop in f.loops:
-            loop[uv2].uv = (0.5, 0.0)
+            loop[uv2].uv = (1.0, 0.0)  # UV1 u: specular scale (cards: layer_spec)
     dl = bm.verts.layers.deform.verify()
     weights = {obj.vertex_groups["head"].index: 1.0}
     return obj, bm, uv, uv2, col, hang_l, sector_l, dl, weights
@@ -743,8 +746,9 @@ def build(b, frame, ccfg, g):
         hang_pt = path[int(np.argmax(hs > 0))] if (hs > 0).any() else path[-1]
         sector = hair_springs.sector_id(frame, hang_pt, 1 if p.get("kind") == "front" else 0)
         x = float(np.clip(shade[layer] * rng.lognormal(0, cfg["lock_sigma"]), 0.2, 1.0))
+        sp = float(cfg["layer_spec"].get(layer, 1.0))
 
-        def on_vert(v, t, hs=hs, nrow=nrow, sector=sector, x=x):
+        def on_vert(v, t, hs=hs, nrow=nrow, sector=sector, x=x, sp=sp):
             v[col] = (x, x, x, 1.0)
             v[hang_l] = float(hs[min(int(round(t * nrow)), nrow)])
             v[sector_l] = sector
@@ -754,7 +758,7 @@ def build(b, frame, ccfg, g):
             x0, x1 = x1, x0
         use[cell] += 1
         return hair_mesh.card(bm, uv, uv2, dl, weights, path, lambda k: normals[k], halfwidth,
-                              (float(rng.random()), 1.0 if path[0].x >= c.x else -1.0),
+                              (sp, 1.0 if path[0].x >= c.x else -1.0),
                               curve=cfg["curve"] if layer not in ("fly", "hairline") else 0.1, mat_index=1,
                               v_map=lambda t, y0=y0, y1=y1: y0 + (y1 - y0) * t,
                               u_range=(x0, x1), on_vert=on_vert)
