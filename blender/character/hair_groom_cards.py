@@ -111,7 +111,7 @@ CARDS = {
     # strands' `length_pct`, lifted `lift_m` over the strands' mean, twisted `twist_deg` (random sign)
     # root to tip. Cells: `cells` representative groups (by length) baked `cell_w` px wide in `cell_rows`
     # rows of the atlas height.
-    "outer": {"enabled": True, "group": 10, "per_clump": 3, "outer_pct": 45, "max_halfwidth_m": 0.004,
+    "outer": {"enabled": True, "group": 10, "per_clump": 2, "outer_pct": 45, "max_halfwidth_m": 0.004,
               "width_pct": 90, "pad_m": 0.0008, "length_pct": 88, "fade": 0.12, "lift_m": 0.0012,
               "twist_deg": [8.0, 50.0], "max_segments": 12, "curve": 0.25, "start": 1,
               "cells": 16, "cell_w": 32, "cell_rows": 2, "strand_px": 0.9},
@@ -122,7 +122,7 @@ CARDS = {
     # transmittance through the groom's strand density along +-x, +-y, +-z (glTF axes), voxels of
     # voxel_m, optical depth = strand projected area per voxel area x `k`; stored as its L1 fit
     # (mean, gradient) in two extra UV sets (TEXCOORD_2 = (mean, gx), TEXCOORD_3 = (gy, gz))
-    "dir_occlusion": {"enabled": True, "voxel_m": 0.004, "k": 1.0, "strand_d_m": 0.00008},
+    "dir_occlusion": {"enabled": True, "voxel_m": 0.004, "k": 0.15, "strand_d_m": 0.00008},
     # T20: under cards clear of the neck: in the hanging part the centreline rides the members'
     # `pct` percentile along the outward (radial) normal, not their mean (a lock wrapping the neck
     # averaged to a line behind it, hidden by the neck in profile where the strands pass in front)
@@ -141,6 +141,11 @@ CARDS = {
                  "min_strands": 4, "segments": 4, "halfwidth_m": [0.0018, 0.004], "lift_m": 0.0006,
                  "near_m": [0.006, 0.022], "root_dark": 0.05, "widen": 0.35, "cell_px": 0.6,
                  "root_skip": 1},       # T15: the cards start this many groom points behind the root
+    # T20 baby hairs: `count` one-strand cards (the fly-away one-strand cells) on single hairline edge
+    # strands spread at least `spacing_m` apart, over their first length_m (random in the range), the tip
+    # lifted lift_m off the scalp: fine, sparse hairs that break the hairline edge at 0.5 mm/px
+    "baby": {"count": 90, "spacing_m": 0.003, "length_m": [0.008, 0.018], "halfwidth_m": 0.0006,
+             "lift_m": 0.0015, "segments": 4},
     "ear_margin_m": 0.004, "ear_lateral_m": 0.035,
     "ear_test": "box",
     "gap_m": 0.0012,                 # card vertices kept this far off the skin / suit (after GN)
@@ -927,7 +932,7 @@ def build(b, frame, ccfg, g):
     # T20: every card draws its random choices (cell variant, flip, shade) from its own generator, keyed
     # by its clump / group / strand id, so a change to one layer's parameters does not reshuffle the
     # others (T15: +-0.02 IoU between builds came from the shared stream as much as from regrooms)
-    LAYER_CODE = {"under": 1, "front": 2, "sec": 3, "hairline": 4, "fly": 5, "outer": 6, "flyone": 7}
+    LAYER_CODE = {"under": 1, "front": 2, "sec": 3, "hairline": 4, "fly": 5, "outer": 6, "flyone": 7, "baby": 8}
 
     def crng(layer, *uid):
         return np.random.default_rng([acfg["seed"], LAYER_CODE[layer], *[int(u) for u in uid]])
@@ -1120,6 +1125,27 @@ def build(b, frame, ccfg, g):
         cell = f"hairline{int(r.integers(len(hl_reps)))}" if hl_reps else lock_names[0]
         count("hairline", add_card(p, cell, "hairline", r, path_from=int(hc.get("root_skip", 0)), k_end=k3,
                                    flip=bool(r.random() < 0.5)))
+    # T20 baby hairs: single edge strands, farthest-point spread, on the one-strand cells
+    bc = cfg.get("baby", {})
+    if bc.get("count", 0) and fly1_names and len(eidx):
+        R = E[eidx, 0]
+        pick = [int(np.argmin(droot[eidx]))]
+        dmin = np.linalg.norm(R - R[pick[0]], axis=1)
+        while len(pick) < bc["count"] and dmin.max() > bc["spacing_m"]:
+            i = int(np.argmax(dmin))
+            pick.append(i)
+            dmin = np.minimum(dmin, np.linalg.norm(R - R[i], axis=1))
+        for i in pick:
+            s_ = int(eidx[i])
+            r = crng("baby", s_)
+            kb = k_of_len(E[s_:s_ + 1], float(r.uniform(*bc["length_m"])))
+            T_, Nn, B, _ = frame_along(frame, E[s_], cloth_gap, 0.02)
+            t_ = np.clip(np.arange(m) / max(kb - 1, 1), 0.0, 1.0)
+            p = {"C": E[s_] + Nn * (bc["lift_m"] * t_ ** 1.5)[:, None], "N": Nn, "B": B,
+                 "hw": np.full(m, bc["halfwidth_m"]), "hang": np.zeros(m), "kind": "baby"}
+            cell = fly1_names[int(r.integers(len(fly1_names)))]
+            count("baby", add_card(p, cell, "flyone", r, k_end=kb, halfwidth_m=bc["halfwidth_m"],
+                                   max_seg=bc["segments"], flip=bool(r.random() < 0.5)))
     # flyaways along the stray hairs (kind 3): the longest `count` on multi-strand cells, the next
     # `single` on one-strand cells (T20)
     fc = cfg["flyaways"]
