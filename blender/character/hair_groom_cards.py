@@ -66,7 +66,7 @@ CARDS = {
               # (hairline_cells x 1024 px tall)
               "fly_cells": 2, "hairline_cells": 4,
               "strand_px": 1.15, "strand_scale": 1.0,     # strand half-width in final px at the root
-              "tip_px": 0.45, "tip_fade": 0.12, "tip_alpha": 0.15,
+              "tip_px": 0.45, "tip_fade": 0.12, "tip_alpha": 0.3,     # T15: tip_alpha 0.15
               "max_strands": 420, "under_max_strands": 700,
               "flow_jitter_deg": 6.0, "seed": 5},
     # Per-strand colour from the groom's melanin / redness (hair_strand_raster.chiang_color),
@@ -76,16 +76,17 @@ CARDS = {
     # radial_roughness None = the groom shader's own values (hair.groom.shader; T12: random
     # 0.08, tip_light 0), so the cards follow the hero colour model instead of a copy of it.
     "albedo": {"radial_roughness": None, "path": 0.68, "gain": 1.0, "random_color": None,
-               "root_dark": None, "tip_light": None, "value_sigma": 0.08},
+               "root_dark": None, "tip_light": None, "value_sigma": 0.08,
+               "front_path": 0.45},          # T15: the front falls (kind 2) at their own path (chroma)
     "roughness": {"base": 0.55, "jitter": 0.12},
     # baked occlusion (ORM R): density x depth only; the root darkening is the viewer's (ORM A, hair.rootAO)
     "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.35},
     # T15: mid / top / under cards run to the `pct` (`under_pct`) percentile of their strands' lengths,
     # not their mean (clump_profile `length`); null = T9
-    "length": {"pct": 80, "under_pct": 70, "fade": 0.12},
+    "length": {"pct": 92, "under_pct": 85, "fade": 0.1},
     "segment_m": 0.024, "min_segments": 4, "max_segments": 16,
     "min_halfwidth_m": 0.0015, "width_pct": 90, "width_pad_m": 0.0015,
-    "tip_width": 0.5, "curve": 0.3, "root_w": [0.3, 0.85], "root_w_m": [0.005, 0.025],
+    "tip_width": 0.7, "curve": 0.3, "root_w": [0.3, 0.85], "root_w_m": [0.005, 0.025],
     "under": {"split": 2, "inset_m": 0.004, "width": 1.15, "max_halfwidth_m": 0.022, "start": 0.15,
               "max_segments": 14},
     # T15: fewer, thicker fly-aways (T9: 60 cards 1.2 mm wide with 3 strands each, too thin to read at
@@ -105,7 +106,8 @@ CARDS = {
     # finer strands in their cells (`cell_px` x the lock strand width; T9 0.8)
     "hairline": {"spacing_m": 0.0065, "radius_m": 0.004, "band_m": 0.009, "length_m": 0.03,
                  "min_strands": 4, "segments": 4, "halfwidth_m": [0.0018, 0.004], "lift_m": 0.0006,
-                 "near_m": [0.006, 0.022], "root_dark": 0.05, "widen": 0.35, "cell_px": 0.6},
+                 "near_m": [0.006, 0.022], "root_dark": 0.05, "widen": 0.35, "cell_px": 0.6,
+                 "root_skip": 1},       # T15: the cards start this many groom points behind the root
     "ear_margin_m": 0.004, "ear_lateral_m": 0.035,
     "ear_test": "box",
     "gap_m": 0.0012,                 # card vertices kept this far off the skin / suit (after GN)
@@ -122,8 +124,8 @@ CARDS = {
     # ramps over `core` (T9 0.3-0.75) of the normalised density, and each projected strand's alpha over
     # `edge_alpha` of the density at its root (null = 1, T9), so the cap thins out where the hero does
     "cap": {"size": 1024, "ss": 2, "data_scale": 2, "strand_px": 0.9, "max_dist_m": 0.03,
-            "strands": 24000, "core": [0.45, 0.9], "density_r_m": 0.004, "shade": 0.8,
-            "skin_mm": 0.0, "edge_alpha": [0.1, 0.6]},
+            "strands": 24000, "core": [0.55, 0.95], "density_r_m": 0.004, "shade": 0.8,
+            "skin_mm": 0.0, "edge_alpha": [0.0, 0.75]},
 }
 
 smoothstep = hair_clumps.smoothstep
@@ -629,6 +631,14 @@ def build(b, frame, ccfg, g):
     vgrid = np.linspace(0, 1, m)[None, :].repeat(n, 0)
     crng = np.random.default_rng(acfg["seed"] + 1)
     cols = strand_colors(mel[:n], red[:n], cfg["albedo"], crng, vgrid)      # (n, m, 3)
+    fp = cfg["albedo"].get("front_path")
+    if fp is not None and (kind == 2).any():
+        # T15: the front falls' own path. Their melanin is 0.95 (no grey), and Chiang's single-scatter
+        # colour gets redder as it gets darker, so the viewer's unit-luminance scatter tint (the
+        # albedo's chroma) made the falls the warmest hair in the engine (r/g 1.29x the hero's there)
+        ff = np.flatnonzero(kind == 2)
+        cols[ff] = strand_colors(mel[ff], red[ff], dict(cfg["albedo"], path=fp),
+                                 np.random.default_rng(acfg["seed"] + 6), vgrid[ff])
     sids = np.random.default_rng(acfg["seed"] + 2).random(n)
     grey = mel[:n] < 0.6
 
@@ -952,7 +962,8 @@ def build(b, frame, ccfg, g):
         p.update(members=gm, kind="hairline", hang=np.zeros(m))
         k3 = k_of_len(E[gm], hc["length_m"])
         cell = f"hairline{int(rng.integers(len(hl_reps)))}" if hl_reps else lock_names[0]
-        count("hairline", add_card(p, cell, "hairline", k_end=k3, flip=bool(rng.random() < 0.5)))
+        count("hairline", add_card(p, cell, "hairline", path_from=int(hc.get("root_skip", 0)), k_end=k3,
+                                   flip=bool(rng.random() < 0.5)))
     # flyaways along the stray hairs (kind 3)
     fc = cfg["flyaways"]
     nx = int((g["kind"] == 3).sum())
