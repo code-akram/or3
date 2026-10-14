@@ -256,7 +256,7 @@ def bake_atlas(cells, acfg, base_hex):
         val = np.where(cov > 0, cell["val"], 1.0)
         lin = base[None, None, :] * (val * ao)[..., None]
         # Store sRGB (the image is tagged sRGB).
-        srgb = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.power(np.maximum(lin, 0), 1 / 2.4) - 0.055)
+        srgb = hair_mesh.linear_to_srgb(lin)
         sl = (slice(y0, y0 + h), slice(x0, x0 + w))
         alb[sl + (slice(0, 3),)] = srgb
         alb[sl + (3,)] = cov
@@ -814,7 +814,7 @@ def bake_cap_texture(frame, g, E, ccfg, ccap):
     alpha[(rows < lo - 0.01) | (rows > hi + 0.03)] = 0.0
     base = np.array([hair_mesh.srgb_to_linear(x) for x in hair_mesh.hex_rgb(tc["color"])])
     lin = base[None, None] * np.where(c > 0, vals, 1.0)[..., None]
-    srgb = np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.power(np.maximum(lin, 0), 1 / 2.4) - 0.055)
+    srgb = hair_mesh.linear_to_srgb(lin)
     rgba = np.concatenate([srgb, alpha[..., None]], axis=2).astype(np.float32)
     img = bpy.data.images.get("hair_cap") or bpy.data.images.new("hair_cap", w, h, alpha=True)
     img.pixels.foreach_set(rgba.ravel())

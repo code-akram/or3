@@ -300,9 +300,12 @@ DEFAULTS = {
                        "canopy_radius_m": 0.005, "canopy_pct": 80, "canopy_floor_m": 0.0006,
                        "shade": {"root": 0.8, "full_at": 0.8},
                        # baked hairs are about 3x real width at this resolution: draw a
-                       # share, lighter, and keep the stacked layers from self-shadowing
-                       "albedo_gain": 1.6, "saturation": 0.8, "cast_shadow": False,
-                       # grey strands (linear luminance over grey_lum) lifted less: silver, not white
+                       # share, and keep the stacked layers from self-shadowing.
+                       # Gains 1: the atlas carries the swatch colours. (1.6 / 0.8 and
+                       # grey_gain made up for the atlas being stored linear in an sRGB
+                       # image, ~10x too dark; fixed in beard_bake.make_image.) Light
+                       # strands (linear luminance over grey_lum) can take their own gain.
+                       "albedo_gain": 1.0, "saturation": 1.0, "cast_shadow": False,
                        "grey_gain": 1.0, "grey_lum": [0.12, 0.22],
                        "stubble_keep": 0.35, "beard_keep": 0.33,
                        "uv": {"max_angle_deg": 120, "pad": 0.02, "origin_back_m": 0.0,
@@ -369,7 +372,8 @@ DEFAULTS = {
                        "radius_scale": 1.0, "min_radius_px": 0.5,
                        "canopy_radius_m": 0.003, "canopy_pct": 85, "canopy_floor_m": 0.0005,
                        "shade": {"root": 0.7, "full_at": 0.7},
-                       "albedo_gain": 1.8, "saturation": 0.85, "cast_shadow": False, "strand_keep": 0.37,
+                       # gain 1: the swatch colours (1.8 / 0.85 made up for the linear-in-sRGB atlas)
+                       "albedo_gain": 1.0, "saturation": 1.0, "cast_shadow": False, "strand_keep": 0.37,
                        "roughness": 0.6, "specular": 0.25},
             "cards": {"per_side": 20, "spacing_m": 0.0025, "clump_radius_m": 0.0015,
                       "min_members": 3, "min_len_m": 0.004, "segments": 2,

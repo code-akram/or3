@@ -551,6 +551,12 @@ def apply(o, parts, mats, marks, folds=None):
               ("leather", [parts.get("shoes")], T["shoe_px"], "leather", mats["leather"])]
     if vest:   # the waistcoat's own cloth (suit.DEFAULTS materials.vest)
         groups.insert(2, ("vest", [parts["waistcoat"]], T.get("vest_px", T["wool_px"]), "wool", vest))
+    # Groups without their own material start from an unwired copy of the
+    # wool: copied after wool_a is wired, they would carry the jacket's maps,
+    # and its glTF Material Output (occlusion = the jacket's ORM) stays linked
+    # beside the new one, so the exporter packed the jacket's AO into the
+    # trousers' ORM.
+    wool_bare = mats["wool"].copy()
     out = {}
     for gname, objs, px, weave, mat in groups:
         objs = [x for x in objs if x is not None]
@@ -568,8 +574,7 @@ def apply(o, parts, mats, marks, folds=None):
         fold_info = add_folds(H, objs, folds, layout, side)
         img = H.normal_image(f"suit_{gname}_normal", slope=T["slope"])
         if mat is None:
-            base = mats["wool"]
-            mat = base.copy()
+            mat = wool_bare.copy()
             mat.name = f"suit_{gname}"
         attach_normal_map(mat, img, strength=1.0)
         mat["suit_atlas_side_m"] = side   # suit_hero: metric UVs for the hero-only detail
@@ -593,4 +598,5 @@ def apply(o, parts, mats, marks, folds=None):
         out[gname] = {"px": px, "atlas_side_m": round(side, 4), "panels": len(layout),
                       "mm_per_px": round(1000 * side / px, 3), "marks": sum(len(v) for v in flat.values()),
                       "folds": fold_info, "surface": surf}
+    bpy.data.materials.remove(wool_bare)
     return out
