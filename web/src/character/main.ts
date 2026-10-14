@@ -511,11 +511,10 @@ async function main(): Promise<void> {
   const scene = new THREE.Scene();
   const model = gltf.scene;
   scene.add(model);
-  // T16 set bounce: the environment of the hero beauty frame (bounce.ts); off (intensity 0) elsewhere
-  if (bounceJson) {
-    scene.environment = bounceTexture(bounceJson);
-    scene.environmentIntensity = 0;
-  }
+  // T16 set bounce: the environment of the hero beauty frame (bounce.ts), on the character's materials
+  // only (as envMap: scene.environment also lit the stage floor, a teal plane behind the head that the
+  // Cycles beauty does not have); intensity 0 outside the beauty frame
+  const bounceTex = bounceJson && q.get('bounce') !== '0' ? bounceTexture(bounceJson) : null;
 
   // bind pose from the inverse bind matrices (the node rest transforms should agree)
   let skinned: THREE.SkinnedMesh | null = null;
@@ -541,6 +540,12 @@ async function main(): Promise<void> {
   const mats = assignMaterials(model, P, side, aa === 'msaa');
   state.hairMaps = hairMaps(mats.byName, mats.roles);
   state.hairPrepass = addHairDepthPrepass(model, P);
+  if (bounceTex) {
+    for (const m of mats.byName.values()) {
+      m.envMap = bounceTex;
+      m.envMapIntensity = 0;
+    }
+  }
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName, P);
   stage.areaMode = areaMode();
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
@@ -581,8 +586,8 @@ async function main(): Promise<void> {
   let hemiBase = hemi.intensity;
   const setBeauty = (on: boolean): void => {
     output.setPost(on);
-    const bounce = on && rigName === 'hero' && !!scene.environment;
-    scene.environmentIntensity = bounce ? (P.get('bounce.gain') as number) : 0;
+    const bounce = on && rigName === 'hero' && !!bounceTex;
+    for (const m of mats.byName.values()) m.envMapIntensity = bounce ? (P.get('bounce.gain') as number) : 0;
     // the cube already holds the world where the set does not cover it
     hemi.intensity = bounce ? 0 : hemiBase;
   };
@@ -738,7 +743,7 @@ async function main(): Promise<void> {
     aa: output.aa === 'msaa' ? { mode: 'msaa', samples: output.samples, hair: 'alpha to coverage' } : { mode: output.aa, scale: output.aa === 'taau' ? output.scale : 1, hair: `hashed (coverage ${P.get('aa.hairCoverage')})`, still_frames: P.get('aa.stillFrames') },
     dof: output.dofOn ? { thin_lens: true, full_res: !!(P.get('dof.fullRes') as number), radius_scale: P.get('dof.radiusScale') } : null,
     grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)',
-    bounce: scene.environment ? { gain: P.get('bounce.gain'), irradiance: bounceJson?.irradiance ?? null } : null,
+    bounce: bounceTex ? { gain: P.get('bounce.gain'), irradiance: bounceJson?.irradiance ?? null } : null,
     passes: output.passList.map((p) => `${p.stage}:${p.name}`),
     fill_shadow: stage.shadowFill,
     frame: fs.summary(),

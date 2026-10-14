@@ -208,8 +208,10 @@ export const DEFAULT_PARAMS = {
   /** T16 temporal AA (output.ts, temporal.ts; ?aa=traa|taau|msaa at load). */
   aa: {
     /** hashed card coverage: 0 = the alpha-to-coverage step at alphaTest (parity with the MSAA path),
-     * 1 = the map alpha (fractional strand coverage) */
-    hairCoverage: 0,
+     * 1 = the map alpha (fractional strand coverage, as Cycles' transparent cards). T16 measured both
+     * (bench/m1/v4/t16-aa-post.md): 1 is closer to Cycles on the closeup hair / beard / brows (1.00 / 0.94 /
+     * 1.07 vs 1.04 / 0.90 / 0.78) and shimmers less on the turntable (3.47 vs 3.63; MSAA 6.08) */
+    hairCoverage: 1,
     /** current-frame weight floor (stock TRAA 0.05) and on hair pixels */
     minWeight: 0.05,
     hairMinWeight: 0.05,
