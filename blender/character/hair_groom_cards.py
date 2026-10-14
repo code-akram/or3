@@ -92,6 +92,7 @@ CARDS = {
     "gap_m": 0.0012,                 # card vertices kept this far off the skin / suit (after GN)
     "layer_shade": {"under": 0.7, "mid": 0.88, "top": 1.0, "front": 0.95, "fly": 0.95, "hairline": 1.0},
     "lock_sigma": 0.08,
+    "top_lift": {"pct": 80, "max_m": 0.012},
     "material": {"roughness": 0.55, "specular": 0.25},
     "proxy": {"voxel_m": 0.004, "radius_m": 0.008, "every": 4},
     # Cap: unique texture on the cap's own unwrap.
@@ -796,7 +797,20 @@ def build(b, frame, ccfg, g):
         p["C"] = p["C"] - p["N"] * flc["inset_m"]
         p.update(members=members, kind="front", layer="front", hang=H[members].mean(0))
         count("front_lock", add_card(p, lock_names[-1 - int(rng.integers(3))], "front"))
-    # mid / top (and the front falls' own sub-clumps)
+    # mid / top (and the front falls' own sub-clumps). The top cards ride on the clump's outer
+    # strands (a percentile of their offset along the outward normal), not its mean: the strands'
+    # outer envelope is the silhouette the hero renders.
+    tl = cfg["top_lift"]
+    lifted = []
+    for p in profs:
+        if p["layer"] != "top":
+            continue
+        dn = (p["O"] * p["N"][None]).sum(2)
+        off = np.percentile(dn, tl["pct"], axis=0)
+        off = np.convolve(np.pad(off, 2, mode="edge"), np.ones(5) / 5, mode="valid")
+        off = np.clip(off, 0.0, tl["max_m"]) * nsmooth(0.0, 0.15, np.linspace(0, 1, len(off)))
+        p["C"] = p["C"] + p["N"] * off[:, None]
+        lifted.append(float(off.max()))
     for p in profs:
         if p["kind"] != "front" and drop_ear(p, p["layer"]):
             continue
@@ -880,6 +894,7 @@ def build(b, frame, ccfg, g):
     b.notes["hair"] = {
         "source": "groom", "baker": "v4 (T9)", "cards": counts, "card_tris": tris, "cap_faces": cap_faces,
         "tris": total, "ear_dropped": ear_dropped, "pushed_card_verts": pushed,
+        "top_lift_mm_p50_max": [round(float(np.median(lifted)) * 1e3, 2), round(float(max(lifted)) * 1e3, 2)] if lifted else None,
         "atlas": {"size": [W, Hh], "cell_w": cw, "data_scale": acfg["data_scale"],
                   "mm_per_px_along_0.55m": round(0.55e3 / Hh, 3), "cells": cell_stats,
                   "fill_linear": [round(float(x), 5) for x in fill]},

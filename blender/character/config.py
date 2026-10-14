@@ -311,17 +311,17 @@ DEFAULTS = {
             # colour from melanin as the hero, tip alpha, flow / depth / ID / root-tip
             # maps in the GLB). Zones first (card_candidates): jaw fins, the
             # moustache's lip edge, the chin; lying cards elsewhere.
-            "game_cards": {"seed": 211, "count": 1024, "spacing_m": 0.0032, "clump_radius_m": 0.0022,
+            "game_cards": {"seed": 211, "count": 2048, "spacing_m": 0.0026, "clump_radius_m": 0.0022,
                            "min_members": 4, "min_len_m": 0.003, "segments": 3,
                            "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
                            "min_halfwidth_m": 0.0009, "max_halfwidth_m": 0.003,
-                           "jaw_nz": [-0.85, 0.05], "moustache_edge_m": 0.006,
-                           "roll_jaw_deg": 80, "roll_moustache_deg": 35, "roll_chin_deg": 50,
+                           "jaw_nz": [-0.95, -0.45], "moustache_edge_m": 0.006,
+                           "roll_jaw_deg": 80, "roll_moustache_deg": 35, "roll_chin_deg": 20,
                            "roll_lying_deg": 12, "roll_sigma_deg": 12,
-                           "cell": [32, 128], "atlas_px": [2048, 2048], "ss": 2, "data_scale": 2,
-                           "strand_px": 0.55, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
+                           "cell": [32, 128], "atlas_px": [2048, 4096], "ss": 2, "data_scale": 2,
+                           "strand_px": 0.8, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
                            "flow_jitter_deg": 8,
-                           "albedo": {"radial_roughness": 0.6, "path": 0.35, "gain": 1.0,
+                           "albedo": {"radial_roughness": 0.6, "path": 0.68, "gain": 1.0,
                                       "random_color": 0.0, "value_sigma": 0.15},
                            "roughness": {"base": 0.55, "jitter": 0.12},
                            "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.3},
@@ -329,8 +329,8 @@ DEFAULTS = {
                            "material": {"roughness": 0.6, "specular": 0.25}},
             # The darker under-layer in the game skin albedo (hair_beard.paint_underlayer,
             # after head_refine): beard + stubble root density -> cover -> toward the beard colour.
-            "underlayer": {"radius_m": 0.003, "full_per_cm2": 300, "stubble_weight": 0.5,
-                           "blur_px": 3, "gamma": 0.8, "strength": 0.55, "colour_gain": 1.0},
+            "underlayer": {"radius_m": 0.003, "full_per_cm2": 200, "stubble_weight": 0.5,
+                           "blur_px": 3, "gamma": 0.7, "strength": 0.85, "colour_gain": 1.0},
             # Game shells (enabled False since T9: kept for comparison): the decimated patch
             # stacked along the normal at t_k x the local groom canopy; tile k is the groom slice.
             "shells": {"enabled": False, "layers": 14, "t_pow": 1.3, "base_tris": 420, "lift_m": 0.0,
@@ -415,7 +415,7 @@ DEFAULTS = {
                            "cell": [32, 64], "atlas_px": [1024, 512], "ss": 2, "data_scale": 2,
                            "strand_px": 0.5, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
                            "flow_jitter_deg": 6,
-                           "albedo": {"radial_roughness": 0.55, "path": 0.35, "gain": 1.0,
+                           "albedo": {"radial_roughness": 0.55, "path": 0.68, "gain": 1.0,
                                       "random_color": 0.0, "value_sigma": 0.12},
                            "roughness": {"base": 0.5, "jitter": 0.1},
                            "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.3},
