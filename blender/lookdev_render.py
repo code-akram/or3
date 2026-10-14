@@ -102,6 +102,9 @@ def parse_args():
                     help="engine parity (T6): one sphere per shipped material under the studio rig, "
                          "Cycles 64 spp + OIDN, Standard view; writes cycles_balls.png, shader_balls.glb "
                          "and shader_balls.json (the engine renders the same GLB), exit")
+    ap.add_argument("--ball-lights", default="",
+                    help="shader balls under these studio lights only (e.g. key or key,fill; T19 per-light "
+                         "parity): the others are hidden and the frame is cycles_balls_<names>.png")
     return ap.parse_args(argv)
 
 
@@ -454,10 +457,14 @@ def _ball_colors(ob, mat, meshes):
     return filled
 
 
-def shader_balls(out, meshes, floor_z, head):
-    """cycles_balls.png + shader_balls.glb + shader_balls.json (see BALLS)."""
+def shader_balls(out, meshes, floor_z, head, lights=(), only=()):
+    """cycles_balls.png + shader_balls.glb + shader_balls.json (see BALLS). `only`: the studio
+    lights to keep (the others hidden), written as cycles_balls_<names>.png."""
     from bpy_extras.object_utils import world_to_camera_view
     sc = bpy.context.scene
+    if only:
+        for lt in lights:
+            lt.hide_render = lt.name not in only
     for o in meshes:
         o.hide_render = True
     centre = Vector((0.0, 0.0, floor_z + BALL_Z))
@@ -544,10 +551,14 @@ def shader_balls(out, meshes, floor_z, head):
             if "Subsurface IOR" in p.inputs:
                 p.inputs["Subsurface IOR"].default_value = BALL_SKIN_SSS["ior"]
             sss = BALL_SKIN_SSS
-    secs = render(os.path.join(out, "cycles_balls.png"))
+    frame = "cycles_balls.png" if not only else f"cycles_balls_{'_'.join(only)}.png"
+    secs = render(os.path.join(out, frame))
 
     def gl(v):
         return [round(float(v[0]), 6), round(float(v[2]), 6), round(float(-v[1]), 6)]
+    if only:   # the GLB and the ball records are the same; only this frame's lights differ
+        print(f"[lookdev] shader balls ({','.join(only)} only): {secs} s -> {out}/{frame}", flush=True)
+        return None
     j = {"version": 1, "script": "blender/lookdev_render.py --shader-balls",
          "res": list(BALL_RES), "exposure": BALL_EXPOSURE, "view_transform": "Standard",
          "cycles": {"samples": BALL_SPP, "denoise": "OIDN", "filter_px": 1.0, "seconds": secs,
@@ -1049,7 +1060,8 @@ def main():
         }
     floor, lights = build_studio(floor_z)
     if ARGS.shader_balls:
-        shader_balls(os.path.abspath(ARGS.out_dir), meshes, floor_z, head)
+        shader_balls(os.path.abspath(ARGS.out_dir), meshes, floor_z, head, lights,
+                     tuple(x for x in ARGS.ball_lights.split(",") if x))
         return
     metrics["cycles_weave"] = cycles_weave()
     if ARGS.calibrate:
