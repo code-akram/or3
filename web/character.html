@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Character viewer</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #050507; color: #d8d8e0; overflow: hidden; }
+      body { font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      canvas#view { display: block; width: 100vw; height: 100vh; }
+      #hud { position: fixed; left: 8px; top: 8px; padding: 6px 8px; background: rgba(0,0,0,.6);
+             border-radius: 4px; white-space: pre; pointer-events: none; max-width: 60ch; }
+      #panel { position: fixed; right: 8px; top: 8px; padding: 6px 8px; background: rgba(0,0,0,.6);
+               border-radius: 4px; display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+      #panel label { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+      #panel select, #panel input, #panel button { font: inherit; }
+      #fatal { position: fixed; inset: 0; display: none; padding: 24px; background: #200; color: #fcc; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="hud">booting…</div>
+    <div id="panel"></div>
+    <div id="fatal"></div>
+    <script type="module" src="/src/character/main.ts"></script>
+  </body>
+</html>

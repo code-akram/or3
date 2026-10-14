@@ -9,6 +9,7 @@
     "dev": "vite",
     "typecheck": "tsc --noEmit -p .",
     "build": "tsc --noEmit -p . && vite build",
+    "build:viewer": "VIEWER_ONLY=1 vite build",
     "preview": "vite preview"
   },
   "dependencies": {
