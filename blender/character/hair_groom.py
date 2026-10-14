@@ -171,9 +171,11 @@ DEFAULTS = {
     # level-2 clump (locks end at different heights), plus `taper_m` x u^pow
     # per strand (each lock's end tapers over 2-3 cm), plus `layer_m` x how far
     # up the skull it is rooted (the outer, top-rooted layer ends higher).
-    # Never into the first `min_hang_m` of the hanging part.
-    "cut": {"lock_m": [0.0, 0.03], "taper_m": 0.03, "taper_pow": 1.0, "layer_m": 0.04,
-            "min_hang_m": 0.04},
+    # Never into the first `min_hang_m` of the hanging part. `taper_radial`
+    # (0 = a random taper per strand: the lock end fades out) blends the taper
+    # toward the root's distance from its level-2 lock centre: pointed lock ends.
+    "cut": {"lock_m": [0.0, 0.07], "taper_m": 0.03, "taper_pow": 1.0, "taper_radial": 0.7,
+            "layer_m": 0.05, "min_hang_m": 0.04},
     "vellus": {"count": 4000, "length_m": [0.003, 0.007], "band_m": [-0.002, 0.008],
                "radius_m": 0.000025, "lift": 0.35, "melanin": 0.7},
     # Front falls (hair_clumps.march with fall gravity). side -1 = the
@@ -187,13 +189,13 @@ DEFAULTS = {
          "comb_side": 0.2, "comb_fwd": 0.3, "comb_down": 0.9, "fall_after_m": 0.025,
          "tip_above_lips_m": 0.045, "tip_jitter_m": 0.015, "hug": 0.06, "clear_m": 0.005,
          "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 360,
-         "clump_w": 1.0, "wave_m": 0.005, "guides": 6, "spread_deg": 5.0, "comb_jitter": 0.25,
+         "clump_w": 1.5, "wave_m": 0.005, "guides": 6, "spread_deg": 5.0, "comb_jitter": 0.25,
          "len_jitter": 0.12},
         {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 32,
          "comb_side": 0.9, "comb_fwd": 0.35, "comb_down": 0.5, "fall_after_m": 0.04, "gravity": 0.75,
          "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.4, "clear_m": 0.007,
          "flare_after_m": 0.11, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
-         "clump_w": 1.0, "wave_m": 0.003, "guides": 5, "spread_deg": 5.0, "comb_jitter": 0.25,
+         "clump_w": 1.5, "wave_m": 0.003, "guides": 5, "spread_deg": 5.0, "comb_jitter": 0.25,
          "len_jitter": 0.12}],
     # Principled Hair BSDF, melanin parametrisation. Melanin 0.82 (red light
     # keeps ~25 % through one hair, so TT / TRT survive: two highlights; v3's
@@ -205,10 +207,12 @@ DEFAULTS = {
     # `grey_redness`. `model` CHIANG or HUANG (the hair test renders both);
     # `roughness` is Chiang's, `huang_roughness` Huang's (roughly its square).
     # `offset_deg`: cuticle tilt. v3: Huang, 0.985, 10 % light strands, no grey.
+    # Chiang roughness 0.32 -> 0.40: at 0.24 -> 0.30 the hair test's shadow side
+    # stayed as dark as v3's (p10 1.1x); at 0.32 -> 0.40 it is 2.2x (t8-hair.md).
     "shader": {"model": "CHIANG", "melanin": 0.82, "redness": 0.12,
-               "roughness": [0.24, 0.30], "huang_roughness": [0.10, 0.14],
+               "roughness": [0.32, 0.40], "huang_roughness": [0.11, 0.16],
                "random_color": 0.2, "random_roughness": 0.1,
-               "ior": 1.55, "aspect_ratio": 0.85, "offset_deg": 2.5,
+               "ior": 1.55, "aspect_ratio": 0.85, "offset_deg": 3.0,
                "light_share": 0.0, "light_melanin": 0.93,
                "lock_melanin_jitter": 0.012, "tint": None,
                "coat": 0.0, "radial_roughness": 0.3,     # Chiang only (coat: the wet look)
@@ -1063,9 +1067,11 @@ def build(b, frame, ccfg, gcfg_in):
     for fi, ff in enumerate(ffs):
         fc = ff["cfg"]
         clump_w[ffid == fi] = fc["clump_w"] if "clump_w" in fc else fc["factor"] / levels[0]["factor"]
-    # Hairline: single hairs, no clumping right at the edge.
+    # Hairline: single hairs, no clumping right at the edge (not the front
+    # falls: they root at the hairline and are locks by design).
     if cc.get("edge_m"):
-        clump_w[kind == 0] *= np.array([smoothstep(0.0, cc["edge_m"], d) for d in droot[kind == 0]])
+        ed = (kind == 0) & (ffid < 0)
+        clump_w[ed] *= np.array([smoothstep(0.0, cc["edge_m"], d) for d in droot[ed]])
 
     def recut(j, new_len):
         arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[j], axis=0), axis=1))])
@@ -1083,7 +1089,17 @@ def build(b, frame, ccfg, gcfg_in):
         crng = sub_rng(101)
         lock = {int(q): crng.uniform(*ct["lock_m"]) for q in np.unique(sub)}
         top_w = np.clip((nrms[:, 2] - 0.3) / 0.6, 0, 1)
-        cut = (np.array([lock[int(q)] for q in sub]) + ct["taper_m"] * crng.random(n) ** ct["taper_pow"]
+        u = crng.random(n)
+        rad = ct.get("taper_radial", 0.0)
+        if rad > 0:
+            # Pointed lock ends: a strand's taper grows with its root's distance
+            # from its level-2 lock centre (relative to the lock's extent), so the
+            # outer strands of a lock end first and the clumped lock tapers to a point.
+            dc = np.linalg.norm(roots[:n] - roots[sub], axis=1)
+            dmax = np.zeros(n)
+            np.maximum.at(dmax, sub, dc)
+            u = (1 - rad) * u + rad * np.clip(dc / np.maximum(dmax[sub], 1e-6), 0, 1)
+        cut = (np.array([lock[int(q)] for q in sub]) + ct["taper_m"] * u ** ct["taper_pow"]
                + ct["layer_m"] * top_w)
         trim_f = crng.uniform(0.0, py_trim, n)
         for j in np.where((kind == 0) & (H[:, -1] > ct["min_hang_m"]))[0]:

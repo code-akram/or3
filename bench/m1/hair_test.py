@@ -49,6 +49,14 @@ RUN = os.path.abspath(argv[0])
 OUT = os.path.abspath(opt("--out", os.path.join(RUN, "hair_test")))
 PARTS = opt("--parts", "test,beard,clay").split(",")
 MODELS = opt("--models", "current").split(",")
+# --variants FILE: extra test frames, a JSON list of {"tag", "model"?, "inputs"?: {BSDF input:
+# value}, "roughness"?: [root, tip], "melanin_shift"?: added to every strand's melanin}
+# (shader sensitivity on one build; each variant starts from the built material).
+VARIANTS = json.load(open(opt("--variants", ""))) if "--variants" in argv else []
+# --beard-albedo S (diagnostic): the EEVEE beard's base colour x S (0: what is left
+# is skin through the shells and specular); writes beard_eevee_aS.* and results
+# "beard_albedo_S", and reuses beard_cycles.exr when --out already holds one.
+BEARD_ALBEDO = float(opt("--beard-albedo", "nan")) if "--beard-albedo" in argv else None
 RES = int(opt("--res", "768"))
 SAMPLES = int(opt("--samples", "64"))
 TEST_EXPOSURE = -2.5     # as the look-dev studio: near-black hair reads near-black
@@ -236,16 +244,51 @@ def hair_test(results):
     nt = mat.node_tree
     bsdf = nt.nodes.get("hair_bsdf") or next(n for n in nt.nodes if n.type == "BSDF_HAIR_PRINCIPLED")
     out = {}
-    for model in MODELS:
-        tag = "current" if model == "current" else model.lower()
-        if model != "current":
-            if "hair_shader" not in mat or "hair_roughness" not in nt.nodes:
-                out[tag] = {"skipped": "material not built by hair v4 (no model A/B)"}
-                continue
+    v4 = "hair_shader" in mat and "hair_roughness" in nt.nodes
+    built = {"model": bsdf.model,
+             # by index: a socket the current model hides is not found by name
+             "inputs": {n: i.default_value for n, i in enumerate(bsdf.inputs)
+                        if not i.is_linked and isinstance(i.default_value, float)},
+             "roughness": [nt.nodes["hair_roughness"].inputs[k].default_value
+                           for k in ("To Min", "To Max")] if v4 else None}
+    grad = nt.nodes.get("melanin_gradient")
+    built_grad = [grad.inputs[k].default_value for k in ("To Min", "To Max")] if grad else None
+    def reset():
+        bsdf.model = built["model"]
+        for k, v in built["inputs"].items():
+            bsdf.inputs[k].default_value = v
+        if v4:
+            for k, v in zip(("To Min", "To Max"), built["roughness"]):
+                nt.nodes["hair_roughness"].inputs[k].default_value = v
+        if grad:
+            for k, v in zip(("To Min", "To Max"), built_grad):
+                grad.inputs[k].default_value = v
+
+    frames = [{"tag": "current" if m == "current" else m.lower(), "model": None if m == "current" else m}
+              for m in MODELS] + VARIANTS
+    for fr in frames:
+        tag, model = fr["tag"], fr.get("model")
+        if (model or fr.get("roughness") or fr.get("melanin_shift")) and not v4:
+            out[tag] = {"skipped": "material not built by hair v4 (no model A/B)"}
+            continue
+        reset()   # to the built material, then apply the frame's changes
+        if model:
             bsdf.model = model
             lo, hi = mat["hair_shader"][model.lower() + "_roughness"]
             nt.nodes["hair_roughness"].inputs["To Min"].default_value = lo
             nt.nodes["hair_roughness"].inputs["To Max"].default_value = hi
+        for k, v in fr.get("inputs", {}).items():
+            socks = sorted((i for i in bsdf.inputs if i.name == k), key=lambda i: not i.enabled)
+            socks[0].default_value = v
+        if fr.get("roughness"):
+            nt.nodes["hair_roughness"].inputs["To Min"].default_value = fr["roughness"][0]
+            nt.nodes["hair_roughness"].inputs["To Max"].default_value = fr["roughness"][1]
+        if fr.get("melanin_shift"):
+            if grad is None:
+                out[tag] = {"skipped": "no melanin_gradient node"}
+                continue
+            for k, v in zip(("To Min", "To Max"), built_grad):
+                grad.inputs[k].default_value = v + fr["melanin_shift"]
         png = os.path.join(OUT, f"hairtest_{tag}.png")
         save(png)
         px = pixels(png)
@@ -253,12 +296,14 @@ def hair_test(results):
         y = luma(px[..., :3])[a >= 0.95]
         hist, _ = np.histogram(y, bins=64, range=(0.0, 1.0))
         md, _ = modes(hist.astype(float))
-        out[tag] = {"model": bsdf.model, "png": png, "hair_px": int(len(y)),
+        out[tag] = {"model": bsdf.model, "variant": {k: v for k, v in fr.items() if k != "tag"},
+                    "png": png, "hair_px": int(len(y)),
                     "p10": round(float(np.percentile(y, 10)), 4), "p50": round(float(np.percentile(y, 50)), 4),
                     "p90": round(float(np.percentile(y, 90)), 4), "p99": round(float(np.percentile(y, 99)), 4),
                     "mean": round(float(y.mean()), 4), "modes": md, "mode_count": len(md),
                     "hist64": hist.tolist()}
         print(f"[hair_test] {tag}: p10 {out[tag]['p10']} p50 {out[tag]['p50']} modes {md}", flush=True)
+    reset()   # leave the material as built
     results["test"] = {"camera": {"az": cam_az, "el": cam_el}, "res": RES, "samples": SAMPLES,
                        "exposure": TEST_EXPOSURE, "frames": out}
 
@@ -323,9 +368,25 @@ def beard_test(results):
     r.resolution_x = r.resolution_y = res
     r.resolution_percentage = 100
     r.film_transparent = False
-    eev = os.path.join(OUT, "beard_eevee.exr")
+    sfx = ""
+    if BEARD_ALBEDO is not None:
+        sfx = f"_a{BEARD_ALBEDO:g}"
+        for o in meshes:
+            if "beard" not in o.name.lower():
+                continue
+            for mt in o.data.materials:
+                bs = next((n for n in mt.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+                if bs is None or not bs.inputs["Base Color"].is_linked:
+                    continue
+                src = bs.inputs["Base Color"].links[0].from_socket
+                sv = mt.node_tree.nodes.new("ShaderNodeVectorMath")
+                sv.operation = "SCALE"
+                sv.inputs["Scale"].default_value = BEARD_ALBEDO
+                mt.node_tree.links.new(src, sv.inputs[0])
+                mt.node_tree.links.new(sv.outputs[0], bs.inputs["Base Color"])
+    eev = os.path.join(OUT, f"beard_eevee{sfx}.exr")
     save(eev, exr=True)
-    save(os.path.join(OUT, "beard_eevee.png"))
+    save(os.path.join(OUT, f"beard_eevee{sfx}.png"))
     # Mask: the beard mesh as an opaque emitter, everything else a holdout.
     beard = [o for o in meshes if "beard" in o.name.lower()]
     em = bpy.data.materials.new("mask_white")
@@ -364,18 +425,19 @@ def beard_test(results):
     cycles(res, SAMPLES, False)
     sc.view_settings.exposure = STUDIO_EXPOSURE
     cyc = os.path.join(OUT, "beard_cycles.exr")
-    save(cyc, exr=True)
-    save(os.path.join(OUT, "beard_cycles.png"))
+    if BEARD_ALBEDO is None or not os.path.exists(cyc):
+        save(cyc, exr=True)
+        save(os.path.join(OUT, "beard_cycles.png"))
     yc = luma(pixels(cyc)[..., :3])
     ye = luma(pixels(eev)[..., :3])
     mc, me = float(yc[m].mean()), float(ye[m].mean())
-    results["beard"] = {"mask_px": int(m.sum()), "cycles_mean_lin": round(mc, 5), "eevee_mean_lin": round(me, 5),
+    results["beard" if BEARD_ALBEDO is None else f"beard_albedo{sfx[2:]}"] = {"mask_px": int(m.sum()), "cycles_mean_lin": round(mc, 5), "eevee_mean_lin": round(me, 5),
                         "ratio_eevee_over_cycles": round(me / mc, 3) if mc > 0 else None,
                         "within_25pct": bool(mc > 0 and abs(me / mc - 1) <= 0.25),
                         "cycles_p50_lin": round(float(np.median(yc[m])), 5),
                         "eevee_p50_lin": round(float(np.median(ye[m])), 5),
                         "res": res, "cycles_samples": SAMPLES}
-    print(f"[hair_test] beard: cycles {mc:.5f} eevee {me:.5f} ratio {results['beard']['ratio_eevee_over_cycles']}",
+    print(f"[hair_test] beard{sfx}: cycles {mc:.5f} eevee {me:.5f} ratio {me / mc if mc > 0 else 0:.3f}",
           flush=True)
 
 

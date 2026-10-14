@@ -287,9 +287,11 @@ DEFAULTS = {
                      # strands (T8, bench/m1/v4/t8-hair.md: beard-region mean linear
                      # luminance, EEVEE game shells vs Cycles strands, same camera and
                      # light). Before: #948e86 #6a4a32 #3e2e23 #30241b (EEVEE 1.44x Cycles
-                     # once the atlases were sRGB-encoded); now those x0.5 in linear.
-                     "swatches": [[0.2, "#6b6761"], [0.9, "#4c3422"], [0.98, "#2b1f17"],
-                                  [1.0, "#201711"]],
+                     # once the atlases were sRGB-encoded); now those x0.375 in linear.
+                     # Most of the shells' luminance is skin through them and specular,
+                     # not the atlas: at albedo 0 EEVEE is still 1.11x Cycles.
+                     "swatches": [[0.2, "#5e5a54"], [0.9, "#422c1d"], [0.98, "#241a13"],
+                                  [1.0, "#1b130d"]],
                      "value_sigma": 0.3},
             "hero": {"radius_m": [0.00005, 0.00008], "tip_radius": 0.22,
                      # soft specular; the ends fade to tip_alpha past tip_fade_from
