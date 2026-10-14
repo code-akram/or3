@@ -7,6 +7,8 @@
     python3 -I bench/m1/lookdev_report.py hairparity RUN [--engine F] [--lights key,fill,rim]
         [--portrait F --cycles-portrait EXR]
     python3 -I bench/m1/lookdev_report.py strip RUN [--cycles HERO_DIR] [--out PNG]
+    python3 -I bench/m1/lookdev_report.py chart --chart CHART.json --engine PNG [--engine2 PNG] --out J [--sheet PNG]
+    python3 -I bench/m1/lookdev_report.py bokeh --sharp A --dof B --roi x,y,w,h [--out J]
 
 `parity` (T6) measures the engine against Cycles: shader-ball luminance ratios
 (RUN/cycles_balls.png vs RUN/game_balls.png, blender/lookdev_render.py
@@ -978,6 +980,316 @@ def strip_cmd(a):
     regression_strip(os.path.abspath(a.run), a.cycles, a.out, a.crop, getattr(a, "build", None))
 
 
+# ---------------------------------------------------------------- grey chart (T16)
+# checkpoint-3 §3.2: 18 / 50 / 90 % patches and an 18 % ball under the hero rig in both renderers
+# (blender/hero/refs.py --mode chart writes chart.json, the Cycles frame and chart.glb for the engine),
+# compared after the grade, per channel, to +-3/255.
+CHART_TOL = 3.0
+
+
+def _read_rgb(path):
+    """(h, w, 3) float: 0..255 display values for 8/16-bit images, scene-linear for EXR."""
+    import numpy as np
+    if path.lower().endswith(".exr"):
+        return _hp_read(path).astype(np.float64)
+    try:
+        import OpenImageIO as oiio
+        i = oiio.ImageInput.open(path)
+        a = np.asarray(i.read_image(format="float"), dtype=np.float64)
+        i.close()
+        a = a[..., None] if a.ndim == 2 else a
+        a = a[..., :3] if a.shape[-1] >= 3 else np.repeat(a[..., :1], 3, -1)
+        return a * 255.0
+    except ImportError:
+        return _png_rgb(path).astype(np.float64)
+
+
+def chart_measure(chart, img):
+    """{sample: [R, G, B]} means over chart.json's patch boxes and ball sample boxes / disc."""
+    import numpy as np
+    out = {}
+    for r in chart["patches"]:
+        if r["kind"] == "patch":
+            x0, y0, x1, y1 = r["bbox_px"]
+            out[r["name"]] = img[y0:y1, x0:x1].reshape(-1, 3).mean(0)
+            continue
+        k = r.get("sample_box_px", 7) // 2
+        for lab, (x, y) in r["samples_px"].items():
+            x, y = int(round(x)), int(round(y))
+            out[f"{r['name']}:{lab}"] = img[y - k:y + k + 1, x - k:x + k + 1].reshape(-1, 3).mean(0)
+        cx, cy = r["center_px"]
+        rr = r["radius_px"] * 0.85
+        yy, xx = np.mgrid[0:img.shape[0], 0:img.shape[1]]
+        out[f"{r['name']}:disc"] = img[(xx + 0.5 - cx) ** 2 + (yy + 0.5 - cy) ** 2 < rr * rr].mean(0)
+    return out
+
+
+def chart_rows(chart, ref_png, frames, tol=CHART_TOL):
+    """The chart row: per sample, the reference (Cycles) mean and each engine frame's mean and
+    difference (0..255 per channel and luma), pass at |d| <= tol on every channel. `frames` is
+    [(label, png)]. Returns {"rows": [...], "pass": {label: bool (patches)}, ...}."""
+    import numpy as np
+    lw = np.array([0.2126, 0.7152, 0.0722])
+    ref = chart_measure(chart, _read_rgb(ref_png))
+    meas = {lab: chart_measure(chart, _read_rgb(p)) for lab, p in frames}
+    rows = []
+    ok = {lab: True for lab, _ in frames}
+    for name, rv in ref.items():
+        row = {"sample": name, "cycles": [round(float(v), 2) for v in rv], "cycles_luma": round(float(rv @ lw), 2)}
+        patch = ":" not in name
+        for lab, _ in frames:
+            ev = meas[lab][name]
+            d = ev - rv
+            p = bool(np.all(np.abs(d) <= tol))
+            row[lab] = {"mean": [round(float(v), 2) for v in ev], "diff": [round(float(v), 2) for v in d],
+                        "diff_luma": round(float((ev - rv) @ lw), 2), "max_abs": round(float(np.abs(d).max()), 2),
+                        "pass": p}
+            if patch:
+                ok[lab] = ok[lab] and p
+        rows.append(row)
+    return {"tolerance_255": tol, "reference": ref_png, "frames": dict(frames), "rows": rows,
+            "pass_patches": ok,
+            "note": "pass = every patch within +-tol/255 on R, G and B; ball samples are reported, not gated"}
+
+
+def chart_sheet(chart, res, ref_png, frames, out_png, pad=40):
+    """Side-by-side crops of the chart region (Cycles | engine ...) with the numbers under them."""
+    xs, ys = [], []
+    for r in chart["patches"]:
+        if r["kind"] == "patch":
+            xs += [r["bbox_px"][0], r["bbox_px"][2]]
+            ys += [r["bbox_px"][1], r["bbox_px"][3]]
+        else:
+            cx, cy, rr = r["center_px"][0], r["center_px"][1], r["radius_px"]
+            xs += [cx - rr, cx + rr]
+            ys += [cy - rr, cy + rr]
+    x0, y0 = max(0, int(min(xs)) - 2 * pad), max(0, int(min(ys)) - 2 * pad)
+    x1, y1 = int(max(xs)) + 2 * pad, int(max(ys)) + 2 * pad
+    w, h = x1 - x0, y1 - y0
+    tiles = [("Cycles (grade.py --parity)", ref_png)] + list(frames)
+    tmp = os.path.dirname(os.path.abspath(out_png))
+    inputs, chains, labels = [], [], []
+    for n, (lab, path) in enumerate(tiles):
+        lp = os.path.join(tmp, f".chart_lab{n}.txt")
+        with open(lp, "w") as f:
+            f.write(lab)
+        labels.append(lp)
+        inputs += ["-i", path]
+        box = ",".join(f"drawbox=x={r['bbox_px'][0] - x0}:y={r['bbox_px'][1] - y0}:w={r['bbox_px'][2] - r['bbox_px'][0]}:"
+                       f"h={r['bbox_px'][3] - r['bbox_px'][1]}:color=yellow@0.6" for r in chart["patches"] if r["kind"] == "patch")
+        chains.append(f"[{n}]crop={w}:{h}:{x0}:{y0},{box},{drawtext(lp, 18)}[t{n}]")
+    lines = ["sample            cycles RGB (0-255)    " + "   ".join(f"{lab[:22]:>22} diff R,G,B" for lab, _ in frames)]
+    for row in res["rows"]:
+        s = f"{row['sample'][6:]:<17} {'%6.1f %6.1f %6.1f' % tuple(row['cycles'])}   "
+        for lab, _ in frames:
+            d = row[lab]["diff"]
+            s += f"   {'%+6.1f %+6.1f %+6.1f' % tuple(d)} {'ok' if row[lab]['pass'] else ('FAIL' if ':' not in row['sample'] else '  ')}"
+        lines.append(s)
+    lines.append(f"patches within +-{res['tolerance_255']}/255: " + ", ".join(f"{k} {'PASS' if v else 'FAIL'}" for k, v in res["pass_patches"].items()))
+    go = res.get("grade_only")
+    if go:
+        lines.append("grade only (own linear -> grade_lut.json on the CPU vs own graded frame): max |d| "
+                     + ", ".join(f"{k} {v:.2f}/255 {'PASS' if go['pass_patches'][k] else 'FAIL'}" for k, v in go["max_abs"].items()))
+    tp = os.path.join(tmp, ".chart_table.txt")
+    with open(tp, "w") as f:
+        f.write("\n".join(lines))
+    labels.append(tp)
+    th = 26 * (len(lines) + 1)
+    fc = ";".join(chains) + ";" + "".join(f"[t{n}]" for n in range(len(tiles))) + \
+        (f"hstack={len(tiles)}" if len(tiles) > 1 else "null") + f",pad=iw:ih+{th}:0:0:black,{drawtext(tp, 18, '12', f'h-{th}+8')}"
+    ffmpeg([*inputs, "-filter_complex", fc, out_png])
+    for p in labels:
+        os.remove(p)
+    return out_png
+
+
+def _lut_pipeline(lut, lin, uv, ev):
+    """grade_lut.json applied on the CPU as the engine does (web/src/character/grade.ts, output.ts):
+    log2 shaper -> 33^3 grade LUT (log2 out) -> vignette map at uv -> x 2^ev -> view LUT (display).
+    lin (k, 3) scene-linear -> (k, 3) display 0..255."""
+    import base64
+    import numpy as np
+    n = lut["size"]
+
+    def dec(d, shape):
+        return np.frombuffer(base64.b64decode(d), np.float32).reshape(shape)
+
+    def tri(t, x):
+        p = np.clip(x, 0, 1) * (n - 1)
+        i0 = np.minimum(np.floor(p).astype(int), n - 2)
+        f = p - i0
+        out = np.zeros_like(x)
+        for db in (0, 1):
+            for dg in (0, 1):
+                for dr in (0, 1):
+                    w = (f[:, 0] if dr else 1 - f[:, 0]) * (f[:, 1] if dg else 1 - f[:, 1]) * (f[:, 2] if db else 1 - f[:, 2])
+                    out += w[:, None] * t[i0[:, 2] + db, i0[:, 1] + dg, i0[:, 0] + dr]
+        return out
+
+    def shaper(c, lo, hi):
+        return np.clip((np.log2(np.maximum(c, 2.0 ** lo)) - lo) / (hi - lo), 0, 1)
+
+    G = dec(lut["grade"]["data"], (n, n, n, 3))
+    V = dec(lut["view"]["data"], (n, n, n, 3))
+    g = 2.0 ** tri(G, shaper(lin, lut["grade"]["min"], lut["grade"]["max"]))
+    vg = lut.get("vignette")
+    if vg:
+        m = dec(vg["data"], (vg["h"], vg["w"]))
+        g = g * m[min(int(uv[1] * vg["h"]), vg["h"] - 1), min(int(uv[0] * vg["w"]), vg["w"] - 1)]
+    return tri(V, shaper(g * 2.0 ** ev, lut["view"]["min"], lut["view"]["max"])) * 255.0
+
+
+def chart_grade_only(chart, lut_path, ref_png, ref_exr, eng_png, eng_npy, tol=CHART_TOL):
+    """The grade alone, in each renderer: its own scene-linear chart through the CPU LUT pipeline
+    against its own graded frame (Cycles: grade.py's PNG of the EXR; engine: the viewer's GPU LUT
+    path). Separates the grade from the lighting, which the full chart row mixes."""
+    import numpy as np
+    lut = load(lut_path)
+    res = chart["res"]
+    centres = {}
+    for r in chart["patches"]:
+        if r["kind"] == "patch":
+            x0, y0, x1, y1 = r["bbox_px"]
+            centres[r["name"]] = ((x0 + x1) / 2, (y0 + y1) / 2)
+        else:
+            for lab, xy in r["samples_px"].items():
+                centres[f"{r['name']}:{lab}"] = tuple(xy)
+            centres[f"{r['name']}:disc"] = tuple(r["center_px"])
+    sides = {"cycles": (chart_measure(chart, _read_rgb(ref_exr)), chart_measure(chart, _read_rgb(ref_png)))}
+    if eng_npy:
+        e = np.load(eng_npy)[..., :3].astype(np.float64)
+        sides["engine"] = (chart_measure(chart, e), chart_measure(chart, _read_rgb(eng_png)))
+    rows, ok = [], {k: True for k in sides}
+    for name, xy in centres.items():
+        row = {"sample": name}
+        for k, (lin, disp) in sides.items():
+            cpu = _lut_pipeline(lut, lin[name][None], (xy[0] / res[0], xy[1] / res[1]), chart["exposure"])[0]
+            d = disp[name] - cpu
+            p = bool(np.all(np.abs(d) <= tol))
+            row[k] = {"linear": [round(float(v), 5) for v in lin[name]], "frame_minus_lut": [round(float(v), 2) for v in d], "pass": p}
+            if ":" not in name:
+                ok[k] = ok[k] and p
+        rows.append(row)
+    return {"lut": lut_path, "rows": rows, "pass_patches": ok,
+            "max_abs": {k: round(max(float(np.abs(r[k]["frame_minus_lut"]).max()) for r in rows
+                                     if not r["sample"].endswith(":disc")), 2) for k in sides},
+            "note": "max_abs and pass leave out the ball disc (a mean of display values against the LUT of a mean "
+                    "of linear values over a gradient)"}
+
+
+def chart_cmd(a):
+    chart = load(a.chart)
+    ref = a.cycles or chart.get("cycles", {}).get("png")
+    if not ref:
+        sys.exit("chart: no Cycles frame (--cycles or chart.json cycles.png)")
+    if not os.path.isabs(ref):
+        ref = os.path.join(os.path.dirname(os.path.abspath(a.chart)), ref)
+    frames = [(a.engine_label, a.engine)] + ([(a.engine2_label, a.engine2)] if a.engine2 else [])
+    for p in [a.chart, ref] + [p for _, p in frames]:
+        if containment.is_private(p):
+            containment.assert_private(a.out, "chart row with private inputs")
+    res = chart_rows(chart, ref, frames, a.tol)
+    if a.lut:
+        exr = chart.get("cycles", {}).get("exr")
+        if exr and not os.path.isabs(exr):
+            exr = os.path.join(os.path.dirname(os.path.abspath(a.chart)), exr)
+        if not exr or not os.path.exists(exr):
+            exr = os.path.join(os.path.dirname(ref), "exr", "chart.exr")
+        res["grade_only"] = chart_grade_only(chart, a.lut, ref, exr, a.engine, a.engine_linear, a.tol)
+    with open(a.out, "w") as f:
+        json.dump(res, f, indent=1)
+    if a.sheet:
+        chart_sheet(chart, res, ref, frames, a.sheet)
+        print(f"-> {a.sheet}")
+    for row in res["rows"]:
+        print(f"{row['sample']:<26} cycles {row['cycles']}  " + "  ".join(
+            f"{lab}: {row[lab]['diff']}{'' if row[lab]['pass'] else ' !'}" for lab, _ in frames))
+    print(f"-> {a.out}; patches within +-{a.tol}/255: {res['pass_patches']}")
+    if "grade_only" in res:
+        go = res["grade_only"]
+        print(f"grade only (own linear -> CPU LUT vs own graded frame): max |d| {go['max_abs']}, patches pass {go['pass_patches']}")
+
+
+# ---------------------------------------------------------------- bokeh radius (T16)
+def _disc_kernel(r, ss=16):
+    """Anti-aliased disc of radius r px (area-sampled ss x ss per px), normalised; r < 0.05 = delta."""
+    import numpy as np
+    if r < 0.05:
+        return np.ones((1, 1))
+    n = int(np.ceil(r + 0.5))
+    o = (np.arange((2 * n + 1) * ss) + 0.5) / ss - (n + 0.5)
+    yy, xx = np.meshgrid(o, o, indexing="ij")
+    k = (xx * xx + yy * yy <= r * r).astype(np.float64)
+    k = k.reshape(2 * n + 1, ss, 2 * n + 1, ss).mean(axis=(1, 3))
+    if k.sum() <= 0:
+        return np.ones((1, 1))
+    return k / k.sum()
+
+
+def _conv_same(img, k):
+    """2-D 'same' convolution of (h, w, c) by a small kernel (edge-padded), via FFT."""
+    import numpy as np
+    kh, kw = k.shape
+    ph, pw = kh // 2, kw // 2
+    p = np.pad(img, ((ph, ph), (pw, pw), (0, 0)), mode="edge")
+    H, W = p.shape[:2]
+    K = np.fft.rfft2(k, s=(H, W))
+    out = np.fft.irfft2(np.fft.rfft2(p, axes=(0, 1)) * K[..., None], s=(H, W), axes=(0, 1))
+    return out[kh - 1:kh - 1 + img.shape[0], kw - 1:kw - 1 + img.shape[1]]
+
+
+def bokeh_fit(sharp, dof, roi, linear=False, rmax=12.0, step=0.05):
+    """Fit the disc radius r (px) minimising |disc_r * sharp - dof|^2 inside roi = (x, y, w, h).
+    PNGs are decoded from sRGB to linear unless `linear`; EXRs are linear. Returns a dict."""
+    import numpy as np
+    x, y, w, h = roi
+    m = int(np.ceil(rmax)) + 2
+
+    def get(path):
+        a = _read_rgb(path)
+        if not path.lower().endswith(".exr"):
+            a = a / 255.0
+            if not linear:
+                a = _hp_srgb_decode(a)
+        return a
+    A, B = get(sharp), get(dof)
+    if A.shape != B.shape:
+        sys.exit(f"bokeh: {sharp} {A.shape[:2]} and {dof} {B.shape[:2]} differ")
+    ya, yb, xa, xb = max(0, y - m), min(A.shape[0], y + h + m), max(0, x - m), min(A.shape[1], x + w + m)
+    sa = A[ya:yb, xa:xb]
+    tgt = B[y:y + h, x:x + w]
+    oy, ox = y - ya, x - xa
+    radii = np.round(np.arange(0.0, rmax + 1e-9, step), 4)
+    errs = []
+    for r in radii:
+        c = _conv_same(sa, _disc_kernel(float(r)))[oy:oy + h, ox:ox + w]
+        errs.append(float(((c - tgt) ** 2).mean()))
+    errs = np.array(errs)
+    i = int(np.argmin(errs))
+    # parabolic refinement around the minimum
+    r_best = float(radii[i])
+    if 0 < i < len(radii) - 1:
+        e0, e1, e2 = errs[i - 1], errs[i], errs[i + 1]
+        den = e0 - 2 * e1 + e2
+        if den > 0:
+            r_best += 0.5 * step * (e0 - e2) / den
+    base = float(((sa[oy:oy + h, ox:ox + w] - tgt) ** 2).mean())
+    return {"radius_px": round(r_best, 3), "residual_rms": round(float(np.sqrt(errs[i])), 6),
+            "unblurred_rms": round(float(np.sqrt(base)), 6), "roi": [x, y, w, h],
+            "png_srgb_decoded": not linear,
+            "curve": [[float(r), round(float(np.sqrt(e)), 6)] for r, e in zip(radii[::4], errs[::4])],
+            "sharp": sharp, "dof": dof}
+
+
+def bokeh_cmd(a):
+    roi = [int(v) for v in a.roi.split(",")]
+    res = bokeh_fit(a.sharp, a.dof, roi, a.linear, a.rmax)
+    if a.out:
+        with open(a.out, "w") as f:
+            json.dump(res, f, indent=1)
+    print(json.dumps({k: v for k, v in res.items() if k != "curve"}))
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1015,9 +1327,29 @@ def main():
     rs.add_argument("--crop", default=STRIP_CROP, help="w,h,x,y of the Cycles crop in the 1920x1080 portrait")
     rs.add_argument("--build", help="data/build root of the fixed stages (default: two levels above RUN)")
     rs.add_argument("--out", help="output PNG (default RUN/regression_strip.png)")
+    ch = sub.add_parser("chart", help="grey-chart row: engine vs Cycles after the grade, +-3/255 (T16)")
+    ch.add_argument("--chart", required=True, help="chart.json (blender/hero/refs.py --mode chart)")
+    ch.add_argument("--engine", required=True, help="engine frame (graded, same 1920x1080 camera)")
+    ch.add_argument("--engine-label", default="engine")
+    ch.add_argument("--engine2", help="a second engine frame (e.g. the pre-LUT grade)")
+    ch.add_argument("--engine2-label", default="engine2")
+    ch.add_argument("--cycles", help="Cycles graded frame (default: chart.json cycles.png)")
+    ch.add_argument("--tol", type=float, default=CHART_TOL)
+    ch.add_argument("--lut", help="grade_lut.json: add the grade-only check (each renderer's linear through the LUT)")
+    ch.add_argument("--engine-linear", help="the engine's scene-linear chart (engine_shots --chart: <prefix>chart_linear.npy)")
+    ch.add_argument("--out", required=True, help="output JSON")
+    ch.add_argument("--sheet", help="output PNG: chart crops side by side with the numbers")
+    bk = sub.add_parser("bokeh", help="fit the DoF disc radius (px) between a sharp and a DoF frame (T16)")
+    bk.add_argument("--sharp", required=True)
+    bk.add_argument("--dof", required=True)
+    bk.add_argument("--roi", required=True, help="x,y,w,h in the frames' pixels (top-left origin)")
+    bk.add_argument("--linear", action="store_true", help="PNG values are used as they are (no sRGB decode)")
+    bk.add_argument("--rmax", type=float, default=12.0)
+    bk.add_argument("--out", help="output JSON")
     a = ap.parse_args()
     {"finalize": finalize, "compare": compare, "engine": engine_sheet, "parity": parity_cmd,
-     "hairtest": hair_test_sheet, "hairparity": hair_parity, "strip": strip_cmd}[a.cmd](a)
+     "hairtest": hair_test_sheet, "hairparity": hair_parity, "strip": strip_cmd,
+     "chart": chart_cmd, "bokeh": bokeh_cmd}[a.cmd](a)
 
 
 if __name__ == "__main__":
