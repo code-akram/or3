@@ -135,10 +135,15 @@ class EyeGaze {
     model.traverse((o) => {
       const m = o as THREE.Mesh;
       if (!m.isMesh || !isEye(m)) return;
+      // packed xyz copies via getX/Y/Z: the attribute may be interleaved (gltf-transform's default layout,
+      // e.g. the KTX2 copy), where .array is the whole vertex buffer
       const orig = new Map<string, Float32Array>();
       for (const k of ['position', 'normal', 'tangent']) {
-        const a = m.geometry.getAttribute(k) as THREE.BufferAttribute | undefined;
-        if (a) orig.set(k, new Float32Array(a.array as Float32Array));
+        const a = m.geometry.getAttribute(k) as THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
+        if (!a) continue;
+        const xyz = new Float32Array(a.count * 3);
+        for (let i = 0; i < a.count; i++) xyz.set([a.getX(i), a.getY(i), a.getZ(i)], i * 3);
+        orig.set(k, xyz);
       }
       this.meshes.push({ mesh: m, orig });
     });
@@ -174,22 +179,18 @@ class EyeGaze {
       const sideOf = new Uint8Array(pos.length / 3);
       for (let i = 0; i < sideOf.length; i++) sideOf[i] = v.fromArray(pos, i * 3).applyMatrix4(M).x > 0 ? 0 : 1;
       for (const [k, src] of orig) {
-        const attr = mesh.geometry.getAttribute(k) as THREE.BufferAttribute;
-        const dst = attr.array as Float32Array;
-        dst.set(src);
-        if (g) {
-          const stride = attr.itemSize;
-          for (let i = 0; i < sideOf.length; i++) {
+        const attr = mesh.geometry.getAttribute(k) as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+        for (let i = 0; i < sideOf.length; i++) {
+          w.fromArray(src, i * 3);
+          if (g) {
             const side = sideOf[i] === 0 ? 'l' : 'r';
-            w.fromArray(src, i * stride);
             if (k === 'position') w.applyMatrix4(T[side]);
             else w.applyMatrix3(Nm[side]).normalize();
-            dst[i * stride] = w.x;
-            dst[i * stride + 1] = w.y;
-            dst[i * stride + 2] = w.z;
           }
+          attr.setXYZ(i, w.x, w.y, w.z); // tangent w (handedness) is left as loaded
         }
-        attr.needsUpdate = true;
+        if ('isInterleavedBufferAttribute' in attr && attr.isInterleavedBufferAttribute) attr.data.needsUpdate = true;
+        else attr.needsUpdate = true;
       }
     }
   }

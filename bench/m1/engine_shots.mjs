@@ -157,7 +157,11 @@ const server = createServer((req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405);
   serve(req, res).catch(() => send(res, 500));
 });
-await new Promise((r) => server.listen(port, '127.0.0.1', r));
+await new Promise((r, rej) => {
+  // a busy port (another track's capture) would otherwise hang here silently
+  server.once('error', (e) => rej(new Error(`[engine_shots] cannot listen on 127.0.0.1:${port}: ${e.code} (try --port)`)));
+  server.listen(port, '127.0.0.1', r);
+});
 
 // ------------------------------------------------------------------ PNG (RGB8, no deps)
 function png(w, h, rgba) {

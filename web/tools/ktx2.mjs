@@ -7,7 +7,7 @@
 // a separate file (export.ktx2 names it character.ktx2.glb). Encoder: ktx2-encoder (basis_universal
 // WASM, no toktx needed); glTF I/O: @gltf-transform/core. Writes only OUT.
 import { readFile, writeFile } from 'node:fs/promises';
-import { NodeIO } from '@gltf-transform/core';
+import { NodeIO, VertexLayout } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
 import { ktx2 } from 'ktx2-encoder/gltf-transform';
 import { PNG } from 'pngjs';
@@ -32,7 +32,8 @@ async function imageDecoder(buf) {
 }
 
 const t0 = Date.now();
-const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
+// separate vertex streams, as Blender writes them (gltf-transform defaults to interleaved)
+const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).setVertexLayout(VertexLayout.SEPARATE);
 const doc = await io.readBinary(new Uint8Array(await readFile(src)));
 const before = doc.getRoot().listTextures().reduce((n, t) => n + (t.getImage()?.byteLength ?? 0), 0);
 // the WASM encoder caps a texture at ~12 Mpix: halve anything larger (the 4k head maps -> 2k; at the
