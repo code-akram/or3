@@ -321,12 +321,12 @@ def _lin_lum(rgb):
     return lin @ np.array([0.2126, 0.7152, 0.0722])
 
 
-def ball_metrics(run):
+def ball_metrics(run, engine_png="game_balls.png"):
     """Per ball: mean and 99.5th-percentile scene-linear luminance (Standard view,
     exposure-scaled) inside 0.85 of its projected radius, Cycles vs engine."""
     import numpy as np
     bj = load(os.path.join(run, "shader_balls.json"))
-    cyc, eng = os.path.join(run, "cycles_balls.png"), os.path.join(run, "game_balls.png")
+    cyc, eng = os.path.join(run, "cycles_balls.png"), os.path.join(run, engine_png)
     if not bj or not os.path.exists(cyc) or not os.path.exists(eng):
         return None
     lc, le = _lin_lum(_png_rgb(cyc)), _lin_lum(_png_rgb(eng))

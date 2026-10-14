@@ -58,8 +58,9 @@ export const DEFAULT_PARAMS = {
     shiftJitter: 0.12,
     exponent1: 160,
     exponent2: 28,
-    spec1: 0.07,
-    spec2: 0.08,
+    // shader-ball calibrated (T6): the hair-card ball read 3.0x Cycles at 0.07 / 0.08 (diffuse alone 0.35x)
+    spec1: 0.0175,
+    spec2: 0.02,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,
@@ -85,7 +86,8 @@ export const DEFAULT_PARAMS = {
   eye: {
     albedoGain: 1.0,
     corneaRoughness: 0.04,
-    corneaStrength: 1.0,
+    // shader-ball calibrated (T6): 1.0 put the area-light catchlight peak at 1.35x Cycles (coat f0 ~0.025 vs 0.04)
+    corneaStrength: 0.7,
     /** Eye UV is a polar map: v from the back (0) to the cornea pole (1). Limbus and pupil rows. */
     limbusV: 0.645,
     limbalWidth: 0.012,
@@ -98,7 +100,8 @@ export const DEFAULT_PARAMS = {
     fuzzColor: [0.32, 0.33, 0.38],
     fuzzStrength: 0.15,
     fuzzPower: 3.0,
-    sheenScale: 0.6,
+    // shader-ball calibrated (T6): three's Charlie sheen vs Blender's; wool read 1.35x at 0.6, 0.88x at 0
+    sheenScale: 0.15,
     twillStrength: 0.12,
     /** Twill period in UV units^-1 (diagonal ridges). */
     twillFreq: 900,

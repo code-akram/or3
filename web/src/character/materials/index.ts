@@ -16,7 +16,7 @@ import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { BRDF_GGX, BRDF_Lambert, diffuseColor, float, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, LTC_Uv, mat3, diffuseColor, float, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -25,6 +25,29 @@ interface DirectInput {
   lightDirection: N;
   lightColor: N;
   reflectedLight: { directDiffuse: N; directSpecular: N };
+}
+interface RectInput {
+  lightColor: N;
+  lightPosition: N;
+  halfWidth: N;
+  halfHeight: N;
+  reflectedLight: { directDiffuse: N; directSpecular: N };
+  ltc_1: N;
+  ltc_2: N;
+}
+
+/** A rect light (three's LTC path, ?area=rims|all) as the point light the custom terms (skin SSS
+ * diffuse, cloth sheen + fuzz) understand: direction to the centre and the intensity of a small
+ * Lambertian emitter, I = L A cos(theta_light), over d^2. The LTC keeps the specular; three's stock
+ * directRectArea has no sheen and knows nothing of these terms, so without this they vanish. */
+function rectAsPoint(i: RectInput): { L: N; color: N } {
+  const toL = i.lightPosition.sub(positionView);
+  const d2 = toL.dot(toL).max(1e-4);
+  const L = toL.normalize();
+  const n = i.halfWidth.cross(i.halfHeight);
+  const area = n.length().mul(4);
+  const cosL = n.normalize().dot(L).max(0); // shines along local -z: the lit side has L along +z
+  return { L, color: i.lightColor.mul(area).mul(cosL).div(d2) };
 }
 
 export type Role = 'skin' | 'hair' | 'facial' | 'lash' | 'eye' | 'cloth' | 'shirt' | 'generic';
@@ -142,6 +165,17 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     const dotNL = normalView.dot(L).clamp();
     reflectedLight.directSpecular.addAssign(lightColor.mul(dotNL).mul(mix(s1, s2, P.u('skin.lobeMix'))).mul(P.u('skin.specGain')));
   }
+
+  override directRectArea(input: unknown, builder?: unknown): void {
+    const i = input as RectInput;
+    // the area-shaped (LTC) specular, scaled like the dual lobe; the stock Lambert diffuse is dropped
+    const spec = vec3(0).toVar();
+    super.directRectArea({ ...(i as object), reflectedLight: { directDiffuse: vec3(0).toVar(), directSpecular: spec } } as never, builder as never);
+    i.reflectedLight.directSpecular.addAssign(spec.mul(this.P.u('skin.specGain')));
+    // pre-integrated SSS / wrap diffuse from the point equivalent (its punctual specular dropped)
+    const pt = rectAsPoint(i);
+    this.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: { directDiffuse: i.reflectedLight.directDiffuse, directSpecular: vec3(0).toVar() } });
+  }
 }
 
 export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
@@ -211,6 +245,13 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const tint = diffuseColor.rgb.max(1e-4).sqrt();
     const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${this.prefix}.spec1`)).add(tint.mul(s2).mul(P.u(`${this.prefix}.spec2`)));
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
+  }
+
+  override directRectArea(input: unknown): void {
+    // the anisotropic fibre lobes have no LTC form: the whole term from the rect's point equivalent
+    const i = input as RectInput;
+    const pt = rectAsPoint(i);
+    this.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: i.reflectedLight });
   }
 }
 
@@ -288,6 +329,24 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
     const s = BRDF_GGX({ lightDirection: L, f0: vec3(0.04), f90: float(1), roughness: r, normalView: Ng });
     reflectedLight.directSpecular.addAssign(lightColor.mul(Ng.dot(L).clamp()).mul(s).mul(this.P.u('eye.corneaStrength')));
   }
+
+  override directRectArea(input: unknown, builder?: unknown): void {
+    const i = input as RectInput;
+    super.directRectArea(input as never, builder as never);
+    // the cornea's reflection of an area light is the light's shape: LTC GGX (f0 0.04) on the eyeball normal
+    const Ng = normalViewGeometry;
+    const V = positionViewDirection;
+    const r = float(this.P.u('eye.corneaRoughness')).clamp(0.02, 1);
+    const t1 = i.ltc_1.sample(LTC_Uv({ N: Ng, V, roughness: r })).toVar();
+    const t2 = i.ltc_2.sample(LTC_Uv({ N: Ng, V, roughness: r })).toVar();
+    const mInv = mat3(vec3(t1.x, 0, t1.y), vec3(0, 1, 0), vec3(t1.z, 0, t1.w));
+    const fres = t2.x.mul(0.04).add(t2.y.mul(0.96));
+    const c = i.lightPosition;
+    const hw = i.halfWidth;
+    const hh = i.halfHeight;
+    const ev = LTC_Evaluate({ N: Ng, V, P: positionView, mInv, p0: c.add(hw).sub(hh), p1: c.sub(hw).sub(hh), p2: c.sub(hw).add(hh), p3: c.add(hw).add(hh) });
+    i.reflectedLight.directSpecular.addAssign(i.lightColor.mul(fres).mul(ev).mul(this.P.u('eye.corneaStrength')));
+  }
 }
 
 export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
@@ -336,6 +395,25 @@ class ClothLightingModel extends THREE.PhysicalLightingModel {
     const wrapNL = normalView.dot(L).mul(0.5).add(0.5).clamp();
     reflectedLight.directDiffuse.addAssign(
       lightColor.mul(this.P.u('cloth.fuzzColor')).mul(rim).mul(wrapNL).mul(this.P.u(this.fuzzKey)).mul(1 / Math.PI),
+    );
+  }
+
+  override directRectArea(input: unknown, builder?: unknown): void {
+    const i = input as RectInput;
+    // LTC diffuse + specular, the diffuse occluded like direct()
+    const diffuse = vec3(0).toVar();
+    super.directRectArea({ ...(i as object), reflectedLight: { ...i.reflectedLight, directDiffuse: diffuse } } as never, builder as never);
+    i.reflectedLight.directDiffuse.addAssign(diffuse.mul(directAO(this.ao, this.P.u('cloth.directAO'))));
+    // sheen (accumulated by the physical direct()) and the fuzz rim from the point equivalent; the
+    // punctual diffuse / specular of that call are discarded (the LTC has them)
+    const pt = rectAsPoint(i);
+    const scratch = { directDiffuse: vec3(0).toVar(), directSpecular: vec3(0).toVar() };
+    super.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: scratch } as never, builder as never);
+    const nv = normalView.dot(positionViewDirection).clamp();
+    const rim = float(1).sub(nv).pow(this.P.u('cloth.fuzzPower'));
+    const wrapNL = normalView.dot(pt.L).mul(0.5).add(0.5).clamp();
+    i.reflectedLight.directDiffuse.addAssign(
+      pt.color.mul(this.P.u('cloth.fuzzColor')).mul(rim).mul(wrapNL).mul(this.P.u(this.fuzzKey)).mul(1 / Math.PI),
     );
   }
 }

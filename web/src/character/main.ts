@@ -102,9 +102,11 @@ async function loadTexture(url: string): Promise<THREE.Texture | null> {
 // LTC rect lights are opt-in: three's RectAreaLight casts no shadows, so a rim behind the head leaks
 // onto the collar / under the jaw; the portrait A/B scored SSIM none 0.694 > rims 0.684 > all 0.670
 // against the Cycles parity render (t6-engine-parity.md). Shadowed spots stay the default.
-function areaMode(): 'none' | 'rims' | 'all' {
+// The shader balls default to 'all': no occluders, so unshadowed LTC rects are the faithful model of the
+// Blender area lights there (ball parity calibrates materials, not the light approximation).
+function areaMode(fallback: 'none' | 'all' = 'none'): 'none' | 'rims' | 'all' {
   const a = q.get('area');
-  return a === 'rims' || a === 'all' ? a : 'none';
+  return a === 'none' || a === 'rims' || a === 'all' ? a : fallback;
 }
 
 interface BuildStats {
@@ -316,7 +318,7 @@ async function mainBalls(): Promise<void> {
   scene.add(gltf.scene);
   const mats = assignMaterials(gltf.scene, P, { flow, data, weave, ...skinSidecars(P, curvHead, curvHands) }, true);
   const stage = new Stage(stageData!, scene, mats.byName);
-  stage.areaMode = areaMode();
+  stage.areaMode = areaMode('all');
   stage.setup('front', 'neutral');
   output.setGrade(false, balls!.exposure);
   output.viewAgX.value = balls!.view_transform === 'AgX' ? 1 : 0;

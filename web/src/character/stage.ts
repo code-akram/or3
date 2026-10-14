@@ -197,7 +197,7 @@ export class Stage {
   private lights: { light: THREE.SpotLight | THREE.RectAreaLight; spec: StageLight }[] = [];
   view: ViewSetup | null = null;
   shadowMapSize = 2048;
-  /** Which lights become LTC rect lights: none, (default: shadowed spots), the rims and kickers, or all. */
+  /** Which lights become LTC rect lights: none (default: shadowed spots), the rims and kickers, or all. */
   areaMode: 'none' | 'rims' | 'all' = 'none';
   private static ltcReady = false;
 
@@ -426,8 +426,9 @@ export function applyCamera(cam: THREE.PerspectiveCamera, s: StageCamera, w: num
   cam.up.copy(new THREE.Vector3(0, 1, 0));
   cam.lookAt(v3(s.target));
   let vfov = s.vfov_deg;
-  if (s.sensor_fit === 'AUTO' && w < h) {
-    // AUTO fit: the sensor spans the larger dimension
+  if (s.sensor_fit === 'AUTO' && w > h) {
+    // AUTO fit: the sensor (vfov_deg) spans the larger dimension, so a landscape frame's vertical FOV is
+    // narrower (the 2:1 shader-ball frame; lookdev frames are square, the hero portrait is VERTICAL)
     vfov = (2 * Math.atan((Math.tan((vfov * Math.PI) / 360) * h) / w) * 180) / Math.PI;
   }
   cam.fov = vfov;
