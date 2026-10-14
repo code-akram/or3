@@ -131,6 +131,14 @@ export const DEFAULT_PARAMS = {
     /** Optical depth of the hair layer above the fibres the camera sees (materials HairLightingModel):
      * every light into the scalp hair x exp(-surfaceDepth / |N.L|); 0 = off. */
     surfaceDepth: 0.0,
+    /** T20: 1 = the TT and scatter terms take the strand's own fibre transmittance exp(-ttDepth (ln albedo)^2)
+     * (materials HairMaterial), 0 = the T9b unit-luminance tint. ttDepth = 2 / (fac^2 path): fac 5.509 is
+     * Chiang's radial-roughness factor at 0.5, path the atlas albedo's (hair_groom_cards CARDS.albedo.path). */
+    fibreTint: 0,
+    ttDepth: 0.0969,
+    /** T20: the baked directional hair occlusion (TEXCOORD_2 / _3 of v5 builds) on every light into the scalp
+     * hair: 1 for the gameplay tier, where the deep shadow (hair.deepShadow) is off; 0 = off (hero tier). */
+    dirOcclusion: 0,
   },
   /** T10 screen-space AO (ao.ts): GTAO at half resolution on a depth / normal prepass (cards with their
    * alpha), multiplied into the direct diffuse of every character material, per light by the light's

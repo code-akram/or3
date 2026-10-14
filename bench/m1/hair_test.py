@@ -911,10 +911,22 @@ def views_test(results):
     counts = hv_regions(groom, arm)
     cycles(res, samples, False)
     sc.view_settings.exposure = STUDIO_EXPOSURE
+    # --views-lights key,fill,rim (T20): one more Cycles frame per studio light and view, the other
+    # lights off (hv_<view>_cycles_<light>.exr), for the per-light / per-term fit of the engine's hair
+    # lobes on the region masks (viewer ?lights=<name>)
+    vlights = [x for x in opt("--views-lights", "").split(",") if x]
     for view, (loc, tgt) in cams.items():
         hv_camera(f"hv_{view}", loc, tgt)
         save(os.path.join(OUT, f"hv_{view}_cycles.exr"), exr=True)
         save(os.path.join(OUT, f"hv_{view}_cycles.png"))
+        for ln in vlights:
+            keep = {o.name: o.hide_render for o in sc.objects if o.type == "LIGHT"}
+            for o in sc.objects:
+                if o.type == "LIGHT":
+                    o.hide_render = o.name != ln
+            save(os.path.join(OUT, f"hv_{view}_cycles_{ln}.exr"), exr=True)
+            for k, v in keep.items():
+                sc.objects[k].hide_render = v
     # Hero hair mask by region: the scalp groom an emitter, every mesh and other curve a holdout.
     reg_mat = _emit_mat("hv_region", attr="t15_region")
     for o in sc.objects:

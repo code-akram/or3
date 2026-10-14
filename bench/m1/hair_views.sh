@@ -12,7 +12,8 @@
 # 2. engine_shots.mjs on RUN/hair_test/views: game_<view>.png (AgX) and lin_<view>.png (Standard)
 # 3. hair_test.py --parts views_measure -> RUN/hair_test/hair_test.json "views", hv_<view>_iou.png
 # Env: ENGINE_PORT (default 8798), ENGINE_LOCK (flock file serialising browsers on that port, default
-# /tmp/or3-engine-<port>.lock), ENGINE_CPUS (default 0-3), CYCLES_THREADS (default 6).
+# /tmp/or3-engine-<port>.lock), ENGINE_CPUS (default 0-3), CYCLES_THREADS (default 6),
+# VIEWS_ARGS (extra hair_test.py options for the views render, e.g. "--views-lights key,fill,rim", T20).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 MEASURE=
@@ -25,7 +26,7 @@ BL=(nice -n 10 blender -b --factory-startup --python-exit-code 1)
 if [[ -z "$MEASURE" ]]; then
   [[ -f "$RUN/character.blend" ]] || { echo "no character.blend in $RUN (KEEP_BLEND=1)" >&2; exit 2; }
   flock /tmp/or3-cycles.lock "${BL[@]}" -t "${CYCLES_THREADS:-6}" --python "$REPO/bench/m1/hair_test.py" -- \
-    "$RUN" --parts views > "$HT/views.log" 2>&1 || { echo "views render failed: $HT/views.log" >&2; tail -20 "$HT/views.log" >&2; exit 1; }
+    "$RUN" --parts views ${VIEWS_ARGS:-} > "$HT/views.log" 2>&1 || { echo "views render failed: $HT/views.log" >&2; tail -20 "$HT/views.log" >&2; exit 1; }
 fi
 [[ -f "$VD/engine_stage.json" ]] || { echo "no $VD/engine_stage.json (run without --measure first)" >&2; exit 2; }
 npm run --prefix "$REPO/web" build:viewer --silent > "$HT/views_engine.log" 2>&1
