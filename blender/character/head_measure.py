@@ -13,7 +13,9 @@ vertices are excluded.
 """
 
 import bpy
+import numpy as np
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 HELPERS = {"HelperGeometry", "JointCubes"}
 TARGETS = {
@@ -28,7 +30,16 @@ TARGETS = {
     "jaw_to_cheek": (0.87, 0.03),
     "lower_face_index": (0.88, 0.04),
 }
-BROW_OVERHANG_MIN = 0.012  # metres, look-spec §1.2 (cal.)
+BROW_OVERHANG_MIN = 0.008  # metres; T7 redefinition (supraorbital rim ahead of the cornea apex)
+# Head structure (bench/m1/v4/checkpoint-1.md §3 T7): key -> (low, high), inclusive.
+RANGES = {
+    "gonial_angle_deg": (115.0, 120.0),
+    "eye_aperture_mm": (9.5, 11.0),
+    "canthal_tilt_deg": (2.0, 4.0),
+    "orbit_recess_mm": (2.0, 3.0),
+    "forehead_behind_brow_mm": (3.0, None),
+    "jaw_to_cheek": (0.84, 0.88),
+}
 # Nose caricature guard (face C, bench/m1/head.md §8): dorsal hump <= 2.5 mm
 # over the nasion-pronasale chord; projection/length 0.60 +- 0.10 (the
 # stock MPFB head is 0.63; a hooked, drooping nose reads > 0.75).
@@ -73,11 +84,17 @@ def _dominant_bones(obj, bones):
     return out
 
 
-def measure(arm, body, eyes):
+def measure(arm, body, eyes, emb=None):
     """Spec landmarks. arm: armature, body: MPFB base mesh (nude, full
-    topology), eyes: the fitted eye proxy or None. Returns a flat dict."""
+    topology), eyes: the fitted eye proxy or None, emb: the MediaPipe landmark embedding on the
+    base mesh (head_sculpt; tri_verts + bary) for the landmark-based measures. Returns a flat
+    dict."""
     bones = set(arm.data.bones.keys())
     co = _rest_coords(body)
+    lm = None
+    if emb is not None:
+        C = np.array([p[:] for p in co])
+        lm = np.einsum("lk,lkd->ld", emb["bary"], C[emb["tri_verts"]])
     dom = _dominant_bones(body, bones)
     V = [(p, b) for p, b in zip(co, dom) if b is not None]
     mw = arm.matrix_world
@@ -166,33 +183,245 @@ def measure(arm, body, eyes):
             m["nose_length_mm"] = (nas.z - prn.z) * 1000
             m["nose_proj_ratio"] = m["nose_projection_mm"] / max(m["nose_length_mm"], 1e-6)
 
-        # Brow overhang (look-spec §1.2): on the mid-pupil vertical, the most
-        # forward brow point minus the cornea front, along -Y. Mean of both sides.
-        over = []
-        for side in (1, -1):
-            eye = [p for p in eye_co if p.x * side > 0]
-            cx = sum(p.x for p in eye) / len(eye)
-            cornea_y = min(p.y for p in eye)
-            brow = [p for p in head_v if abs(p.x - cx) < 0.004 and ez + 0.008 < p.z < ez + 0.040]
-            if brow:
-                over.append(cornea_y - min(p.y for p in brow))
-        if over:
-            m["brow_overhang"] = sum(over) / len(over)
+        m.update(head_structure(body, co, eyes, eye_co, chin, ez, lm))
         m["interpupillary"] = (sum(p.x for p in eye_co if p.x > 0) / max(1, sum(1 for p in eye_co if p.x > 0))
                                - sum(p.x for p in eye_co if p.x < 0) / max(1, sum(1 for p in eye_co if p.x < 0)))
 
-    return {k: round(v, 4) for k, v in m.items()}
+    return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in m.items()}
+
+
+# --- head structure (T7) ------------------------------------------------------------------------
+
+def _skin_bvh(body, co):
+    """BVH of the skin polygons (helper and joint-cube polygons dropped), on rest coords co."""
+    gidx = {g.index for g in body.vertex_groups if g.name in HELPERS}
+    helper = np.zeros(len(co), bool)
+    for v in body.data.vertices:
+        if any(g.group in gidx and g.weight > 0 for g in v.groups):
+            helper[v.index] = True
+    polys = [tuple(p.vertices) for p in body.data.polygons if not helper[list(p.vertices)].any()]
+    return BVHTree.FromPolygons(co, polys), helper, polys
+
+
+def _eye_spheres(eye_co):
+    """Per side (1 = character's left, +x): sphere centre, radius and cornea apex (most forward)."""
+    out = {}
+    for side in (1, -1):
+        p = np.array([q[:] for q in eye_co if q.x * side > 0])
+        A = np.c_[2 * p, np.ones(len(p))]
+        sol = np.linalg.lstsq(A, (p ** 2).sum(1), rcond=None)[0]
+        c = sol[:3]
+        r = float(np.sqrt(sol[3] + c @ c))
+        out[side] = (c, r, p[np.argmin(p[:, 1])])
+    return out
+
+
+def _profile(bvh, x, z0, z1, step=0.0005, y0=-1.0):
+    """Skin profile on the vertical line x: first hit along +Y from the front, per height z.
+    Returns (z, y) arrays (y nan where nothing was hit)."""
+    zs = np.arange(z0, z1 + 1e-9, step)
+    ys = np.full(len(zs), np.nan)
+    for i, z in enumerate(zs):
+        loc, _, _, _ = bvh.ray_cast(Vector((x, y0, z)), Vector((0, 1, 0)))
+        if loc is not None:
+            ys[i] = loc.y
+    return zs, ys
+
+
+def _aperture(skin, eye_bvh, c, side, step=0.00025):
+    """Palpebral fissure seen from the front: the front rays that reach the eyeball before any
+    skin, as the connected region around the pupil. Returns the vertical extent through the pupil
+    (m), the canthi (medial, lateral) as (x, z): the extreme columns' mean heights, and the top
+    and bottom of the pupil column relative to the eye centre (the lid margins)."""
+    xs = np.arange(-0.020, 0.020 + 1e-9, step)
+    zs = np.arange(-0.014, 0.014 + 1e-9, step)
+    open_ = np.zeros((len(zs), len(xs)), bool)
+    d = Vector((0, 1, 0))
+    for j, dx in enumerate(xs):
+        for i, dz in enumerate(zs):
+            o = Vector((c[0] + dx, c[1] - 0.2, c[2] + dz))
+            le, _, _, te = eye_bvh.ray_cast(o, d)
+            if le is None:
+                continue
+            ls, _, _, ts = skin.ray_cast(o, d)
+            open_[i, j] = ls is None or te < ts
+    i0, j0 = int(np.argmin(np.abs(zs))), int(np.argmin(np.abs(xs)))
+    if not open_[i0, j0]:
+        return None
+    reg = np.zeros_like(open_)
+    stack = [(i0, j0)]
+    while stack:
+        i, j = stack.pop()
+        if i < 0 or j < 0 or i >= len(zs) or j >= len(xs) or reg[i, j] or not open_[i, j]:
+            continue
+        reg[i, j] = True
+        stack += [(i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)]
+    k = np.nonzero(reg[:, j0])[0]
+    aperture = (k.max() - k.min() + 1) * step
+    top, bottom = zs[k.max()] + step / 2, zs[k.min()] - step / 2
+    cols = np.nonzero(reg.any(0))[0]
+
+    def canthus(jj):
+        return c[0] + xs[jj], c[2] + float(zs[reg[:, jj]].mean())
+    a, b = canthus(cols.min()), canthus(cols.max())
+    lateral, medial = (b, a) if side > 0 else (a, b)
+    return aperture, medial, lateral, top, bottom
+
+
+def _occluding_edge(skin, side, ray, scan, pivots, span=0.045, step=0.0005, jump=0.004, z_min=-np.inf):
+    """Occluding-contour points of the skin seen along `ray` (unit): for each pivot, a line of
+    parallel rays offset along `scan` (unit, perpendicular to ray); the edge is the last hit
+    before the first depth jump (or miss) when scanning toward +scan (the first overhang below
+    the cheek), among edges above z_min."""
+    out = []
+    r = Vector(ray)
+    for p0 in pivots:
+        hits = []
+        for u in np.arange(-span, span + 1e-9, step):
+            o = Vector(p0 + u * scan - 0.25 * ray)
+            loc, _, _, d = skin.ray_cast(o, r)
+            hits.append((d if loc is not None else np.inf, loc))
+        t = np.array([h[0] for h in hits])
+        k = None
+        for i in range(len(t) - 1):
+            if np.isfinite(t[i]) and hits[i][1].z > z_min and t[i + 1] - t[i] > jump:
+                k = i
+                break
+        if k is not None:
+            out.append(np.array(hits[k][1][:]))
+    return np.array(out).reshape(-1, 3)
+
+
+def jaw_border(skin, side, M, C, x_jaw):
+    """The mandible's lower border on the skin as an occluding contour: seen from above-lateral at
+    45 deg, the line where the surface normal turns from lateral to down (the jaw overhangs the
+    neck there). One point per 2 mm of depth from 20 mm behind the menton M to the condyle point C
+    (object coords); x_jaw is the jaw's lateral half-width (where the scan lines pivot)."""
+    s = float(side)
+    r1 = np.array([-s, 0.0, -1.0]) / np.sqrt(2)
+    u1 = np.array([s, 0.0, -1.0]) / np.sqrt(2)
+    ys = np.arange(M[1] + 0.02, C[1] + 0.002, 0.002)
+    return _occluding_edge(skin, side, r1, u1, [np.array([s * x_jaw, y, M[2] + 0.02]) for y in ys],
+                           z_min=M[2] - 0.005)
+
+
+def gonial_from_border(lower, M, C, ear_gap=0.008):
+    """Soft-tissue gonial angle in the sagittal (y, z) projection. Gonion: the lower-border point
+    farthest behind-below the menton-condyle chord (the jaw corner), among points at least
+    `ear_gap` in front of the condyle point. Mandibular line: from the menton, tangent to the
+    lower border (the flattest line through M with the border on or above it). Ramus line: gonion
+    to the condyle point (the tragus proxy). Returns (degrees, gonion, mandibular-line degrees
+    above horizontal) or None."""
+    lo = lower[((lower[:, 1] - M[1]) > 0.025) & (lower[:, 1] < C[1] - ear_gap)] if len(lower) else lower
+    if len(lo) < 3:
+        return None
+    ch = (C - M)[1:] / np.linalg.norm((C - M)[1:])
+    nrm = np.array([ch[1], -ch[0]])                       # behind-below the chord
+    g = lo[np.argmax((lo[:, 1:] - M[1:]) @ nrm)]
+    phi = np.arctan2(lo[:, 2] - M[2], lo[:, 1] - M[1]).min()
+    to_m = -np.array([np.cos(phi), np.sin(phi)])
+    to_c = (C - g)[1:] / np.linalg.norm((C - g)[1:])
+    return float(np.degrees(np.arccos(np.clip(to_m @ to_c, -1, 1)))), g, float(np.degrees(phi))
+
+
+def group_mask(body, name):
+    out = np.zeros(len(body.data.vertices), bool)
+    g = body.vertex_groups.get(name)
+    if g is not None:
+        for v in body.data.vertices:
+            if any(x.group == g.index and x.weight > 0 for x in v.groups):
+                out[v.index] = True
+    return out
+
+
+def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
+    """T7 head-structure measures, mean of both sides (per side in *_lr):
+
+    brow_overhang            supraorbital rim (most forward skin 6-25 mm above the eye centre on
+                             the mid-pupil line) ahead of the cornea apex, along -Y (metres)
+    forehead_behind_brow_mm  the profile 25 mm above that rim point, behind it (+ = behind)
+    orbit_recess_mm          cornea apex behind the rim line (supraorbital rim to infraorbital rim,
+                             the most forward skin 10-16 mm below the eye centre, below the lower
+                             lid of a 12 mm globe), at apex height
+    eye_aperture_mm          palpebral fissure height through the pupil, seen from the front
+    canthal_tilt_deg         lateral canthus above the medial one (+ = up-tilted)
+    gonial_angle_deg         soft-tissue jaw angle (gonial_from_border on the jaw_border contour)
+    globe_radius_mm          sphere fit of the fitted eye
+    infraorbital_*_mm        diagnostics: the infraorbital rim point ahead of the apex / below the eye centre
+    """
+    m = {}
+    skin, helper, polys = _skin_bvh(body, co)
+    E = [Vector(p) for p in eye_co]
+    eye_bvh = BVHTree.FromPolygons(E, [tuple(p.vertices) for p in eyes.data.polygons])
+    rows = {k: [] for k in ("brow_overhang", "forehead_behind_brow_mm", "orbit_recess_mm",
+                            "eye_aperture_mm", "canthal_tilt_deg", "globe_radius_mm",
+                            "infraorbital_ahead_mm", "infraorbital_below_mm")}
+    for side, (c, r, apex) in _eye_spheres(eye_co).items():
+        rows["globe_radius_mm"].append(r * 1000)
+        zs, ys = _profile(skin, float(c[0]), c[2] - 0.03, c[2] + 0.065)
+        up = (zs > c[2] + 0.006) & (zs < c[2] + 0.025) & np.isfinite(ys)
+        lo = (zs > c[2] - 0.016) & (zs < c[2] - 0.010) & np.isfinite(ys)
+        if up.any() and lo.any():
+            iS = np.nonzero(up)[0][np.argmin(ys[up])]
+            iI = np.nonzero(lo)[0][np.argmin(ys[lo])]
+            yS, zS, yI, zI = ys[iS], zs[iS], ys[iI], zs[iI]
+            rows["brow_overhang"].append(apex[1] - yS)
+            f = np.isfinite(ys) & (np.abs(zs - (zS + 0.025)) < 0.002)
+            if f.any():
+                rows["forehead_behind_brow_mm"].append((ys[f].mean() - yS) * 1000)
+            t = (apex[2] - zS) / (zI - zS)
+            rows["infraorbital_ahead_mm"].append((apex[1] - yI) * 1000)
+            rows["infraorbital_below_mm"].append((c[2] - zI) * 1000)
+            rows["orbit_recess_mm"].append((apex[1] - (yS + t * (yI - yS))) * 1000)
+        ap = _aperture(skin, eye_bvh, c, side)
+        if ap:
+            a, (mx, mz), (lx, lz) = ap[:3]
+            rows["eye_aperture_mm"].append(a * 1000)
+            rows["canthal_tilt_deg"].append(float(np.degrees(np.arctan2(lz - mz, abs(lx - mx)))))
+    for k, v in rows.items():
+        if v:
+            m[k] = float(np.mean(v))
+            if k != "brow_overhang" and len(v) == 2:
+                m[k + "_lr"] = [round(float(x), 2) for x in v]
+    C = np.array([p[:] for p in co])
+    ears = group_mask(body, "ears")
+    M = np.array(chin[:])
+    ang, gon, mp = [], [], []
+    for side in (1, -1):
+        e = ears & (C[:, 0] * side > 0)
+        if not e.any():
+            continue
+        E = C[e]
+        cond = np.array([side * np.abs(E[:, 0]).min(), E[:, 1].min(), E[:, 2].mean()])
+        x_jaw = 0.5 * m.get("bigonial", 0.12)
+        r = gonial_from_border(jaw_border(skin, side, M, cond, x_jaw), M, cond)
+        if r:
+            ang.append(r[0])
+            gon.append(r[1])
+            mp.append(r[2])
+    if ang:
+        m["gonial_angle_deg"] = float(np.mean(ang))
+        m["gonial_angle_deg_lr"] = [round(x, 1) for x in ang]
+        m["gonion_y_mm"] = [round(float(g[1]) * 1000, 1) for g in gon]
+        m["gonion_below_eye_mm"] = [round(float(ez - g[2]) * 1000, 1) for g in gon]
+        m["mandibular_plane_deg"] = [round(x, 1) for x in mp]
+        m["menton_y_mm"] = round(float(M[1]) * 1000, 1)
+    return m
 
 
 def checks(m):
     """Pass/fail against the spec targets: {key: {value, target, tol, ok}}."""
     out = {}
     for k, (t, tol) in TARGETS.items():
-        if k in m:
+        if k in m and k not in RANGES:
             out[k] = {"value": m[k], "target": t, "tol": tol, "ok": abs(m[k] - t) <= tol + 1e-9}
     if "brow_overhang" in m:
         out["brow_overhang"] = {"value": m["brow_overhang"], "target": BROW_OVERHANG_MIN,
                                 "tol": None, "ok": m["brow_overhang"] >= BROW_OVERHANG_MIN}
+    for k, (lo, hi) in RANGES.items():
+        if k in m:
+            ok = (lo is None or m[k] >= lo - 1e-9) and (hi is None or m[k] <= hi + 1e-9)
+            out[k] = {"value": m[k], "target": [lo, hi], "tol": None, "ok": ok}
     if "nose_hump_mm" in m:   # caricature guard: rugged, not hooked
         out["nose_hump_mm"] = {"value": m["nose_hump_mm"], "target": NOSE_HUMP_MAX,
                                "tol": None, "ok": m["nose_hump_mm"] <= NOSE_HUMP_MAX}
@@ -210,7 +439,14 @@ def measure_live(b):
     """On the live MPFB human (nude: no clothes fitted yet)."""
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
     eyes = find_eyes(bpy.data.objects)
-    m = measure(arm, b.basemesh, eyes)
+    st = getattr(b, "sculpt_state", None)
+    emb = st and st.get("emb")
+    if emb is None:   # no sculpt layer: the default embedding, when it exists, still gives the jaw angle
+        import os
+        from . import head_layer
+        path = head_layer.resolve("$DATA/build/identity/base_embedding.npz")
+        emb = np.load(path) if os.path.exists(path) else None
+    m = measure(arm, b.basemesh, eyes, emb)
     b.notes["spec_landmarks"] = m
     b.notes["spec_checks"] = checks(m)
     return m

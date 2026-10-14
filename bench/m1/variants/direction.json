@@ -22,19 +22,11 @@
    "lr-eye-bag-incr": 0.5,
    "lr-eye-eyefold-down": 0.4,
    "forehead-temple-decr": 0.5,
-   "mouth-upperlip-volume-decr": 1.0,
-   "mouth-lowerlip-volume-decr": 0.5,
-   "mouth-laugh-lines-in": 0.25,
    "neck-scale-horiz-decr": 0.35,
    "chin-prognathism-decr": 0.2,
-   "mouth-scale-horiz-decr": 0.85,
-   "mouth-upperlip-height-decr": 0.8,
-   "mouth-cupidsbow-incr": 0.5,
-   "mouth-philtrum-volume-incr": 0.5,
-   "mouth-lowerlip-height-decr": 0.2,
-   "mouth-trans-up": 0.2,
-   "mouth-eversion": 0.5,
-   "mouth-compression": 0.25
+   "mouth-scale-horiz-decr": 0.5,
+   "mouth-upperlip-height-decr": 0.5,
+   "mouth-cupidsbow-incr": 0.5
   },
   "edits": {
    "brow_depth": 0.9,
@@ -91,11 +83,29 @@
    }
   },
   "refine": {
-   "replanarise": 0.0,
+   "replanarise": 1.0,
    "skin": {
     "base": "#b8927b"
+   },
+   "plane_sharp": 3.0,
+   "eyes": {
+    "iris_mm": 11.8,
+    "converge_m": 1.2
+   },
+   "sculpt": {
+    "lid_margin_mm": 1.5
    }
-  }
+  },
+  "identity": {
+   "delta": "$DATA/build/identity/public_face.npz",
+   "coeffs": "$REPO/bench/m1/variants/public_identity.json",
+   "base_embedding": "$DATA/build/identity/base_embedding.npz",
+   "ict_embedding": "$DATA/build/identity/ict_embedding.npz",
+   "ict": "$DATA/raw/ict-facekit",
+   "weight": 1.0,
+   "auto": true
+  },
+  "sculpt": {}
  },
  "hair": {
   "clumps": {

@@ -441,6 +441,10 @@ def refine(b):
         r = replanarise(body, eyes, b.cfg["head"], rcfg)
         if r:
             notes["replanarise"] = r
+    from . import head_sculpt
+    r = head_sculpt.refine(b, body, lab, eyes)  # crisp band of the bony fields (head_sculpt.py)
+    if r:
+        notes["head_sculpt"] = r
     s = sculpt(body, arm, eyes, lab, rcfg.get("sculpt"))
     if s:
         notes["sculpt"] = s
