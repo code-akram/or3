@@ -566,14 +566,14 @@ def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
     return stats
 
 
-def paint_underlayer(b):
-    """After head_refine (facial_hair_refit): the darker under-layer of the beard painted
-    into the game skin albedo (skin_head_albedo; the hero albedo is untouched, Cycles has
-    the strands). Per head texel: the beard + stubble root density of the hero grooms
-    (refitted), blurred, as a cover fraction; the albedo is pulled toward the beard colour
-    by strength x cover, so the skin between and under the cards reads dark and the cheek
-    line fades as the groom's density does."""
-    ul = getattr(b, "beard_underlayer", None)
+def paint_underlayer(b, key="beard"):
+    """After head_refine (facial_hair_refit): the darker under-layer of the beard (or, T9b,
+    `key` "brows": the brows) painted into the game skin albedo (skin_head_albedo; the hero
+    albedo is untouched, Cycles has the strands). Per head texel: the beard + stubble (brow)
+    root density of the hero grooms (refitted), blurred, as a cover fraction; the albedo is
+    pulled toward the beard (brow) colour by strength x cover, so the skin between and under
+    the cards reads dark and the edge fades as the groom's density does."""
+    ul = getattr(b, f"{key}_underlayer", None)
     if not ul or not ul.get("cfg"):
         return None
     cfg = ul["cfg"]
@@ -585,15 +585,18 @@ def paint_underlayer(b):
         return {"skipped": "no skin_head_albedo / body"}
     roots, wts = [], []
     for o in bpy.data.objects:
-        if o.type != "CURVES" or not o.name.startswith("beard_hero_"):
+        if o.type != "CURVES":
             continue
-        if "_under_" in o.name:
+        if key == "brows":
+            if o.name != "brows_hero":
+                continue
+        elif not o.name.startswith("beard_hero_") or "_under_" in o.name:
             continue
         r = beard_groom.base_points(o)[:, 0]
         roots.append(r)
         wts.append(np.full(len(r), cfg["stubble_weight"] if "_stubble_" in o.name else 1.0))
     if not roots:
-        return {"skipped": "no beard grooms"}
+        return {"skipped": f"no {key} grooms"}
     R = np.concatenate(roots)
     Wr = np.concatenate(wts)
     kd = KDTree(len(R))
@@ -628,7 +631,7 @@ def paint_underlayer(b):
         tri_uv.append([tuple(uvl.data[li].uv) for li in lt.loops])
         tri_val.append(vals)
     if not tri_uv:
-        return {"skipped": "no beard texels"}
+        return {"skipped": f"no {key} texels"}
     w, h = img.size
     area = math.pi * rr * rr * 1e4          # cm^2
     full = cfg["full_per_cm2"] * area       # weighted roots in the disc for full cover
@@ -640,14 +643,14 @@ def paint_underlayer(b):
     img.pixels.foreach_get(px)
     px = px.reshape(h, w, 4)
     lin = beard_bake.linear(px[..., :3])
-    col = np.array(ul["beard_albedo"]) * cfg["colour_gain"]
+    col = np.array(ul["beard_albedo"] if key == "beard" else ul["albedo"]) * cfg["colour_gain"]
     out = lin * (1 - a[..., None]) + col[None, None] * a[..., None]
     px[..., :3] = hair_mesh.linear_to_srgb(out)
     img.pixels.foreach_set(px.ravel())
     img.pack()
     st = {"texels": int((a > 0.01).sum()), "max_cover": round(float(a.max()), 3), "tris": len(tri_uv),
           "roots": int(len(R)), "image": [w, h]}
-    b.notes.setdefault("beard", {})["underlayer"] = st
+    b.notes.setdefault(key, {})["underlayer"] = st
     return st
 
 

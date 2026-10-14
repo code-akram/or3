@@ -232,6 +232,9 @@ def build(b, frame, cfg):
                                              lambda r: wcache[ckd.find(Vector(r))[1]], gc, "brows",
                                              frame.skin_bvh, crng)
         stats["albedo_median_linear"] = [round(float(x), 5) for x in np.median(gr["rgb"], 0)]
+        if gc.get("underlayer"):
+            # painted into the game skin after head_refine (hair_beard.paint_underlayer, T9b)
+            b.brows_underlayer = {"cfg": gc["underlayer"], "albedo": np.median(gr["rgb"], 0).tolist()}
         b.facial_refit.add("mesh", obj)
         b.cutouts.append("brows_export")
         obj.hide_render = True
