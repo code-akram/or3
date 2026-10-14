@@ -5,6 +5,8 @@
 // URL: character.html?asset=<dir under /asset/>&view=front|three_quarter|profile|closeup|portrait
 //      &rig=neutral|hero&turntable=1&pose=rest|stand|arms_up|...&amount=0..1&gl=1&dpr=1&params=<json>
 //      &area=none|rims|all&post=0&gaze=0&scene=balls&view_transform=standard
+//      &hairshadow=0 (T9b binary shadow on the hair) &fillshadow=0 (unshadowed fill / wrap) &gtao=0 (the
+//      baked direct-AO stand-in instead of GTAO) &aoview=1 (show the AO) &lights=key,rim (debug)
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
@@ -18,6 +20,7 @@ import { ParamStore } from './materials/params';
 import { addHairDepthPrepass, assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
 import { skinLUT } from './materials/sss';
 import { Output } from './output';
+import { SceneAO } from './ao';
 import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
 import { FrameStats, textureBytes } from './hud';
 
@@ -208,11 +211,12 @@ interface BallsJson {
  * serving origin (engine_shots.mjs --serve, which accepts only these names and writes only into its
  * one run dir). Then a timed loop of the portrait at the canvas size for frame / GPU times. */
 async function deviceCapture(
-  api: { capture: (v: ViewName, r: RigName, w: number, h: number, pose?: string, post?: boolean) => Promise<{ b64: string; ms: number; draw_calls: number; triangles: number }>; stats: () => unknown; setView: (v: ViewName, r: RigName) => void },
+  api: { capture: (v: ViewName, r: RigName, w: number, h: number, pose?: string, post?: boolean, angleDeg?: number) => Promise<{ b64: string; ms: number; draw_calls: number; triangles: number }>; stats: () => unknown; setView: (v: ViewName, r: RigName) => void },
   renderer: THREE.WebGPURenderer,
   drawCanvas: () => void,
 ): Promise<void> {
-  const views = (q.get('views') ?? 'front,three_quarter,profile,closeup,portrait').split(',').filter((v) => (VIEWS as readonly string[]).includes(v)) as ViewName[];
+  // a view is `name` (its own rig) or `name:hero` (T10: closeup:hero, the hero rig around the head)
+  const views = (q.get('views') ?? 'front,three_quarter,profile,closeup,portrait,closeup:hero').split(',').filter((v) => (VIEWS as readonly string[]).includes(v.split(':')[0]!));
   const size = Number(q.get('size') ?? 1024);
   const [pw, ph] = (q.get('portrait') ?? '1920x1080').split('x').map(Number) as [number, number];
   const post = async (name: string, body: BodyInit, headers: Record<string, string> = {}) => {
@@ -221,14 +225,16 @@ async function deviceCapture(
   };
   const shots: unknown[] = [];
   state.phase = 'uploading';
-  for (const v of views) {
-    for (const withPost of v === 'portrait' ? [false, true] : [false]) {
+  for (const spec of views) {
+    const [v, rr] = spec.split(':') as [ViewName, string | undefined];
+    const own: RigName = v === 'portrait' ? 'hero' : 'neutral';
+    const rig: RigName = rr === 'hero' || rr === 'neutral' ? rr : own;
+    for (const withPost of v === 'portrait' && rig === 'hero' ? [false, true] : [false]) {
       const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
-      const rig: RigName = v === 'portrait' ? 'hero' : 'neutral';
       const t = performance.now();
       const r = await api.capture(v, rig, w, h, undefined, withPost);
       const bin = Uint8Array.from(atob(r.b64), (ch) => ch.charCodeAt(0));
-      const name = `game_${v}${withPost ? '_beauty' : ''}.png`;
+      const name = `game_${v}${rig !== own ? `_${rig}` : ''}${withPost ? '_beauty' : ''}.png`;
       await post(name, bin, { 'x-width': String(w), 'x-height': String(h), 'content-type': 'application/octet-stream' });
       shots.push({ view: v, rig, post: withPost, file: name, res: [w, h], render_ms: r.ms, wall_ms: Math.round(performance.now() - t), draw_calls: r.draw_calls, triangles: r.triangles });
       hud.textContent = `uploaded ${name}`;
@@ -409,14 +415,23 @@ async function main(): Promise<void> {
 
   const rt = new DeformRuntime(model, rules ?? { version: 1 });
   const poser = new Poser(rt);
-  const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands) };
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 200);
+  // T10: GTAO at half resolution (ao.ts) instead of the baked direct-AO stand-in; ?gtao=0 or ao.gtao 0 = off
+  const sceneAO = q.get('gtao') !== '0' && (P.get('ao.gtao') as number) ? new SceneAO(renderer, camera, model, P) : null;
+  output.ao = sceneAO;
+  if (sceneAO && q.get('aoview') === '1') output.setDebugAO(sceneAO.texture);
+  if (sceneAO && q.get('aoview') === 'normal') output.setDebugAO(sceneAO.normalTexture, true);
+  const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands), screenAO: sceneAO?.texture ?? null };
   if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, samples > 1);
   state.hairMaps = hairMaps(mats.byName, mats.roles);
   state.hairPrepass = addHairDepthPrepass(model, P);
-  const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName);
+  const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName, P);
   stage.areaMode = areaMode();
+  // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
+  stage.deepHair = q.get('hairshadow') !== '0' && !!(P.get('hair.deepShadow') as number);
+  stage.shadowFill = q.get('fillshadow') !== '0';
   if (q.get('lights')) stage.only = q.get('lights')!.split(','); // debug: per-light parity (hair_test --parity-lights)
   const gaze = new EyeGaze(model, (m) => {
     const mm = Array.isArray(m.material) ? m.material[0] : m.material;
@@ -425,7 +440,6 @@ async function main(): Promise<void> {
   const tSetup = performance.now();
 
   // ------------------------------------------------------------------ view / pose state
-  const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 200);
   let viewName = (VIEWS as readonly string[]).includes(q.get('view') ?? '') ? (q.get('view') as ViewName) : 'front';
   let rigName: RigName = q.get('rig') === 'hero' ? 'hero' : q.get('rig') === 'neutral' ? 'neutral' : viewName === 'portrait' ? 'hero' : 'neutral';
   let poseName = q.get('pose') ?? (viewName === 'portrait' ? 'stand' : 'rest');
@@ -589,6 +603,10 @@ async function main(): Promise<void> {
     textures: tex.count,
     texture_mb_est: +(tex.bytes / 1e6).toFixed(1),
     lights: stage.lightCount(),
+    shadow_maps: stage.shadowMapCount(),
+    gtao: sceneAO ? { half_res: true, last_ms: Math.round(sceneAO.lastMs) } : null,
+    hair_shadow: stage.deepHair ? 'deep (hair twins)' : 'binary',
+    fill_shadow: stage.shadowFill,
     frame: fs.summary(),
     first_frame_ms: Math.round(firstFrameMs),
   });
@@ -611,13 +629,15 @@ async function main(): Promise<void> {
     lights: () => stage.describeLights(),
     stats: statsNow,
     /** Render view (stage camera, rig) at w x h; returns base64 RGBA8 rows, top row first. */
-    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false) => {
+    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false, angleDeg = 0) => {
       setView(view, rig);
       output.setPost(post);
       poseName = pose ?? (view === 'portrait' ? 'stand' : 'rest');
       amount = 1;
       applyPose();
-      model.rotation.y = 0;
+      // turntable frames (engine_shots --turntable): the model turns in the fixed rig, as the viewer's turntable
+      model.rotation.y = (angleDeg * Math.PI) / 180;
+      model.updateMatrixWorld(true);
       applyCamera(camera, stage.view!.camera, w, h);
       const t = performance.now();
       const px = await output.capture(scene, camera, w, h);
