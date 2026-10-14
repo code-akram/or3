@@ -34,7 +34,11 @@ BROW_OVERHANG_MIN = 0.008  # metres; T7 redefinition (supraorbital rim ahead of 
 # Head structure (bench/m1/v4/checkpoint-1.md §3 T7): key -> (low, high), inclusive.
 RANGES = {
     "gonial_angle_deg": (115.0, 120.0),
-    "eye_aperture_mm": (9.5, 11.0),
+    # t7b: a calm, slightly hooded adult-male fissure, no sclera above or below the iris: upper lid
+    # 1.5-2.5 mm and lower lid 0.5-1.0 mm over an 11.8 mm iris -> 8.3-9.8 mm; MRD1 3.4-4.4 and
+    # MRD2 4.9-5.4 mm (normal adult MRD1 ~4-5, upper lid 1-2 mm over the limbus, the lower at or
+    # just above it; heavy lids sit at the low end). Was 9.5-11, which allowed the stare.
+    "eye_aperture_mm": (8.5, 9.5),
     "canthal_tilt_deg": (2.0, 4.0),
     "orbit_recess_mm": (2.0, 3.0),
     "forehead_behind_brow_mm": (3.0, None),
@@ -84,7 +88,7 @@ def _dominant_bones(obj, bones):
     return out
 
 
-def measure(arm, body, eyes, emb=None):
+def measure(arm, body, eyes, emb=None, globes=None):
     """Spec landmarks. arm: armature, body: MPFB base mesh (nude, full
     topology), eyes: the fitted eye proxy or None, emb: the MediaPipe landmark embedding on the
     base mesh (head_sculpt; tri_verts + bary) for the landmark-based measures. Returns a flat
@@ -183,7 +187,7 @@ def measure(arm, body, eyes, emb=None):
             m["nose_length_mm"] = (nas.z - prn.z) * 1000
             m["nose_proj_ratio"] = m["nose_projection_mm"] / max(m["nose_length_mm"], 1e-6)
 
-        m.update(head_structure(body, co, eyes, eye_co, chin, ez, lm))
+        m.update(head_structure(body, co, eyes, eye_co, chin, ez, lm, globes))
         m["interpupillary"] = (sum(p.x for p in eye_co if p.x > 0) / max(1, sum(1 for p in eye_co if p.x > 0))
                                - sum(p.x for p in eye_co if p.x < 0) / max(1, sum(1 for p in eye_co if p.x < 0)))
 
@@ -203,15 +207,28 @@ def _skin_bvh(body, co):
     return BVHTree.FromPolygons(co, polys), helper, polys
 
 
+def eye_sphere(p):
+    """Sphere (centre, radius) of one eye's points (n, 3): least squares through the back half
+    (y behind the centroid), as eyes_hq.build fits the eye it ships (the MPFB eye's front carries
+    a corneal bulge). Every globe test (this measure, head_sculpt's dense clearance) uses this one
+    fit: the all-points fit sits ~0.45 mm higher on the low-poly proxy, and the dense clearance on
+    it left the upper lid 0.5 mm inside the shipped left globe (t7b)."""
+    p = np.asarray(p, np.float64)
+    back = p[p[:, 1] > p[:, 1].mean()]
+    q = back if len(back) > 12 else p
+    A = np.c_[2 * q, np.ones(len(q))]
+    sol = np.linalg.lstsq(A, (q ** 2).sum(1), rcond=None)[0]
+    c = sol[:3]
+    return c, float(np.sqrt(sol[3] + c @ c))
+
+
 def _eye_spheres(eye_co):
-    """Per side (1 = character's left, +x): sphere centre, radius and cornea apex (most forward)."""
+    """Per side (1 = character's left, +x): sphere centre, radius (eye_sphere) and cornea apex
+    (most forward)."""
     out = {}
     for side in (1, -1):
         p = np.array([q[:] for q in eye_co if q.x * side > 0])
-        A = np.c_[2 * p, np.ones(len(p))]
-        sol = np.linalg.lstsq(A, (p ** 2).sum(1), rcond=None)[0]
-        c = sol[:3]
-        r = float(np.sqrt(sol[3] + c @ c))
+        c, r = eye_sphere(p)
         out[side] = (c, r, p[np.argmin(p[:, 1])])
     return out
 
@@ -228,42 +245,83 @@ def _profile(bvh, x, z0, z1, step=0.0005, y0=-1.0):
     return zs, ys
 
 
-def _aperture(skin, eye_bvh, c, side, step=0.00025):
+def _sphere_hit(o, c, r):
+    """Distance along +Y from o to the sphere (c, r), or None."""
+    dx, dz = o[0] - c[0], o[2] - c[2]
+    h = r * r - dx * dx - dz * dz
+    if h < 0:
+        return None
+    return (c[1] - np.sqrt(h)) - o[1]
+
+
+def _aperture(skin, sphere, side, step=0.00025, band=0.00075, tol=0.0005):
     """Palpebral fissure seen from the front: the front rays that reach the eyeball before any
     skin, as the connected region around the pupil. Returns the vertical extent through the pupil
     (m), the canthi (medial, lateral) as (x, z): the extreme columns' mean heights, and the top
-    and bottom of the pupil column relative to the eye centre (the lid margins)."""
+    and bottom of the pupil column relative to the eye centre (the lid margins).
+
+    Robustness (t7b; the left eye's aperture swung 8-12 mm over small edits):
+      * the eyeball is the analytic sphere (c, r) fitted to the eye: the low-poly proxy and the
+        eye helper are 48-vertex polyhedra whose facets lie up to ~1 mm inside the sphere, about
+        the lid's clearance, so testing the lid against them flipped margin rows in or out with
+        the facet under each ray;
+      * the upper lid lies on the globe nearly tangentially over the last 1-2 mm above the
+        margin, within 0.0-0.3 mm of it, and the fitted proxy (r 12.21 mm) and the helper the
+        sculpt loop drives (12.0 mm, centre 0.26 mm lower and further forward) disagree by about
+        that much: lid skin less than tol inside the sphere still counts as lid (the dense pass
+        pushes such skin out in front of the shipped eye anyway, head_sculpt.refine);
+      * per column only the contiguous open run that overlaps the pupil row's run counts (a slit
+        under the lower lid that shows the globe is a separate run, not part of the fissure);
+      * the aperture and margins are the median over the columns within +-band of the pupil."""
+    c, r = np.asarray(sphere[0], np.float64), float(sphere[1])
     xs = np.arange(-0.020, 0.020 + 1e-9, step)
     zs = np.arange(-0.014, 0.014 + 1e-9, step)
     open_ = np.zeros((len(zs), len(xs)), bool)
     d = Vector((0, 1, 0))
     for j, dx in enumerate(xs):
         for i, dz in enumerate(zs):
-            o = Vector((c[0] + dx, c[1] - 0.2, c[2] + dz))
-            le, _, _, te = eye_bvh.ray_cast(o, d)
-            if le is None:
+            o = (c[0] + dx, c[1] - 0.2, c[2] + dz)
+            te = _sphere_hit(o, c, r)
+            if te is None:
                 continue
-            ls, _, _, ts = skin.ray_cast(o, d)
-            open_[i, j] = ls is None or te < ts
+            ls, _, _, ts = skin.ray_cast(Vector(o), d)
+            open_[i, j] = ls is None or te < ts - tol
     i0, j0 = int(np.argmin(np.abs(zs))), int(np.argmin(np.abs(xs)))
     if not open_[i0, j0]:
         return None
-    reg = np.zeros_like(open_)
-    stack = [(i0, j0)]
-    while stack:
-        i, j = stack.pop()
-        if i < 0 or j < 0 or i >= len(zs) or j >= len(xs) or reg[i, j] or not open_[i, j]:
-            continue
-        reg[i, j] = True
-        stack += [(i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)]
-    k = np.nonzero(reg[:, j0])[0]
-    aperture = (k.max() - k.min() + 1) * step
-    top, bottom = zs[k.max()] + step / 2, zs[k.min()] - step / 2
-    cols = np.nonzero(reg.any(0))[0]
+
+    def run(col, i):
+        """The contiguous open run of column col containing row i, as (lo, hi) row indices."""
+        lo = hi = i
+        while lo > 0 and open_[lo - 1, col]:
+            lo -= 1
+        while hi < len(zs) - 1 and open_[hi + 1, col]:
+            hi += 1
+        return lo, hi
+
+    # the fissure: walk out from the pupil column, keeping per column the run that overlaps the
+    # neighbouring column's run (stops where the lids meet)
+    runs = {j0: run(j0, i0)}
+    for step_j in (1, -1):
+        j, prev = j0 + step_j, runs[j0]
+        while 0 <= j < len(xs):
+            cand = [i for i in range(prev[0], prev[1] + 1) if open_[i, j]]
+            if not cand:
+                break
+            mid = cand[len(cand) // 2]
+            prev = runs[j] = run(j, mid)
+            j += step_j
+    near = [j for j in runs if abs(xs[j]) <= band + 1e-9]
+    tops = np.array([zs[runs[j][1]] + step / 2 for j in near])
+    bots = np.array([zs[runs[j][0]] - step / 2 for j in near])
+    top, bottom = float(np.median(tops)), float(np.median(bots))
+    aperture = top - bottom
+    cols = sorted(runs)
 
     def canthus(jj):
-        return c[0] + xs[jj], c[2] + float(zs[reg[:, jj]].mean())
-    a, b = canthus(cols.min()), canthus(cols.max())
+        lo, hi = runs[jj]
+        return c[0] + xs[jj], c[2] + float(zs[lo:hi + 1].mean())
+    a, b = canthus(cols[0]), canthus(cols[-1])
     lateral, medial = (b, a) if side > 0 else (a, b)
     return aperture, medial, lateral, top, bottom
 
@@ -334,7 +392,7 @@ def group_mask(body, name):
     return out
 
 
-def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
+def head_structure(body, co, eyes, eye_co, chin, ez, lm=None, globes=None):
     """T7 head-structure measures, mean of both sides (per side in *_lr):
 
     brow_overhang            supraorbital rim (most forward skin 6-25 mm above the eye centre on
@@ -351,12 +409,14 @@ def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
     """
     m = {}
     skin, helper, polys = _skin_bvh(body, co)
-    E = [Vector(p) for p in eye_co]
-    eye_bvh = BVHTree.FromPolygons(E, [tuple(p.vertices) for p in eyes.data.polygons])
     rows = {k: [] for k in ("brow_overhang", "forehead_behind_brow_mm", "orbit_recess_mm",
                             "eye_aperture_mm", "canthal_tilt_deg", "globe_radius_mm",
                             "infraorbital_ahead_mm", "infraorbital_below_mm")}
-    for side, (c, r, apex) in _eye_spheres(eye_co).items():
+    sph = _eye_spheres(eye_co)
+    if globes:   # the globes that ship (head_sculpt.shipped_spheres), world; the proxy's apex moved with them
+        sph = {s_: (np.asarray(globes[s_][0]), float(globes[s_][1]),
+                    sph[s_][2] + (np.asarray(globes[s_][0]) - sph[s_][0])) for s_ in sph}
+    for side, (c, r, apex) in sph.items():
         rows["globe_radius_mm"].append(r * 1000)
         zs, ys = _profile(skin, float(c[0]), c[2] - 0.03, c[2] + 0.065)
         up = (zs > c[2] + 0.006) & (zs < c[2] + 0.025) & np.isfinite(ys)
@@ -373,7 +433,7 @@ def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
             rows["infraorbital_ahead_mm"].append((apex[1] - yI) * 1000)
             rows["infraorbital_below_mm"].append((c[2] - zI) * 1000)
             rows["orbit_recess_mm"].append((apex[1] - (yS + t * (yI - yS))) * 1000)
-        ap = _aperture(skin, eye_bvh, c, side)
+        ap = _aperture(skin, (c, r), side)
         if ap:
             a, (mx, mz), (lx, lz) = ap[:3]
             rows["eye_aperture_mm"].append(a * 1000)
@@ -446,7 +506,14 @@ def measure_live(b):
         from . import head_layer
         path = head_layer.resolve("$DATA/build/identity/base_embedding.npz")
         emb = np.load(path) if os.path.exists(path) else None
-    m = measure(arm, b.basemesh, eyes, emb)
+    globes = None
+    if st and st.get("eye_c") and eyes is not None:
+        from . import head_sculpt
+        eco = np.array([p[:] for p in _rest_coords(eyes)])
+        fitted = [eye_sphere(eco[eco[:, 0] > 0]), eye_sphere(eco[eco[:, 0] < 0])]
+        g, used = head_sculpt.shipped_spheres(b, b.basemesh, fitted)
+        globes = {1: g[0], -1: g[1]} if used else None
+    m = measure(arm, b.basemesh, eyes, emb, globes)
     b.notes["spec_landmarks"] = m
     b.notes["spec_checks"] = checks(m)
     return m

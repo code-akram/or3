@@ -436,6 +436,8 @@ def build(b):
         cen0 = pts.mean(0)
         backp = pts[pts[:, 1] > cen0[1]]
         spheres.append(fit_sphere(backp if len(backp) > 12 else pts))
+    from . import head_sculpt
+    spheres, fit["sculpt_globes"] = head_sculpt.shipped_spheres(b, head_refine.staged_body(b), spheres)
     radius_m = float(np.mean([r for _, r in spheres]))
     if cfg.get("iris_mm"):
         cfg["iris_deg"] = math.degrees(math.asin(min(cfg["iris_mm"] * 0.0005 / radius_m, 0.95)))
