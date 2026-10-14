@@ -11,6 +11,13 @@ runs. Public builds only (refuses a fan config, like build_character.py does for
 
 Writes DIR/head_measures.json, DIR/strip.png (front, 3/4, profile, low 3/4 for the jaw angle,
 plus a raking key on the front) and optionally DIR/head.blend.
+
+--blend RUN/character.blend renders the same bald clay strip of a kept public build instead (no
+build, no measures; hair, beard, brows, lashes, suit and the hero-only eye shells hidden), and
+--turntable adds DIR/turntable.png (eight views, 45 deg apart):
+
+    blender -b -t 3 --factory-startup --python-exit-code 1 --python bench/m1/head_quick.py -- \
+        --blend RUN/character.blend --out DIR [--turntable]
 """
 
 import argparse
@@ -41,8 +48,10 @@ VIEWS = [("front", 0, 0, "studio"), ("rake", 0, 0, "rake"), ("tq", 35, 3, "studi
 def args():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     ap = argparse.ArgumentParser()
-    ap.add_argument("--system-assets", required=True)
-    ap.add_argument("--suit-assets", required=True)
+    ap.add_argument("--system-assets", default="")
+    ap.add_argument("--suit-assets", default="")
+    ap.add_argument("--blend", default="", help="render a kept public build instead of building")
+    ap.add_argument("--turntable", action="store_true")
     ap.add_argument("--config", action="append", default=[], help="JSON override; repeat to merge in order")
     ap.add_argument("--out", required=True)
     ap.add_argument("--res", type=int, default=640)
@@ -76,7 +85,11 @@ def clay():
     return m
 
 
-def render(b, a):
+HIDE = ("eyebrow", "eyelash", "teeth", "tongue", "hair", "beard", "brow", "lash", "groom", "clump", "cap_",
+        "vellus", "stubble", "card", "suit", "nail", "cornea", "tear", "meniscus", "caruncle", "hero")
+
+
+def render(b, a, views=VIEWS, name="strip"):
     sc = bpy.context.scene
     sc.render.engine = "BLENDER_WORKBENCH"
     sc.display.shading.light = "STUDIO"
@@ -90,18 +103,25 @@ def render(b, a):
     sc.view_settings.view_transform = "Standard"
     m = clay()
     for o in bpy.data.objects:
+        if o.type in ("CURVES", "CURVE", "POINTCLOUD"):     # strand groom, beard, vellus
+            o.hide_render = True
         if o.type != "MESH":
             continue
+        for md in o.modifiers:
+            if md.type == "PARTICLE_SYSTEM":
+                md.show_render = False
         n = o.name.lower()
-        if any(k in n for k in ("eyebrow", "eyelash", "teeth", "tongue")):
-            o.hide_render = True
-            continue
         if "low-poly" in n or "eyes" in n:
+            continue
+        if any(k in n for k in HIDE):
+            o.hide_render = True
             continue
         o.data.materials.clear()
         o.data.materials.append(m)
     arm = next(o for o in bpy.data.objects if o.type == "ARMATURE")
-    eyes = head_measure.find_eyes(bpy.data.objects)
+    eyes = head_measure.find_eyes(bpy.data.objects) or max(
+        (o for o in bpy.data.objects if o.type == "MESH" and "eyes" in o.name.lower() and not o.hide_render),
+        key=lambda o: len(o.data.vertices))
     eco = [eyes.matrix_world @ v.co for v in eyes.data.vertices]
     target = sum(eco, Vector()) / len(eco) + Vector((0, 0, -0.045))
     cd = bpy.data.cameras.new("quick")
@@ -112,7 +132,7 @@ def render(b, a):
     sc.camera = cam
     dist = a.frame / 2 / math.tan(math.atan(cd.sensor_height / 2 / cd.lens))
     files = []
-    for name, az, el, light in VIEWS:
+    for vname, az, el, light in views:
         th, ph = math.radians(az), math.radians(el)
         d = Vector((math.sin(th) * math.cos(ph), -math.cos(th) * math.cos(ph), math.sin(ph)))
         cam.location = target + d * dist
@@ -124,11 +144,11 @@ def render(b, a):
         else:
             sc.display.light_direction = (0.35, -0.45, 0.82)
             sh.shadow_intensity = 0.5
-        p = os.path.join(a.out, f"quick_{name}.png")
+        p = os.path.join(a.out, f"quick_{vname}.png")
         sc.render.filepath = p
         bpy.ops.render.render(write_still=True)
         files.append(p)
-    out = os.path.join(a.out, "strip.png")
+    out = os.path.join(a.out, f"{name}.png")
     try:
         subprocess.run(["magick", *files, "+append", "-resize", "x420", out], check=True)
     except (OSError, subprocess.CalledProcessError):
@@ -139,6 +159,20 @@ def render(b, a):
 def main():
     a = args()
     os.makedirs(a.out, exist_ok=True)
+    if a.blend:
+        if containment.is_private(a.blend):
+            raise SystemExit("head_quick.py --blend is for public builds only")
+        bpy.ops.wm.open_mainfile(filepath=os.path.abspath(a.blend))
+        st = os.path.splitext(a.blend)[0] + ".stats.json"
+        if not os.path.exists(st) or containment.likeness(json.load(open(st))):
+            raise SystemExit("head_quick.py --blend: not a public build (missing or likeness stats)")
+        print(f"[quick] strip -> {render(None, a)[0]}")
+        if a.turntable:
+            tt = [(f"tt{k:03d}", k, 4, "studio") for k in range(0, 360, 45)]
+            print(f"[quick] turntable -> {render(None, a, tt, 'turntable')[0]}")
+        return
+    if not (a.system_assets and a.suit_assets):
+        raise SystemExit("--system-assets and --suit-assets are needed to build")
     b = build(a)
     m = b.notes.get("spec_landmarks", {})
     res = {"spec_landmarks": m, "spec_checks": b.notes.get("spec_checks"),
