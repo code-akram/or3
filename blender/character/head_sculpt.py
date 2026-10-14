@@ -671,7 +671,7 @@ def refine(b, body, lab, eyes_obj):
     new = co + d
     # clearance on the dense face against the fitted eyes: subdivision shrinks the lids onto (and
     # into) a 12 mm globe; an outer-skin vertex inside the eye would show the eyeball through it
-    npush = 0
+    npush = nline = 0
     if eyes_obj is not None:
         clear = float(c["eyes"].get("dense_clearance_mm", 0.3)) * MM if c["eyes"] else 0.0003
         for cen, R in ((cl, rl), (cr, rr)):
@@ -681,7 +681,14 @@ def refine(b, body, lab, eyes_obj):
             m_ = sel & outer & (r < R + clear) & (v[:, 1] < 0.004)
             new[m_] = cen + v[m_] / r[m_, None] * (R + clear)
             npush += int(m_.sum())
+            # the lids' inner lining (normals toward the eye) onto the globe (t7b): subdivision
+            # shrinks the convex outer lid onto the eye and swells the concave lining outward,
+            # and under the lower lid the two crossed (the lining's back faces seen from the front)
+            inner = (nrm * v).sum(1) / np.maximum(r, 1e-9) < -0.5
+            m_ = sel & inner & (r > R + 0.0002) & (r < R + 0.0025) & (v[:, 1] < 0.004)
+            new[m_] = cen + v[m_] / r[m_, None] * (R + 0.0002)
+            nline += int(m_.sum())
     hr.set_coords(body, new)
     mag = np.linalg.norm(new - co, axis=1)
     return {"max_mm": round(float(mag.max()) * 1000, 2), "verts_over_0.1mm": int((mag > 1e-4).sum()),
-            "eye_clearance_pushed": npush}
+            "eye_clearance_pushed": npush, "lid_lining_seated": nline}
