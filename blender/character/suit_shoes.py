@@ -380,7 +380,10 @@ def build_shoe(G, body, S, side):
     tip = up.rows[-1]
     v0 = tip[0]
     v0.co = sum((v.co for v in tip), Vector()) / len(tip)
-    for v in set(tip):
+    # dict.fromkeys, not set: removal order decides which freed slots later
+    # verts.new() reuses, so a hash (address) order changes the vertex order
+    # of everything built after it from run to run
+    for v in dict.fromkeys(tip):
         if v is not v0:
             G.bm.verts.remove(v)
     up.rows[-1] = [v0] * len(tip)
@@ -403,7 +406,7 @@ def build_shoe(G, body, S, side):
         w = 1.0 - smoothstep((d - S["backstay_m"] * 0.55) / (S["backstay_m"] * 0.45))
         if w <= 0:
             continue
-        for v in set(up.rows[k]):
+        for v in dict.fromkeys(up.rows[k]):
             n = Vector((0.25 * (v.co.x - L.cx0) / max(abs(v.co.x - L.cx0), 1e-6), 1.0, 0.0)).normalized()
             v.co += n * S["backstay_lift_m"] * w
     lat_feather = [up.rows[k][0] for k in range(n_rows)]
