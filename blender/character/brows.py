@@ -217,6 +217,10 @@ def build(b, frame, cfg):
         # T9: cards only, over the whole brow (beard_bake.build_groom_cards)
         crng = np.random.default_rng(gc["seed"])
         gr["rgb"] = beard_bake.strand_rgb(mel, red, gc["albedo"], crng)
+        if gc.get("alpha", 1.0) < 1.0:
+            # T11: semi-transparent strands over the under-layer band (opaque near-black strokes
+            # read as scratchy pen lines next to the hero's soft brow)
+            gr["alpha"] = np.full(m, gc["alpha"])
         Ls = np.linalg.norm(np.diff(ev, axis=1), axis=2).sum(1)
         ok = (Ls > gc["min_len_m"]) & (f["density"] > gc["min_density"])
         centres = beard_bake.pick_centres(ev[:, 0], ok, crng.random(m) * 0.3, gc["spacing_m"], gc["count"], crng)

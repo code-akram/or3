@@ -565,7 +565,9 @@ def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
         # thinned the cards render near-black where the hero's dense beard reads charcoal (its multiple
         # scattering and under-coat; the engine's facial hair has no scatter lobe). A small neutral
         # floor on every strand (sRGB hex) stands in for it.
-        rgb = rgb + beard_bake.linear(hair_mesh.hex_rgb(gy["body"]))[None, :]
+        # (x body_moustache on the moustache: the hero's darkest zone)
+        bs = np.where(f["moustache"] > 0.5, gy.get("body_moustache", 1.0), 1.0)
+        rgb = rgb + bs[:, None] * beard_bake.linear(hair_mesh.hex_rgb(gy["body"]))[None, :]
     gb = {"pts": ev, "root_n": rn, "rgb": rgb, "radius": rad0}
     px = np.where(grey, gy["px"], 1.0) if gy else np.ones(len(mel))
     # T11: cheek-line fade: each strand's alpha in its card ramps with the groom's root density
