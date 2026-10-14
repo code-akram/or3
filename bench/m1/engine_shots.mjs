@@ -4,12 +4,12 @@
 // writes game_<view>.png + game_shots.json into that build dir.
 //
 //   node bench/m1/engine_shots.mjs --build RUN_DIR [--views front,three_quarter,profile,closeup,portrait]
-//        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8791] [--timeout 600]
+//        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8796] [--timeout 600]
 //        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_] [--pose arms_up]
 //        [--balls auto|on|off]  shader-ball parity frame (game_balls.png) when RUN_DIR has shader_balls.json
-//   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8791] [--selftest]
+//   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8796] [--selftest]
 //        Device capture (the M4 Air): serve only, no browser. Open the printed URL on the device (through
-//        `ssh -N -L 8791:127.0.0.1:8791 <this host>`); the page renders every view on its own GPU and POSTs
+//        `ssh -N -L 8796:127.0.0.1:8796 <this host>`); the page renders every view on its own GPU and POSTs
 //        the frames and a summary back; the server writes them into RUN_DIR (whitelisted names only) and
 //        exits after game_shots.json. --selftest drives the same URL from local headless Chromium.
 //
@@ -43,7 +43,7 @@ const views = opt('views', 'front,three_quarter,profile,closeup,portrait').split
 const size = Number(opt('size', 1024));
 const [pw, ph] = opt('portrait', '1920x1080').split('x').map(Number);
 const backendWanted = opt('backend', 'auto');
-const port = Number(opt('port', 8791));
+const port = Number(opt('port', 8796));
 const timeoutS = Number(opt('timeout', 900));
 const extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/B only)
 const outPrefix = opt('prefix', 'game_');
@@ -81,7 +81,7 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|hair_atlas_(flow|data)\.png)$/;
+const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png)$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');
@@ -264,7 +264,7 @@ async function run(backend) {
         return null;
       }
     });
-    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, facial_atlas: st.facialAtlas, gaze: st.gaze, stats, shots, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
+    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
   } finally {
     await browser.close();
   }

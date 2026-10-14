@@ -9,7 +9,8 @@
 # Env: ENGINE_CPUS (taskset CPU list for the browser, default 0-3; the machine is shared),
 #      ENGINE_BACKEND (auto|webgpu|webgl2, default auto: WebGPU on SwiftShader, WebGL2 fallback),
 #      ENGINE_SIZE (look-dev views, default 1024), ENGINE_PORTRAIT (default 1920x1080),
-#      ENGINE_VIEWS (default front,three_quarter,profile,closeup,portrait).
+#      ENGINE_VIEWS (default front,three_quarter,profile,closeup,portrait),
+#      ENGINE_PORT (loopback port of the asset server, default 8796, outside the review servers' 8790-8793; shared machines pick a free one).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 RUN="$(realpath "${1:?usage: $0 RUN_DIR}")"
@@ -31,6 +32,6 @@ PIN=()
 command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
 "${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$RUN" \
   --backend "${ENGINE_BACKEND:-auto}" --size "${ENGINE_SIZE:-1024}" --portrait "${ENGINE_PORTRAIT:-1920x1080}" \
-  --views "${ENGINE_VIEWS:-front,three_quarter,profile,closeup,portrait}" >> "$LOG" 2>&1 \
+  --views "${ENGINE_VIEWS:-front,three_quarter,profile,closeup,portrait}" --port "${ENGINE_PORT:-8796}" >> "$LOG" 2>&1 \
   || { echo "engine shots failed: $LOG" >&2; exit 1; }
 echo "-> $RUN/game_*.png ($(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['backend'])" "$RUN/game_shots.json"))"

@@ -4,7 +4,7 @@
 //
 // URL: character.html?asset=<dir under /asset/>&view=front|three_quarter|profile|closeup|portrait
 //      &rig=neutral|hero&turntable=1&pose=rest|stand|arms_up|...&amount=0..1&gl=1&dpr=1&params=<json>
-//      &area=none|rims|all&post=0&gaze=0&scene=balls
+//      &area=none|rims|all&post=0&gaze=0&scene=balls&view_transform=standard
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
@@ -15,7 +15,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DeformRuntime, type RigRules } from './deform';
 import { Poser, PRESETS, applyPreset } from './poses';
 import { ParamStore } from './materials/params';
-import { assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
+import { addHairDepthPrepass, assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
 import { skinLUT } from './materials/sss';
 import { Output } from './output';
 import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
@@ -35,7 +35,8 @@ interface ViewerState {
   load?: Record<string, number>;
   stats?: Record<string, unknown>;
   verify?: Record<string, unknown>;
-  facialAtlas?: string;
+  hairMaps?: Record<string, string>;
+  hairPrepass?: number;
   sssLutMs?: number;
   gaze?: unknown;
   warnings: string[];
@@ -109,19 +110,15 @@ function areaMode(fallback: 'none' | 'all' = 'none'): 'none' | 'rims' | 'all' {
   return a === 'none' || a === 'rims' || a === 'all' ? a : fallback;
 }
 
-interface BuildStats {
-  beard?: { atlas_fill_linear?: number[] };
-}
-
-/** facialHair.linearFix -1 (auto): T2 builds record beard.atlas_fill_linear in character.stats.json
- * and ship sRGB-encoded atlases (read as tagged, gain 1); older builds store linear values in an
- * sRGB-tagged image (read as linear, gain 0.45, the T5 compensation). */
-function resolveFacialAtlas(P: ParamStore, stats: BuildStats | null): void {
-  if (P.get('facialHair.linearFix') !== -1) return;
-  const encoded = !stats || Array.isArray(stats.beard?.atlas_fill_linear);
-  P.set('facialHair.linearFix', encoded ? 0 : 1);
-  if (!encoded && P.get('facialHair.albedoGain') === 1) P.set('facialHair.albedoGain', 0.45);
-  state.facialAtlas = encoded ? 'srgb (T2 build)' : 'linear-in-srgb (pre-T2 build): linearFix 1, gain 0.45';
+/** Which hair / facial-hair materials carry the GLB strand maps (export.pack_hair_maps, T9 builds). */
+function hairMaps(mats: Map<string, THREE.Material>, roles: Map<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, role] of roles) {
+    if (role !== 'hair' && role !== 'facial') continue;
+    const m = mats.get(name) as (THREE.Material & { __maps?: boolean }) | undefined;
+    out[name] = m?.__maps ? 'anisotropy+orm' : 'none (UV bitangent, hashed ID)';
+  }
+  return out;
 }
 
 /** The hero shot's eye turn (wet.gaze in Blender rotates the eyes' rest vertices about each eyeball
@@ -275,7 +272,7 @@ async function deviceCapture(
     load: state.load,
     verify: state.verify,
     warnings: state.warnings,
-    facial_atlas: state.facialAtlas,
+    hair_maps: state.hairMaps,
     stats: api.stats(),
     shots,
     perf: { frames: frameMs.length, canvas: [canvas.width, canvas.height], frame_ms_p50: pct(frameMs, 0.5), frame_ms_p95: pct(frameMs, 0.95), gpu_ms_p50: pct(gpuMs, 0.5), gpu_ms_p95: pct(gpuMs, 0.95), gpu_samples: gpuMs.length },
@@ -297,14 +294,11 @@ async function mainBalls(): Promise<void> {
   renderer.setPixelRatio(1);
   const output = new Output(renderer, 4);
   state.phase = 'loading';
-  const [gltf, balls, stageData, flow, data, paramJson, buildStats, weave, curvHead, curvHands] = await Promise.all([
+  const [gltf, balls, stageData, paramJson, weave, curvHead, curvHands] = await Promise.all([
     new GLTFLoader().loadAsync(base + 'shader_balls.glb'),
     fetchJson<BallsJson>(base + 'shader_balls.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
-    loadTexture(base + 'hair_atlas_flow.png'),
-    loadTexture(base + 'hair_atlas_data.png'),
     fetchJson<unknown>(base + 'material_params.json'),
-    fetchJson<BuildStats>(base + 'character.stats.json'),
     loadWeave(base),
     loadTexture(base + 'skin_head_curvature.png'),
     loadTexture(base + 'skin_hands_curvature.png'),
@@ -314,10 +308,9 @@ async function mainBalls(): Promise<void> {
   let overrides: unknown = paramJson;
   if (q.get('params')) overrides = JSON.parse(q.get('params')!);
   const P = new ParamStore(overrides);
-  resolveFacialAtlas(P, buildStats);
   const scene = new THREE.Scene();
   scene.add(gltf.scene);
-  const mats = assignMaterials(gltf.scene, P, { flow, data, weave, ...skinSidecars(P, curvHead, curvHands) }, true);
+  const mats = assignMaterials(gltf.scene, P, { weave, ...skinSidecars(P, curvHead, curvHands) }, true);
   const stage = new Stage(stageData!, scene, mats.byName);
   stage.areaMode = areaMode('all');
   stage.setup('front', 'neutral');
@@ -380,14 +373,11 @@ async function main(): Promise<void> {
     progress.total = e.total;
     hud.textContent = `loading character.glb ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;
   });
-  const [gltf, rules, stageData, flow, data, paramJson, buildStats, weave, curvHead, curvHands] = await Promise.all([
+  const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands] = await Promise.all([
     glbP,
     fetchJson<RigRules>(base + 'character.rig.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
-    loadTexture(base + 'hair_atlas_flow.png'),
-    loadTexture(base + 'hair_atlas_data.png'),
     fetchJson<unknown>(base + 'material_params.json'),
-    fetchJson<BuildStats>(base + 'character.stats.json'),
     loadWeave(base),
     loadTexture(base + 'skin_head_curvature.png'),
     loadTexture(base + 'skin_hands_curvature.png'),
@@ -402,10 +392,8 @@ async function main(): Promise<void> {
     }
   }
   const P = new ParamStore(overrides);
-  resolveFacialAtlas(P, buildStats);
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
-  if (!flow || !data) state.warnings.push('hair flow/data sidecars missing: tangent = UV bitangent, no strand ID');
 
   const scene = new THREE.Scene();
   const model = gltf.scene;
@@ -421,10 +409,12 @@ async function main(): Promise<void> {
 
   const rt = new DeformRuntime(model, rules ?? { version: 1 });
   const poser = new Poser(rt);
-  const side: Sidecars = { flow, data, weave, ...skinSidecars(P, curvHead, curvHands) };
+  const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands) };
   if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, samples > 1);
+  state.hairMaps = hairMaps(mats.byName, mats.roles);
+  state.hairPrepass = addHairDepthPrepass(model, P);
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName);
   stage.areaMode = areaMode();
   const gaze = new EyeGaze(model, (m) => {
@@ -465,6 +455,9 @@ async function main(): Promise<void> {
     if (q.get('gaze') !== '0') gaze.apply(g);
     state.gaze = g ? { deg: g.deg, meshes: gaze.count } : null;
     output.setGrade(r === 'hero', vs.exposure, stage.data.hero.grade);
+    // ?view_transform=standard: clamp + sRGB instead of AgX, so a capture decodes back to scene-linear
+    // (hair / beard tone parity against Cycles EXRs, bench/m1/hair_parity.py)
+    output.viewAgX.value = q.get('view_transform') === 'standard' ? 0 : 1;
     // beauty post (bloom, halation, grain) on the interactive hero frames; ?post=0 for parity
     output.setPost(r === 'hero' && q.get('post') !== '0');
     userOrbit = false;
@@ -576,7 +569,7 @@ async function main(): Promise<void> {
   let tris = 0;
   model.traverse((o) => {
     const g = (o as THREE.Mesh).geometry;
-    if ((o as THREE.Mesh).isMesh && g) tris += (g.index ? g.index.count : g.attributes.position!.count) / 3;
+    if ((o as THREE.Mesh).isMesh && g && !o.userData.hairPrepass) tris += (g.index ? g.index.count : g.attributes.position!.count) / 3;
   });
   state.load = {
     init_ms: Math.round(tInit - t0),

@@ -444,6 +444,26 @@ def build(b, frame, cfg):
     gs = {"pts": ev_stub, "h": sh_, "feet": sfeet, "root_n": sn, "radius": srad[:, 0],
           "rgb": bake_rgb(smel, sred, rng)}
     sh = cfg["shells"]
+    gcards = cfg.get("game_cards")
+    if gcards and not sh.get("enabled", True):
+        # T9: cards only, over the whole groom; the skin under-layer is painted after
+        # head_refine (paint_underlayer, from facial_hair_refit)
+        stats = game_cards(b, frame, obj, bm, gcards, ev_beard, n, rad[:, 0], mel, red, f, rng)
+        b.facial_refit.add("mesh", obj)
+        b.cutouts.append("beard_export")
+        obj.hide_render = True
+        b.beard_underlayer = {"cfg": cfg.get("underlayer"), "beard_albedo": stats.pop("_albedo_median")}
+        allg = np.concatenate([mel, smel])
+        stats.update({"strands": int(len(pos)), "stubble_strands": int(sm),
+                      "undercoat_strands": int(len(under[1])) if under else 0,
+                      "grey_share": round(float((allg < 0.4).mean()), 4),
+                      "grey_share_beard": round(float((mel < 0.4).mean()), 4),
+                      "length_mm": {"p10": round(float(np.percentile(L, 10)) * 1e3, 1),
+                                    "p50": round(float(np.percentile(L, 50)) * 1e3, 1),
+                                    "p90": round(float(np.percentile(L, 90)) * 1e3, 1)},
+                      "hero_objects": [o.name for o, *_ in objs]})
+        b.notes["beard"] = stats
+        return obj
     base_before = sum(len(fc.verts) - 2 for fc in bm.faces)
     # canopy from both grooms (before decimation, the vertex keys change)
     roots_all = np.concatenate([ev_beard[:, 0], ev_stub[:, 0]])
@@ -511,6 +531,129 @@ def build(b, frame, cfg):
         "hero_objects": [o.name for o, *_ in objs]})
     b.notes["beard"] = stats
     return obj
+
+
+def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
+    """The game beard as cards over the whole groom (beard_bake.build_groom_cards):
+    blue-noise centres over every strand longer than min_len_m (the silhouette zones
+    first: jaw fins, the moustache's lip edge, the chin), lying cards elsewhere."""
+    crng = np.random.default_rng(gc["seed"])
+    rgb = beard_bake.strand_rgb(mel, red, gc["albedo"], crng)
+    gb = {"pts": ev, "root_n": rn, "rgb": rgb, "radius": rad0}
+    L = np.linalg.norm(np.diff(ev, axis=1), axis=2).sum(1)
+    zone, zprio, zroll = card_candidates(gb, f, frame, gc)
+    ok = L > gc["min_len_m"]
+    prio = np.where(zone, 1.0 + zprio, 0.0) + crng.random(len(L)) * 0.3
+    centres = beard_bake.pick_centres(ev[:, 0], ok, prio, gc["spacing_m"], gc["count"], crng)
+    sig = math.radians(gc["roll_sigma_deg"])
+    rolls = [(zroll[j] if zone[j] else math.radians(gc["roll_lying_deg"])) + crng.normal(0, sig) for j in centres]
+    dl = bm.verts.layers.deform.verify()
+    bm.verts.ensure_lookup_table()
+    kd = KDTree(len(bm.verts))
+    for i, v in enumerate(bm.verts):
+        kd.insert(v.co, i)
+    kd.balance()
+    wcache = {i: dict(v[dl].items()) for i, v in enumerate(bm.verts)}
+    stats = beard_bake.build_groom_cards(b, obj, bm, gb, centres, rolls, lambda r: wcache[kd.find(Vector(r))[1]],
+                                         gc, "beard", frame.skin_bvh, crng)
+    stats["zone_cards"] = int(sum(1 for j in centres if zone[j]))
+    stats["albedo_median_linear"] = [round(float(x), 5) for x in np.median(rgb, 0)]
+    grey = mel < 0.4
+    chin = f["chin"] > 0.5
+    if (grey & chin).any() or chin.any():
+        stats["grey_share_chin"] = round(float(grey[chin].mean()), 4) if chin.any() else None
+    stats["_albedo_median"] = np.median(rgb, 0).tolist()
+    return stats
+
+
+def paint_underlayer(b):
+    """After head_refine (facial_hair_refit): the darker under-layer of the beard painted
+    into the game skin albedo (skin_head_albedo; the hero albedo is untouched, Cycles has
+    the strands). Per head texel: the beard + stubble root density of the hero grooms
+    (refitted), blurred, as a cover fraction; the albedo is pulled toward the beard colour
+    by strength x cover, so the skin between and under the cards reads dark and the cheek
+    line fades as the groom's density does."""
+    ul = getattr(b, "beard_underlayer", None)
+    if not ul or not ul.get("cfg"):
+        return None
+    cfg = ul["cfg"]
+    import bpy
+    from . import hair_groom_cards as hgc
+    img = bpy.data.images.get("skin_head_albedo")
+    body = next((o for o in b.meshes() if o.vertex_groups.get("scalp")), None)
+    if img is None or body is None:
+        return {"skipped": "no skin_head_albedo / body"}
+    roots, wts = [], []
+    for o in bpy.data.objects:
+        if o.type != "CURVES" or not o.name.startswith("beard_hero_"):
+            continue
+        if "_under_" in o.name:
+            continue
+        r = beard_groom.base_points(o)[:, 0]
+        roots.append(r)
+        wts.append(np.full(len(r), cfg["stubble_weight"] if "_stubble_" in o.name else 1.0))
+    if not roots:
+        return {"skipped": "no beard grooms"}
+    R = np.concatenate(roots)
+    Wr = np.concatenate(wts)
+    kd = KDTree(len(R))
+    for i, p in enumerate(R):
+        kd.insert(Vector(p), i)
+    kd.balance()
+    me = body.data
+    mw = body.matrix_world
+    mat_i = next((i for i, m_ in enumerate(me.materials) if m_ and m_.name == "skin_head"), None)
+    if mat_i is None:
+        return {"skipped": "no skin_head material"}
+    uvl = me.uv_layers.active
+    rr = cfg["radius_m"]
+    me.calc_loop_triangles()
+    vdens = {}
+    tri_uv, tri_val = [], []
+    lo_corner = np.array([R[:, 0].min(), R[:, 1].min(), R[:, 2].min()]) - 2 * rr
+    hi_corner = np.array([R[:, 0].max(), R[:, 1].max(), R[:, 2].max()]) + 2 * rr
+    for lt in me.loop_triangles:
+        if lt.material_index != mat_i:
+            continue
+        ps = [mw @ me.vertices[vi].co for vi in lt.vertices]
+        if not any(np.all(np.array(p[:]) > lo_corner) and np.all(np.array(p[:]) < hi_corner) for p in ps):
+            continue
+        vals = []
+        for vi, p in zip(lt.vertices, ps):
+            if vi not in vdens:
+                vdens[vi] = sum(Wr[i] for _, i, _ in kd.find_range(p, rr))
+            vals.append(vdens[vi])
+        if max(vals) <= 0:
+            continue
+        tri_uv.append([tuple(uvl.data[li].uv) for li in lt.loops])
+        tri_val.append(vals)
+    if not tri_uv:
+        return {"skipped": "no beard texels"}
+    w, h = img.size
+    area = math.pi * rr * rr * 1e4          # cm^2
+    full = cfg["full_per_cm2"] * area       # weighted roots in the disc for full cover
+    tv = np.clip(np.array(tri_val) / full, 0, 1)[..., None]
+    cov, hit = hgc._tri_raster(w, h, np.array(tri_uv), tv)
+    cov = hsr_blur(cov[..., 0], cfg["blur_px"])
+    a = cfg["strength"] * np.clip(cov, 0, 1) ** cfg["gamma"]
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    px = px.reshape(h, w, 4)
+    lin = beard_bake.linear(px[..., :3])
+    col = np.array(ul["beard_albedo"]) * cfg["colour_gain"]
+    out = lin * (1 - a[..., None]) + col[None, None] * a[..., None]
+    px[..., :3] = hair_mesh.linear_to_srgb(out)
+    img.pixels.foreach_set(px.ravel())
+    img.pack()
+    st = {"texels": int((a > 0.01).sum()), "max_cover": round(float(a.max()), 3), "tris": len(tri_uv),
+          "roots": int(len(R)), "image": [w, h]}
+    b.notes.setdefault("beard", {})["underlayer"] = st
+    return st
+
+
+def hsr_blur(a, r):
+    from . import hair_strand_raster
+    return hair_strand_raster.blur(a, r)
 
 
 def tones(m, tone, rng, grey_share):

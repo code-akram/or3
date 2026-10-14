@@ -212,6 +212,36 @@ def build(b, frame, cfg):
     rgb = beard_bake.linear(hair_beard.tone_rgb(mel, red, rng, tone))
     gr = {"pts": ev, "h": h, "feet": feet, "root_n": n, "radius": rad[:, 0], "rgb": rgb}
     sh = cfg["shells"]
+    gc = cfg.get("game_cards")
+    if gc and not sh.get("enabled", True):
+        # T9: cards only, over the whole brow (beard_bake.build_groom_cards)
+        crng = np.random.default_rng(gc["seed"])
+        gr["rgb"] = beard_bake.strand_rgb(mel, red, gc["albedo"], crng)
+        Ls = np.linalg.norm(np.diff(ev, axis=1), axis=2).sum(1)
+        ok = (Ls > gc["min_len_m"]) & (f["density"] > gc["min_density"])
+        centres = beard_bake.pick_centres(ev[:, 0], ok, crng.random(m) * 0.3, gc["spacing_m"], gc["count"], crng)
+        rolls = [math.radians(gc["roll_deg"]) + crng.normal(0, math.radians(gc["roll_sigma_deg"])) for _ in centres]
+        dl_body = bm.verts.layers.deform.verify()
+        bm.verts.ensure_lookup_table()
+        ckd = KDTree(len(bm.verts))
+        for i, v in enumerate(bm.verts):
+            ckd.insert(v.co, i)
+        ckd.balance()
+        wcache = {i: dict(v[dl_body].items()) for i, v in enumerate(bm.verts)}
+        stats = beard_bake.build_groom_cards(b, obj, bm, gr, centres, rolls,
+                                             lambda r: wcache[ckd.find(Vector(r))[1]], gc, "brows",
+                                             frame.skin_bvh, crng)
+        stats["albedo_median_linear"] = [round(float(x), 5) for x in np.median(gr["rgb"], 0)]
+        b.facial_refit.add("mesh", obj)
+        b.cutouts.append("brows_export")
+        obj.hide_render = True
+        b.export_objs.remove(proxy)
+        bpy.data.objects.remove(proxy, do_unlink=True)
+        stats.update({"proxy_dropped": cfg["proxy"], "strands": int(m),
+                      "strands_per_side": {str(int(s)): int((f["side"] * s > 0).sum()) for s in (-1, 1)},
+                      "length_mm_p50": round(float(np.median(L)) * 1e3, 1)})
+        b.notes["brows"] = stats
+        return obj
     base_before = sum(len(fc.verts) - 2 for fc in bm.faces)
     bm, _ = facial_hair.decimate_patch(obj, bm, {"density": fl["density"]}, sh["base_tris"], frame.skin_bvh)
     base_tris = sum(len(fc.verts) - 2 for fc in bm.faces)

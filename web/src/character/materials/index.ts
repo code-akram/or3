@@ -5,9 +5,10 @@
 //   skin   wrap-lit diffuse with per-channel wrap + normal blur (curvature-scaled; cheap pre-integrated
 //          SSS stand-in), a terminator scatter tint, dual-lobe GGX specular
 //   hair   dual-lobe Kajiya-Kay (white primary shifted to the root, albedo-tinted secondary to the tip,
-//          shifts jittered per strand ID), tangent from the flow sidecar, root / depth AO, alpha to
-//          coverage (4x MSAA) with hashed alpha when there is no MSAA
-//   facial beard / brow / lash shells and cards on the hair path, tangent = UV bitangent
+//          shifts jittered per strand ID, exponents scaled by per-strand roughness), flow / depth /
+//          ORM strand maps from the GLB (KHR_materials_anisotropy + occlusion / metallicRoughness),
+//          alpha to coverage (4x MSAA) with hashed alpha when there is no MSAA
+//   facial beard / brow cards on the same path and maps (prefix facialHair); lashes along the UV bitangent
 //   eye    clearcoat cornea lobe on the geometric normal, limbal darkening, iris parallax
 //   cloth  glTF sheen + a 1 - N.V fuzz rim + a procedural micro-twill normal
 import * as THREE from 'three/webgpu';
@@ -217,6 +218,8 @@ export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
 interface HairNodes {
   tangent: N; // view-space fibre tangent
   jitter: N; // per-strand shift jitter in [-1, 1]
+  rough: N; // per-strand roughness (ORM G): scales the lobe exponents around hair.roughRef
+  specScale: N; // per-card specular scale (UV1 u: the baker's layer_spec), 1 when absent
 }
 
 class HairLightingModel extends THREE.PhysicalLightingModel {
@@ -240,18 +243,20 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     reflectedLight.directDiffuse.addAssign(lightColor.mul(diff).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
     const H = L.add(V).normalize();
     const j = this.h.jitter.mul(P.u('hair.shiftJitter'));
+    // per-strand roughness: a rougher strand has a broader lobe (exponent ~ 1 / variance)
+    const er = P.u('hair.roughRef').div(this.h.rough.max(0.05)).pow(2);
     const kk = (shift: N, exp: N) => {
       const t = T.add(N.mul(shift.add(j))).normalize();
       const th = t.dot(H);
       const sinTH = float(1).sub(th.mul(th)).max(0).sqrt();
       // Kajiya-Kay lobe; strength is a plain multiplier (no energy normalisation, see params)
-      return sinTH.pow(exp);
+      return sinTH.pow(exp.mul(er));
     };
     const s1 = kk(P.u('hair.shift1'), P.u('hair.exponent1'));
     const s2 = kk(P.u('hair.shift2'), P.u('hair.exponent2'));
     const atten = nl.mul(0.75).add(0.25).clamp(0, 1);
     const tint = diffuseColor.rgb.max(1e-4).sqrt();
-    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${this.prefix}.spec1`)).add(tint.mul(s2).mul(P.u(`${this.prefix}.spec2`)));
+    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${this.prefix}.spec1`)).add(tint.mul(s2).mul(P.u(`${this.prefix}.spec2`))).mul(this.h.specScale);
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
   }
 
@@ -263,51 +268,69 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
   }
 }
 
-export interface HairSidecars {
-  flow?: THREE.Texture | null; // RG flow (0.5 + 0.5 x), B depth, A AO
-  data?: THREE.Texture | null; // R coverage, G root-to-tip, B strand ID
-}
-
 /** Runtime inputs next to the GLB that glTF has no slot for (blender/character/export.write_sidecars). */
-export interface Sidecars extends HairSidecars {
+export interface Sidecars {
   weave?: WeaveSidecar | null;
   /** skin material name -> curvature map (skin_<part>_curvature.png) */
   curvature?: Record<string, THREE.Texture | null>;
   sssLUT?: THREE.Texture | null;
 }
 
+/**
+ * Hair and facial-hair cards. The strand maps ride in the GLB's standard slots (blender/character/
+ * hair_strand_raster.py, export.pack_hair_maps): anisotropyMap (KHR_materials_anisotropy) RG flow in
+ * the tangent frame, A depth across the card; aoMap = metalnessRoughnessMap = the ORM image: R occlusion
+ * (density x depth), G roughness, B strand ID, A root-to-tip. A material without them (pre-T9 build)
+ * shades along the UV bitangent with a UV hash for the ID.
+ */
 export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
   private readonly nodes: HairNodes;
   readonly prefix: string;
+  /** the GLB strand maps were found (main.ts reports it as state.hairMaps) */
+  __maps = false;
+  /** KHR_materials_anisotropy texture (flow, depth), for the depth prepass */
+  readonly anisoMap: THREE.Texture | null;
 
-  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair'; side?: HairSidecars; msaa: boolean }) {
+  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair'; msaa: boolean }) {
     super();
     copyStd(this, src);
     this.prefix = opts.prefix;
-    const flow = opts.side?.flow ?? null;
-    const data = opts.side?.data ?? null;
+    const anisoMap = (src as THREE.MeshPhysicalMaterial).anisotropyMap ?? null;
+    const ormMap = src.aoMap ?? null;
+    this.anisoMap = anisoMap && ormMap ? anisoMap : null;
+    // the maps are read below; three's own AO / roughness / metalness / anisotropic GGX stay off
+    this.aoMap = null;
+    this.roughnessMap = null;
+    this.metalnessMap = null;
+    this.anisotropy = 0;
     const c = mapRGBA(src);
     let col = c.rgb;
     if (this.vertexColors) col = col.mul(vertexColor().rgb);
+    // scalp cards: UV1 u carries the card layer's specular scale (hair_groom_cards layer_spec; T9 builds, which
+    // are the ones with the strand maps)
+    const specScale: N = opts.prefix === 'hair' && this.anisoMap ? uv(1).x : float(1);
     let ao: N = float(1);
-    if (data) {
-      const d = texture(data);
-      ao = ao.mul(mix(float(1).sub(P.u('hair.rootAO')), float(1), smoothstep(0, 0.45, d.g)));
-    }
-    if (flow) {
-      const f = texture(flow);
-      ao = ao.mul(mix(float(1).sub(P.u('hair.depthAO')), float(1), f.b)).mul(f.a);
+    let tUV: N = vec2(0, 1); // along +v (root -> tip)
+    let id: N = hash(uv().mul(4096).floor().x.add(uv().mul(4096).floor().y.mul(4096)));
+    let rough: N = P.u('hair.roughRef');
+    this.__maps = !!(anisoMap && ormMap);
+    if (anisoMap && ormMap) {
+      const a = texture(anisoMap);
+      const o = texture(ormMap);
+      tUV = a.rg.mul(2).sub(1);
+      id = o.b;
+      rough = o.g;
+      ao = mix(float(1).sub(P.u('hair.rootAO')), float(1), smoothstep(0, P.u('hair.rootV'), o.a))
+        .mul(mix(float(1), o.r, P.u('hair.bakedAO')))
+        .mul(mix(float(1).sub(P.u('hair.depthAO')), float(1), a.a));
     }
     this.colorNode = vec4(albedo(P, opts.prefix, col).mul(ao), c.a);
     this.vertexColors = false; // folded into colorNode above
-    // tangent: flow (UV space) through the exported tangent frame; default along +v (the bitangent)
-    let tUV: N = vec2(0, 1);
-    if (flow) tUV = texture(flow).rg.mul(2).sub(1);
+    // flow (UV space) through the exported tangent frame (glTF: +Y = the image's up = +v in Blender)
     const T = tangentView.mul(tUV.x).add(bitangentView.mul(tUV.y)).normalize().mul(P.u('hair.tangentSign'));
-    const id = data ? texture(data).b : hash(uv().mul(4096).floor().x.add(uv().mul(4096).floor().y.mul(4096)));
-    this.nodes = { tangent: T, jitter: id.mul(2).sub(1) };
+    this.nodes = { tangent: T, jitter: id.mul(2).sub(1), rough, specScale };
     this.normalNode = null; // shade the card as a fibre bundle: the smooth proxy normal from the GLB
-    this.roughnessNode = float(0.6);
+    this.roughnessNode = rough;
     this.metalnessNode = float(0);
     this.side = THREE.DoubleSide;
     this.alphaTest = P.get(`${opts.prefix}.alphaTest`) as number;
@@ -318,6 +341,53 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
   override setupLightingModel(): THREE.PhysicalLightingModel {
     return new HairLightingModel(this.P, this.prefix, this.nodes);
   }
+}
+
+/**
+ * Depth prepass for the hair cards (hair.depthPrepass 1): a depth-only twin of every hair-card mesh
+ * (shared geometry and skeleton, drawn first) writes depth where the card is dense (coverage over
+ * hair.prepassAlpha) and in front within the card (anisotropy-map depth over hair.prepassDepth), so the
+ * alpha-to-coverage pass that follows resolves the cards against the dense core and the front strands
+ * instead of against draw order. Returns the number of twins; they carry userData.hairPrepass.
+ */
+export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number {
+  if (!(P.get('hair.depthPrepass') as number)) return 0;
+  const twins: [THREE.Object3D, THREE.Mesh][] = [];
+  const made = new Map<THREE.Material, THREE.MeshBasicNodeMaterial>();
+  root.traverse((o) => {
+    const m = o as THREE.SkinnedMesh;
+    if (!m.isMesh || Array.isArray(m.material)) return;
+    const hm = m.material as HairMaterial;
+    if (!(hm instanceof HairMaterial) || hm.prefix !== 'hair' || !m.parent) return;
+    let dm = made.get(hm);
+    if (!dm) {
+      dm = new THREE.MeshBasicNodeMaterial();
+      const src = hm as unknown as Std;
+      const a = src.map ? texture(src.map).a : float(1);
+      const depth = hm.anisoMap ? texture(hm.anisoMap).a : float(1);
+      // discard thin texels and the back of the card: what is left is the opaque front of each lock
+      dm.opacityNode = a.mul(smoothstep(P.u('hair.prepassDepth').sub(0.05), P.u('hair.prepassDepth'), depth));
+      dm.alphaTest = P.get('hair.prepassAlpha') as number;
+      dm.colorWrite = false;
+      dm.depthWrite = true;
+      dm.side = THREE.DoubleSide;
+      dm.name = `${hm.name}_prepass`;
+      made.set(hm, dm);
+    }
+    const t: THREE.Mesh = m.isSkinnedMesh ? new THREE.SkinnedMesh(m.geometry, dm) : new THREE.Mesh(m.geometry, dm);
+    if (m.isSkinnedMesh) (t as THREE.SkinnedMesh).bind(m.skeleton, m.bindMatrix);
+    t.position.copy(m.position);
+    t.quaternion.copy(m.quaternion);
+    t.scale.copy(m.scale);
+    t.renderOrder = m.renderOrder - 1;
+    t.frustumCulled = false;
+    t.castShadow = false;
+    t.receiveShadow = false;
+    t.userData.hairPrepass = true;
+    twins.push([m.parent, t]);
+  });
+  for (const [p, t] of twins) p.add(t);
+  return twins.length;
 }
 
 // --------------------------------------------------------------------------------------- eye
@@ -516,21 +586,13 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
   const make = (src: Std): THREE.MeshPhysicalNodeMaterial => {
     const role = roleOf(src.name);
     roles.set(src.name, role);
-    if (role === 'facial' || role === 'lash') {
-      // pre-T2 builds (review §1.9 S2): the bytes are linear values in an sRGB-tagged image.
-      // main.ts resolves linearFix -1 (auto) from character.stats.json before this runs.
-      if (src.map && P.get('facialHair.linearFix') === 1) {
-        src.map.colorSpace = THREE.NoColorSpace;
-        src.map.needsUpdate = true;
-      }
-    }
     switch (role) {
       case 'skin': {
         const cm = side.curvature?.[src.name];
         return new SkinMaterial(src, P, cm && side.sssLUT ? { lut: side.sssLUT, curvature: cm } : null);
       }
       case 'hair':
-        return new HairMaterial(src, P, { prefix: 'hair', side: src.name === 'hair_cards' ? { flow: side.flow ?? null, data: side.data ?? null } : {}, msaa });
+        return new HairMaterial(src, P, { prefix: 'hair', msaa });
       case 'facial':
       case 'lash':
         return new HairMaterial(src, P, { prefix: 'facialHair', msaa });
