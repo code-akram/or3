@@ -1081,16 +1081,17 @@ SPIKE2 = {
     "draft": {"split_lapel": True, "neck_scale": 1.0, "waist_min_frac": 0.82, "length_frac": 0.44,
               "hem_flare_cm": 0.0, "pad_cm": 1.5, "shoulder_drop_deg": 1.0,
               "suppression": {"cb": 0.22, "back_side": 0.40, "side_front": 0.25, "front_dart": 0.13},
-              "ease": {"cuff": 12.0},
-              "sleeve": {"end_above_wrist_cm": 2.0}},
+              "ease": {"cuff": 11.0},
+              "sleeve": {"end_above_wrist_cm": 2.0, "elbow_extra_cm": 0.0}},
     "pad_cm": 1.5,
     # the hem and the cuffs are turned up 4 cm (two layers and the hem canvas): stiffer
-    "canvas_bands": {"hem_cm": 4.0, "cuff_cm": 4.0},
+    # (not the cuffs: flat-rest bending in a stiff band round a 4 cm tube opens it into a bell)
+    "canvas_bands": {"hem_cm": 4.0, "cuff_cm": 0.0},
     "sew_frames": 30,                 # stage 1: unwelded, flat rest, sewing springs, no gravity
     "gravity_ramp": 10, "settle_frames": 35,      # stage 2: welded, sewn rest, gravity
     "rest_smooth": {"rings": 2, "iters": 6},      # stage-2 rest: the seam band relaxed
     "pin_neck": 0.0,                  # pin weight on the neckline in stage 2 (0 = off)
-    "hull": {"alpha_back": 0.75, "z_lo_below_hem_m": 0.05, "z_hi_m": None},
+    "hull": {"alpha_back": 0.55, "z_lo_below_hem_m": 0.05, "z_hi_m": None},
     "push": {"clear_m": 0.0015, "smooth_iters": 3},
     "bent": None,
     "rever": {},
@@ -1568,13 +1569,54 @@ XPBD = {
     "drape_frames": 45, "gravity_ramp": 8,
     "button_gap_m": 0.004, "layer_gap_m": 0.003,
     "sew_close_m": 0.002, "sew_extra_max": 40,
+    "neck_fair_iters": 60,                            # fair the neckline hold targets (0 = as placed)
     "neck_hold_k": 30.0,                              # N/m: the collar and the neck tape hold the neckline
+    "neck_hold_k2": 30.0, "neck_hold2_fair": False,   # stage 2
     "sdf_h": 0.006,
     # self-contact (the elbow crook and the underarm fold onto themselves otherwise): vertices
     # closer than self_r repel unless within self_excl of each other on the placed garment
     "self_r": 0.010, "self_excl": 0.025,
     "kb_sleeve": 6e-5,
 }
+
+
+def neck_targets(C, Xm, wm0, iters=60):
+    """Fair hold targets for the neckline, by weld group: per side, the chain CB -> NP (back
+    neck) -> roll crossing (front gorge, reversed), Taubin-smoothed with its ends fixed, then
+    re-spaced along the smoothed line in proportion to the pattern's arc length."""
+    out = {}
+    if iters <= 0:
+        return out
+    for suf in ("", "_r"):
+        ids, s = [], []
+        acc = 0.0
+        for pn, e, rev in (("back" + suf, "neck", False), ("front" + suf, "gorge", True)):
+            if (pn, e) not in C["pts"]:
+                continue
+            Pp = C["pts"][(pn, e)]
+            js = list(range(len(Pp)))[::-1] if rev else list(range(len(Pp)))
+            for k, j in enumerate(js):
+                g = int(wm0[C["gid"][(pn, e, j)]])
+                if k > 0:
+                    acc += float(np.linalg.norm(Pp[j] - Pp[js[k - 1]]))
+                if ids and ids[-1] == g:
+                    continue
+                ids.append(g)
+                s.append(acc)
+        if len(ids) < 4:
+            continue
+        Q = Xm[ids].copy()
+        for it in range(2 * iters):
+            lam = 0.5 if it % 2 == 0 else -0.53
+            Q[1:-1] += lam * (0.5 * (Q[:-2] + Q[2:]) - Q[1:-1])
+        # re-space by the pattern's arc length
+        seg = np.linalg.norm(np.diff(Q, axis=0), axis=1)
+        cq = np.r_[0.0, np.cumsum(seg)]
+        f = np.array(s) / max(s[-1], 1e-9) * cq[-1]
+        R = np.c_[[np.interp(f, cq, Q[:, k]) for k in range(3)]].T
+        for g, r in zip(ids, R):
+            out[g] = r
+    return out
 
 
 def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
@@ -1614,9 +1656,14 @@ def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
         S.self_ref, S.self_r, S.self_excl, S.self_skip = Xm[wm0], P["self_r"], P["self_excl"], skip0
     if neck is not None and P["neck_hold_k"] > 0:
         # hold the neckline where it was placed (a sewn corner at its pair's mean, so the
-        # hold and the seam agree): the collar and the neck tape hold it in a real jacket
+        # hold and the seam agree): the collar and the neck tape hold it in a real jacket.
+        # The placement can step where the back wraps into the shoulder: the targets are the
+        # placed line smoothed and spaced as on the pattern (a taped neckline is a fair curve)
         S.hold_idx = np.nonzero(neck)[0]
-        S.hold_pos = Xm[wm0[S.hold_idx]]
+        tgt = neck_targets(C, Xm, wm0, P["neck_fair_iters"])
+        stats["_neck_tgt"] = tgt
+        S.hold_pos = np.array([tgt.get(int(wm0[i]), Xm[wm0[i]]) for i in S.hold_idx])
+        stats["neck_hold_moved_mm"] = round(float(np.abs(S.hold_pos - Xm[wm0[S.hold_idx]]).max()) * 1000, 1)
         S.hold_k = P["neck_hold_k"]
     k0, k1 = P["sew_k"]
     nf = P["sew_frames"]
@@ -1661,9 +1708,16 @@ def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
         skip2[wm[skip0]] = True
         S2.self_ref, S2.self_r, S2.self_excl, S2.self_skip = Xm, P["self_r"], P["self_excl"], skip2
     if neck is not None and P["neck_hold_k"] > 0:
-        S2.hold_idx = np.unique(wm[np.nonzero(neck)[0]])
-        S2.hold_pos = Xw[S2.hold_idx].copy()
-        S2.hold_k = P["neck_hold_k"]
+        # where stage 1 left it (holding stage 2 to the fair line instead, firmer, crumples the
+        # collar ends: run t13b-j4); neck_hold2_fair switches that back on
+        tgt = stats.pop("_neck_tgt", {})
+        tgt = tgt if P["neck_hold2_fair"] else {}
+        hold = {}
+        for i in np.nonzero(neck)[0]:
+            hold[int(wm[i])] = tgt.get(int(wm0[i]), Xw[wm[i]])
+        S2.hold_idx = np.array(sorted(hold), int)
+        S2.hold_pos = np.array([hold[k] for k in S2.hold_idx])
+        S2.hold_k = P["neck_hold_k2"]
     gr = P["gravity_ramp"]
     S2.run(P["drape_frames"], P["fps"], P["substeps"], g_of=lambda f: 9.81 * min(1.0, (f + 1) / gr),
            ksew_of=lambda f: k1)
@@ -1697,7 +1751,9 @@ CLOSE = {"close_34": (35.0, (0.0, 0.0, 1.42), 0.62), "close_back": (180.0, (0.0,
          # the left cuff and forearm from behind (the hind seam)
          "close_cuff": (120.0, (0.47, -0.12, 1.14), 0.30),
          # the wearer's left lapel edge, from the front
-         "close_lapel": (10.0, (0.07, -0.12, 1.42), 0.16)}
+         "close_lapel": (10.0, (0.07, -0.12, 1.42), 0.16),
+         # the back of the collar (stand, fall, the centre back)
+         "close_collar_back": (160.0, (0.0, 0.05, 1.57), 0.24, 0.05)}
 
 
 def render_close(out_dir, tag, show):

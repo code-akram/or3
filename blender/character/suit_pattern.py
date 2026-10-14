@@ -79,7 +79,7 @@ DEFAULTS = {
     "roll_past_np_cm": 2.0,       # roll line crosses the shoulder line this far past the neck point
     "collar": {"stand_cm": 3.0, "fall_cm": 4.2, "end_width_cm": 4.0, "spread": 1.22},
     "sleeve": {"head_ease_cm": 3.0, "pitch_cm": 2.0, "bend_deg": 25.0, "bend_zone_cm": 5.0, "cuff_slant_cm": 1.2,
-               "under_offset_cm": 3.0, "hind_offset_cm": 1.5, "end_above_wrist_cm": 1.0},
+               "elbow_extra_cm": 1.0, "under_offset_cm": 3.0, "hind_offset_cm": 1.5, "end_above_wrist_cm": 1.0},
     "seam_allowance_cm": 1.0,     # drawn on the pattern sheet; the sim sews on the sew lines
 }
 
@@ -896,7 +896,7 @@ def draft(M, opts=None):
     AH = arclen(arm_b) + arclen(scye_s) + arclen(arm_f)
     Wb = M["bicep"] * cm + E["bicep"]
     Wc = M["wrist"] * cm + E["cuff"]
-    We = 0.5 * (Wb + Wc) + 1.0
+    We = 0.5 * (Wb + Wc) + Sv.get("elbow_extra_cm", 1.0)
     up = M["upperarm_len"] * cm + o["shoulder_out_cm"]
     SL = up + M["forearm_len"] * cm - Sv["end_above_wrist_cm"]
     uc = 1.0

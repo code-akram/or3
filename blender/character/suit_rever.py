@@ -57,6 +57,7 @@ DEFAULTS = {
     "corner_blend_cm": 0.8,      # the fall's normal turns over the stand/jacket corner within this
     "thick_cm": 0.26,
     "relax_iters": 12,
+    "lift_spread_cm": 2.0,       # spread each clearing lift into a smooth swell of this radius
     "clear_cm": 0.15,            # final: every vertex this far outside the jacket and the under-garments
 }
 
@@ -465,14 +466,18 @@ def relax(X, T, fixed, iters, lam=0.33, mu=-0.34):
     return X
 
 
-def clear(X, bvhs, dist, skip=None, log=None):
+def clear(X, bvhs, dist, skip=None, log=None, max_push=0.01):
     """Push every vertex at least `dist` outside each BVH surface (along its normal).
 
     bvhs run outermost first (the jacket, then the under-garments). A test counts only
     when the vertex is over the face (the offset mostly along the normal): beside an open
     edge (the stand above the jacket's neck edge) the nearest point says nothing about
     inside or out. A vertex over an outer surface is done once it is outside it: the
-    outer layer already clears the inner ones."""
+    outer layer already clears the inner ones.
+
+    A push deeper than `max_push` is a misreading, not a penetration (the map keeps the sheet
+    outside to within millimetres): the stand leans in over the neck, in front of the plane of
+    a jacket neck edge that rolls in, and snapping it there folds the collar flat."""
     X = X.copy()
     moved = 0
     for i, p in enumerate(X):
@@ -486,6 +491,8 @@ def clear(X, bvhs, dist, skip=None, log=None):
             s = np.dot(p - loc, nor)
             if abs(s) < 0.5 * d:
                 continue        # beside an open edge, not over the face
+            if s < dist and dist - s > max_push:
+                break           # misread (see above): leave it
             if s < dist:
                 if log is not None:
                     log.append((i, bi, s, d))
@@ -496,22 +503,90 @@ def clear(X, bvhs, dist, skip=None, log=None):
     return X, moved
 
 
-def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc):
+def spread_lift(X0, X1, Vc, r_cm, fixed=None):
+    """Spread each local lift that `clear` made (X0 -> X1) into a smooth bump of radius r_cm
+    on the chart, so a point of the jacket under the collar lifts the cloth over it as a
+    gentle swell, not a pimple. Each vertex takes the largest bump that reaches it; the lift
+    direction is the local (averaged) push direction."""
+    D = X1 - X0
+    a = np.linalg.norm(D, axis=1)
+    src = np.nonzero(a > 1e-5)[0]
+    if not len(src):
+        return X1
+    out = X1.copy()
+    best = a.copy()
+    dirv = np.zeros_like(X1)
+    dirv[src] = D[src] / a[src, None]
+    acc = np.zeros_like(X1)
+    for j in src:
+        d = np.linalg.norm(Vc - Vc[j], axis=1)
+        m = d < r_cm
+        w = sp.smoothstep(1.0 - d[m] / r_cm)
+        lift = a[j] * w
+        acc[m] += dirv[j] * lift[:, None]
+        upd = lift > best[m]
+        idx = np.nonzero(m)[0][upd]
+        best[idx] = lift[upd]
+    nd = np.linalg.norm(acc, axis=1)
+    ok = nd > 1e-9
+    dirn = np.zeros_like(acc)
+    dirn[ok] = acc[ok] / nd[ok, None]
+    mv = ok & (best > a + 1e-6)
+    if fixed is not None:
+        mv &= ~fixed
+    out[mv] = X0[mv] + dirn[mv] * best[mv, None]
+    return out
+
+
+def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc, rings=5):
     """Solidify toward the base by t (tapered to 0 near the attachment edge), with a rounded
-    rim on the free boundary. Returns (V, F)."""
+    rim on the free boundary. Returns (V, F).
+
+    A pressed edge is a half round (diameter t), not a flat strip: a flat strip at 90 deg to the
+    sheet, smooth shaded with shared vertices, takes its normal tilt from however many
+    triangles fan into each boundary vertex, and the edge reads as a sawtooth. The boundary
+    normals are smoothed along the loop for the same reason."""
     n = len(X)
     t = (t_cm / 100.0) * sp.smoothstep(Vc[:, 1] / taper_q)
-    # the sheet's visible side: Nout (away from its base)
-    Xi = X - Nout * t[:, None]
-    V = np.vstack([X, Xi])
+    b = np.asarray(list(bids), int)
+    nb = len(b)
+    N = np.asarray(Nout, float).copy()
+    for _ in range(4):   # smooth the boundary normals along the loop
+        Nb = N[b]
+        N[b] = _norm(np.roll(Nb, 1, 0) + 2.0 * Nb + np.roll(Nb, -1, 0))
+    # the sheet's visible side: N (away from its base)
+    Xi = X - N * t[:, None]
+    # in-plane outward direction at each boundary vertex: across the loop's tangent, away from
+    # the triangles that touch it
+    tan = X[np.roll(b, -1)] - X[np.roll(b, 1)]
+    o = _norm(np.cross(tan, N[b]))
+    inward = np.zeros((n, 3))
+    cen = X[T].mean(1)
+    for k in range(3):
+        np.add.at(inward, T[:, k], cen - X[T[:, k]])
+    flip = np.einsum("ij,ij->i", o, inward[b]) > 0
+    o[flip] = -o[flip]
+    r = 0.5 * t[b][:, None]
+    C = X[b] - N[b] * r
+    ring_ids = []
+    V = [X, Xi]
+    base = 2 * n
+    for m in range(1, rings):
+        ph = math.pi * m / rings
+        V.append(C + r * (N[b] * math.cos(ph) + o * math.sin(ph)))
+        ring_ids.append(base + np.arange(nb))
+        base += nb
+    V = np.vstack(V)
     F = [tuple(f) for f in T] + [tuple(f[::-1] + n) for f in T]
-    # rim: the boundary loop, skipping the attachment edge
-    b = list(bids)
-    for k in range(len(b)):
-        i, j = b[k], b[(k + 1) % len(b)]
+    # rim: the boundary loop, skipping the attachment edge; rows top sheet -> rings -> inner sheet
+    for k in range(nb):
+        k2 = (k + 1) % nb
+        i, j = b[k], b[k2]
         if attach[i] and attach[j]:
             continue
-        F.append((j, i, i + n, j + n))
+        rows = [(i, j)] + [(R[k], R[k2]) for R in ring_ids] + [(i + n, j + n)]
+        for (a0, b0), (a1, b1) in zip(rows[:-1], rows[1:]):
+            F.append((int(b0), int(a0), int(a1), int(b1)))
     return V, F
 
 
@@ -536,8 +611,11 @@ def build(X, T, chains, D, under_bvhs=(), opts=None, stats=None):
     Xr = relax(Xr, Tc, attach | bnd, o["relax_iters"])
     X_relax = Xr.copy()
     clog = []
+    Xr0 = Xr
     Xr, moved = clear(Xr, [surf.bvh] + list(under_bvhs), o["clear_cm"] / 100.0 + o["thick_cm"] / 100.0,
                       skip=Vc[:, 1] < 1.5, log=clog)
+    if o["lift_spread_cm"] > 0:
+        Xr = spread_lift(Xr0, Xr, Vc, o["lift_spread_cm"], fixed=Vc[:, 1] < 1.5)
     # outward normals of the sheet (consistent with Nout)
     Nm = vertex_normals(Xr, Tc)
     if np.einsum("ij,ij->i", Nm, Nout).mean() < 0:
