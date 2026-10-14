@@ -18,6 +18,34 @@ def hex_rgb(hex_srgb):
     return np.array([int(hex_srgb[i:i + 2], 16) / 255 for i in (1, 3, 5)])
 
 
+def linear_to_srgb(lin):
+    """Linear -> sRGB transfer (array). A byte image tagged sRGB stores
+    encoded values: its `pixels` are not converted on write."""
+    lin = np.asarray(lin)
+    return np.where(lin <= 0.0031308, lin * 12.92, 1.055 * np.power(np.maximum(lin, 0), 1 / 2.4) - 0.055)
+
+
+def rgba_image(name, rgba, srgb):
+    """Packed RGBA byte image (replaces one of the same name). rgba: (H, W, 4)
+    float, row 0 = image bottom (Blender convention), RGB in linear light for
+    colour (srgb=True: encoded to sRGB and tagged sRGB, so the image, and the
+    PNG the glTF exporter writes from it, carry the intended colour) or raw
+    data values (srgb=False: tagged Non-Color, written as is). Alpha is
+    always written as is (straight)."""
+    h, w, _ = rgba.shape
+    img = bpy.data.images.get(name)
+    if img:
+        bpy.data.images.remove(img)
+    img = bpy.data.images.new(name, w, h, alpha=True)
+    img.colorspace_settings.name = "sRGB" if srgb else "Non-Color"
+    px = np.clip(np.asarray(rgba, dtype=np.float64), 0, 1)
+    if srgb:
+        px[..., :3] = linear_to_srgb(px[..., :3])
+    img.pixels.foreach_set(px.astype(np.float32).ravel())
+    img.pack()
+    return img
+
+
 def strand_image(name, cfg, kind):
     """Generated strand texture (our own synthesis, packed into the GLB).
 

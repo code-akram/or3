@@ -30,7 +30,6 @@ alpha edge does not darken the hairs into a black outline.
 import math
 
 import bmesh
-import bpy
 import numpy as np
 from mathutils import Vector
 from mathutils.kdtree import KDTree
@@ -88,16 +87,12 @@ class Canvas:
         return out.reshape(self.h, self.w, 4)
 
 
-def make_image(name, rgba):
-    """rgba: (H, W, 4) float, row 0 = image bottom (Blender convention)."""
-    h, w, _ = rgba.shape
-    img = bpy.data.images.get(name)
-    if img:
-        bpy.data.images.remove(img)
-    img = bpy.data.images.new(name, w, h, alpha=True)
-    img.pixels.foreach_set(np.clip(rgba, 0, 1).astype(np.float32).ravel())
-    img.pack()
-    return img
+def make_image(name, rgba, srgb=True):
+    """Colour atlas: rgba (H, W, 4) float, RGB linear, row 0 = image bottom
+    (Blender convention); stored sRGB-encoded (hair_mesh.rgba_image). Before
+    this the linear values went straight into the sRGB byte image, so the
+    game facial hair read about 10x too dark and its dark tones banded."""
+    return hair_mesh.rgba_image(name, rgba, srgb)
 
 
 def linear(rgb):
@@ -272,7 +267,10 @@ def build_shells(b, obj, bm, canopy, project, grooms, cfg, name, extra=None):
                                                     cfg.get("tangent_passes", 2))
     stats = {"layers": S, "shell_tris": tris, "atlas": [W, H], "t": [round(x, 3) for x in ts],
              "welded_verts": welded, "culled_degenerate_faces": culled,
-             "tangent_nudged_loops": nudged, "tangent_culled_faces": culled_tan}
+             "tangent_nudged_loops": nudged, "tangent_culled_faces": culled_tan,
+             # linear RGB under the transparent texels (stored sRGB-encoded):
+             # a read-back check of the atlas encoding
+             "atlas_fill_linear": [round(float(x), 6) for x in fill]}
     stats.update(card_stats)
     return stats
 
@@ -395,4 +393,5 @@ def build_cards(bm, uv, uv2, dl, groom, centres, roll, weights_of, cfg, name, rn
     fill = (rgb.mean(0) * cfg["root_shade"]).astype(np.float32)
     img = make_image(name + "_cards", canvas.rgba(fill))
     mat = hair_mesh.material(name + "_cards", "#ffffff", cfg["roughness"], img, cfg["specular"], wrap=False)
-    return {"cards": len(centres), "card_tris": tris, "card_atlas": [W, H], "_roots": vroots}, mat
+    return {"cards": len(centres), "card_tris": tris, "card_atlas": [W, H],
+            "card_fill_linear": [round(float(x), 6) for x in fill], "_roots": vroots}, mat
