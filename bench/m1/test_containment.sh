@@ -8,7 +8,8 @@
 # bench/m1/character_provenance.py (refuses fan stats, mesh.jsonl untouched), lookdev.sh --compare
 # and run routing (DATA= a temp dir; private runs under the real private/likeness/lookdev/ with a
 # selftest-<pid> prefix), hero.sh failing closed on a missing stats file, and tools/hooks/pre-commit
-# in a throwaway git repo. Everything it creates is removed on exit. Exit 0 = all passed.
+# in a throwaway git repo (including the repo-wide binary policy), plus provenance/audit.py
+# --check-files catching a --no-verify commit of binaries. Everything it creates is removed on exit. Exit 0 = all passed.
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 MAIN_ROOT="$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")"
@@ -157,8 +158,8 @@ unset DATA
 
 echo "== pre-commit hook (throwaway repo)"
 G="$T/repo"
-mkdir -p "$G/tools/hooks" "$G/pipeline/likeness" "$G/bench/m1/v3" "$G/provenance"
-cp "$REPO/tools/hooks/pre-commit" "$REPO/tools/hooks/check_staged.py" "$G/tools/hooks/"
+mkdir -p "$G/tools/hooks" "$G/pipeline/likeness" "$G/bench/m1/v3" "$G/provenance" "$G/web/public" "$G/docs" "$G/bench/m0/img"
+cp "$REPO/tools/hooks/pre-commit" "$REPO/tools/hooks/check_staged.py" "$REPO/tools/hooks/binary_policy.py" "$G/tools/hooks/"
 cp "$REPO/pipeline/likeness/containment.py" "$G/pipeline/likeness/"
 git -C "$G" init -q
 gc() { git -C "$G" -c user.name=selftest -c user.email=selftest@invalid -c commit.gpgsign=false \
@@ -181,6 +182,46 @@ try_commit refuse "fan key in malformed JSON"           "cfg.json"              
 try_commit pass   "clean JSON"                          "cfg.json"                '{"hands": {"fan_deg": 40}}'
 try_commit pass   "track doc under bench/m1/v3"         "bench/m1/v3/likeness-review.md" 'notes'
 try_commit pass   "likeness code"                       "pipeline/likeness/new_tool.py"  'print()'
+# repo-wide binary policy (tools/hooks/binary_policy.py); try_commit stages with `git add -f`
+try_commit refuse "image outside bench/ (web/public)"   "web/public/render.png"   'PNG'
+try_commit refuse "renamed render, upper-case ext"      "docs/shot.PNG"           'PNG'
+try_commit refuse "jpeg in repo root"                   "ref.jpeg"                'JFIF'
+try_commit refuse "exr"                                 "docs/a.exr"              'x'
+try_commit refuse "glb"                                 "web/public/head.glb"     'glTF'
+try_commit refuse "gltf (can embed buffers)"            "web/public/head.gltf"    '{"buffers": []}'
+try_commit refuse "npy"                                 "pipeline/codes.npy"      'x'
+try_commit refuse "blend"                               "docs/scene.blend"        'BLENDER'
+try_commit refuse "wav"                                 "docs/take.wav"           'RIFF'
+try_commit refuse "flac"                                "docs/take.flac"          'fLaC'
+try_commit refuse "opus"                                "docs/take.opus"          'OggS'
+try_commit refuse "mp4"                                 "docs/clip.mp4"           'x'
+try_commit pass   "svg is not a raster"                 "web/public/icon.svg"     '<svg/>'
+try_commit pass   "allowlisted legacy m0 image"         "bench/m0/img/chunk-kabukicho-alley.png" 'PNG'
+
+echo "== provenance/audit.py --check-files (repo-wide binary policy, catches --no-verify)"
+A="$T/auditrepo"
+mkdir -p "$A/provenance" "$A/tools/hooks"
+cp "$REPO/provenance/audit.py" "$REPO/provenance/record.schema.json" "$REPO/provenance/licences.json" "$A/provenance/"
+cp "$REPO/tools/hooks/binary_policy.py" "$A/tools/hooks/"
+: > "$A/provenance/mesh.jsonl"
+git -C "$A" init -q
+ac() { git -C "$A" -c user.name=selftest -c user.email=selftest@invalid -c commit.gpgsign=false "$@"; }
+audit() { python3 -I "$A/provenance/audit.py" --data-root "$T/data" "$@" >"$T/last.log" 2>&1; }
+ac add -A && ac commit -qm base --no-verify >/dev/null 2>&1
+if audit --check-files; then ok "clean checkout passes"; else bad "clean checkout fails"; sed 's/^/       /' "$T/last.log" | tail -3; fi
+mkdir -p "$A/web/public"; printf 'PNG\n' > "$A/web/public/render.png"; printf 'RIFF\n' > "$A/web/public/take.wav"
+ac add -f web/public/render.png web/public/take.wav && ac commit -qm bypass --no-verify >/dev/null 2>&1
+if audit --check-files; then bad "--no-verify binaries not caught"
+elif grep -q '^ERROR: git ls-files: web/public/render.png:' "$T/last.log" \
+     && grep -q '^ERROR: git ls-files: web/public/take.wav:' "$T/last.log" \
+     && grep -q '2 error(s)' "$T/last.log"; then ok "--no-verify binaries caught"
+else bad "audit failed without the expected errors"; sed 's/^/       /' "$T/last.log" | tail -3; fi
+if audit; then ok "without --check-files the repo scan is off"; else bad "repo scan ran without --check-files"; fi
+NG="$T/nogit"; mkdir -p "$NG/provenance" "$NG/tools/hooks"
+cp "$A/provenance/audit.py" "$A/provenance/record.schema.json" "$A/provenance/licences.json" "$A/provenance/mesh.jsonl" "$NG/provenance/"
+cp "$A/tools/hooks/binary_policy.py" "$NG/tools/hooks/"; printf 'PNG\n' > "$NG/stray.png"
+if python3 -I "$NG/provenance/audit.py" --data-root "$T/data" --check-files >"$T/last.log" 2>&1; then ok "outside a git checkout: skipped"
+else bad "outside a git checkout: failed"; sed 's/^/       /' "$T/last.log" | tail -3; fi
 
 echo "== $PASS passed, $FAIL failed"
 [[ $FAIL == 0 ]]
