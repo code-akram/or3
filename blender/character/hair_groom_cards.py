@@ -77,13 +77,14 @@ CARDS = {
     # 0.08, tip_light 0), so the cards follow the hero colour model instead of a copy of it.
     "albedo": {"radial_roughness": None, "path": 0.68, "gain": 1.0, "random_color": None,
                "root_dark": None, "tip_light": None, "value_sigma": 0.08,
-               "front_path": 0.45},          # T15: the front falls (kind 2) at their own path (chroma)
+               "front_path": None},   # T15: the front falls (kind 2) at their own path; null = path (a3 0.45: r/g 1.20 -> 1.29x Cycles)
     "roughness": {"base": 0.55, "jitter": 0.12},
     # baked occlusion (ORM R): density x depth only; the root darkening is the viewer's (ORM A, hair.rootAO)
     "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.35},
     # T15: mid / top / under cards run to the `pct` (`under_pct`) percentile of their strands' lengths,
     # not their mean (clump_profile `length`); null = T9
-    "length": {"pct": 92, "under_pct": 85, "fade": 0.1},
+    # (a3: 92 / 85 / 0.1 ended more of the cell's strands before the card end and lost the tips' coverage)
+    "length": {"pct": 80, "under_pct": 70, "fade": 0.12},
     "segment_m": 0.024, "min_segments": 4, "max_segments": 16,
     "min_halfwidth_m": 0.0015, "width_pct": 90, "width_pad_m": 0.0015,
     "tip_width": 0.7, "curve": 0.3, "root_w": [0.3, 0.85], "root_w_m": [0.005, 0.025],
