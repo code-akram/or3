@@ -92,7 +92,7 @@ DEFAULTS = {
     # view: the upper margin 2 mm over the iris top (MRD1 ~3.9 mm), the lower 0.75 mm over the iris
     # bottom (MRD2 ~5.15 mm); fissure = 2 * iris - upper - lower = 9.05 mm
     "eyes": {"globe_mm": 12.0, "forward_mm": 0.6, "iris_mm": 5.9, "upper_over_iris_mm": 2.0, "lower_over_iris_mm": 0.75,
-             "canthal_tilt_deg": 3.0, "core_mm": 1.5, "fade_mm": 6.0,
+             "canthal_tilt_deg": 3.0, "core_mm": 1.5, "fade_mm": 6.0, "clearance_mm": 0.6,
              "lids_on_fan": False},   # the lid targets (aperture, tilt) apply to the public face only
 }
 
@@ -537,6 +537,28 @@ def clear_globes(obj, out, skin, lash, side_of, eye_c, clear):
     return out, n
 
 
+def shipped_spheres(b, body, fitted):
+    """The eyeballs eyes_hq generates, world space: fitted is [(centre, radius)] (+x eye first)
+    from the fitted proxy; when the build ran the sculpt layer, its eye-helper spheres (the globes
+    the lids, socket guard and clearances were shaped against) replace them where they agree
+    within 4 mm. The proxy's back-half fit sits ~0.9 mm forward of the helper (t7b): eyes built on
+    it poked through the upper lid that lies tangent on the helper globe."""
+    st = getattr(b, "sculpt_state", None)
+    if not st or "eye_c" not in st:
+        return fitted, False
+    mw = np.array(body.matrix_world)
+    out, used = [], True
+    for (c, r), side in zip(fitted, (1.0, -1.0)):
+        ch, rh = st["eye_c"][side]
+        cw = (mw @ np.append(ch, 1.0))[:3]
+        if np.linalg.norm(cw - np.asarray(c)) < 0.004:
+            out.append((cw, float(rh) * float(np.linalg.norm(mw[:3, 0]))))
+        else:
+            out.append((c, r))
+            used = False
+    return out, used
+
+
 def W_lash(W):
     return W["helper-l-eyelashes-1"] | W["helper-l-eyelashes-2"] | W["helper-r-eyelashes-1"] | W["helper-r-eyelashes-2"]
 
@@ -630,11 +652,14 @@ def refine(b, body, lab, eyes_obj):
         # the centre on a proxy with a cornea), against the helper spheres seen at edit_base
         to_body = body.matrix_world.inverted() @ eyes_obj.matrix_world
         E = np.array([(to_body @ v.co)[:] for v in eyes_obj.data.vertices])
-        cl, rl = head_forms.fit_sphere(E[E[:, 0] > 0])
-        cr, rr = head_forms.fit_sphere(E[E[:, 0] < 0])
+        from . import head_measure
+        cl, rl = head_measure.eye_sphere(E[E[:, 0] > 0])
+        cr, rr = head_measure.eye_sphere(E[E[:, 0] < 0])
         gap = max(np.linalg.norm(cl - st["eye_c"][1.0][0]), np.linalg.norm(cr - st["eye_c"][-1.0][0]))
         if gap > 0.004:
             return {"skipped": f"eye centres moved {gap * 1000:.1f} mm since edit_base"}
+        # the globes eyes_hq ships (shipped_spheres): the helper spheres the lids were shaped on
+        (cl, rl), (cr, rr) = st["eye_c"][1.0], st["eye_c"][-1.0]
     sel = (lab == "face") | (lab == "head")
     ears = hr.group_weights(body, "ears") > 0
     c = st["cfg"]

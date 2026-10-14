@@ -88,7 +88,7 @@ def _dominant_bones(obj, bones):
     return out
 
 
-def measure(arm, body, eyes, emb=None):
+def measure(arm, body, eyes, emb=None, globes=None):
     """Spec landmarks. arm: armature, body: MPFB base mesh (nude, full
     topology), eyes: the fitted eye proxy or None, emb: the MediaPipe landmark embedding on the
     base mesh (head_sculpt; tri_verts + bary) for the landmark-based measures. Returns a flat
@@ -187,7 +187,7 @@ def measure(arm, body, eyes, emb=None):
             m["nose_length_mm"] = (nas.z - prn.z) * 1000
             m["nose_proj_ratio"] = m["nose_projection_mm"] / max(m["nose_length_mm"], 1e-6)
 
-        m.update(head_structure(body, co, eyes, eye_co, chin, ez, lm))
+        m.update(head_structure(body, co, eyes, eye_co, chin, ez, lm, globes))
         m["interpupillary"] = (sum(p.x for p in eye_co if p.x > 0) / max(1, sum(1 for p in eye_co if p.x > 0))
                                - sum(p.x for p in eye_co if p.x < 0) / max(1, sum(1 for p in eye_co if p.x < 0)))
 
@@ -207,15 +207,28 @@ def _skin_bvh(body, co):
     return BVHTree.FromPolygons(co, polys), helper, polys
 
 
+def eye_sphere(p):
+    """Sphere (centre, radius) of one eye's points (n, 3): least squares through the back half
+    (y behind the centroid), as eyes_hq.build fits the eye it ships (the MPFB eye's front carries
+    a corneal bulge). Every globe test (this measure, head_sculpt's dense clearance) uses this one
+    fit: the all-points fit sits ~0.45 mm higher on the low-poly proxy, and the dense clearance on
+    it left the upper lid 0.5 mm inside the shipped left globe (t7b)."""
+    p = np.asarray(p, np.float64)
+    back = p[p[:, 1] > p[:, 1].mean()]
+    q = back if len(back) > 12 else p
+    A = np.c_[2 * q, np.ones(len(q))]
+    sol = np.linalg.lstsq(A, (q ** 2).sum(1), rcond=None)[0]
+    c = sol[:3]
+    return c, float(np.sqrt(sol[3] + c @ c))
+
+
 def _eye_spheres(eye_co):
-    """Per side (1 = character's left, +x): sphere centre, radius and cornea apex (most forward)."""
+    """Per side (1 = character's left, +x): sphere centre, radius (eye_sphere) and cornea apex
+    (most forward)."""
     out = {}
     for side in (1, -1):
         p = np.array([q[:] for q in eye_co if q.x * side > 0])
-        A = np.c_[2 * p, np.ones(len(p))]
-        sol = np.linalg.lstsq(A, (p ** 2).sum(1), rcond=None)[0]
-        c = sol[:3]
-        r = float(np.sqrt(sol[3] + c @ c))
+        c, r = eye_sphere(p)
         out[side] = (c, r, p[np.argmin(p[:, 1])])
     return out
 
@@ -379,7 +392,7 @@ def group_mask(body, name):
     return out
 
 
-def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
+def head_structure(body, co, eyes, eye_co, chin, ez, lm=None, globes=None):
     """T7 head-structure measures, mean of both sides (per side in *_lr):
 
     brow_overhang            supraorbital rim (most forward skin 6-25 mm above the eye centre on
@@ -399,7 +412,11 @@ def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
     rows = {k: [] for k in ("brow_overhang", "forehead_behind_brow_mm", "orbit_recess_mm",
                             "eye_aperture_mm", "canthal_tilt_deg", "globe_radius_mm",
                             "infraorbital_ahead_mm", "infraorbital_below_mm")}
-    for side, (c, r, apex) in _eye_spheres(eye_co).items():
+    sph = _eye_spheres(eye_co)
+    if globes:   # the globes that ship (head_sculpt.shipped_spheres), world; the proxy's apex moved with them
+        sph = {s_: (np.asarray(globes[s_][0]), float(globes[s_][1]),
+                    sph[s_][2] + (np.asarray(globes[s_][0]) - sph[s_][0])) for s_ in sph}
+    for side, (c, r, apex) in sph.items():
         rows["globe_radius_mm"].append(r * 1000)
         zs, ys = _profile(skin, float(c[0]), c[2] - 0.03, c[2] + 0.065)
         up = (zs > c[2] + 0.006) & (zs < c[2] + 0.025) & np.isfinite(ys)
@@ -489,7 +506,14 @@ def measure_live(b):
         from . import head_layer
         path = head_layer.resolve("$DATA/build/identity/base_embedding.npz")
         emb = np.load(path) if os.path.exists(path) else None
-    m = measure(arm, b.basemesh, eyes, emb)
+    globes = None
+    if st and st.get("eye_c") and eyes is not None:
+        from . import head_sculpt
+        eco = np.array([p[:] for p in _rest_coords(eyes)])
+        fitted = [eye_sphere(eco[eco[:, 0] > 0]), eye_sphere(eco[eco[:, 0] < 0])]
+        g, used = head_sculpt.shipped_spheres(b, b.basemesh, fitted)
+        globes = {1: g[0], -1: g[1]} if used else None
+    m = measure(arm, b.basemesh, eyes, emb, globes)
     b.notes["spec_landmarks"] = m
     b.notes["spec_checks"] = checks(m)
     return m

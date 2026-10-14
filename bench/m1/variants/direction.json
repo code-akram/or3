@@ -115,14 +115,14 @@
      "mm": 0.0
     },
     "brow": {
-     "mm": -1.8
+     "mm": -2.6
     },
     "gonion": {
      "mm": 12.5
     }
    },
    "eyes": {
-    "forward_mm": 0.9
+    "forward_mm": 1.8
    }
   }
  },
