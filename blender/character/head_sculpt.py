@@ -67,7 +67,7 @@ DEFAULTS = {
         "chin": {"mm": 1.2, "r_mm": 6.0, "drop_mm": 0.0},
         "temporal": {"mm": 0.5, "hollow_mm": -1.2},
     },
-    "eyes": {"globe_mm": 12.0, "iris_mm": 5.9, "upper_over_iris_mm": 1.5, "aperture_mm": 10.0,
+    "eyes": {"globe_mm": 12.0, "iris_mm": 5.9, "upper_over_iris_mm": 1.5, "aperture_mm": 9.8,
              "canthal_tilt_deg": 3.0, "core_mm": 1.5, "fade_mm": 6.0},
 }
 
@@ -483,7 +483,12 @@ def refine(b, body, lab, eyes_obj):
     co = hr.coords(body)
     nrm = hr.normals(body)
     if eyes_obj is not None:
-        cl, cr = hr.eye_centres(eyes_obj)
+        # sphere centres of the fitted eyes in the body's object space (a centroid sits forward of
+        # the centre on a proxy with a cornea), against the helper spheres seen at edit_base
+        to_body = body.matrix_world.inverted() @ eyes_obj.matrix_world
+        E = np.array([(to_body @ v.co)[:] for v in eyes_obj.data.vertices])
+        cl = head_forms.fit_sphere(E[E[:, 0] > 0])[0]
+        cr = head_forms.fit_sphere(E[E[:, 0] < 0])[0]
         gap = max(np.linalg.norm(cl - st["eye_c"][1.0][0]), np.linalg.norm(cr - st["eye_c"][-1.0][0]))
         if gap > 0.004:
             return {"skipped": f"eye centres moved {gap * 1000:.1f} mm since edit_base"}

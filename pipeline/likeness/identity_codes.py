@@ -18,6 +18,15 @@ Inputs come from a reference directory written by refboard.py (index.json, crops
         [--ids 3,8,12 | --auto] [--weight-flat 2.0]
 
 Run with OMP_NUM_THREADS=3.
+
+`compare` (T7 originality check) prints ONE number and writes nothing: the cosine similarity
+between ArcFace (w600k_r50, ONNX via cv2.dnn) embeddings of a render and of the reference set
+(the normalised coordinate-wise median over the --ids / --auto frames), for checking that an
+authored face is not the reference identity (target <= 0.25):
+
+    python -I identity_codes.py compare --arcface ONNX --yunet ONNX --ref REF_DIR [--auto] IMG...
+
+The render's five points come from YuNet; the reference crops use their stored landmarks.
 """
 
 import argparse
@@ -194,7 +203,66 @@ def weighted_median(X, w):
     return Xs[idx, np.arange(X.shape[1])]
 
 
+def compare(argv):
+    """Print the ArcFace cosine between render image(s) and the reference set; write nothing."""
+    ap = argparse.ArgumentParser(prog="identity_codes.py compare")
+    ap.add_argument("--arcface", required=True, help="w600k_r50 ONNX")
+    ap.add_argument("--yunet", required=True, help="YuNet face detector ONNX (render five points)")
+    ap.add_argument("--ref", required=True, help="reference dir from refboard.py board")
+    ap.add_argument("--ids", default="")
+    ap.add_argument("--auto", action="store_true")
+    ap.add_argument("--max-yaw", type=float, default=25.0)
+    ap.add_argument("--max-pitch", type=float, default=15.0)
+    ap.add_argument("--max-roll", type=float, default=20.0)
+    ap.add_argument("--max-expr", type=float, default=0.25)
+    ap.add_argument("--min-sharp", type=float, default=40.0)
+    ap.add_argument("images", nargs="+", help="render(s) of the authored face")
+    a = ap.parse_args(argv)
+    cv2.setNumThreads(3)
+    net = cv2.dnn.readNetFromONNX(a.arcface)
+
+    def embed(crop):
+        blob = cv2.dnn.blobFromImage(crop, 1.0 / 127.5, (112, 112), (127.5, 127.5, 127.5), swapRB=True)
+        net.setInput(blob)
+        e = net.forward().reshape(-1).astype(np.float64)
+        return e / np.linalg.norm(e)
+
+    ref = Path(a.ref)
+    frames = json.load(open(ref / "index.json"))["frames"]
+    if a.ids:
+        sel = {int(x) for x in a.ids.split(",") if x.strip()}
+    elif a.auto:
+        sel = set(auto_pick(frames, a.max_yaw, a.max_pitch, a.max_roll, a.max_expr, a.min_sharp))
+    else:
+        sel = {f["id"] for f in frames}
+    R = np.array([embed(align(cv2.imread(str(ref / f["crop"])), five_points(np.load(ref / f["landmarks"]))))
+                  for f in frames if f["id"] in sel])
+    if not len(R):
+        raise SystemExit("compare: empty reference set")
+    r = np.median(R, axis=0)
+    r /= np.linalg.norm(r)
+    out = []
+    for path in a.images:
+        img = cv2.imread(path)
+        if img is None:
+            raise SystemExit(f"compare: cannot read {path}")
+        h, w = img.shape[:2]
+        det = cv2.FaceDetectorYN.create(a.yunet, "", (w, h), 0.5, 0.3, 5)
+        _, faces = det.detect(img)
+        if faces is None or not len(faces):
+            raise SystemExit(f"compare: no face found in {path}")
+        f = faces[np.argmax(faces[:, -1])]
+        out.append(embed(align(img, f[4:14].reshape(5, 2).astype(np.float64))))
+    e = np.mean(out, axis=0)
+    e /= np.linalg.norm(e)
+    print(f"{float(e @ r):.3f}")
+    return 0
+
+
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv and argv[0] == "compare":
+        return compare(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--ckpt", required=True, help="MICA-style checkpoint (arcface + flameModel.regressor)")
     ap.add_argument("--ref", required=True, help="reference dir from refboard.py board")

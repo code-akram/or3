@@ -28,5 +28,5 @@ get FaceXModel/vertex_indices.json
 for i in $(seq -f '%03g' 0 99); do get "FaceXModel/identity$i.obj"; done
 grep -q '^MIT License' "$OUT/LICENSE" || { echo "unexpected licence text in $OUT/LICENSE" >&2; exit 1; }
 echo "$SHA" > "$OUT/COMMIT"
-(cd "$OUT" && sha256sum LICENSE FaceXModel/generic_neutral_mesh.obj FaceXModel/vertex_indices.json > SHA256SUMS)
+(cd "$OUT" && sha256sum LICENSE README.md FaceXModel/*.obj FaceXModel/vertex_indices.json > SHA256SUMS)
 echo "OK: $OUT ($(ls "$OUT"/FaceXModel/identity*.obj | wc -l) identity shapes, commit ${SHA:0:12})"

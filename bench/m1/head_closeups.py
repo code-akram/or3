@@ -47,7 +47,10 @@ SHOTS = {
     "cheek":      ("cheek_l", 40.0, 0.0, 0.05, True),
     "forehead":   ("forehead", -20.0, 10.0, 0.07, True),
     "pores":      ("cheek_l", 35.0, 0.0, 0.020, True),
+    "jaw_low":    ("face", -60.0, -12.0, 0.30, True),     # gonial angle and mandibular border
 }
+# head turntable, hair hidden (tt000 front, then every 45 deg toward the character's left)
+SHOTS.update({f"tt{a:03d}": ("head", float(a if a <= 180 else a - 360), 5.0, 0.40, True) for a in range(0, 360, 45)})
 HAIR = ("clump", "cap_", "hair", "long0", "groom")
 KEEP = ("beard", "brow", "lash", "moustache")
 STUDIO_EXPOSURE = -2.5

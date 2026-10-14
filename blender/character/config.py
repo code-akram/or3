@@ -41,6 +41,12 @@ DEFAULTS = {
         "edits": {},
         # Planarisation blend 0..1 per plane group (head_shape.PLANES).
         "planes": {},
+        # Public face identity delta (head_layer.py; author_public.py wraps hand-chosen ICT-FaceKit
+        # coefficients, bench/m1/variants/public_identity.json). A private fan block replaces it.
+        "identity": None,
+        # Bony structure fields + eye block on the base mesh (head_sculpt.DEFAULTS; {} = defaults),
+        # crisp band added in head_refine. null disables.
+        "sculpt": None,
         # Post-staging refinement (head_refine.py, skin_tex.py, eyes_hq.py):
         # dense face + hands, re-fitted planes, sculpt forms, re-packed UVs,
         # generated 4k skin. null disables the whole stage.
