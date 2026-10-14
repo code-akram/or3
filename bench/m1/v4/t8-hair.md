@@ -1,6 +1,48 @@
 # m1 v4 track T8: hair v4 steps 1-3 (groom, hairline and scalp, shading) + beard tone
 
-_Track T8 report, 2026-10-14. Spec: `checkpoint-1.md` §3 T8, `fable_review.md` §5.4-5.6. Public build only (`bench/m1/variants/direction.json`), no fan overlay. Blender-only: the game cards are not rebuilt (that is step 4, next round), so the EEVEE/engine scalp hair still has the old near-black card look and picks up one new defect (see "What still reads wrong")._
+_Track T8 report, 2026-10-14. Spec: `checkpoint-1.md` §3 T8, `fable_review.md` §5.4-5.6. Public build only (`bench/m1/variants/direction.json`), no fan overlay. Blender-only: the game cards are not rebuilt (that is step 4, next round)._
+
+**Final state: run `20261014T125019Z-t8-v5` (commit `2cc3eba`).** The first pass (v4c/v4d, §1-§7 below) regressed the read against main: the hair went tan-brown, the side front falls became a flat light panel, the hem read as a one-length bob, and the brow-lock card blotched on the forehead. §0 is the rework after review. Where §1-§7 give v4c values that §0 changes, §0 wins.
+
+**Before/after strip** (base left, v5 right; hero portrait crop, hero portrait, hero back, engine `game_portrait`): `data/build/t8/strip_base_vs_v5.png`.
+
+## 0. Rework after review (v5)
+
+| Review point | Change (`hair.groom`) | Result (v5) |
+|---|---|---|
+| Colour read tan-brown, not near-black | `shader.melanin` 0.82 → **0.90**, `random_color` 0.2 → 0.15, `root_dark` 0.06 → 0.08, `tip_light` 0.04 → 0.03, `redness` 0.12 → 0.10; `scalp_tint.color` `#4a3a31` → `#2b221d`. The p10 is kept by the lobes instead: Chiang `roughness` 0.32-0.40 → **0.36-0.45**, `radial_roughness` 0.3 → **0.5** (Huang 0.13-0.20). Coat 0.2 was tried and lowers p10 (0.026). Grey (12 %, temple-weighted) unchanged | Hero portrait: the mass reads near-black, with a soft sheen on the crown and along the lengths. Hair test p10 **0.0445 (2.8x base)** |
+| Side front falls merged into a flat light panel | `front_fall[0]`: `az_step_deg` 6 → 11, `strands` 360 → 200, `guides` 6 → 3, `spread_deg` 5 → 2, `comb_jitter` 0.25 → 0.12, `clump_w` 1.5 → 1.75 (tight ropes), new `depth_step_m` 0.005 (each fall hangs 5 mm further off the face), new per-fall `melanin` 0.95 (no grey, no edge lightening) | Three thin, separated dark strands beside the face, close to v3 |
+| Brow lock read as a smooth light ribbon; its card blotched the forehead | `front_fall[1]` back to the v3 values (one guide, hug 0.08, gravity 0.55, comb_fwd 0.5, comb_down 0.4, flare after 70 mm, factor 0.75) plus `melanin` 0.95 | Hero: a dark lock. Game: the forehead blotches are gone, back to main's single strokes (engine `game_portrait`, lookdev closeup) |
+| Hem read as a one-length bob | new `perimeter` `{back_m 0.05, sigma_deg 60}`: guide tips 5 cm lower at the back centre, fading round the head (a U). `cut.lock1_m` 0-8 cm per level-1 lock (the 3-4 cm locks; ±4 cm), `cut.lock_m` 0-3 cm per level-2 lock, `layer_m` 0.04; new `cut.long_share` 0.006: 406 strands stay uncut and loosely clumped (wisps below their locks) | Hero back: longer and tapered at the centre back, and the silhouette breaks into locks of different lengths. Clay: lock lengths vary, with a few long wisps. Still a sleek, straight curtain |
+| Crown whorl light patch | `field.whorl.turn_deg` 50 → 30, darker scalp tint | The patch in the neutral back view (`hair_test/back.png`) is a specular band along the top silhouette from the clay rig's top light, not scalp. It does not show in the hero back. Left as is |
+
+v5 metrics:
+
+| | base | v5 |
+|---|---|---|
+| Hair test p10 / p50 (Chiang) | 0.0157 / 0.0627 | 0.0445 / 0.1115 |
+| Hair test modes | 1 | 1 (single peak; still fails, §3) |
+| Beard EEVEE / Cycles | 1.436 | **1.232** (0.3459 / 0.2807) |
+| Tris total; hair + beard | 126,884; 27,788 | 127,208; 28,112 (hair 21,152 + beard 6,960) |
+| glTF errors | 0 | 0 |
+| Strands / stray hairs / vellus / long uncut | 40,000 / - / 1,400 / - | 70,000 / 1,400 / 4,000 / 406 |
+| Front-fall strands, sub-guides | 1,340, 4 guides | 860, 10 |
+| read40 | eye band fail, beard 76 % | eye band fail (not T8), beard 86 % |
+| IoU vs base | - | front 0.988, three-quarter 0.994, profile 0.997, closeup 0.915 |
+
+Images:
+- **Strip:** `data/build/t8/strip_base_vs_v5.png`.
+- **Hero preview:** `data/build/hero/20261014T130129Z-t8-v5/{portrait,portrait_crop,back}.png`.
+- **Engine portrait:** `data/build/lookdev/{20261014T101315Z-t8-base,20261014T125019Z-t8-v5}/game_portrait.png`, both from `engine_shots.sh` with portrait only.
+- **Hair test sheet:** `…-t8-v5/hair_test/hair_test_sheet.png`.
+- **Clay:** `…-t8-v5/hair_test/clay_turntable.png`.
+
+Still wrong after the rework:
+- **Character's right temple:** in the portrait crop there is a soft, lighter wisp. These are temple-weighted grey strands and stray hairs catching the key; the grey is intended (NOTES §7), but it reads a little hazy.
+- **Hairline:** smooth and slicked. The edge is soft rather than spiky, but the line is a regular arc.
+- **Lengths:** still a straight, sleek curtain with little volume. The two-modes metric fails for the same reason.
+- **Brow lock from behind:** it still stands off the head like v3's (the "antenna" in the hair test view, as on main).
+- **Engine:** the scalp cards are still stringy at the hairline and temples, as on main (step 4). The engine still applies `facialHair.albedoGain` 0.45 on top of the darker swatches until T6 drops the knob.
 
 ## Runs
 
@@ -15,12 +57,15 @@ All runs are under `data/build/lookdev/` (EEVEE loop mode, `THREADS=3`, `KEEP_BL
 | `20261014T120927Z-t8-v4d` | `1bdbc3a` | final beard swatches (x0.3); groom and shading identical to v4c |
 | `data/build/t8/sweep_v4a/`, `data/build/t8/dev4/hair_test/` | | shader sweeps on one build (`hair_test.py --variants`) |
 | `data/build/t8/v3check/` | `14e9268` + `hair_v3_groom.json` | the v3 groom is still reachable by config |
+| `data/build/t8/sweep_dark/` | | darker-shader sweep on v4c (melanin +0.08, roughness, radial, coat) |
+| `data/build/t8/dev5/` | `2cc3eba` (head refine off) | rework check: hero preview `data/build/hero/20261014T123811Z-t8-dev5/`, hair test, game closeup |
+| **`20261014T125019Z-t8-v5`** | **`2cc3eba`** | **final** (§0); hero `data/build/hero/20261014T130129Z-t8-v5/` |
 
 Hero previews (`hero.sh --preview --shots portrait,back --crop portrait`, Cycles): before `data/build/hero/20261014T110302Z-t8-base/`, after `data/build/hero/20261014T120848Z-t8-v4c/` (v4c blend).
 
 ## Gate
 
-| Gate item | Before (base) | After (v4c / v4d) | Verdict |
+| Gate item (first pass; v5 numbers in §0) | Before (base) | After (v4c / v4d) | Verdict |
 |---|---|---|---|
 | Strand count + clump factors in `character.stats.json` | 40k, 2 levels (not recorded) | top-level `hair_groom`: 70,000 strands + 1,400 stray hairs + 4,000 vellus, 48 points, 4 levels with count, strands per clump, factor, shape, tip spread, offset, falloff | pass |
 | Hair test p10 >= 2x before | 0.0157 | Chiang **0.0364 (2.3x)**; Huang 0.0126 (0.8x) | pass (Chiang, the shipped model) |
