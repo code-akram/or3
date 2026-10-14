@@ -15,7 +15,7 @@
    "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18]},
    "flyaways": {"mode": "noise", "share": 0.04, "distance_m": 0.010},
    "trim": {"random": 0.05, "in_gn": true},
-   "cut": null,
+   "cut": null, "perimeter": null,
    "vellus": {"count": 1400, "length_m": [0.003, 0.006], "band_m": [-0.002, 0.006],
               "radius_m": 0.000018, "melanin": 0.9},
    "front_fall": [
@@ -32,7 +32,7 @@
    "shader": {"model": "HUANG", "melanin": 0.985, "roughness": [0.22, 0.30], "random_color": 0.08,
               "offset_deg": null, "light_share": 0.10, "coat": null, "radial_roughness": null,
               "root_dark": 0.0, "tip_light": 0.0, "grey_share": 0.0},
-   "scalp_tint": {"fade_m": [0.008, 0.03], "alpha": 0.85},
+   "scalp_tint": {"color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
    "render": null
   }
  }

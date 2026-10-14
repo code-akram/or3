@@ -84,7 +84,7 @@ DEFAULTS = {
     # (+ = counter-clockwise seen from outside), fading over `radius_m`. `down`:
     # behind and below the whorl the comb turns down by this much. `jitter_deg`
     # of coherent angle noise round the scalp normal at `jitter_scale_m`.
-    "field": {"whorl": {"el_deg": 58.0, "az_deg": 14.0, "radius_m": 0.025, "turn_deg": 50.0},
+    "field": {"whorl": {"el_deg": 58.0, "az_deg": 14.0, "radius_m": 0.025, "turn_deg": 30.0},
               "down": 0.5, "jitter_deg": 12.0, "jitter_scale_m": 0.035, "seed": 5},
     # Share of roots per side that tuck behind the ear (the rest drape over
     # it, kept off by the ear collider). left = +x, the character's left.
@@ -174,8 +174,14 @@ DEFAULTS = {
     # Never into the first `min_hang_m` of the hanging part. `taper_radial`
     # (0 = a random taper per strand: the lock end fades out) blends the taper
     # toward the root's distance from its level-2 lock centre: pointed lock ends.
-    "cut": {"lock_m": [0.0, 0.07], "taper_m": 0.03, "taper_pow": 1.0, "taper_radial": 0.7,
-            "layer_m": 0.05, "min_hang_m": 0.04},
+    # `lock1_m` adds a cut per level-1 lock (the big 3-4 cm locks: the
+    # silhouette breaks up); `long_share` of the strands stay uncut (wisps
+    # hanging below their locks).
+    "cut": {"lock_m": [0.0, 0.03], "lock1_m": [0.0, 0.08], "taper_m": 0.03, "taper_pow": 1.0,
+            "taper_radial": 0.7, "layer_m": 0.04, "min_hang_m": 0.04, "long_share": 0.006},
+    # Perimeter (null = level): the guide tips sit `back_m` lower at the back
+    # centre, fading by a Gaussian of `sigma_deg` round the head (a U, not a bob).
+    "perimeter": {"back_m": 0.05, "sigma_deg": 60.0},
     "vellus": {"count": 4000, "length_m": [0.003, 0.007], "band_m": [-0.002, 0.008],
                "radius_m": 0.000025, "lift": 0.35, "melanin": 0.7},
     # Front falls (hair_clumps.march with fall gravity). side -1 = the
@@ -183,20 +189,24 @@ DEFAULTS = {
     # the fall's own `guides` sub-guides (rooted within `spread_deg`, each
     # combed `comb_jitter` and cut `len_jitter` differently) instead of all
     # copying one guide (v3: guides 1, a rigid slab). `clump_w` scales the
-    # clump factors (v3: `factor` / the level-1 factor).
+    # clump factors (v3: `factor` / the level-1 factor). `depth_step_m`: each
+    # further fall of a group hangs this much further off the face (depth).
+    # `melanin` (optional): the fall's own melanin, no grey, no edge lightening.
+    # The side falls are thin, separated ropes (az_step 11 deg, 200 strands,
+    # sub-guides close, clumped hard); the brow lock (side 1) is v3's (one
+    # guide: the card baker's front-lock path draws it as one stroke).
     "front_fall": [
-        {"side": -1, "count": 3, "az0_deg": 30, "az_step_deg": 6.0, "el_deg": 24,
+        {"side": -1, "count": 3, "az0_deg": 30, "az_step_deg": 11.0, "el_deg": 24,
          "comb_side": 0.2, "comb_fwd": 0.3, "comb_down": 0.9, "fall_after_m": 0.025,
-         "tip_above_lips_m": 0.045, "tip_jitter_m": 0.015, "hug": 0.06, "clear_m": 0.005,
-         "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 360,
-         "clump_w": 1.5, "wave_m": 0.005, "guides": 6, "spread_deg": 5.0, "comb_jitter": 0.25,
-         "len_jitter": 0.12},
+         "tip_above_lips_m": 0.045, "tip_jitter_m": 0.025, "hug": 0.06, "clear_m": 0.004,
+         "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 200,
+         "clump_w": 1.75, "wave_m": 0.005, "guides": 3, "spread_deg": 2.0, "comb_jitter": 0.12,
+         "len_jitter": 0.15, "depth_step_m": 0.005, "melanin": 0.95},
         {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 32,
-         "comb_side": 0.9, "comb_fwd": 0.35, "comb_down": 0.5, "fall_after_m": 0.04, "gravity": 0.75,
-         "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.4, "clear_m": 0.007,
-         "flare_after_m": 0.11, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
-         "clump_w": 1.5, "wave_m": 0.003, "guides": 5, "spread_deg": 5.0, "comb_jitter": 0.25,
-         "len_jitter": 0.12}],
+         "comb_side": 0.9, "comb_fwd": 0.5, "comb_down": 0.4, "fall_after_m": 0.04, "gravity": 0.55,
+         "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.08, "clear_m": 0.007,
+         "flare_after_m": 0.07, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
+         "factor": 0.75, "wave_m": 0.003, "melanin": 0.95}],
     # Principled Hair BSDF, melanin parametrisation. Melanin 0.82 (red light
     # keeps ~25 % through one hair, so TT / TRT survive: two highlights; v3's
     # 0.985 left only the white R lobe), Random Color 0.2; per point melanin
@@ -209,20 +219,20 @@ DEFAULTS = {
     # `offset_deg`: cuticle tilt. v3: Huang, 0.985, 10 % light strands, no grey.
     # Chiang roughness 0.32 -> 0.40: at 0.24 -> 0.30 the hair test's shadow side
     # stayed as dark as v3's (p10 1.1x); at 0.32 -> 0.40 it is 2.2x (t8-hair.md).
-    "shader": {"model": "CHIANG", "melanin": 0.82, "redness": 0.12,
-               "roughness": [0.32, 0.40], "huang_roughness": [0.11, 0.16],
-               "random_color": 0.2, "random_roughness": 0.1,
+    "shader": {"model": "CHIANG", "melanin": 0.90, "redness": 0.10,
+               "roughness": [0.36, 0.45], "huang_roughness": [0.13, 0.20],
+               "random_color": 0.15, "random_roughness": 0.1,
                "ior": 1.55, "aspect_ratio": 0.85, "offset_deg": 3.0,
                "light_share": 0.0, "light_melanin": 0.93,
                "lock_melanin_jitter": 0.012, "tint": None,
-               "coat": 0.0, "radial_roughness": 0.3,     # Chiang only (coat: the wet look)
-               "root_dark": 0.06, "tip_light": 0.04,
+               "coat": 0.0, "radial_roughness": 0.5,     # Chiang only (coat: the wet look)
+               "root_dark": 0.08, "tip_light": 0.03,
                "grey_share": 0.12, "grey_melanin": [0.0, 0.5], "grey_redness": 0.0,
                "grey_temple": 2.2, "grey_temple_az_deg": 70.0, "grey_temple_sigma_deg": 22.0,
                "fly_roughness": None, "fly_melanin": None},   # flyaway strands (curve attr `fly`) blend to this: dry strays on a wet groom
     # Hero scalp shell under the strands: dark, fading in from fade_m[0] inside
     # the hairline (v3: from 8 mm, so the first 8 mm read as bare skin).
-    "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.0, 0.014], "alpha": 0.8},
+    "scalp_tint": {"offset_m": 0.0004, "color": "#2b221d", "fade_m": [0.0, 0.014], "alpha": 0.8},
     # Cycles settings saved with the kept .blend: hair as 3D curves (THICK, not
     # the default ribbons) and the glossy bounces dark hair needs (fable_review
     # §5.4). The hero rig (blender/hero/rig.py cycles()) still sets its own bounces.
@@ -464,6 +474,7 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
         return max(behind, low) * ccfg["gravity"]
 
     tk = gcfg["tuck"]
+    pm = gcfg.get("perimeter")
 
     wv = ccfg["wave"]
     G, H, hang_pts = [], [], []
@@ -471,6 +482,10 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
         side = surf.part_side(p, n)
         comb = comb_dir(surf, ccfg, p, n, rng, side)
         tip = tip_base + rng.uniform(-1, 1) * length["jitter_m"]
+        if pm:
+            # perimeter: a U, longer toward the back centre
+            off = 180.0 - abs(surf.azimuth(tuple(p)))
+            tip -= pm["back_m"] * math.exp(-(off / pm["sigma_deg"]) ** 2)
         lay = rng.uniform(0, gcfg["layer_jitter_m"])
         share = tk["left"] if p[0] >= c.x else tk["right"]
         tuck = True if share >= 1.0 else rng.random() < share   # no draw: v2 grooms unchanged
@@ -576,7 +591,8 @@ def front_fall_guides(frame, ccfg, gcfg, surf, rng, m):
                     ln = len0 * (1.0 - lj * rng.random())
                     fl = flare0 * rng.uniform(0.85, 1.15)
                 s = hair_clumps.Strand(r, rn, comb, tip, ln, fall_gravity,
-                                       gcfg["gap_m"] + ff["clear_m"] + 0.0015 * i, {}, side)
+                                       gcfg["gap_m"] + ff["clear_m"] + ff.get("depth_step_m", 0.0015) * i,
+                                       {}, side)
                 s.hug = ff["hug"]
                 s.flare = (fl, ff["flare"])
                 s.lift = (0.0, 0.03, 0.03, 0.08, 0.5)
@@ -1083,7 +1099,7 @@ def build(b, frame, ccfg, gcfg_in):
     ct = gcfg.get("cut")
     tr = gcfg["trim"]
     py_trim = tr["random"] if not tr.get("in_gn", True) else 0.0
-    cut_n = 0
+    cut_n = long_n = 0
     if ct or py_trim > 0:
         ct = ct or {"lock_m": [0.0, 0.0], "taper_m": 0.0, "taper_pow": 1.0, "layer_m": 0.0, "min_hang_m": 0.04}
         crng = sub_rng(101)
@@ -1101,7 +1117,18 @@ def build(b, frame, ccfg, gcfg_in):
             u = (1 - rad) * u + rad * np.clip(dc / np.maximum(dmax[sub], 1e-6), 0, 1)
         cut = (np.array([lock[int(q)] for q in sub]) + ct["taper_m"] * u ** ct["taper_pow"]
                + ct["layer_m"] * top_w)
+        if ct.get("lock1_m"):
+            # per level-1 lock (3-4 cm wide): the silhouette breaks up
+            lock1 = {int(q): crng.uniform(*ct["lock1_m"]) for q in np.unique(prim)}
+            cut += np.array([lock1[int(q)] for q in prim])
         trim_f = crng.uniform(0.0, py_trim, n)
+        if ct.get("long_share"):
+            # a few strands keep their full length: longer wisps below their locks
+            longs = (crng.random(n) < ct["long_share"]) & (ffid[:n] < 0)
+            cut[longs] = 0.0
+            trim_f[longs] = 0.0
+            clump_w[longs] *= 0.3
+            long_n = int(longs.sum())
         for j in np.where((kind == 0) & (H[:, -1] > ct["min_hang_m"]))[0]:
             arc_len = float(np.linalg.norm(np.diff(S[j], axis=0), axis=1).sum())
             new_len = max(arc_len - cut[j] - trim_f[j] * arc_len, arc_len - H[j, -1] + ct["min_hang_m"])
@@ -1212,6 +1239,14 @@ def build(b, frame, ccfg, gcfg_in):
         grey = grng.random(n) < sh["grey_share"] * wg / wg.mean()
         melanin[grey] = grng.uniform(*sh["grey_melanin"], int(grey.sum()))
         redness[grey] = sh["grey_redness"]
+    # Front falls with their own `melanin`: that value, no grey, no edge
+    # lightening (they hang in front of the face: dark locks, not a light sheet).
+    for fi, ff in enumerate(ffs):
+        if ff["cfg"].get("melanin") is not None:
+            sel = ffid[:n] == fi
+            melanin[sel] = ff["cfg"]["melanin"]
+            redness[sel] = sh["redness"]
+            grey[sel] = False
     if nx:
         fly_x = np.ones(nx)
         mel_x, red_x = melanin[src], redness[src]
@@ -1316,7 +1351,7 @@ def build(b, frame, ccfg, gcfg_in):
                          for idx, lvl in zip(lv, levels)],
         "clump_preserve_length": bool(cc.get("preserve_length", False)),
         "strays": int(stray.sum()), "flyaways": int(nfly), "flyaway_mode": fw.get("mode", "noise"),
-        "cut_strands": int(cut_n), "edge_strands": int((w_edge > 0.02).sum()),
+        "cut_strands": int(cut_n), "long_strands": int(long_n), "edge_strands": int((w_edge > 0.02).sum()),
         "grey_share": round(float(grey.mean()), 4), "comb_mode": gcfg["comb"].get("mode"),
         "shader_model": sh["model"], "melanin": sh["melanin"], "radius_m": gcfg["radius_m"],
         "points_pushed": int(pushed),
