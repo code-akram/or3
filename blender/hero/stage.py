@@ -47,7 +47,7 @@ def render_crop(ch, name, spec, cam, out_dir, size=0.5):
     """Close-up evidence: the same shot at 100 % resolution, cropped to
     `size` of the frame around the near eye (head shots) or the camera's
     focus target, or the shot's `crop_at` (("hands", size): between the
-    hands). Writes exr/<name>_crop.exr; returns its record."""
+    hands; ("eyes", size): the head of a full-body shot). Writes exr/<name>_crop.exr; returns its record."""
     from bpy_extras.object_utils import world_to_camera_view
     sc = bpy.context.scene
     r = sc.render
@@ -62,6 +62,8 @@ def render_crop(ch, name, spec, cam, out_dir, size=0.5):
         at, size = spec["crop_at"]
         if at == "hands":
             pt = (ch.bone_head("middle_01_l") + ch.bone_head("middle_01_r")) * 0.5
+        elif at == "eyes":
+            pt = ch.aim("eyes")
     v = world_to_camera_view(sc, cam["obj"], pt)
     cx = min(max(v.x, size / 2), 1 - size / 2)
     cy = min(max(v.y, size / 2), 1 - size / 2)
@@ -106,7 +108,9 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
         sets.neon(spec.get("neon", 1.0))
     lights = dict(spec.get("lights") or {})
     rig.hero_rig(ch, cam, lights=lights, twin=spec.get("twin"),
-                 flag=spec.get("flag", ("key", "wrap", "fill", "eye")) if set_kind == "alley" else ())
+                 flag=spec.get("flag", ("key", "wrap", "fill", "eye")) if set_kind == "alley" else (),
+                 practicals=rig.practical_lights() if set_kind == "alley" else (),
+                 emitters=rig.practical_emitters() if set_kind == "alley" else ())
     if set_kind == "void":
         rig.world()
         rig.void_floor()

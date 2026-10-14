@@ -308,18 +308,31 @@ def receivers(ch):
     return col
 
 
-# Hair rim (Track B's finding): the wet coat specular mirrors a saturated
-# rim at full saturation: magenta hair on the shadow side, a teal sheen on the
-# part. Every saturated rim / kicker (HSV saturation > HAIR_RIM_MIN_SAT) is
-# split by light linking: the original lights everything but the head hair; a
-# twin at the same place lights only the hair, desaturated to HAIR_RIM_SAT of
-# the original saturation at the same luminance. A magenta rim is pulled
-# toward white-violet (HAIR_RIM_TOWARD), any other hue toward white (its own
-# hue kept). Face, suit and set keep the full rim.
+# Light twins (Cycles light linking). A saturated light turns some things the
+# wrong colour: the wet hair coat mirrors it outright (Track B: magenta hair
+# on the shadow side, a teal sheen on the part), a metal slide reads plum, a
+# black jacket reads plum or purple, a teal rim blows out on a cheek plane.
+# So every saturated light (HSV saturation > HAIR_RIM_MIN_SAT; Kelvin lights
+# never are) can be split: the original lights everything but the twinned
+# groups' objects; per group a twin at the same place lights only that group,
+# desaturated to a fraction of the original saturation at the same luminance,
+# times an energy factor. Magenta is pulled toward white-violet
+# (HAIR_RIM_TOWARD) and then, below that colour's saturation, on toward
+# white; any other hue straight toward white (its own hue kept).
+#
+# Which lights get which twins (twin_plan):
+#   hair   every saturated hero light (key, fill, rim, kicker, top, ...) at
+#          HAIR_RIM_SAT, when HAIR_RIM is on (hero.sh --no-hair-rim).
+#   props  every saturated hero light at PROP_SAT (the pistol slide).
+#   cloth, skin, beard
+#          opt-in per shot (the shot spec's `twin`).
+# The set's practicals (sign spill lights) get no twins unless a shot asks
+# for them under the light name "practicals".
 HAIR_RIM = True
 HAIR_RIM_SAT = 0.4
 HAIR_RIM_MIN_SAT = 0.3
 HAIR_RIM_TOWARD = (0.85, 0.80, 1.0)
+PROP_SAT = 0.15
 
 
 def _lum(c):
@@ -343,16 +356,25 @@ def _is_saturated(colour):
 def hair_rim_colour(colour, sat=None):
     """`colour` moved toward white-violet (magenta) or white (any other
     hue) until its HSV saturation is `sat` (default HAIR_RIM_SAT) of the
-    original; returns (rgb, energy factor that keeps the luminance)."""
+    original; returns (rgb, energy factor that keeps the luminance).
+    Magenta continues from white-violet on to white when `sat` asks for less
+    saturation than white-violet has (PROP_SAT: white-violet alone stops at
+    about 21 % of the sets' magenta)."""
     sat = HAIR_RIM_SAT if sat is None else sat
-    toward = HAIR_RIM_TOWARD if _is_magenta(colour) else (1.0, 1.0, 1.0)
+    path = [tuple(colour)] + ([HAIR_RIM_TOWARD] if _is_magenta(colour) else []) + [(1.0, 1.0, 1.0)]
+    n = len(path) - 1
+
+    def at(u):  # u in [0, n]: along the polyline colour -> (white-violet ->) white
+        i = min(int(u), n - 1)
+        t = u - i
+        return tuple(a + (b - a) * t for a, b in zip(path[i], path[i + 1]))
+
     s0 = colorsys.rgb_to_hsv(*colour)[1]
-    lo, hi = 0.0, 1.0
-    for _ in range(30):
-        t = (lo + hi) / 2
-        c = tuple(a + (b - a) * t for a, b in zip(colour, toward))
-        lo, hi = (t, hi) if colorsys.rgb_to_hsv(*c)[1] > sat * s0 else (lo, t)
-    c = tuple(a + (b - a) * hi for a, b in zip(colour, toward))
+    lo, hi = 0.0, float(n)
+    for _ in range(40):
+        u = (lo + hi) / 2
+        lo, hi = (u, hi) if colorsys.rgb_to_hsv(*at(u))[1] > sat * s0 else (lo, u)
+    c = at(hi)
     return c, _lum(colour) / _lum(c)
 
 
@@ -361,15 +383,9 @@ def hair_objects(ch):
     return [o for o in ch.objs if o.name.startswith("hair_") or o.name.startswith("Human.hair")]
 
 
-# The same split for the other things a saturated light turns the wrong
-# colour. Held props (the pistol): a metal slide is nearly all specular, so
-# it takes a magenta light's colour outright and reads plum instead of black;
-# every saturated hero light gets a props twin at PROP_SAT. Per shot (the
-# spec's "twin": {group: (saturation fraction, energy factor)}), the rim and
-# kicker can also get a cloth twin (the suit: a black jacket under the
-# magenta rim reads plum from behind) or a skin twin (a teal face rim that
-# blows out on the cheek plane in the profile).
-PROP_SAT = 0.15
+def beard_objects(ch):
+    """The facial hair: beard, stubble and brows (strands or game cards)."""
+    return [o for o in ch.objs if o.name.startswith(("beard_", "brows_"))]
 
 
 def prop_objects(ch):
@@ -388,7 +404,38 @@ def skin_objects(ch):
     return [o for o in ch.objs if skin(o) or o.name.startswith("skin_vellus")]
 
 
-TWIN_GROUPS = {"hair": hair_objects, "props": prop_objects, "cloth": cloth_objects, "skin": skin_objects}
+TWIN_GROUPS = {"hair": hair_objects, "beard": beard_objects, "props": prop_objects,
+               "cloth": cloth_objects, "skin": skin_objects}
+
+
+def twin_plan(name, twin=None, practical=False):
+    """The twins one saturated light gets: [(group, saturation fraction,
+    energy factor)]. Defaults: hair (HAIR_RIM_SAT, if HAIR_RIM) and props
+    (PROP_SAT) on every hero light, nothing on a practical. `twin` is the
+    shot's {group: value}; value (fraction, factor) applies to every
+    saturated hero light, {light name: (fraction, factor)} to the named ones
+    ("practicals" = every saturated set spill light), and None (plain or per
+    light) drops that group's default twin."""
+    plan = {}
+    if not practical:
+        plan["props"] = (PROP_SAT, 1.0)
+        if HAIR_RIM:
+            plan["hair"] = (HAIR_RIM_SAT, 1.0)
+    for g, val in (twin or {}).items():
+        if g not in TWIN_GROUPS:
+            raise ValueError(f"twin group {g!r}: not one of {sorted(TWIN_GROUPS)}")
+        if isinstance(val, dict):
+            key = "practicals" if practical else name
+            if key not in val:
+                continue
+            val = val[key]
+        elif practical:
+            continue   # the plain form is for the hero lights only
+        if val is None:
+            plan.pop(g, None)
+        else:
+            plan[g] = (float(val[0]), float(val[1]))
+    return [(g, f, k) for g, (f, k) in plan.items()]
 
 
 def _receivers(name, objs, state):
@@ -404,18 +451,30 @@ def _receivers(name, objs, state):
     return rc
 
 
-def _split(ch, col, light, groups):
+def _split(ch, col, light, groups, only=None):
     """Split `light` (saturated) by light linking: the original lights all
-    but the groups' objects; per group (name, saturation fraction, energy
+    but the groups' objects (of `only`, if given: a flagged light that lights
+    only the character); per group (name, saturation fraction, energy
     factor) a twin at the same place lights only that group, desaturated to
-    the fraction at the same luminance, times the energy factor. Returns
-    {group: twin}."""
-    parts = [(g, TWIN_GROUPS[g](ch), sat, k) for g, sat, k in groups]
-    parts = [p for p in parts if p[1]]
+    the fraction at the same luminance, times the energy factor. A group
+    also named earlier keeps its first objects. Returns {group: twin}."""
+    taken = set()
+    parts = []
+    for g, sat, k in groups:
+        objs = [o for o in TWIN_GROUPS[g](ch) if o.name not in taken and (only is None or o in only)]
+        taken.update(o.name for o in objs)
+        if objs:
+            parts.append((g, objs, sat, k))
     if not parts:
+        if only is not None:
+            light.light_linking.receiver_collection = _receivers(light.name + "_rx", only, "INCLUDE")
         return {}
-    light.light_linking.receiver_collection = _receivers(
-        light.name + "_rx", [o for _, objs, _, _ in parts for o in objs], "EXCLUDE")
+    if only is None:
+        light.light_linking.receiver_collection = _receivers(
+            light.name + "_rx", [o for _, objs, _, _ in parts for o in objs], "EXCLUDE")
+    else:
+        light.light_linking.receiver_collection = _receivers(
+            light.name + "_rx", [o for o in only if o.name not in taken], "INCLUDE")
     twins = {}
     for g, objs, sat, k in parts:
         c, f = hair_rim_colour(tuple(light.data.color), sat)
@@ -430,15 +489,38 @@ def _split(ch, col, light, groups):
     return twins
 
 
-def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(), twin=None):
+def practical_lights():
+    """The set's coloured practicals: the sign spill area lights."""
+    col = bpy.data.collections.get("set_alley")
+    if col is None:
+        return []
+    return [o for o in col.all_objects if o.type == "LIGHT" and o.data.type == "AREA" and "_spill" in o.name]
+
+
+def practical_emitters():
+    """The set's neon tubes and letters (emissive geometry, a mesh light to
+    Cycles): the objects using a sets.emissive "<sign>_neon" material."""
+    col = bpy.data.collections.get("set_alley")
+    if col is None:
+        return []
+    return [o for o in col.all_objects if o.type in ("MESH", "CURVE", "FONT")
+            and any(s.material and s.material.name.endswith("_neon") for s in o.material_slots)]
+
+
+def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(), twin=None, practicals=(),
+             emitters=()):
     """Build the base hero rig around the camera's subject (the head for
     head shots, the chest otherwise). `lights` overrides entries of
     HERO_LIGHTS; scale multiplies every power. `flag`: names of lights that
     light only the character (Cycles light linking, the render version of a
     flag on a stand), so a camera-relative key does not wash the set.
-    `twin`: {"cloth" | "skin": (saturation fraction, energy factor)}, extra
-    twins of the saturated rim / kicker for this shot (see PROP_SAT); the
-    value can also be {"rim" | "kicker": (fraction, factor)} per light."""
+    Every saturated light, flagged or not, is split into light-linked twins
+    (see twin_plan): `twin` is the shot's {group: (saturation fraction,
+    energy factor) | {light name | "practicals": (fraction, factor) | None}}
+    for the groups in TWIN_GROUPS. `practicals`: the set's spill lights
+    (practical_lights()); `emitters`: the set's neon tubes
+    (practical_emitters()). Their light linking is reset and re-split here
+    every shot, since they outlive the rig."""
     col = collection("hero_rig")
     spec = dict(HERO_LIGHTS)
     spec.update(lights or {})
@@ -465,19 +547,23 @@ def hero_rig(ch, cam, e_key=HERO_E, lights=None, subject=None, scale=1.0, flag=(
         if name == "eye":
             made[name].data.use_shadow = False
             made[name].data.diffuse_factor = EYE_DIFFUSE  # mostly a catchlight
-        if name in flag:
-            made[name].light_linking.receiver_collection = receivers(ch)
-        elif _is_saturated(colour):
-            groups = [("props", PROP_SAT, 1.0)]
-            if name in ("rim", "kicker"):
-                if HAIR_RIM:
-                    groups.append(("hair", HAIR_RIM_SAT, 1.0))
-                for g, val in (twin or {}).items():
-                    val = val.get(name) if isinstance(val, dict) else val
-                    if val is not None:
-                        groups.append((g, val[0], val[1]))
-            for g, t in _split(ch, col, made[name], groups).items():
+        only = list(receivers(ch).objects) if name in flag else None
+        if _is_saturated(colour):
+            for g, t in _split(ch, col, made[name], twin_plan(name, twin), only).items():
                 made[name + "_" + g] = t
+        elif only is not None:
+            made[name].light_linking.receiver_collection = receivers(ch)
+    for p in practicals:
+        p.light_linking.receiver_collection = None
+        if _is_saturated(tuple(p.data.color)) and not p.data.use_temperature:
+            for g, t in _split(ch, col, p, twin_plan(p.name, twin, practical=True)).items():
+                made[p.name + "_" + g] = t
+    # The tubes themselves can't be twinned (geometry, not a light): a group
+    # with a practicals twin is excluded from their emission and takes the
+    # sign's light only through its spill twins.
+    excl = [o for g, _, _ in twin_plan("practicals", twin, practical=True) for o in TWIN_GROUPS[g](ch)]
+    for e in emitters:
+        e.light_linking.receiver_collection = _receivers("set_neon_rx", excl, "EXCLUDE") if excl else None
     return made
 
 
