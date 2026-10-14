@@ -60,6 +60,7 @@ DEFAULTS = {
     "thick_cm": 0.26,
     "relax_iters": 12,
     "lift_spread_cm": 2.0,       # spread each clearing lift into a smooth swell of this radius
+    "pick": {"in_cm": 0.6, "pitch_cm": 0.6},   # pick stitching in from the free edge
     "clear_cm": 0.15,            # final: every vertex this far outside the jacket and the under-garments
 }
 
@@ -550,9 +551,11 @@ def spread_lift(X0, X1, Vc, r_cm, fixed=None):
     return out
 
 
-def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc, rings=5):
+def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc, rings=5, FU=None):
     """Solidify toward the base by t (tapered to 0 near the attachment edge), with a rounded
-    rim on the free boundary. Returns (V, F).
+    rim on the free boundary. FU: per-corner UVs of the sheet (m, 3, 2). Returns (V, F, UV),
+    UV None without FU, else {"uv": per face, "src": the sheet face it came from}
+    (suit_detail.solid).
 
     A pressed edge is a half round (diameter t), not a flat strip: a flat strip at 90 deg to the
     sheet, smooth shaded with shared vertices, takes its normal tilt from however many
@@ -590,6 +593,13 @@ def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc, rings=5):
         base += nb
     V = np.vstack(V)
     F = [tuple(f) for f in T] + [tuple(f[::-1] + n) for f in T]
+    UV = SRC = RU = None
+    if FU is not None:
+        from .suit_detail import boundary_edge_uv, rim_uv
+        FU = np.asarray(FU, float)
+        UV = [fu for fu in FU] + [fu[::-1] for fu in FU]
+        SRC = list(range(len(T))) * 2
+        RU, RS = rim_uv(boundary_edge_uv(T, FU), b, r[:, 0], rings)
     # rim: the boundary loop, skipping the attachment edge; rows top sheet -> rings -> inner sheet
     for k in range(nb):
         k2 = (k + 1) % nb
@@ -597,9 +607,73 @@ def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc, rings=5):
         if attach[i] and attach[j]:
             continue
         rows = [(i, j)] + [(R[k], R[k2]) for R in ring_ids] + [(i + n, j + n)]
-        for (a0, b0), (a1, b1) in zip(rows[:-1], rows[1:]):
+        for m, ((a0, b0), (a1, b1)) in enumerate(zip(rows[:-1], rows[1:])):
             F.append((int(b0), int(a0), int(a1), int(b1)))
-    return V, F
+            if UV is not None:
+                UV.append(RU[k][m] if RU[k] is not None else np.zeros((4, 2)))
+                SRC.append(int(RS[k]))
+    if UV is not None:
+        UV = {"uv": UV, "src": np.array(SRC, int)}
+    return V, F, UV
+
+
+COLLAR, LAPEL_L, LAPEL_R = 1, 2, 3
+
+
+def chart_uv(Vc, Tc, bids, G, o):
+    """UVs (m) of the rever sheet, cut as a tailor cuts it: the top collar one piece, its grain
+    up the centre back (q); each lapel facing with its grain along the front edge (s). The two
+    meet at the gorge seam (faces split by the gorge line through (s_R, 0) and (s_G, q_G)).
+    The visible (top) faces wind counter-clockwise in UV (u flipped where not). Marks: the
+    gorge a pressed seam either side, pick stitching in from the free edge (lapel, notch,
+    collar end and fall). Returns FU (m, 3, 2), tag (m,), marks {tag: [...]}, tags, orient."""
+    from .suit_detail import _inset
+    Vc = np.asarray(Vc, float)
+    Tc = np.asarray(Tc, int)
+    cen = Vc[Tc].mean(1)
+    a = np.array([G["s_R"], 0.0])
+    g = np.array([G["s_G"], G["q_G"]]) - a
+
+    def lapel_side(P):
+        P = np.atleast_2d(P)
+        Pa = np.c_[np.abs(P[:, 0]), P[:, 1]] - a
+        side = g[0] * Pa[:, 1] - g[1] * Pa[:, 0]
+        ref = g[0] * (0.0 - a[1]) - g[1] * (G["s_B"] - a[0])      # a point down the roll edge
+        return np.sign(side) == np.sign(ref)
+    lap = lapel_side(cen)
+    tag = np.where(lap, np.where(cen[:, 0] > 0, LAPEL_L, LAPEL_R), COLLAR)
+    A = {COLLAR: np.array([[0.01, 0.0], [0.0, 0.01]]),          # (s, q)
+         LAPEL_L: np.array([[0.0, 0.01], [-0.01, 0.0]]),        # (q, -s): s (down the edge) is the grain
+         LAPEL_R: np.array([[0.0, 0.01], [-0.01, 0.0]])}
+    orient = {}
+    for t_ in (COLLAR, LAPEL_L, LAPEL_R):
+        P = Vc[Tc[tag == t_]] @ A[t_].T
+        e1, e2 = P[:, 1] - P[:, 0], P[:, 2] - P[:, 0]
+        pos = float(((e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]) > 0).mean()) if len(P) else 1.0
+        if pos < 0.5:
+            A[t_] = A[t_] * np.array([[-1.0], [1.0]])
+        orient[int(t_)] = {"ccw_frac": round(pos, 4), "flipped": bool(pos < 0.5)}
+    FU = np.zeros((len(Tc), 3, 2))
+    for t_ in (COLLAR, LAPEL_L, LAPEL_R):
+        m = tag == t_
+        FU[m] = Vc[Tc[m]] @ A[t_].T
+    # marks, in the chart then to each region's UVs
+    loop, gorge, _ = outline(G, o)
+    bnd = Vc[np.asarray(bids, int)]
+    pk = o["pick"]
+    marks = {COLLAR: [], LAPEL_L: [], LAPEL_R: []}
+    for sgn, lt in ((1.0, LAPEL_L), (-1.0, LAPEL_R)):
+        gl_ = gorge * np.array([sgn, 1.0])
+        for t_ in (COLLAR, lt):
+            marks[t_].append(("seam", [tuple(q) for q in gl_ @ A[t_].T], {"stitch": False}))
+        for nm, poly in loop:
+            if nm == "edge" or pk["in_cm"] <= 0:
+                continue
+            pin = _inset(poly * np.array([sgn, 1.0]), bnd, pk["in_cm"])
+            t_ = lt if nm in ("lapel", "lapel_top") else COLLAR
+            marks[t_].append(("pick", [tuple(q) for q in pin @ A[t_].T], {"pitch_m": pk["pitch_cm"] / 100}))
+    tags = {COLLAR: "collar", LAPEL_L: "lapel", LAPEL_R: "lapel_r"}
+    return FU, tag, marks, tags, orient
 
 
 def build(X, T, chains, D, under_bvhs=(), opts=None, stats=None):
@@ -635,11 +709,14 @@ def build(X, T, chains, D, under_bvhs=(), opts=None, stats=None):
     if np.einsum("ij,ij->i", Nm, Nout).mean() < 0:
         Nm = -Nm
         Tc = Tc[:, ::-1]
-    V, F = thicken(Xr, Tc, Nm, bids, attach, o["thick_cm"], 0.6, Vc)
+    FU, ftag, marks, tags, orient = chart_uv(Vc, Tc, bids, G, o)
+    V, F, U = thicken(Xr, Tc, Nm, bids, attach, o["thick_cm"], 0.6, Vc, FU=FU)
     if stats is not None:
         stats.update({"chart": {k: round(v, 2) for k, v in G.items() if isinstance(v, float)},
                       "collar_point_sq": [round(float(c), 2) for c in CP],
-                      "verts": int(len(V)), "faces": int(len(F)), "pushed_out": int(moved)})
+                      "verts": int(len(V)), "faces": int(len(F)), "pushed_out": int(moved),
+                      "uv_orient": orient})
     dbg = {"col_s": C.s, "col_E": C.E, "col_D": C.D, "col_N": C.N, "col_T": C.T, "col_lean": C.lean,
            "col_W": C.W, "X_map": X_map, "clear_log": np.array(clog, float).reshape(-1, 4), "X_relax": X_relax}
-    return V, F, {"chart_V": Vc, "chart_T": Tc, "sheet_X": Xr, "gorge_ids": gl, "attach": attach, "debug": dbg}
+    return V, F, {"chart_V": Vc, "chart_T": Tc, "sheet_X": Xr, "gorge_ids": gl, "attach": attach, "debug": dbg,
+                  "uv": U["uv"], "tag": ftag[U["src"]], "marks": marks, "tags": tags}

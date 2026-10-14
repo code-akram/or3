@@ -40,7 +40,11 @@ DEFAULTS = {
     "vent": {"height_cm": 22.0, "sleeve_cm": 10.5, "step_mm": 3.5, "band_cm": 1.2, "fade_cm": 3.0},
     "button": {"front_diam_cm": 2.0, "front_thick_mm": 3.6, "cuff_thick_mm": 3.0, "stand_mm": 1.5,
                "seg": 32, "hole_r_frac": 0.05, "hole_at_frac": 0.12, "hole_depth_mm": 1.2},
-    "buttonhole": {"cord_r_mm": 0.9, "eye_r_mm": 1.6, "gap_mm": 0.8},
+    "buttonhole": {"cord_r_mm": 0.9, "eye_r_mm": 1.6, "gap_mm": 0.8,
+                   # the cord's UVs are scaled up (more texels for the purl; the wool twill
+                   # detail is finer than the eye there, as on a silk-twist cord)
+                   "uv_scale": 4.0, "purl_pitch_mm": 0.6, "purl_h_mm": 0.12},
+    "pick": {"in_cm": 0.6, "pitch_cm": 0.6},   # pick stitching in from the fronts' edge
 }
 
 
@@ -83,11 +87,77 @@ def boundary_loops(T):
     return loops
 
 
-def solid(X, T, N, t, rings, loops=None, keep=None):
+def boundary_edge_uv(T, FU):
+    """{(a, b) sorted: ({a: uv, b: uv}, out)} for every boundary edge of a triangle mesh with
+    per-corner UVs FU (m, 3, 2): the edge's UVs in the face that holds it and the unit UV
+    direction across the edge, away from that face."""
+    T = np.asarray(T, int)
+    E = np.sort(np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]]), 1)
+    key = E[:, 0].astype(np.int64) * (int(T.max()) + 1) + E[:, 1]
+    u, inv, cnt = np.unique(key, return_inverse=True, return_counts=True)
+    m = len(T)
+    out = {}
+    for i in np.nonzero(cnt[inv] == 1)[0]:
+        f, k = i % m, i // m
+        a, b, c = T[f, k], T[f, (k + 1) % 3], T[f, (k + 2) % 3]
+        ua, ub, uc = FU[f, k], FU[f, (k + 1) % 3], FU[f, (k + 2) % 3]
+        e = ub - ua
+        nrm = np.array([e[1], -e[0]]) / max(float(np.linalg.norm(e)), 1e-12)
+        if np.dot(nrm, uc - ua) > 0:
+            nrm = -nrm
+        out[(min(a, b), max(a, b))] = ({int(a): ua, int(b): ub}, nrm, int(f))
+    return out
+
+
+def rim_uv(EU, loop, r, rings):
+    """Per-corner UVs of a half-round rim's quads on a boundary loop (see solid): the rim
+    continues each panel's UV outward across the edge, one ring step = pi r / rings of arc, so
+    the weave runs on round the turned edge. Corners mitre where both quads share the UV.
+    Returns ([k][m] -> 4 corner UVs (the quad (loop[k2], loop[k]) from ring m to m + 1), None
+    for an edge with no UV; the sheet face each edge belongs to, per k (-1: none))."""
+    nb = len(loop)
+    ua, ub = np.zeros((nb, 2)), np.zeros((nb, 2))
+    out = np.zeros((nb, 2))
+    ok = np.zeros(nb, bool)
+    src = np.full(nb, -1)
+    for k in range(nb):
+        a, b = int(loop[k]), int(loop[(k + 1) % nb])
+        e = EU.get((min(a, b), max(a, b)))
+        if e is None:
+            continue
+        ua[k], ub[k], out[k], src[k], ok[k] = e[0][a], e[0][b], e[1], e[2], True
+    oa, ob = out.copy(), out.copy()
+    for k in range(nb):
+        kp = (k - 1) % nb
+        if ok[k] and ok[kp] and np.linalg.norm(ub[kp] - ua[k]) < 1e-7:
+            mvec = out[kp] + out[k]
+            ln = np.linalg.norm(mvec)
+            if ln > 1e-9:
+                mvec = mvec / ln
+                mvec = mvec / max(float(np.dot(mvec, out[k])), 0.5)
+                oa[k] = ob[kp] = mvec
+    r = np.broadcast_to(np.asarray(r, float), (nb,))
+    step = math.pi * r / rings
+    res = []
+    for k in range(nb):
+        k2 = (k + 1) % nb
+        if not ok[k]:
+            res.append(None)
+            continue
+        res.append([np.array([ub[k] + ob[k] * step[k2] * m, ua[k] + oa[k] * step[k] * m,
+                              ua[k] + oa[k] * step[k] * (m + 1), ub[k] + ob[k] * step[k2] * (m + 1)])
+                    for m in range(rings)])
+    return res, src
+
+
+def solid(X, T, N, t, rings, loops=None, keep=None, FU=None):
     """Solidify a sheet inward (against N) by t (scalar or per vertex, m) with a half-round rim
     of `rings` segments on each boundary loop. keep: per-vertex mask; a boundary edge with both
-    ends outside it gets no rim. Returns V, F (list of tuples), part (per face: 0 outside,
-    1 inside, 2 rim)."""
+    ends outside it gets no rim. FU: per-corner UVs of the sheet (m, 3, 2), or None.
+    Returns V, F (list of tuples), part (per face: 0 outside, 1 inside, 2 rim), UV: None
+    without FU, else {"uv": a (k, 2) array per face aligned with F, "src": the sheet face each
+    face came from}: the outside and the inside take the sheet's UVs, the rim continues them
+    across the edge (rim_uv)."""
     X = np.asarray(X, float)
     n = len(X)
     t = np.broadcast_to(np.asarray(t, float), (n,)).copy()
@@ -101,6 +171,12 @@ def solid(X, T, N, t, rings, loops=None, keep=None):
     V = [X, Xi]
     F = [tuple(int(i) for i in f) for f in T] + [tuple(int(i) + n for i in f[::-1]) for f in T]
     part = [0] * len(T) + [1] * len(T)
+    UV = None
+    if FU is not None:
+        FU = np.asarray(FU, float)
+        UV = [fu for fu in FU] + [fu[::-1] for fu in FU]
+        SRC = list(range(len(T))) * 2
+        EU = boundary_edge_uv(T, FU)
     base = 2 * n
     inward = np.zeros((n, 3))
     cen = X[T].mean(1)
@@ -121,15 +197,21 @@ def solid(X, T, N, t, rings, loops=None, keep=None):
             rows.append(base + np.arange(nb))
             base += nb
         rows.append(b + n)
+        RU, RS = rim_uv(EU, b, r[:, 0], rings) if UV is not None else (None, None)
         for k in range(nb):
             k2 = (k + 1) % nb
             if keep is not None and not (keep[b[k]] or keep[b[k2]]):
                 continue
-            for ra, rb in zip(rows[:-1], rows[1:]):
+            for m, (ra, rb) in enumerate(zip(rows[:-1], rows[1:])):
                 # the loop runs in the faces' winding: the rim continues the outside's orientation
                 F.append((int(ra[k2]), int(ra[k]), int(rb[k]), int(rb[k2])))
                 part.append(EDGE)
-    return np.vstack(V), F, np.array(part, int)
+                if UV is not None:
+                    UV.append(RU[k][m] if RU[k] is not None else np.zeros((4, 2)))
+                    SRC.append(int(RS[k]))
+    if UV is not None:
+        UV = {"uv": UV, "src": np.array(SRC, int)}
+    return np.vstack(V), F, np.array(part, int), UV
 
 
 def cdt_patch(outline, h, holes=()):
@@ -211,9 +293,13 @@ class PanelMap:
         self.N = vertex_normals(self.X, np.asarray(Tw, int))
         self.panels = {}
         self.holes = {}
+        self.uvA = {}
         for name, I in C["info"].items():
             ids = wm[I["base"] + np.arange(len(I["V"]))]
             self.panels[name] = (np.asarray(I["V"], float), np.asarray(I["T"], int), ids)
+            # pattern (x, y down, cm) -> UV (m): the grain is the pattern's y (v up the panel);
+            # the right-hand copies are mirrored so the twill runs the same way on both sides
+            self.uvA[name] = np.array([[-0.01 if I.get("mirror") else 0.01, 0.0], [0.0, -0.01]])
             if D is not None:
                 self.holes[name] = D.geom(name).dart_holes()
 
@@ -234,6 +320,10 @@ class PanelMap:
                 q = a + t[:, None] * d
                 P2[i] = q[np.argmin(np.linalg.norm(q - P2[i], axis=1))]
         return P2
+
+    def uv(self, name, P2):
+        """Pattern points (cm) -> the panel's UVs (m)."""
+        return np.atleast_2d(np.asarray(P2, float)) @ self.uvA[name].T
 
     def locate(self, name, P2):
         V, T, _ = self.panels[name]
@@ -284,7 +374,7 @@ def on_drape(pm, name, V2, lift):
 
 def patch3d(pm, name, outline, h, lift_m, thick_m, rings):
     """A cloth patch (flap, jet, welt) on the drape: outline (cm, pattern), solid with a
-    rounded rim. Returns V, F, part."""
+    rounded rim, UVs from the pattern (cut on the panel's grain). Returns V, F, part, UV."""
     V2, T, bids = cdt_patch(outline, h)
     X, N = on_drape(pm, name, V2, lift_m + thick_m)
     # the flat triangles are CCW in pattern (x, y-down) coords; match the drape's outward side
@@ -292,7 +382,7 @@ def patch3d(pm, name, outline, h, lift_m, thick_m, rings):
     if np.einsum("ij,ij->i", fn, N[T].mean(1)).mean() < 0:
         T = T[:, ::-1]
     N = vertex_normals(X, T)
-    return solid(X, T, N, thick_m, rings)
+    return solid(X, T, N, thick_m, rings, FU=pm.uv(name, V2)[T])
 
 
 # --- buttons -------------------------------------------------------------------------------------
@@ -390,8 +480,9 @@ def button(c, n, u, diam_m, thick_m, o, seg=None):
     return V, _orient(V, F, want)
 
 
-def tube(P, N, r, seg=6, closed=True):
-    """A round cord of radius r along the polyline P (n, 3), N the surface normal per point."""
+def tube(P, N, r, seg=6, closed=True, uv_scale=1.0):
+    """A round cord of radius r along the polyline P (n, 3), N the surface normal per point.
+    Returns V, F, UV: u the arc length along the cord, v round it (m, times uv_scale)."""
     P = np.asarray(P, float)
     nP = len(P)
     tg = _norm(np.roll(P, -1, 0) - np.roll(P, 1, 0)) if closed else _norm(np.gradient(P, axis=0))
@@ -404,15 +495,22 @@ def tube(P, N, r, seg=6, closed=True):
             V.append(P[i] + r * (math.cos(a) * nn[i] + math.sin(a) * b[i]))
     m = nP if closed else nP - 1
     want = []
+    UV = []
+    su = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(np.vstack([P, P[:1]]), axis=0), axis=1))] * uv_scale
+    sv = -2 * math.pi * r * uv_scale / seg        # negative: CCW in UV seen from outside
     for i in range(m):
         i2 = (i + 1) % nP
         for s in range(seg):
             s2 = (s + 1) % seg
             F.append((i * seg + s, i * seg + s2, i2 * seg + s2, i2 * seg + s))
+            UV.append(np.array([(su[i], s * sv), (su[i], (s + 1) * sv), (su[i + 1], (s + 1) * sv),
+                                (su[i + 1], s * sv)]))
             a = 2 * math.pi * (s + 0.5) / seg
             want.append(math.cos(a) * nn[i] + math.sin(a) * b[i])
     V = np.array(V)
-    return V, _orient(V, F, want)
+    Fo = _orient(V, F, want)
+    UV = [uv if fo == tuple(f) else uv[::-1] for f, fo, uv in zip(F, Fo, UV)]
+    return V, Fo, UV
 
 
 # --- the made jacket -----------------------------------------------------------------------------
@@ -514,8 +612,89 @@ def _vents(X, T, C, wm, o, stats):
     return X, T
 
 
+def _inset(poly, outline, d):
+    """The polyline moved d (cm) into the closed outline (both pattern cm)."""
+    from .suit_rever import _pip
+    poly = np.asarray(poly, float)
+    tg = np.gradient(poly, axis=0)
+    nrm = _norm(np.c_[-tg[:, 1], tg[:, 0]])
+    if _pip(poly + nrm * 0.2, np.asarray(outline, float)).mean() < 0.5:
+        nrm = -nrm
+    return poly + nrm * d
+
+
+def shell_uv(C, wm, Tw, pm, stats=None):
+    """Per-corner UVs and panel tags of the welded drape's faces: each face's corners at their
+    pattern coordinates (the unwelded triangle it came from), so a seam vertex has one UV per
+    panel. Tags are 1 + the panel's index in C["names"]. A panel whose UVs would wind against
+    the outside (a mirrored chart) gets u flipped (pm.uvA), so the twill has one handedness
+    on the outside of every panel. Returns FU (m, 3, 2), tag (m,)."""
+    To = np.asarray(C["T"], int)
+    Ta = wm[To]
+    ok = (Ta[:, 0] != Ta[:, 1]) & (Ta[:, 1] != Ta[:, 2]) & (Ta[:, 2] != Ta[:, 0])
+    To = To[ok]
+    if len(To) != len(Tw) or not np.array_equal(wm[To], Tw):
+        raise ValueError("shell_uv: the faces are not the weld of C['T']")
+    tag0 = np.zeros(len(wm), int)
+    for k, name in enumerate(C["names"]):
+        I = C["info"][name]
+        tag0[I["base"] + np.arange(len(I["V"]))] = k + 1
+    ftag = tag0[To[:, 0]]
+    orient = {}
+    for k, name in enumerate(C["names"]):
+        for _ in range(2):
+            uv0 = np.zeros((len(wm), 2))
+            I = C["info"][name]
+            uv0[I["base"] + np.arange(len(I["V"]))] = pm.uv(name, I["V"])
+            fu = uv0[To[ftag == k + 1]]
+            e1, e2 = fu[:, 1] - fu[:, 0], fu[:, 2] - fu[:, 0]
+            pos = float(((e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]) > 0).mean())
+            if pos >= 0.5:
+                break
+            pm.uvA[name] = pm.uvA[name] * np.array([[-1.0], [1.0]])
+        orient[name] = {"ccw_frac": round(pos, 4), "u_sign": int(np.sign(pm.uvA[name][0, 0]))}
+    uv0 = np.zeros((len(wm), 2))
+    for name in C["names"]:
+        I = C["info"][name]
+        uv0[I["base"] + np.arange(len(I["V"]))] = pm.uv(name, I["V"])
+    if stats is not None:
+        stats["uv_orient"] = orient
+    return uv0[To], ftag
+
+
+def shell_marks(C, D, pm, o):
+    """The shell's surface marks per panel tag, in UV metres (suit_textures.draw_marks): every
+    visible sewn edge and each dart leg a pressed-open seam (a groove, no stitching shows on a
+    suit), the fronts' edge below the break pick-stitched in from the edge. The neckline, gorge
+    and roll edges are under the rever."""
+    sewn = set()
+    for sm in D.seams:
+        for ch in (sm["a"], sm["b"]):
+            for pn, e, _ in ch:
+                sewn.add((D.geom(pn).name, e))
+    hidden = {"neck", "gorge", "roll"}
+    pk = o["pick"]
+    out = {}
+    for k, name in enumerate(C["names"]):
+        P = D.geom(name)
+        L = []
+        for e, poly in P.edges:
+            if (P.name, e) in sewn and e not in hidden:
+                L.append(("seam", [tuple(q) for q in pm.uv(name, poly)], {"stitch": False}))
+        for e, poly in P.inner.items():
+            L.append(("seam", [tuple(q) for q in pm.uv(name, poly)], {"stitch": False}))
+        if P.kind == "front" and pk["in_cm"] > 0:
+            pin = _inset(P.edge("front"), P.outline(), pk["in_cm"])
+            L.append(("pick", [tuple(q) for q in pm.uv(name, pin)], {"pitch_m": pk["pitch_cm"] / 100}))
+        out[k + 1] = L
+    return out
+
+
 def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
-    """The made jacket on the drape (X, Tw welded). Returns {name: (V, F, part)} plus info."""
+    """The made jacket on the drape (X, Tw welded). Returns {name: (V, F, part, UV, tag)}:
+    UV a (k, 2) array per face (m; None for the buttons), tag the face's panel tag (the UV
+    rectangles suit_textures packs), plus "_uv": {"marks": {name: {tag: marks}},
+    "tags": {name: {tag: label}}}."""
     o = sp.merge(DEFAULTS, opts or {})
     stats = {} if stats is None else stats
     rings = rings or o["edge_rings"]
@@ -528,7 +707,10 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
     Xs, Ts = _vents(X, Tw, C, wm, o, stats)
     N = vertex_normals(Xs, Ts)
     t = np.full(len(Xs), o["shell_thick_mm"] / 1000.0)
-    V, F, part = solid(Xs, Ts, N, t, rings)
+    FU, ftag = shell_uv(C, wm, Tw, pm, stats)
+    V, F, part, U = solid(Xs, Ts, N, t, rings, FU=FU)
+    tags = {"shell": {k + 1: n for k, n in enumerate(C["names"])}, "pockets": {}, "buttonhole": {}}
+    marks = {"shell": shell_marks(C, D, pm, o), "pockets": {}, "buttonhole": {}}
     # inside: lining, except the facings and the turn-ups
     n = len(Xs)
     wool_in = np.zeros(n, bool)
@@ -544,18 +726,22 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
         f = F[i]
         if wool_in[np.array(f) - n].mean() > 0.5:
             part[i] = WOOL
-    out["shell"] = (V, F, part)
+    out["shell"] = (V, F, part, U["uv"], ftag[U["src"]])
     stats["shell"] = {"verts": int(len(V)), "tris": int(sum(len(f) - 2 for f in F)),
                       "lining_faces": int((part == LINING).sum())}
     # --- pockets
     fl, jt, wl = o["flap"], o["jet"], o["welt"]
-    pv, pf, pp = [], [], []
+    pv, pf, pp, pu, pt = [], [], [], [], []
 
-    def add(V_, F_, part_):
+    def add(V_, F_, part_, U_, label):
         b = sum(len(v) for v in pv)
         pv.append(V_)
         pf.extend(tuple(int(i) + b for i in f) for f in F_)
         pp.extend(list(part_))
+        pu.extend(U_["uv"])
+        tg = len(tags["pockets"]) + 1         # each patch its own rectangle in the atlas
+        tags["pockets"][tg] = label
+        pt.extend([tg] * len(F_))
     front = D.geom("front")
     if "hip_pocket" in front.notches:
         (xa, yp), (xb, _) = front.notches["hip_pocket"]
@@ -564,15 +750,18 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
         flap = rounded_rect(xa, yp + g, xb, yp + hp["flap_cm"], fl["corner_r_cm"])
         jet = rounded_rect(xa, yp - hp["jet_cm"], xb, yp - g, 0.0)
         for nm in ("front", "front_r"):
-            add(*patch3d(pm, nm, flap, fl["h_cm"], fl["lift_mm"] / 1000, fl["thick_mm"] / 1000, rings))
-            add(*patch3d(pm, nm, jet, 0.25, jt["lift_mm"] / 1000, jt["thick_mm"] / 1000, max(2, rings // 2)))
+            add(*patch3d(pm, nm, flap, fl["h_cm"], fl["lift_mm"] / 1000, fl["thick_mm"] / 1000, rings),
+                f"flap_{nm}")
+            add(*patch3d(pm, nm, jet, 0.25, jt["lift_mm"] / 1000, jt["thick_mm"] / 1000, max(2, rings // 2)),
+                f"jet_{nm}")
     if "breast_welt" in front.notches:
         (x0, y0), (x1, y1) = front.notches["breast_welt"]
         bw = dt["breast_welt"]
         hgt = bw["height_cm"]
         welt = np.array([(x0, y0), (x1, y1), (x1, y1 - hgt), (x0, y0 - hgt)])
-        add(*patch3d(pm, "front", welt, wl["h_cm"], wl["lift_mm"] / 1000, wl["thick_mm"] / 1000, rings))
-    out["pockets"] = (np.vstack(pv), pf, np.array(pp, int)) if pv else None
+        add(*patch3d(pm, "front", welt, wl["h_cm"], wl["lift_mm"] / 1000, wl["thick_mm"] / 1000, rings),
+            "welt_front")
+    out["pockets"] = (np.vstack(pv), pf, np.array(pp, int), pu, np.array(pt, int)) if pv else None
     # --- buttons
     bo = o["button"]
     bv, bf = [], []
@@ -595,7 +784,7 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
                 Xp, Np, ux, uy = pm.frame(nm, [xy])
                 addb(*button(Xp[0], Np[0], ux[0] + uy[0], cb["diam_cm"] / 100 * 0.97,
                              bo["cuff_thick_mm"] / 1000, bo))
-    out["buttons"] = (np.vstack(bv), bf, np.full(len(bf), BUTTON)) if bv else None
+    out["buttons"] = (np.vstack(bv), bf, np.full(len(bf), BUTTON), None, None) if bv else None
     # --- the keyhole buttonhole (left front): a corded lip round the slit and the eye
     if "buttonhole" in front.notches:
         bo2 = o["buttonhole"]
@@ -610,8 +799,18 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
         lower = np.c_[np.linspace(xs, eye[0, 0], 10), np.full(10, ye - cord_r)]
         loop2 = np.vstack([eye, upper[1:], lower[1:-1]])
         Xp, Np, _, _ = pm.frame("front", loop2)
-        V_, F_ = tube(Xp + Np * cr, Np, cr, seg=6)
-        out["buttonhole"] = (V_, F_, np.full(len(F_), EDGE))
+        bu = bo2["uv_scale"]
+        V_, F_, U_ = tube(Xp + Np * cr, Np, cr, seg=6, uv_scale=bu)
+        out["buttonhole"] = (V_, F_, np.full(len(F_), EDGE), U_, np.ones(len(F_), int))
+        tags["buttonhole"][1] = "cord"
+        # the purl: buttonhole twist wrapped round the cord, a ridge across it every pitch
+        Lc = max(float(np.max(uv[:, 0])) for uv in U_)
+        vc = 2 * math.pi * cr * bu
+        pitch = bo2["purl_pitch_mm"] / 1000 * bu
+        marks["buttonhole"][1] = [("ridge", [(u_, 0.0), (u_, -vc)], {"height": bo2["purl_h_mm"] / 1000 * bu,
+                                                                    "width_m": 0.55 * pitch})
+                                  for u_ in np.arange(0.5 * pitch, Lc, pitch)]
     stats["details"] = {k: {"verts": int(len(v[0])), "tris": int(sum(len(f) - 2 for f in v[1]))}
                         for k, v in out.items() if v is not None}
+    out["_uv"] = {"marks": marks, "tags": tags}
     return out

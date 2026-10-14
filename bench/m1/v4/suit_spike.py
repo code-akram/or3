@@ -1075,6 +1075,7 @@ SPIKE = {
 SPIKE2 = {
     "details": True,             # the made jacket (blender/character/suit_detail.py); a dict overrides
     "lods": [0.4, 0.15],         # LOD1, LOD2 decimate ratios of the made jacket
+    "textures": True,            # UVs from the pattern + the wool atlas (character/suit_made_tex.py)
     "v2": True,
     "h_cm": 1.2,                      # finer than spike 1: a fold at the elbow crook needs it
     # the draft for the XPBD drape: the neckline at the neck's own length (spike 1's 1.15
@@ -2065,28 +2066,42 @@ def main_v2(O):
                             sheet_X=rinfo["sheet_X"], **rinfo["debug"])
     tick("rever", t)
     rv = mesh_object("spike_jacket_rever", Vr, Fr)
+    from character import suit_made_tex
+    suit_made_tex.set_uv(rv, rinfo["uv"], rinfo["tag"])
+    set_parts(rv, np.zeros(len(Fr), int))
     det_obs = []
+    uv_obs, uv_marks, uv_tags = {"rever": rv}, {"rever": rinfo["marks"]}, {"rever": rinfo["tags"]}
     if O.get("details"):
         # the made jacket: shell with turned edges and lining, pockets, vents, buttons
         t = time.perf_counter()
         from character import suit_detail
         dst = {}
         det = suit_detail.build(C, D, wm, X3, Tw, O["details"] if isinstance(O["details"], dict) else None, dst)
-        Vs_, Fs_, ps_ = det["shell"]
+        Vs_, Fs_, ps_, us_, ts_ = det["shell"]
         jk = mesh_object("spike_jacket_body", Vs_, Fs_)
         set_parts(jk, ps_)
+        suit_made_tex.set_uv(jk, us_, ts_)
+        uv_obs["shell"] = jk
         for k in ("pockets", "buttons", "buttonhole"):
             if det.get(k) is not None:
                 ob_ = mesh_object(f"spike_jacket_{k}", det[k][0], det[k][1])
                 set_parts(ob_, det[k][2])
+                if det[k][3] is not None:
+                    suit_made_tex.set_uv(ob_, det[k][3], det[k][4])
+                    uv_obs[k] = ob_
                 det_obs.append(ob_)
+        uv_marks.update(det["_uv"]["marks"])
+        uv_tags.update(det["_uv"]["tags"])
         dst["clearance_mm"] = detail_clearance(X3, Tw, det)
         stats["detail"] = dst
+        parts_ = {k: v for k, v in det.items() if v is not None and not k.startswith("_")}
         np.savez_compressed(os.path.join(A.out_dir, "made.npz"),
-                            **{f"{k}_V": v[0] for k, v in det.items() if v is not None},
-                            **{f"{k}_F": np.array([list(f) + [-1] * (4 - len(f)) for f in v[1]]) for k, v in det.items()
-                               if v is not None},
-                            **{f"{k}_part": v[2] for k, v in det.items() if v is not None})
+                            **{f"{k}_V": v[0] for k, v in parts_.items()},
+                            **{f"{k}_F": np.array([list(f) + [-1] * (4 - len(f)) for f in v[1]]) for k, v in parts_.items()},
+                            **{f"{k}_part": v[2] for k, v in parts_.items()},
+                            **{f"{k}_uv": np.array([list(np.ravel(u)) + [0.0] * (8 - np.size(u)) for u in v[3]])
+                               for k, v in parts_.items() if v[3] is not None},
+                            **{f"{k}_tag": v[4] for k, v in parts_.items() if v[4] is not None})
         tick("details", t)
     else:
         jk = mesh_object("spike_jacket_body", X3, Tw)
@@ -2132,6 +2147,13 @@ def main_v2(O):
         render_close(A.out_dir, "jbody", [body.name, jk.name])
         render_views(A.out_dir, "rever", [body.name, rv.name], ["front", "back"], target=(0, 0, 1.4), scale=0.7)
     tick("render", t)
+    if O.get("textures"):
+        # after the clay renders (they replace the materials): the wool atlas and the
+        # materials, kept in spike.blend for the beauty frames (suit_beauty.py)
+        t = time.perf_counter()
+        btn = [o_ for o_ in det_obs if o_.name.endswith("buttons")]
+        stats["textures"] = suit_made_tex.apply(uv_obs, uv_marks, uv_tags, btn, suit.DEFAULTS)
+        tick("textures", t)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(A.out_dir, "spike.blend"), compress=True)
     with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
         stats["timings_s"] = T
