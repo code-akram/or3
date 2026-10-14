@@ -62,9 +62,12 @@ for (const t of doc.getRoot().listTextures()) {
   halved.push({ name: t.getName(), from, to: [png.width, png.height] });
 }
 const common = { generateMipmap: true, imageDecoder };
+// data maps must say linear: ktx2-encoder's defaults tag every file sRGB (isSetKTX2SRGBTransferFunc: true),
+// and three then linearises roughness / normals on sampling (wet skin, broken eyes in the first test)
+const data = { ...common, isUASTC: true, uastcLDRQualityLevel: uastcQ, needSupercompression: true, isSetKTX2SRGBTransferFunc: false, isInputSRGB: false, isPerceptual: false };
 await doc.transform(
-  ktx2({ ...common, isUASTC: true, uastcLDRQualityLevel: uastcQ, needSupercompression: true, isNormalMap: true, slots: /^normalTexture$/ }),
-  ktx2({ ...common, isUASTC: true, uastcLDRQualityLevel: uastcQ, needSupercompression: true, slots: /(occlusion|metallicRoughness|clearcoat|clearcoatRoughness|anisotropy)Texture$/ }),
+  ktx2({ ...data, isNormalMap: true, slots: /^normalTexture$/ }),
+  ktx2({ ...data, slots: /(occlusion|metallicRoughness|clearcoat|clearcoatRoughness|anisotropy)Texture$/ }),
   ktx2({ ...common, isUASTC: false, qualityLevel: etc1sQ, isSetKTX2SRGBTransferFunc: true, slots: /^(baseColor|sheenColor|emissive)Texture$/ }),
 );
 const texs = doc.getRoot().listTextures();

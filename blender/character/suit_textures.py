@@ -401,6 +401,7 @@ def twill_tile(slope=1.0, px=DETAIL_PX, n=DETAIL_PERIODS):
     rgba[..., :3] = n3 * 0.5 + 0.5
     rgba[..., 3] = 1.0
     img = bpy.data.images.get(DETAIL_TILE) or bpy.data.images.new(DETAIL_TILE, px, px, alpha=False)
+    img.use_fake_user = True  # no node uses it in the build, and the hero .blend needs it (cycles_weave)
     img.colorspace_settings.name = "Non-Color"
     img.pixels.foreach_set(rgba.ravel())
     img.pack()
@@ -442,6 +443,9 @@ def cycles_weave(records=None, tile=None, gain=1.0):
         bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
         lk = bsdf and bsdf.inputs["Normal"].links
         nm = lk[0].from_node if lk else None
+        while nm is not None and nm.type == "BUMP":  # suit_hero's fine twill bumps over the normal map
+            lk = nm.inputs["Normal"].links
+            nm = lk[0].from_node if lk else None
         if nm is None or nm.type != "NORMAL_MAP" or not nm.inputs["Color"].links:
             continue
         base = nm.inputs["Color"].links[0].from_socket
@@ -490,6 +494,17 @@ def cycles_weave(records=None, tile=None, gain=1.0):
         mat["cycles_weave"] = 1
         done.append(name)
     return done
+
+
+def cycles_weave_blend(blend_path, gain=1.0):
+    """cycles_weave for a kept character.blend: the material records, the tile from the .blend or (builds
+    before the tile had a fake user, so the orphan image was not saved) the PNG sidecar beside it."""
+    import os
+    tile = bpy.data.images.get(DETAIL_TILE)
+    png = os.path.join(os.path.dirname(os.path.abspath(blend_path)), DETAIL_TILE + ".png")
+    if tile is None and os.path.exists(png):
+        tile = bpy.data.images.load(png, check_existing=True)
+    return cycles_weave(None, tile, gain)
 
 
 def cycles_weave_sidecar(glb_path, gain=1.0):

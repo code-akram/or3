@@ -271,7 +271,7 @@ def main(argv):
     # the suit twill as the engine's tiled detail (no longer baked, T6): from the .blend's material
     # records, or the suit_detail.json sidecar next to a GLB
     weave = (suit_textures.cycles_weave_sidecar(a.inp) if a.inp.endswith(".glb")
-             else suit_textures.cycles_weave())
+             else suit_textures.cycles_weave_blend(a.inp))
     for o in ch.objs:
         o.pass_index = 1
     if a.parity:
