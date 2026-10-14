@@ -27,7 +27,8 @@ Parts:
          look-dev closeup (as `beard`) in Cycles on the kept .blend (hero strands: scalp groom,
          beard, brows) and in EEVEE on the GLB; regions from the hero grooms themselves (the
          scalp groom and the beard curves as emitters, every mesh a holdout, closed and eroded
-         2 px), so the metric does not move with the game geometry. The engine frame is
+         2 px; brows blue, closed 2 / eroded 1 px, T9b), so the metric does not move with the
+         game geometry. The engine frame is
          RUN_DIR/lin_closeup.png when present (engine_shots.mjs --views closeup --prefix lin_
          --query view_transform=standard: Standard view at the studio exposure, so it decodes
          back to scene-linear). Metric: region mean linear luminance, engine / Cycles and
@@ -513,6 +514,17 @@ def parity_test(results):
     cyc = os.path.join(OUT, "parity_cycles.exr")
     save(cyc, exr=True)
     save(os.path.join(OUT, "parity_cycles.png"))
+    # --parity-lights key,rim (T9b): one more Cycles frame per studio light, the others off
+    # (parity_cycles_<light>.exr), to calibrate the engine's hair lobes light by light
+    # (viewer ?lights=<name>)
+    for ln in [x for x in opt("--parity-lights", "").split(",") if x]:
+        keep = {o.name: o.hide_render for o in sc.objects if o.type == "LIGHT"}
+        for o in sc.objects:
+            if o.type == "LIGHT":
+                o.hide_render = o.name != ln
+        save(os.path.join(OUT, f"parity_cycles_{ln}.exr"), exr=True)
+        for k, v in keep.items():
+            sc.objects[k].hide_render = v
     # Region masks from the hero grooms: scalp groom red, beard green, every mesh a holdout.
     def emit(name, rgb):
         m_ = bpy.data.materials.new(name)
@@ -526,11 +538,13 @@ def parity_test(results):
         nt.links.new(e.outputs[0], o_.inputs[0])
         return m_
     red, green, black = emit("m_hair", (1, 0, 0)), emit("m_beard", (0, 1, 0)), emit("m_other", (0, 0, 0))
+    blue = emit("m_brows", (0, 0, 1))
     for o in sc.objects:
         if o.type == "MESH":
             o.is_holdout = True
         elif o.type == "CURVES" and not o.hide_render:
-            mt = red if o.name.startswith("hair_groom") else green if o.name.startswith("beard_hero") else black
+            mt = (red if o.name.startswith("hair_groom") else green if o.name.startswith("beard_hero")
+                  else blue if o.name.startswith("brows_hero") else black)
             o.data.materials.clear()
             o.data.materials.append(mt)
     fl = bpy.data.objects.get("lookdev_floor")
@@ -544,8 +558,11 @@ def parity_test(results):
     mpath = os.path.join(OUT, "parity_mask.exr")
     save(mpath, exr=True)
     mk = pixels(mpath)
+    # brows (T9b): thin, so closed 2 px and eroded 1 px (the scalp / beard erosion of 2 px leaves
+    # only the brow cores)
     regions = {"hair": _erode(_close(mk[..., 0] > 0.3, 3), 2),
-               "beard": _erode(_close(mk[..., 1] > 0.3, 3), 2)}
+               "beard": _erode(_close(mk[..., 1] > 0.3, 3), 2),
+               "brows": _erode(_close(mk[..., 2] > 0.3, 2), 1)}
     yc = luma(pixels(cyc)[..., :3])
     ye = luma(pixels(eev)[..., :3])
     eng = os.path.join(RUN, "lin_closeup.png")
@@ -572,7 +589,7 @@ def parity_test(results):
                         "engine_p50_lin": round(float(np.median(yg[m])), 5)})
         rec["cycles_p50_lin"] = round(float(np.median(yc[m])), 5)
         out[name] = rec
-        vis[m] += (1, 0, 0) if name == "hair" else (0, 1, 0)
+        vis[m] += {"hair": (1, 0, 0), "beard": (0, 1, 0), "brows": (0, 0, 1)}[name]
         print(f"[hair_test] parity {name}: {rec}", flush=True)
     # region overlay for the record (Blender rows are bottom-up; the PNG writer flips them back)
     ov = bpy.data.images.new("parity_regions", res, res, alpha=True)

@@ -5,7 +5,8 @@
 //   skin   wrap-lit diffuse with per-channel wrap + normal blur (curvature-scaled; cheap pre-integrated
 //          SSS stand-in), a terminator scatter tint, dual-lobe GGX specular
 //   hair   dual-lobe Kajiya-Kay (white primary shifted to the root, albedo-tinted secondary to the tip,
-//          shifts jittered per strand ID, exponents scaled by per-strand roughness), flow / depth /
+//          shifts jittered per strand ID / card / along-strand wave, exponents scaled by per-strand
+//          roughness), a tinted TT (backlit) lobe and a wrapped multiple-scatter body (T9b), flow / depth /
 //          ORM strand maps from the GLB (KHR_materials_anisotropy + occlusion / metallicRoughness),
 //          alpha to coverage (4x MSAA) with hashed alpha when there is no MSAA
 //   facial beard / brow cards on the same path and maps (prefix facialHair); lashes along the UV bitangent
@@ -17,7 +18,7 @@ import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, LTC_Uv, mat3, diffuseColor, faceDirection, float, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -217,9 +218,10 @@ export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
 
 interface HairNodes {
   tangent: N; // view-space fibre tangent
-  jitter: N; // per-strand shift jitter in [-1, 1]
+  shiftOff: N; // per-fragment lobe shift offset: per-strand + per-card jitter + the along-strand wave tilt
   rough: N; // per-strand roughness (ORM G): scales the lobe exponents around hair.roughRef
-  specScale: N; // per-card specular scale (UV1 u: the baker's layer_spec), 1 when absent
+  specScale: N; // per-card specular scale (UV1 u: the baker's layer_spec) x the occlusion on the lobes
+  tint: N; // warm scatter colour: the albedo's chroma, saturated (luminance 1)
 }
 
 class HairLightingModel extends THREE.PhysicalLightingModel {
@@ -234,6 +236,7 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
   override direct(input: unknown): void {
     const { lightDirection: L, lightColor, reflectedLight } = input as DirectInput;
     const P = this.P;
+    const pre = this.prefix;
     const N = normalView;
     const V = positionViewDirection;
     const T = this.h.tangent;
@@ -241,12 +244,16 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const nl = N.dot(L);
     const diff = diffuseRamp(P, nl.add(w).div(w.add(1)).max(0));
     reflectedLight.directDiffuse.addAssign(lightColor.mul(diff).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
+    // T9b: the multiple-scattering body (the warm mid-brown of the Chiang hero along the lengths): a
+    // fully wrapped, albedo-chroma tinted diffuse. Dark hair is lit mostly by light that went through
+    // other fibres, which comes out with the fibre's transmittance colour, not white.
+    const msWrap = nl.add(1).mul(0.5).max(0);
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(diffuseRamp(P, msWrap)).mul(this.h.tint).mul(P.u(`${pre}.scatter`)).mul(1 / Math.PI));
     const H = L.add(V).normalize();
-    const j = this.h.jitter.mul(P.u('hair.shiftJitter'));
     // per-strand roughness: a rougher strand has a broader lobe (exponent ~ 1 / variance)
     const er = P.u('hair.roughRef').div(this.h.rough.max(0.05)).pow(2);
     const kk = (shift: N, exp: N) => {
-      const t = T.add(N.mul(shift.add(j))).normalize();
+      const t = T.add(N.mul(shift.add(this.h.shiftOff))).normalize();
       const th = t.dot(H);
       const sinTH = float(1).sub(th.mul(th)).max(0).sqrt();
       // Kajiya-Kay lobe; strength is a plain multiplier (no energy normalisation, see params)
@@ -255,9 +262,22 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const s1 = kk(P.u('hair.shift1'), P.u('hair.exponent1'));
     const s2 = kk(P.u('hair.shift2'), P.u('hair.exponent2'));
     const atten = nl.mul(0.75).add(0.25).clamp(0, 1);
-    const tint = diffuseColor.rgb.max(1e-4).sqrt();
-    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${this.prefix}.spec1`)).add(tint.mul(s2).mul(P.u(`${this.prefix}.spec2`))).mul(this.h.specScale);
+    // R: white, shifted to the root; TRT: the scatter tint (T9b; was sqrt(albedo), near grey on dark hair)
+    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${pre}.spec1`)).add(this.h.tint.mul(s2).mul(P.u(`${pre}.spec2`))).mul(this.h.specScale);
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
+    // TT (T9b): light passing through the fibres toward the camera when the hair is backlit (the warm
+    // glow on the hero's lengths under the rim; per-light Cycles frames put ~80 % of the hero hair's
+    // closeup luminance on the rim). Longitudinally a cone like R (T.L = -T.V, lobe ttExponent on the
+    // jittered tangent, so it breaks up per strand); azimuthally forward scattering: the light and view
+    // directions across the fibre roughly opposite, ((1 - Lp.Vp) / 2)^ttPow. In the scatter tint.
+    // lightColor carries the shadow, so only hair the light reaches (edges, hanging lengths) glows.
+    const tj = T.add(N.mul(this.h.shiftOff)).normalize();
+    const Lp = L.sub(tj.mul(tj.dot(L))).normalize();
+    const Vp = V.sub(tj.mul(tj.dot(V))).normalize();
+    const fwd = float(1).sub(Lp.dot(Vp)).mul(0.5).pow(P.u('hair.ttPow'));
+    const tth = tj.dot(H);
+    const cone = float(1).sub(tth.mul(tth)).max(0).sqrt().pow(P.u('hair.ttExponent').mul(er));
+    reflectedLight.directSpecular.addAssign(lightColor.mul(this.h.tint).mul(fwd.mul(cone).mul(P.u(`${pre}.tt`))).mul(this.h.specScale));
   }
 
   override directRectArea(input: unknown): void {
@@ -291,7 +311,7 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
   /** KHR_materials_anisotropy texture (flow, depth), for the depth prepass */
   readonly anisoMap: THREE.Texture | null;
 
-  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair'; msaa: boolean }) {
+  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair' | 'brows'; msaa: boolean }) {
     super();
     copyStd(this, src);
     this.prefix = opts.prefix;
@@ -305,20 +325,31 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     this.anisotropy = 0;
     const c = mapRGBA(src);
     let col = c.rgb;
-    if (this.vertexColors) col = col.mul(vertexColor().rgb);
+    // per-card random (T9b): the baker's per-card value (COLOR_0, lognormal per card), hashed
+    let card: N = float(0.5);
+    if (this.vertexColors) {
+      col = col.mul(vertexColor().rgb);
+      card = hash(vertexColor().r.mul(65536).floor());
+    }
     // scalp cards: UV1 u carries the card layer's specular scale (hair_groom_cards layer_spec; T9 builds, which
     // are the ones with the strand maps)
-    const specScale: N = opts.prefix === 'hair' && this.anisoMap ? uv(1).x : float(1);
+    const layerSpec: N = opts.prefix === 'hair' && this.anisoMap ? uv(1).x : float(1);
     let ao: N = float(1);
     let tUV: N = vec2(0, 1); // along +v (root -> tip)
     let id: N = hash(uv().mul(4096).floor().x.add(uv().mul(4096).floor().y.mul(4096)));
+    let along: N = uv().y;
     let rough: N = P.u('hair.roughRef');
     this.__maps = !!(anisoMap && ormMap);
     if (anisoMap && ormMap) {
       const a = texture(anisoMap);
       const o = texture(ormMap);
+      // the strand ID for the lobe jitter is read at a sharper mip (hair.idLodBias): the trilinear ID of a
+      // minified card is the average of many strands (~0.5), which took the jitter out and lit the whole
+      // card at one highlight angle (the T9 "silver plates")
+      const oj = texture(ormMap).bias(P.u('hair.idLodBias'));
       tUV = a.rg.mul(2).sub(1);
-      id = o.b;
+      id = oj.b;
+      along = oj.a;
       rough = o.g;
       ao = mix(float(1).sub(P.u('hair.rootAO')), float(1), smoothstep(0, P.u('hair.rootV'), o.a))
         .mul(mix(float(1), o.r, P.u('hair.bakedAO')))
@@ -328,7 +359,20 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     this.vertexColors = false; // folded into colorNode above
     // flow (UV space) through the exported tangent frame (glTF: +Y = the image's up = +v in Blender)
     const T = tangentView.mul(tUV.x).add(bitangentView.mul(tUV.y)).normalize().mul(P.u('hair.tangentSign'));
-    this.nodes = { tangent: T, jitter: id.mul(2).sub(1), rough, specScale };
+    // lobe shift offset (T9b): per strand (ID), per card, and a slow wave tilt along each strand (the hero
+    // groom's 1-2 waves per strand tilt the fibre out of the card plane), so a planar card shows
+    // separated, broken highlights instead of one sheet at the highlight angle
+    const id2 = fract(id.mul(7.31).add(0.37));
+    const wc = P.u('hair.waveCycles');
+    const wave = sin(along.mul(mix(wc.x, wc.y, id2)).add(id).mul(2 * Math.PI)).mul(P.u('hair.waveTilt'));
+    const shiftOff = id.mul(2).sub(1).mul(P.u('hair.shiftJitter')).add(card.mul(2).sub(1).mul(P.u('hair.cardJitter'))).add(wave);
+    // the lobes see the strand occlusion too (root, density, back of the card): T9 darkened only the albedo,
+    // so occluded strands kept their full highlight
+    const specScale = layerSpec.mul(mix(float(1), ao, P.u('hair.specAO')));
+    // scatter tint: the albedo's chroma raised to scatterSat, normalised to luminance 1
+    const sat = col.max(1e-4).pow(P.u('hair.scatterSat'));
+    const tint = sat.div(sat.dot(vec3(0.2126, 0.7152, 0.0722)).max(1e-5)).min(4);
+    this.nodes = { tangent: T, shiftOff, rough, specScale, tint };
     this.normalNode = null; // shade the card as a fibre bundle: the smooth proxy normal from the GLB
     this.roughnessNode = rough;
     this.metalnessNode = float(0);
@@ -595,7 +639,8 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
         return new HairMaterial(src, P, { prefix: 'hair', msaa });
       case 'facial':
       case 'lash':
-        return new HairMaterial(src, P, { prefix: 'facialHair', msaa });
+        // brows: their own gains (T9b: the brow region is calibrated apart from the beard)
+        return new HairMaterial(src, P, { prefix: src.name.startsWith('brows') ? 'brows' : 'facialHair', msaa });
       case 'eye':
         return new EyeMaterial(src, P);
       case 'cloth':

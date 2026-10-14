@@ -84,7 +84,11 @@ CARDS = {
     "under": {"split": 2, "inset_m": 0.004, "width": 1.15, "max_halfwidth_m": 0.022, "start": 0.15,
               "max_segments": 14},
     "flyaways": {"count": 60, "start": 0.3, "halfwidth_m": 0.0012, "max_segments": 12},
-    "front_lock": {"width_pct": 85, "pad_m": 0.0015, "inset_m": 0.0015, "max_halfwidth_m": 0.007},
+    # T9b: each front fall is `strips` narrower cards (half-width x strip_w, centres at +-strip_off x the
+    # lock half-width) that twist in opposite directions along the lock (twist_deg root -> tip) and
+    # cross, with a deeper V profile (`curve`): one wide planar card took the highlight as a sheet
+    "front_lock": {"width_pct": 85, "pad_m": 0.0015, "inset_m": 0.0015, "max_halfwidth_m": 0.007,
+                   "strips": 2, "strip_w": 0.6, "strip_off": 0.45, "twist_deg": [8.0, 40.0], "curve": 0.6},
     # Hairline cards: every `spacing_m` along the front hairline (and the temples), the
     # strands rooted within `radius_m` and `band_m` of the line, their first `length_m`.
     "hairline": {"spacing_m": 0.0055, "radius_m": 0.004, "band_m": 0.009, "length_m": 0.03,
@@ -708,7 +712,8 @@ def build(b, frame, ccfg, g):
 
     use = {k: 0 for k in cells}
 
-    def add_card(p, cell, layer, path_from=0, halfwidth_m=None, k_end=None, max_seg=None, flip=False):
+    def add_card(p, cell, layer, path_from=0, halfwidth_m=None, k_end=None, max_seg=None, flip=False,
+                 twist=None, curve=None):
         C = p["C"][path_from:k_end]
         arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(C, axis=0), axis=1))])
         total = arc[-1]
@@ -762,7 +767,9 @@ def build(b, frame, ccfg, g):
         use[cell] += 1
         return hair_mesh.card(bm, uv, uv2, dl, weights, path, lambda k: normals[k], halfwidth,
                               (sp, 1.0 if path[0].x >= c.x else -1.0),
-                              curve=cfg["curve"] if layer not in ("fly", "hairline") else 0.1, mat_index=1,
+                              curve=(curve if curve is not None else
+                                     cfg["curve"] if layer not in ("fly", "hairline") else 0.1), mat_index=1,
+                              twist=twist,
                               v_map=lambda t, y0=y0, y1=y1: y0 + (y1 - y0) * t,
                               u_range=(x0, x1), on_vert=on_vert)
 
@@ -820,8 +827,22 @@ def build(b, frame, ccfg, g):
                           flc["max_halfwidth_m"])
         p["C"] = p["C"] - p["N"] * flc["inset_m"]
         p.update(members=members, kind="front", layer="front", hang=H[members].mean(0))
-        fcell = front_names[int(rng.integers(len(front_names)))] if front_names else lock_names[-1]
-        count("front_lock", add_card(p, fcell, "front"))
+        ns_ = int(flc.get("strips", 1))
+        # one draw per fall as before (the rng stream of the other layers is unchanged); the strips
+        # alternate between the front cells
+        f0 = int(rng.integers(len(front_names))) if front_names else 0
+        for k_ in range(ns_):
+            fcell = front_names[(f0 + k_) % len(front_names)] if front_names else lock_names[-1]
+            if ns_ == 1:
+                count("front_lock", add_card(p, fcell, "front"))
+                continue
+            sgn = -1.0 if k_ % 2 == 0 else 1.0
+            off = (k_ / (ns_ - 1) * 2 - 1) * flc["strip_off"]
+            q = dict(p, C=p["C"] + p["B"] * (p["hw"] * off)[:, None], hw=p["hw"] * flc["strip_w"])
+            t0, t1 = (math.radians(a) for a in flc["twist_deg"])
+            count("front_lock", add_card(q, fcell, "front", flip=bool(k_ % 2),
+                                         twist=lambda t, sgn=sgn, t0=t0, t1=t1: sgn * (t0 + (t1 - t0) * t),
+                                         curve=flc["curve"]))
     # mid / top (and the front falls' own sub-clumps). The top cards ride on the clump's outer
     # strands (a percentile of their offset along the outward normal), not its mean: the strands'
     # outer envelope is the silhouette the hero renders.

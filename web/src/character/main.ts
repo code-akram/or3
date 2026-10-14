@@ -417,6 +417,7 @@ async function main(): Promise<void> {
   state.hairPrepass = addHairDepthPrepass(model, P);
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName);
   stage.areaMode = areaMode();
+  if (q.get('lights')) stage.only = q.get('lights')!.split(','); // debug: per-light parity (hair_test --parity-lights)
   const gaze = new EyeGaze(model, (m) => {
     const mm = Array.isArray(m.material) ? m.material[0] : m.material;
     return mats.roles.get(mm?.name ?? '') === 'eye';

@@ -319,10 +319,11 @@ DEFAULTS = {
                            "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
                            "min_halfwidth_m": 0.0009, "max_halfwidth_m": 0.003,
                            "jaw_nz": [-0.95, -0.45], "moustache_edge_m": 0.006,
-                           "roll_jaw_deg": 80, "roll_moustache_deg": 35, "roll_chin_deg": 20,
+                           # T9b: jaw fins 80 -> 55 deg and a longer tip fade (the jaw edge read spiky)
+                           "roll_jaw_deg": 55, "roll_moustache_deg": 35, "roll_chin_deg": 20,
                            "roll_lying_deg": 12, "roll_sigma_deg": 12,
                            "cell": [32, 128], "atlas_px": [2048, 4096], "ss": 2, "data_scale": 2,
-                           "strand_px": 0.8, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
+                           "strand_px": 0.8, "tip_px": 0.3, "tip_fade": 0.4, "tip_alpha": 0.1,
                            "flow_jitter_deg": 8,
                            "albedo": {"radial_roughness": 0.6, "path": 0.68, "gain": 0.35,
                                       "random_color": 0.0, "value_sigma": 0.15},
@@ -416,14 +417,19 @@ DEFAULTS = {
                            "min_halfwidth_m": 0.0006, "max_halfwidth_m": 0.0018,
                            "roll_deg": 8, "roll_sigma_deg": 8,
                            "cell": [32, 64], "atlas_px": [1024, 512], "ss": 2, "data_scale": 2,
-                           "strand_px": 0.5, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
+                           # T9b: finer strands, longer tip fade (the cards read as spiky strokes)
+                           "strand_px": 0.42, "tip_px": 0.25, "tip_fade": 0.45, "tip_alpha": 0.05,
                            "flow_jitter_deg": 6,
                            "albedo": {"radial_roughness": 0.55, "path": 0.68, "gain": 1.0,
                                       "random_color": 0.0, "value_sigma": 0.12},
                            "roughness": {"base": 0.5, "jitter": 0.1},
                            "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.3},
                            "gap_m": 0.0002, "cast_shadow": False,
-                           "material": {"roughness": 0.6, "specular": 0.25}},
+                           "material": {"roughness": 0.6, "specular": 0.25},
+                           # T9b: a soft under-layer in the game skin (hair_beard.paint_underlayer):
+                           # the hero brow is a soft band, the cards alone a set of strokes
+                           "underlayer": {"radius_m": 0.002, "full_per_cm2": 300, "stubble_weight": 1.0,
+                                          "blur_px": 10, "gamma": 1.0, "strength": 0.4, "colour_gain": 1.0}},
             # shells: enabled False since T9 (kept for comparison)
             "shells": {"enabled": False, "layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
                        "atlas_cols": 2, "tile": [512, 192], "px_per_m": 6000.0,

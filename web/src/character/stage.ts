@@ -199,6 +199,8 @@ export class Stage {
   shadowMapSize = 2048;
   /** Which lights become LTC rect lights: none (default: shadowed spots), the rims and kickers, or all. */
   areaMode: 'none' | 'rims' | 'all' = 'none';
+  /** Debug (?lights=key,rim): build only the lights with these names (and their _hair twins); null = all. */
+  only: string[] | null = null;
   private static ltcReady = false;
 
   constructor(
@@ -336,6 +338,7 @@ export class Stage {
     fl.color.setRGB(fa[0]!, fa[1]!, fa[2]!);
     fl.roughness = hero ? 0.45 : this.data.lookdev.floor.roughness;
     for (const s of specs) {
+      if (this.only && !this.only.includes(s.name.replace(/_(hair|cloth|skin|props)$/, ''))) continue;
       if (this.isArea(s)) {
         const r = this.rectLight(s);
         this.group.add(r);

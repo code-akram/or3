@@ -434,3 +434,7 @@ def refit(b):
     ul = hair_beard.paint_underlayer(b)
     if ul is not None:
         b.notes["facial_hair_refit"]["beard_underlayer"] = ul
+    # T9b: the brows' soft under-layer (the hero brow reads as a soft band, the cards as strokes)
+    ul = hair_beard.paint_underlayer(b, "brows")
+    if ul is not None:
+        b.notes["facial_hair_refit"]["brows_underlayer"] = ul
