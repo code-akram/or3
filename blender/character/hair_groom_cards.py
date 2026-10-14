@@ -72,18 +72,27 @@ CARDS = {
     # Per-strand colour from the groom's melanin / redness (hair_strand_raster.chiang_color),
     # Random Color and the root-dark / tip-light gradient as the hero shader; `path` < 1
     # lightens the absorption, `gain` scales the result (both calibrated against the hero
-    # strands with hair_test.py --parts parity).
-    "albedo": {"radial_roughness": 0.5, "path": 0.68, "gain": 1.0, "random_color": 0.15,
-               "root_dark": 0.08, "tip_light": 0.03, "value_sigma": 0.08},
+    # strands with hair_test.py --parts parity). T15: random_color / root_dark / tip_light /
+    # radial_roughness None = the groom shader's own values (hair.groom.shader; T12: random
+    # 0.08, tip_light 0), so the cards follow the hero colour model instead of a copy of it.
+    "albedo": {"radial_roughness": None, "path": 0.68, "gain": 1.0, "random_color": None,
+               "root_dark": None, "tip_light": None, "value_sigma": 0.08},
     "roughness": {"base": 0.55, "jitter": 0.12},
     # baked occlusion (ORM R): density x depth only; the root darkening is the viewer's (ORM A, hair.rootAO)
     "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.35},
+    # T15: mid / top / under cards run to the `pct` (`under_pct`) percentile of their strands' lengths,
+    # not their mean (clump_profile `length`); null = T9
+    "length": {"pct": 80, "under_pct": 70, "fade": 0.12},
     "segment_m": 0.024, "min_segments": 4, "max_segments": 16,
     "min_halfwidth_m": 0.0015, "width_pct": 90, "width_pad_m": 0.0015,
     "tip_width": 0.5, "curve": 0.3, "root_w": [0.3, 0.85], "root_w_m": [0.005, 0.025],
     "under": {"split": 2, "inset_m": 0.004, "width": 1.15, "max_halfwidth_m": 0.022, "start": 0.15,
               "max_segments": 14},
-    "flyaways": {"count": 60, "start": 0.3, "halfwidth_m": 0.0012, "max_segments": 12},
+    # T15: fewer, thicker fly-aways (T9: 60 cards 1.2 mm wide with 3 strands each, too thin to read at
+    # game resolution): `count` cards, `halfwidth_m`, each cell `cell_strands` strands of a hanging
+    # clump spread `cell_spread` x, at `cell_px` x the lock strand width
+    "flyaways": {"count": 30, "start": 0.3, "halfwidth_m": 0.0026, "max_segments": 12,
+                 "cell_strands": 6, "cell_spread": 1.5, "cell_px": 1.0},
     # T9b: each front fall is `strips` narrower cards (half-width x strip_w, centres at +-strip_off x the
     # lock half-width) that twist in opposite directions along the lock (twist_deg root -> tip) and
     # cross, with a deeper V profile (`curve`): one wide planar card took the highlight as a sheet
@@ -91,9 +100,12 @@ CARDS = {
                    "strips": 2, "strip_w": 0.6, "strip_off": 0.45, "twist_deg": [8.0, 40.0], "curve": 0.6},
     # Hairline cards: every `spacing_m` along the front hairline (and the temples), the
     # strands rooted within `radius_m` and `band_m` of the line, their first `length_m`.
-    "hairline": {"spacing_m": 0.0055, "radius_m": 0.004, "band_m": 0.009, "length_m": 0.03,
-                 "min_strands": 4, "segments": 4, "halfwidth_m": [0.0025, 0.0055], "lift_m": 0.0006,
-                 "near_m": [0.006, 0.022], "root_dark": 0.05, "widen": 0.35},
+    # T15: the hairline cards sat ~5 mm ahead of the hero's dense edge (engine-only pixels at the
+    # three-quarter / profile hairline): sparser (5.5 -> 6.5 mm), narrower (2.5-5.5 -> 1.8-4 mm) and
+    # finer strands in their cells (`cell_px` x the lock strand width; T9 0.8)
+    "hairline": {"spacing_m": 0.0065, "radius_m": 0.004, "band_m": 0.009, "length_m": 0.03,
+                 "min_strands": 4, "segments": 4, "halfwidth_m": [0.0018, 0.004], "lift_m": 0.0006,
+                 "near_m": [0.006, 0.022], "root_dark": 0.05, "widen": 0.35, "cell_px": 0.6},
     "ear_margin_m": 0.004, "ear_lateral_m": 0.035,
     "ear_test": "box",
     "gap_m": 0.0012,                 # card vertices kept this far off the skin / suit (after GN)
@@ -102,13 +114,16 @@ CARDS = {
     # front locks are flat, unoccluded cards facing the camera and read as white ribbons at full
     "layer_spec": {"front": 0.4, "under": 0.7},
     "lock_sigma": 0.08,
-    "top_lift": {"pct": 80, "max_m": 0.012},
+    "top_lift": {"pct": 90, "max_m": 0.015},       # T15: 80 / 12 mm (the hero contour stood 1-2 mm outside)
     "material": {"roughness": 0.55, "specular": 0.25},
     "proxy": {"voxel_m": 0.004, "radius_m": 0.008, "every": 4},
     # Cap: unique texture on the cap's own unwrap.
+    # T15: the cap's core and its strands follow the groom's root density (the feather): core alpha
+    # ramps over `core` (T9 0.3-0.75) of the normalised density, and each projected strand's alpha over
+    # `edge_alpha` of the density at its root (null = 1, T9), so the cap thins out where the hero does
     "cap": {"size": 1024, "ss": 2, "data_scale": 2, "strand_px": 0.9, "max_dist_m": 0.03,
-            "strands": 24000, "core": [0.3, 0.75], "density_r_m": 0.004, "shade": 0.8,
-            "skin_mm": 0.0},
+            "strands": 24000, "core": [0.45, 0.9], "density_r_m": 0.004, "shade": 0.8,
+            "skin_mm": 0.0, "edge_alpha": [0.1, 0.6]},
 }
 
 smoothstep = hair_clumps.smoothstep
@@ -197,19 +212,64 @@ def frame_along(frame, C, cloth_gap, off):
     return T, Nn, B, touch
 
 
-def clump_profile(frame, E, members, cloth_gap, pct, pad, hw_min, hw_max=None):
-    """Centreline, frame and half-width per point for a clump's strands."""
+def clump_profile(frame, E, members, cloth_gap, pct, pad, hw_min, hw_max=None, length=None, H=None):
+    """Centreline, frame and half-width per point for a clump's strands.
+
+    length (T15; None = T9): {"pct", "fade"}. T9 averaged the members point by point, each strand
+    resampled over its own length, so the card ended at the members' mean length and the cut's long
+    strands (the lengths over the shoulder) were lost. With `length` the members are resampled on one
+    arc-length grid out to the `pct` percentile of their lengths; past its own end a strand is dead
+    (`alive` False) and the centreline is the mean of the live ones, each weighted down over the last
+    `fade` x that length before it ends (no jump where a strand drops out). H: the members' hang_s,
+    resampled the same way (the profile's "hang")."""
     S = E[members]
-    C = S.mean(0)
+    alive = None
+    hang = None
+    if length:
+        n, m = S.shape[:2]
+        acc = np.concatenate([np.zeros((n, 1)), np.cumsum(np.linalg.norm(np.diff(S, axis=1), axis=2), 1)], 1)
+        L = acc[:, -1]
+        Lp = float(np.percentile(L, length["pct"]))
+        s = (acc / np.maximum(L[:, None], 1e-9)).mean(0) * Lp       # the members' own point grading
+        R = np.empty_like(S)
+        for j in range(n):
+            for k in range(3):
+                R[j, :, k] = np.interp(s, acc[j], S[j, :, k])
+        alive = s[None, :] <= L[:, None] + 1e-9
+        w = np.clip((L[:, None] - s[None, :]) / max(length["fade"] * Lp, 1e-4), 0.0, 1.0)
+        w[:, :2] = 1.0
+        w = np.where(alive, np.maximum(w, 1e-3), 0.0)
+        C = (R * w[..., None]).sum(0) / w.sum(0)[:, None]
+        # a light smoothing past the root (the live set still thins out toward the end)
+        Cs = C.copy()
+        for k in range(3):
+            Cs[:, k] = np.convolve(np.pad(C[:, k], 2, mode="edge"), np.ones(5) / 5, mode="valid")
+        ramp = nsmooth(0.0, 0.3, s / max(Lp, 1e-9))[:, None]
+        C = C * (1 - ramp) + Cs * ramp
+        if H is not None:
+            Hm = np.array([np.interp(s, acc[j], H[j]) for j in range(n)])
+            hang = (Hm * w).sum(0) / w.sum(0)
+        S = R
+    else:
+        C = S.mean(0)
+        if H is not None:
+            hang = H.mean(0)
     T, Nn, B, touch = frame_along(frame, C, cloth_gap, 0.02)
     O = S - C[None]
     u = np.abs((O * B[None]).sum(2))
-    hw = np.percentile(u, pct, axis=0) + pad
+    if alive is not None:
+        u = np.where(alive, u, np.nan)
+        hw = np.nanpercentile(u, pct, axis=0) + pad
+    else:
+        hw = np.percentile(u, pct, axis=0) + pad
     hw = np.maximum(hw, hw_min)
     if hw_max is not None:
         hw = np.minimum(hw, hw_max)
     hw = np.convolve(np.pad(hw, 2, mode="edge"), np.ones(5) / 5, mode="valid")
-    return {"C": C, "T": T, "N": Nn, "B": B, "touch": touch, "hw": hw, "S": S, "O": O}
+    out = {"C": C, "T": T, "N": Nn, "B": B, "touch": touch, "hw": hw, "S": S, "O": O, "alive": alive}
+    if hang is not None:
+        out["hang"] = hang
+    return out
 
 
 # ---------------------------------------------------------------- cells
@@ -228,16 +288,20 @@ def raster_clump(prof, cols, rng, W, H, ss, acfg, max_strands=None, k_end=None, 
     dmax = np.abs((O[:, :k] * Nn[None, :k]).sum(2)).max() + 1e-6
     cell = hsr.Cell(W, H, ss)
     rc = rough_cfg or {"base": 0.55, "jitter": 0.1}
+    # the points each strand is drawn to: all k, or (length profiles, T15) its live points
+    al = prof.get("alive")
+    kj = {j: (k if al is None else max(2, min(k, int(al[j].sum())))) for j in idx}
     # painter's order: back (depth -1) first
-    dmean = np.array([(O[j, :k] * Nn[:k]).sum(1).mean() for j in idx])
+    dmean = np.array([(O[j, :kj[j]] * Nn[:kj[j]]).sum(1).mean() for j in idx])
     for j in idx[np.argsort(dmean, kind="stable")]:
-        u = (O[j, :k] * B[:k]).sum(1) / hw[:k] * u_spread
-        d = (O[j, :k] * Nn[:k]).sum(1) / dmax
-        v = np.clip((arc + (O[j, :k] * T[:k]).sum(1)) / vtot, 0.0, 1.0)
+        kk = kj[j]
+        u = (O[j, :kk] * B[:kk]).sum(1) / hw[:kk] * u_spread
+        d = (O[j, :kk] * Nn[:kk]).sum(1) / dmax
+        v = np.clip((arc[:kk] + (O[j, :kk] * T[:kk]).sum(1)) / vtot, 0.0, 1.0)
         # the strand's own length in this cell: where it ends (cut ends sit above v = 1)
         x = (u * 0.5 + 0.5) * W
         y = v * H
-        L = np.linalg.norm(np.diff(S[j, :k], axis=0), axis=1)
+        L = np.linalg.norm(np.diff(S[j, :kk], axis=0), axis=1)
         s = np.concatenate([[0.0], np.cumsum(L)]) / max(L.sum(), 1e-9)
         tip = np.clip((s - (1 - acfg["tip_fade"])) / acfg["tip_fade"], 0, 1)
         rad = (acfg["strand_px"] + (acfg["tip_px"] - acfg["strand_px"]) * tip) * acfg["strand_scale"]
@@ -393,7 +457,24 @@ def bake_cap(frame, g, E, bm, uv, cfg, cols_main, rng, sids):
     cell = hsr.Cell(size, size, ss)
     drawn = 0
     rc = cfg["roughness"]
+    # root density (strands within density_r_m), normalised by its 60th percentile over the cap
+    roots = E[:, 0]
+    kd = KDTree(len(roots))
+    for i, p in enumerate(roots):
+        kd.insert(Vector(p), i)
+    kd.balance()
+    rr = cc["density_r_m"]
+    dens_v = np.array([len(kd.find_range(Vector(tuple(p)), rr)) for p in V], dtype=np.float64)
+    ref = np.percentile(dens_v[dens_v > 0], 60) if (dens_v > 0).any() else 1.0
+    dens_v = dens_v / max(ref, 1e-6)
+    ea = cc.get("edge_alpha")
     for j in pick:
+        a_j = 1.0
+        if ea:
+            dj = len(kd.find_range(Vector(tuple(E[j, 0])), rr)) / max(ref, 1e-6)
+            a_j = float(nsmooth(ea[0], ea[1], dj))
+            if a_j < 0.02:
+                continue
         P = E[j]
         uvp, ok = project(P)
         # the strand's run over the cap from its root, until it leaves it
@@ -411,20 +492,11 @@ def bake_cap(frame, g, E, bm, uv, cfg, cols_main, rng, sids):
         v = np.linspace(0, 1, m)[:k]
         rad = np.full(k, cc["strand_px"])
         sid = float(sids[j])
-        cell.draw(x, y, rad, np.ones(k), v, np.zeros(k), cols_main[j], sid,
+        cell.draw(x, y, rad, np.full(k, a_j), v, np.zeros(k), cols_main[j], sid,
                   rc["base"] + rc["jitter"] * (2 * sid - 1))
         drawn += 1
     r = cell.resolve()
-    # root density per cap vertex -> per texel (low res, then up)
-    roots = E[:, 0]
-    kd = KDTree(len(roots))
-    for i, p in enumerate(roots):
-        kd.insert(Vector(p), i)
-    kd.balance()
-    rr = cc["density_r_m"]
-    dens_v = np.array([len(kd.find_range(Vector(tuple(p)), rr)) for p in V], dtype=np.float64)
-    ref = np.percentile(dens_v[dens_v > 0], 60) if (dens_v > 0).any() else 1.0
-    dens_v = dens_v / max(ref, 1e-6)
+    # root density per cap vertex (dens_v, above) -> per texel (low res, then up)
     lo = size // 4
     dimg, hit = _tri_raster(lo, lo, tri_uv, dens_v[tri_v][..., None])
     dimg, hit = _dilate_fill(dimg, hit, 4)
@@ -552,6 +624,8 @@ def build(b, frame, ccfg, g):
 
     # --- per-strand colour (the groom's melanin / redness), IDs
     mel, red = strand_tones(g, cfg)
+    sh = g["cfg"]["shader"]
+    cfg = dict(cfg, albedo={k: (sh[k] if v is None and k in sh else v) for k, v in cfg["albedo"].items()})
     vgrid = np.linspace(0, 1, m)[None, :].repeat(n, 0)
     crng = np.random.default_rng(acfg["seed"] + 1)
     cols = strand_colors(mel[:n], red[:n], cfg["albedo"], crng, vgrid)      # (n, m, 3)
@@ -566,8 +640,9 @@ def build(b, frame, ccfg, g):
         if len(members) < 3:
             continue
         p = clump_profile(frame, E, members, cloth_gap, cfg["width_pct"], cfg["width_pad_m"],
-                          cfg["min_halfwidth_m"])
-        p.update(members=members, kind="front" if kind[s] == 2 else "sec", hang=H[members].mean(0))
+                          cfg["min_halfwidth_m"], length=None if kind[s] == 2 else cfg.get("length"),
+                          H=H[members])
+        p.update(members=members, kind="front" if kind[s] == 2 else "sec")
         profs.append(p)
     for p in profs:
         mid = p["C"][len(p["C"]) // 3:]
@@ -587,11 +662,12 @@ def build(b, frame, ccfg, g):
             mm = members[part]
             if len(mm) < 10:
                 continue
+            ul = cfg.get("length") and dict(cfg["length"], pct=cfg["length"]["under_pct"])
             p = clump_profile(frame, E, mm, cloth_gap, cfg["width_pct"], cfg["width_pad_m"],
-                              cfg["min_halfwidth_m"], uc["max_halfwidth_m"])
+                              cfg["min_halfwidth_m"], uc["max_halfwidth_m"], length=ul, H=H[mm])
             p["hw"] *= uc["width"]
             p["C"] = p["C"] - p["N"] * uc["inset_m"] * nsmooth(0.0, 0.2, np.linspace(0, 1, m))[:, None]
-            p.update(members=mm, kind="under", layer="under", hang=H[mm].mean(0))
+            p.update(members=mm, kind="under", layer="under")
             unders.append(p)
 
     # --- atlas: lock cells, under cells, fly cells, hairline cells
@@ -642,13 +718,15 @@ def build(b, frame, ccfg, g):
     col_fly = nl_all + acfg["under_cells"]
     # fly cells: a few loose strands of a hanging clump each, spread wide
     nf = acfg["fly_cells"]
+    fcf = cfg["flyaways"]
     for i in range(nf):
         src = dict(reps[(3 + 4 * i) % nl])
-        pick = rng.choice(len(src["S"]), min(3, len(src["S"])), replace=False)
-        fl = dict(src, S=src["S"][pick], O=src["O"][pick] * 2.2)
+        pick = rng.choice(len(src["S"]), min(fcf.get("cell_strands", 3), len(src["S"])), replace=False)
+        fl = dict(src, S=src["S"][pick], O=src["O"][pick] * fcf.get("cell_spread", 2.2),
+                  alive=None if src.get("alive") is None else src["alive"][pick])
         res, ns = raster_clump(fl, cols[src["members"][pick]], rng, cw // nf, Hh, ss,
-                               dict(acfg, strand_px=acfg["strand_px"] * 0.85), rough_cfg=cfg["roughness"],
-                               sids=sids[src["members"][pick]])
+                               dict(acfg, strand_px=acfg["strand_px"] * fcf.get("cell_px", 0.85)),
+                               rough_cfg=cfg["roughness"], sids=sids[src["members"][pick]])
         put(f"fly{i}", res, ns, col_fly * cw + i * (cw // nf), 0)
     col_hl = col_fly + 1
 
@@ -694,7 +772,8 @@ def build(b, frame, ccfg, g):
         p = clump_profile(frame, E, gm, cloth_gap, 95, 0.0005, 0.0015)
         k3 = k_of_len(E[gm], hc["length_m"])
         res, ns = raster_clump(p, cols[gm], rng, cw, Hh // nh, ss,
-                               dict(acfg, strand_px=acfg["strand_px"] * 0.8, tip_fade=0.3, tip_alpha=0.0),
+                               dict(acfg, strand_px=acfg["strand_px"] * hc.get("cell_px", 0.8), tip_fade=0.3,
+                                    tip_alpha=0.0),
                                k_end=k3, rough_cfg=cfg["roughness"], sids=sids[gm])
         put(f"hairline{i}", res, ns, col_hl * cw, i * (Hh // nh))
     fill = atl.bleed()
@@ -852,7 +931,10 @@ def build(b, frame, ccfg, g):
         if p["layer"] != "top":
             continue
         dn = (p["O"] * p["N"][None]).sum(2)
-        off = np.percentile(dn, tl["pct"], axis=0)
+        if p.get("alive") is not None:
+            off = np.nanpercentile(np.where(p["alive"], dn, np.nan), tl["pct"], axis=0)
+        else:
+            off = np.percentile(dn, tl["pct"], axis=0)
         off = np.convolve(np.pad(off, 2, mode="edge"), np.ones(5) / 5, mode="valid")
         off = np.clip(off, 0.0, tl["max_m"]) * nsmooth(0.0, 0.15, np.linspace(0, 1, len(off)))
         p["C"] = p["C"] + p["N"] * off[:, None]

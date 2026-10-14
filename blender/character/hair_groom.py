@@ -108,6 +108,10 @@ DEFAULTS = {
     "hairline": {"recess_m": 0.011, "recess_az_deg": 44, "recess_sigma_deg": 13,
                  "recess_above_ear_m": 0.025,
                  "recess_side": {"left": [1.0, 0.0], "right": [1.3, 4.0]},
+                 # T15 widow's peak: notches `depth_m` deep at +-`az_deg` round `centre_deg`
+                 # (sigma `sigma_deg`), x `side` (left, right); null = off
+                 "peak": {"depth_m": 0.005, "az_deg": 11.0, "sigma_deg": 5.0, "centre_deg": -3.0,
+                          "side": [1.0, 0.7]},
                  "feather_m": 0.011, "feather_min": 0.05, "ramp_pow": 1.2,
                  "nape_feather_m": 0.006,
                  "noise": [[0.002, 0.008], [0.0015, 0.005], [0.001, 0.003]], "noise_seed": 3,
@@ -303,8 +307,17 @@ class Surface:
         az = self.azimuth(p)
         depth, shift = (h.get("recess_side") or {}).get("left" if az >= 0 else "right", (1.0, 0.0))
         gate = smoothstep(self.frame.ear_z, self.frame.ear_z + h["recess_above_ear_m"], p[2])
-        return (h["recess_m"] * depth * gate
-                * math.exp(-((abs(az) - h["recess_az_deg"] - shift) / h["recess_sigma_deg"]) ** 2))
+        r = (h["recess_m"] * depth * gate
+             * math.exp(-((abs(az) - h["recess_az_deg"] - shift) / h["recess_sigma_deg"]) ** 2))
+        pk = h.get("peak")
+        if pk and pk.get("depth_m"):
+            # widow's peak (T15): two shallow notches either side of `centre_deg` leave the line
+            # between them standing forward as a small, off-centre point; `side` scales each notch
+            # (left, right) so the point is lopsided, not a drawn V
+            a = az - pk["centre_deg"]
+            sd = pk["side"][0] if a >= 0 else pk["side"][1]
+            r += pk["depth_m"] * sd * gate * math.exp(-((abs(a) - pk["az_deg"]) / pk["sigma_deg"]) ** 2)
+        return r
 
     def d_eff(self, p):
         """Distance inside the hairline (m): boundary distance minus the
