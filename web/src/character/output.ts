@@ -9,8 +9,12 @@
 // scene-linear frame, from a thresholded half-res bright pass whose mip chain stands in for the glare
 // blur, and 2 % luminance-proportional grain after the vignette. Order as Blender: compositor grade on
 // the scene-linear render, then the view exposure, then AgX. No DoF yet (needs a resolved depth).
+//
+// T10: the screen-space AO (ao.ts) runs its depth / normal prepass and GTAO before the scene pass,
+// at the frame's size; ?aoview=1 shows the AO itself instead of the frame (setDebugAO).
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
+import type { SceneAO } from './ao';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { agxToneMapping, float, fract, max, mix, pow, sin, texture, uniform, uv, vec2, vec3, vec4 } = TSL as any;
@@ -63,6 +67,9 @@ export class Output {
   readonly res = uniform(new THREE.Vector2(1, 1));
   private brightRT: THREE.RenderTarget;
   private readonly brightQuad: THREE.QuadMesh;
+  /** T10: GTAO before the scene pass (null = off) */
+  ao: SceneAO | null = null;
+  private debugQuad: THREE.QuadMesh | null = null;
 
   constructor(
     private readonly renderer: THREE.WebGPURenderer,
@@ -129,6 +136,17 @@ export class Output {
     this.res.value.set(w, h);
   }
 
+  /** ?aoview=1: draw the AO texture (grey, sRGB-encoded) instead of the frame. */
+  setDebugAO(tex: THREE.Texture | null, normals = false): void {
+    if (!tex) {
+      this.debugQuad = null;
+      return;
+    }
+    const m = new THREE.NodeMaterial();
+    m.fragmentNode = vec4(normals ? texture(tex).rgb.mul(0.5).add(0.5) : srgbEncode(vec3(texture(tex).r)), 1);
+    this.debugQuad = new THREE.QuadMesh(m);
+  }
+
   /** Beauty post (bloom, halation, grain) on or off; parity captures turn it off. */
   setPost(on: boolean): void {
     this.postOn.value = on ? 1 : 0;
@@ -138,6 +156,7 @@ export class Output {
   render(scene: THREE.Scene, camera: THREE.Camera, w: number, h: number, target: THREE.RenderTarget | null = null): void {
     this.ensure(w, h);
     const r = this.renderer;
+    this.ao?.render(scene, camera, w, h);
     r.setRenderTarget(this.sceneRT);
     const info = r.info.render;
     const [d0, t0] = [info.drawCalls, info.triangles];
@@ -149,7 +168,7 @@ export class Output {
       this.brightQuad.render(r);
     }
     r.setRenderTarget(target);
-    this.quad.render(r);
+    (this.debugQuad ?? this.quad).render(r);
     r.setRenderTarget(null);
   }
 

@@ -110,6 +110,36 @@ export const DEFAULT_PARAMS = {
     depthPrepass: 1,
     prepassAlpha: 0.85,
     prepassDepth: 0.45,
+    /** T10 hair self-shadowing (hairshadow.ts): every shadowed light that reaches the hair gets a hair-only
+     * twin whose shadow is a one-layer deep shadow, T = exp(-shadowDensity * (depth below the first
+     * occluder - shadowBias)), metres; 0 = the T9b binary shadow on the hair (read at load). */
+    deepShadow: 1,
+    shadowDensity: 120,
+    shadowBias: 0.002,
+    /** Vogel-disk radius of the deep-shadow taps, in shadow-map texels. */
+    shadowRadius: 1.5,
+    /** Twin shadow maps: size, and the half-width (m) of the frustum around the head (read at load). */
+    shadowMapSize: 2048,
+    shadowExtent: 0.45,
+    /** Optical depth of the hair layer above the fibres the camera sees (materials HairLightingModel):
+     * every light into the scalp hair x exp(-surfaceDepth / |N.L|); 0 = off. */
+    surfaceDepth: 0.0,
+  },
+  /** T10 screen-space AO (ao.ts): GTAO at half resolution on a depth / normal prepass (cards with their
+   * alpha), multiplied into the direct diffuse of every character material, per light by the light's
+   * size over distance (a big soft light is what AO stands in for; the key's own shadow map has the
+   * rest). gtao 0 = the T6 stand-in (skin / cloth directAO x the baked AO; ?gtao=0 at load). */
+  ao: {
+    gtao: 1,
+    strength: 1.0,
+    /** World radius (m), thickness (m; depth steps beyond it do not occlude) and samples of three's GTAONode. */
+    radius: 0.06,
+    thickness: 0.15,
+    samples: 16,
+    /** How much of the baked AO stays in the direct diffuse with GTAO on (fine folds GTAO misses). */
+    bakedMix: 0.25,
+    /** Floor of the per-light weight (min(1, size / distance) otherwise). */
+    lightWeightMin: 0.3,
   },
   facialHair: {
     /** Atlas gain: 1 (T9: no per-build decode fix or gain; the beard / brow atlases are sRGB-encoded
