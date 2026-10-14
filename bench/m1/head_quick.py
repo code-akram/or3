@@ -14,7 +14,8 @@ plus a raking key on the front) and optionally DIR/head.blend.
 
 --blend RUN/character.blend renders the same bald clay strip of a kept public build instead (no
 build, no measures; hair, beard, brows, lashes, suit and the hero-only eye shells hidden), and
---turntable adds DIR/turntable.png (eight views, 45 deg apart):
+--turntable adds DIR/turntable.png (eight views, 45 deg apart) and DIR/vault.png (the cranium:
+profile, back, high back 3/4, top-back), on a build as well:
 
     blender -b -t 3 --factory-startup --python-exit-code 1 --python bench/m1/head_quick.py -- \
         --blend RUN/character.blend --out DIR [--turntable]
@@ -89,13 +90,19 @@ HIDE = ("eyebrow", "eyelash", "teeth", "tongue", "hair", "beard", "brow", "lash"
         "vellus", "stubble", "card", "suit", "nail", "cornea", "tear", "meniscus", "caruncle", "hero")
 
 
-def render(b, a, views=VIEWS, name="strip"):
+# the vault: the whole cranium (profile, back, high back three-quarter, top-back), framed on the
+# middle of the head (85 mm behind and 30 mm above the eyes)
+VAULT = [("v_profile", 90, 0, "studio"), ("v_back", 180, 0, "studio"), ("v_bq", 135, 25, "studio"),
+         ("v_top", 180, 60, "studio")]
+
+
+def render(b, a, views=VIEWS, name="strip", dz=-0.045, dy=0.0, shadows=True):
     sc = bpy.context.scene
     sc.render.engine = "BLENDER_WORKBENCH"
     sc.display.shading.light = "STUDIO"
     sc.display.shading.color_type = "MATERIAL"
     sc.display.shading.show_cavity = False
-    sc.display.shading.show_shadows = True
+    sc.display.shading.show_shadows = shadows     # off for the vault: no hard terminator across the scalp
     sc.display.shadow_focus = 0.9
     sc.render.resolution_x = sc.render.resolution_y = a.res
     sc.render.film_transparent = False
@@ -123,7 +130,7 @@ def render(b, a, views=VIEWS, name="strip"):
         (o for o in bpy.data.objects if o.type == "MESH" and "eyes" in o.name.lower() and not o.hide_render),
         key=lambda o: len(o.data.vertices))
     eco = [eyes.matrix_world @ v.co for v in eyes.data.vertices]
-    target = sum(eco, Vector()) / len(eco) + Vector((0, 0, -0.045))
+    target = sum(eco, Vector()) / len(eco) + Vector((0, dy, dz))
     cd = bpy.data.cameras.new("quick")
     cd.lens = 85
     cd.sensor_fit = "VERTICAL"
@@ -156,6 +163,15 @@ def render(b, a, views=VIEWS, name="strip"):
     return out, arm
 
 
+def turntables(a):
+    """--turntable: DIR/turntable.png (eight views, 45 deg apart) and DIR/vault.png (VAULT)."""
+    if not a.turntable:
+        return
+    tt = [(f"tt{k:03d}", k, 4, "studio") for k in range(0, 360, 45)]
+    print(f"[quick] turntable -> {render(None, a, tt, 'turntable')[0]}")
+    print(f"[quick] vault -> {render(None, a, VAULT, 'vault', dz=0.03, dy=0.085, shadows=False)[0]}")
+
+
 def main():
     a = args()
     os.makedirs(a.out, exist_ok=True)
@@ -167,9 +183,7 @@ def main():
         if not os.path.exists(st) or containment.likeness(json.load(open(st))):
             raise SystemExit("head_quick.py --blend: not a public build (missing or likeness stats)")
         print(f"[quick] strip -> {render(None, a)[0]}")
-        if a.turntable:
-            tt = [(f"tt{k:03d}", k, 4, "studio") for k in range(0, 360, 45)]
-            print(f"[quick] turntable -> {render(None, a, tt, 'turntable')[0]}")
+        turntables(a)
         return
     if not (a.system_assets and a.suit_assets):
         raise SystemExit("--system-assets and --suit-assets are needed to build")
@@ -180,6 +194,7 @@ def main():
     with open(os.path.join(a.out, "head_measures.json"), "w") as f:
         json.dump(res, f, indent=1, default=str)
     strip, _ = render(b, a)
+    turntables(a)
     if a.save_blend:
         bpy.ops.wm.save_as_mainfile(filepath=os.path.join(a.out, "head.blend"))
     keys = ("bizygomatic", "bigonial", "jaw_to_cheek", "lower_face_index", "brow_overhang",

@@ -33,6 +33,17 @@ of the head never moves. Fields (head.sculpt.fields, mm; negative = recess):
   chin           mental tubercles, a squarer chin; drop_mm lowers the menton
   temporal       temporal line, with the temple hollow behind it
 
+  The vault (a cranial frame from the base mesh: porion from the ear fronts, vertex, the midline
+  back; vault_frame):
+  crown          the top flattened, down (the egg's dome), broad
+  parietal       parietal eminences, out and a little up, behind and above the ear: with the flat
+                 crown, the pentagonal skull outline seen from behind
+  temporal_fossa the side under the superior temporal line (the arc from the temple over the ear to
+                 the supramastoid crest), pushed in: a flat temporal plane with a crisp upper edge
+  occiput        the occipital curve (opisthocranion) pushed back: a fuller back of the head
+  nuchal         under the superior nuchal line (inion out to the mastoids), pushed in: the shelf
+                 where the occiput turns into the neck, instead of the egg's smooth taper
+
 Two-band application: the base mesh has ~4-5 mm vertex spacing, so edit_base applies each
 profile widened by base_spacing_mm (soft band, same peak); head_refine then adds the difference
 (sharp - soft) on the subdivided face (refine()), which carries the crisp edges into the GLB.
@@ -40,7 +51,8 @@ profile widened by base_spacing_mm (soft band, same peak); head_refine then adds
 Eye block (head.sculpt.eyes): the eye helpers are scaled to globe_mm about a centre moved forward
 so the cornea apex stays put; the lid skin is re-seated on the smaller globe (core/fade like
 wrap.py's eye cores); the lids are then rotated (head_forms.lids) so the upper margin covers
-upper_over_iris_mm of the iris and the fissure is aperture_mm; the lateral canthus is moved to
+upper_over_iris_mm of the iris top and the lower margin lower_over_iris_mm of its bottom (iris_mm is
+the iris radius); the lateral canthus is moved to
 canthal_tilt_deg. Parameters only; no person is the reference.
 """
 
@@ -51,6 +63,7 @@ import numpy as np
 from . import head_forms, head_layer, head_shape
 
 MM = 0.001
+LID_MM = 1.5       # socket globe guard: least skin-to-globe gap in front of the eye (t7b)
 
 DEFAULTS = {
     "embedding": "$DATA/build/identity/base_embedding.npz",
@@ -68,8 +81,17 @@ DEFAULTS = {
         "nasal": {"mm": 0.5, "side_mm": -0.7},
         "chin": {"mm": 1.2, "r_mm": 6.0, "drop_mm": 0.0},
         "temporal": {"mm": 0.5, "hollow_mm": -1.2},
+        # the vault (t7b): skull, not egg, from the back and in profile (vault_frame, vault)
+        "crown": {"mm": -4.0, "r_mm": 32.0},
+        "parietal": {"mm": 5.0, "r_mm": 28.0},
+        "temporal_fossa": {"mm": -3.5, "neg_mm": 22.0, "pos_mm": 3.0, "depth_mm": 15.0},
+        "occiput": {"mm": 4.5, "r_mm": 22.0},
+        "nuchal": {"mm": -5.5, "neg_mm": 10.0, "pos_mm": 3.0, "depth_mm": 15.0},
     },
-    "eyes": {"globe_mm": 12.0, "forward_mm": 0.6, "iris_mm": 5.9, "upper_over_iris_mm": 1.5, "aperture_mm": 10.0,
+    # lids (t7b): a calm, slightly hooded adult-male eye, no sclera above or below the iris in a front
+    # view: the upper margin 2 mm over the iris top (MRD1 ~3.9 mm), the lower 0.75 mm over the iris
+    # bottom (MRD2 ~5.15 mm); fissure = 2 * iris - upper - lower = 9.05 mm
+    "eyes": {"globe_mm": 12.0, "forward_mm": 0.6, "iris_mm": 5.9, "upper_over_iris_mm": 2.0, "lower_over_iris_mm": 0.75,
              "canthal_tilt_deg": 3.0, "core_mm": 1.5, "fade_mm": 6.0,
              "lids_on_fan": False},   # the lid targets (aperture, tilt) apply to the public face only
 }
@@ -212,9 +234,12 @@ def ear_front(co, ears, side):
     return p[np.argmin(p[:, 1])], p[:, 2].mean(), p[:, 2].min()
 
 
-def fields(an, co, nrm, eyes_c, ears, fcfg, widen):
-    """Sum of all ridge fields (n, 3), metres."""
+def fields(an, co, nrm, eyes_c, ears, fcfg, widen, vf=None):
+    """Sum of all ridge fields (n, 3), metres. vf: vault_frame() of the base mesh (the vault
+    fields are skipped without it)."""
     out = np.zeros_like(co)
+    if vf is not None:
+        out += vault(co, nrm, an, vf, fcfg, widen)
     up, fwd = an.up, an.fwd
     m = lambda v: float(v) * MM  # noqa: E731
     for side in (1.0, -1.0):
@@ -304,6 +329,84 @@ def fields(an, co, nrm, eyes_c, ears, fcfg, widen):
     return out
 
 
+def vault_frame(co, skin, ears, an):
+    """Cranial frame on the (sculpted-face) base mesh, kept for the dense pass: porion height Pz
+    (the ears' mid height) and depth Py (10 mm behind the ear's front edge), the vertex height Vz,
+    and surface points for the vault fields, found at fractions of the auricular height
+    H = Vz - Pz (porion to vertex). Positions are object space, metres."""
+    x0 = an.x0
+    efs = [ear_front(co, ears, s_) for s_ in (1.0, -1.0)]
+    Pz = float(np.mean([e[1] for e in efs]))
+    Py = float(np.mean([e[0][1] for e in efs])) + 0.010
+    head = skin & ~ears & (co[:, 2] > Pz - 0.06)
+    mid = head & (np.abs(co[:, 0] - x0) < 0.006)
+    V = co[mid][np.argmax(co[mid][:, 2])]
+    H = float(V[2] - Pz)
+
+    def extreme(m_fn, key, w):
+        """The skin point maximising key among those in the window m_fn(w), the window widened
+        until it holds some (the base mesh is ~4-5 mm apart)."""
+        for k in range(6):
+            m_ = m_fn(w * 1.5 ** k)
+            if m_.any():
+                p = co[m_]
+                return p[np.argmax(key(p))]
+        raise RuntimeError("head_sculpt.vault_frame: no skin point found")
+
+    def back_at(x, z, w=0.006):
+        """The most posterior skin point near (x, z)."""
+        return extreme(lambda w_: head & (np.abs(co[:, 0] - x) < w_) & (np.abs(co[:, 2] - z) < w_) & (co[:, 1] > Py),
+                       lambda p: p[:, 1], w)
+
+    def side_at(side, y, z, w=0.008):
+        """The most lateral skin point near (y, z) on the x side `side`."""
+        return extreme(lambda w_: head & (np.abs(co[:, 1] - y) < w_) & (np.abs(co[:, 2] - z) < w_)
+                       & ((co[:, 0] - x0) * side > 0), lambda p: (p[:, 0] - x0) * side, w)
+
+    zi = Pz + 0.08 * H                                   # inion
+    nuchal = [back_at(x0, zi)]
+    for side in (1.0, -1.0):
+        pts = [back_at(x0 + side * 0.030, zi - 0.004), back_at(x0 + side * 0.052, zi - 0.013)]
+        nuchal = (pts[::-1] + nuchal) if side < 0 else (nuchal + pts)
+    out = {"Pz": Pz, "Py": Py, "H": H, "vertex": V, "opisthocranion": back_at(x0, Pz + 0.28 * H),
+           "nuchal": np.array(nuchal)}
+    for side in (1.0, -1.0):
+        out[("parietal", side)] = side_at(side, Py + 0.045, Pz + 0.62 * H)
+        out[("temporal", side)] = np.array([side_at(side, Py - 0.050, Pz + 0.45 * H),
+                                            side_at(side, Py - 0.015, Pz + 0.55 * H),
+                                            side_at(side, Py + 0.025, Pz + 0.56 * H),
+                                            side_at(side, Py + 0.055, Pz + 0.45 * H),
+                                            side_at(side, Py + 0.070, Pz + 0.28 * H)])
+    return out
+
+
+def vault(co, nrm, an, vf, fcfg, widen):
+    """The vault fields (n, 3), metres (see the module docstring)."""
+    out = np.zeros_like(co)
+    up, back = an.up, -an.fwd
+    m = lambda v: float(v) * MM  # noqa: E731
+    f = fcfg.get("crown")
+    if f:
+        out += blob(co, nrm, vf["vertex"], up, m(f["mm"]), m(f["r_mm"]), widen)
+    f = fcfg.get("occiput")
+    if f:
+        out += blob(co, nrm, vf["opisthocranion"], unit(back + 0.2 * up), m(f["mm"]), m(f["r_mm"]), widen)
+    f = fcfg.get("nuchal")
+    if f:
+        out += ridge(co, nrm, vf["nuchal"], back, up, m(f["mm"]), m(f["neg_mm"]), m(f["pos_mm"]),
+                     m(f["depth_mm"]), widen, taper=0.1)
+    for side in (1.0, -1.0):
+        lat = an.lat(side)
+        f = fcfg.get("parietal")
+        if f:
+            out += blob(co, nrm, vf[("parietal", side)], unit(lat + 0.35 * up), m(f["mm"]), m(f["r_mm"]), widen)
+        f = fcfg.get("temporal_fossa")
+        if f:
+            out += ridge(co, nrm, vf[("temporal", side)], lat, up, m(f["mm"]), m(f["neg_mm"]), m(f["pos_mm"]),
+                         m(f["depth_mm"]), widen, taper=0.12)
+    return out
+
+
 def socket(co, nrm, an, eye, side, amp, amp_lo, r_lo, edge, widen):
     """Recess inside the orbital rim: an ellipse in the frontal plane around the eye (rim radii
     from the brow landmarks above, 13 mm below, 19 mm lateral, 13 mm medial), outside the lids
@@ -324,7 +427,19 @@ def socket(co, nrm, an, eye, side, amp, amp_lo, r_lo, edge, widen):
     front = ss(0.0, 0.006, (c[1] - co[:, 1]))
     w = inside * lids * front * np.clip(nrm @ an.fwd, 0, 1)
     a = np.where(dz > 0, amp, amp_lo + (amp - amp_lo) * ss(-0.004, 0.0, dz))
-    return (a * w)[:, None] * an.fwd[None, :]          # negative amp: back into the orbit
+    back = -(a * w)                                     # metres pushed back (+ = into the orbit)
+    # globe guard (t7b): the lid skin over the lower globe (6-10 mm below the eye centre) must stay
+    # in front of the eyeball. Unguarded, the infraorbital push drove it into the globe: a fold
+    # under the lower lid, sclera showing through the skin and back faces seen from the front.
+    # The push is limited to what keeps the skin lid_mm in front of the globe, with a soft min.
+    gap = float(LID_MM) * MM
+    h = (R + gap) ** 2 - dx ** 2 - dz ** 2
+    room = np.where(h > 0, (c[1] - np.sqrt(np.maximum(h, 0.0))) - co[:, 1], np.inf)
+    room = np.where(co[:, 1] < c[1], np.maximum(room, 0.0), np.inf)
+    k = 0.0005
+    lim = np.where(np.isfinite(room), -k * np.logaddexp(-back / k, -room / k), back)
+    back = np.where(back > 0, np.clip(lim, 0.0, back), back)
+    return (-back)[:, None] * an.fwd[None, :]          # negative amp: back into the orbit
 
 
 # --- eyes ------------------------------------------------------------------------------------
@@ -361,7 +476,7 @@ def eye_block(obj, co, ecfg, notes):
     # the lids rotated toward the target margins and the lateral canthus moved to the tilt
     iris = float(ecfg["iris_mm"]) * MM
     up_t = iris - float(ecfg["upper_over_iris_mm"]) * MM
-    lo_t = up_t - float(ecfg["aperture_mm"]) * MM
+    lo_t = -iris + float(ecfg["lower_over_iris_mm"]) * MM
     tgt = np.radians(float(ecfg["canthal_tilt_deg"]))
     lash = W_lash(W)
     clear = float(ecfg.get("clearance_mm", 0.0)) * MM      # base-mesh clearance (off: head_refine's is on)
@@ -427,28 +542,17 @@ def W_lash(W):
 
 
 def fissures(obj, co, W, eye_c):
-    """Per eye ("l"/"r"): head_measure._aperture on the current coords, the eye-helper sphere
-    standing in for the eye proxy (not fitted yet). Canthi as (x, z) world; margins relative to
-    the eye centre."""
+    """Per eye ("l"/"r"): head_measure._aperture on the current coords, the globe as the analytic
+    sphere (centre, radius) of the resized eye helper (the fitted proxy does not exist yet).
+    Canthi as (x, z) world; margins relative to the eye centre."""
     from mathutils import Vector
     from mathutils.bvhtree import BVHTree
     from . import head_measure
     skip = W["HelperGeometry"] | (head_shape._group_weights(obj, "JointCubes") > 0)
     V = [Vector(p) for p in co]
-    skin_p, eye_p = [], []
-    for p in obj.data.polygons:
-        vs = list(p.vertices)
-        if not skip[vs].any():
-            skin_p.append(vs)
-        elif (W["helper-l-eye"][vs] | W["helper-r-eye"][vs]).all():
-            eye_p.append(vs)
+    skin_p = [list(p.vertices) for p in obj.data.polygons if not skip[list(p.vertices)].any()]
     skin_bvh = BVHTree.FromPolygons(V, skin_p)
-    eye_bvh = BVHTree.FromPolygons(V, eye_p)
-    out = {}
-    for key, side in (("l", 1.0), ("r", -1.0)):
-        cn, _ = eye_c[key]
-        out[key] = head_measure._aperture(skin_bvh, eye_bvh, cn, side)
-    return out
+    return {key: head_measure._aperture(skin_bvh, eye_c[key], side) for key, side in (("l", 1.0), ("r", -1.0))}
 
 
 # --- stage -----------------------------------------------------------------------------------
@@ -489,11 +593,12 @@ def apply(b):
     for side, g in ((1.0, "helper-l-eye"), (-1.0, "helper-r-eye")):
         eye_c[side] = head_forms.fit_sphere(edited[head_shape._group_weights(obj, g) > 0])
     an_now = Anchors(edited, np.load(head_layer.resolve(c["embedding"])), an.x0)
-    disp = fields(an_now, edited, nrm, eye_c, ears, c["fields"], c["base_spacing_mm"] * MM)
+    vf = vault_frame(edited, ~helpers, ears, an_now)
+    disp = fields(an_now, edited, nrm, eye_c, ears, c["fields"], c["base_spacing_mm"] * MM, vf)
     disp[eyes | helpers] = 0.0       # helper cubes have no meaningful normal; the lids moved above
     edited = edited + disp
     emb = np.load(head_layer.resolve(c["embedding"]))
-    b.sculpt_state = {"cfg": c, "anchors": an_now, "eye_c": eye_c,
+    b.sculpt_state = {"cfg": c, "anchors": an_now, "eye_c": eye_c, "vault": vf,
                       "emb": {"tri_verts": emb["tri_verts"], "bary": emb["bary"]},
                       "ears_front": {s: ear_front(edited, ears, s) for s in (1.0, -1.0)}}
     kb = obj.data.shape_keys.key_blocks
@@ -534,8 +639,8 @@ def refine(b, body, lab, eyes_obj):
     ears = hr.group_weights(body, "ears") > 0
     c = st["cfg"]
     w = c["base_spacing_mm"] * MM
-    sharp = fields(st["anchors"], co, nrm, st["eye_c"], ears, c["fields"], 0.0)
-    soft = fields(st["anchors"], co, nrm, st["eye_c"], ears, c["fields"], w)
+    sharp = fields(st["anchors"], co, nrm, st["eye_c"], ears, c["fields"], 0.0, st.get("vault"))
+    soft = fields(st["anchors"], co, nrm, st["eye_c"], ears, c["fields"], w, st.get("vault"))
     d = (sharp - soft) * sel[:, None]
     d[hr.group_weights(body, "lips") > 0] = 0.0
     new = co + d

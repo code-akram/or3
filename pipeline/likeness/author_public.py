@@ -319,7 +319,8 @@ def clean_delta(base, delta, TV, TFt, notes, band_iters=12, relax_iters=40, spik
        takes the mean (mouth corners, lid folds);
     4. nostrils: around the alar base (emb: the base landmark embedding) the field is relaxed, so
        the outer skin and the nostril's inner wall move together (the snapped outer skin otherwise
-       sinks behind the inner wall, which then shows through the cheek)."""
+       sinks behind the inner wall, which then shows through the cheek), and the cavity walls
+       there follow the outer skin in front of them."""
     import wrap
     co = base.co
     skin = base.skin
@@ -356,6 +357,22 @@ def clean_delta(base, delta, TV, TFt, notes, band_iters=12, relax_iters=40, spik
         wn = (1 - np.clip((d - 0.008) / 0.010, 0, 1)) * (skin & ~base.helper)
         out = out + wn[:, None] * (base.smooth(out, 2 * relax_iters) - out)
         nrel = int((wn > 0).sum())
+        # the nasal cavity walls behind the alar groove (base normals facing back) take the field
+        # of the outer skin in front of them (t7b): relaxed or not, the snapped groove skin moved
+        # back ~2 mm more than the cavity behind it, and the cavity wall poked through the cheek
+        # beside each ala (back faces seen from the front: the engine's teal specks)
+        nb = base.normals(co)
+        near = (d < 0.025) & skin & ~base.helper
+        inner = np.nonzero(near & (nb[:, 1] > 0.2))[0]
+        outer = np.nonzero(near & (nb[:, 1] < -0.2))[0]
+        if len(inner) and len(outer):
+            dxz = co[inner][:, None, [0, 2]] - co[outer][None, :, [0, 2]]
+            wgt = np.exp(-0.5 * (dxz ** 2).sum(2) / 0.002 ** 2) * (co[outer][None, :, 1] < co[inner][:, None, 1])
+            tot = wgt.sum(1)
+            ok_ = tot > 1e-3
+            follow = (wgt @ out[outer]) / np.maximum(tot, 1e-12)[:, None]
+            out[inner[ok_]] = follow[ok_]
+            notes["cavity_follow_verts"] = int(ok_.sum())
     notes["clean"] = {"on_target_verts": int(on.sum()), "spikes_fixed": nspike, "nostril_relaxed_verts": nrel}
     return out
 
