@@ -127,8 +127,18 @@ class Solver:
         self.layers = []
         self.sdf = None
         self.pinned = np.zeros(n, bool)
+        self.hold_idx = np.zeros(0, int)       # soft attachments to target positions
+        self.hold_pos = np.zeros((0, 3))
+        self.hold_k = 0.0
         self.kstretch = np.full(len(self.E), o["k_stretch"])
         self.kcomp = np.full(len(self.E), o["k_comp"])
+        # self-contact: vertex-vertex repulsion at radius self_r between vertices that are
+        # at least self_excl apart in the reference shape self_ref (the placed, unfolded
+        # garment: neighbours on the cloth never repel); self_skip vertices take no part
+        self.self_ref = None
+        self.self_r = 0.0
+        self.self_excl = 0.0
+        self.self_skip = None
 
     def set_sew(self, pairs, rest=None):
         self.sew = np.asarray(pairs, int).reshape(-1, 2)
@@ -144,8 +154,8 @@ class Solver:
         X[free] += V[free] * h
         h2 = h * h
         wp = np.where(free, w, 0.0)
-        # stretch
-        for c in self.ecol:
+        # stretch (stretch_iters sweeps: inextensibility converges slowest)
+        for c in self.ecol * self.o.get("stretch_iters", 1):
             i, j = self.E[c, 0], self.E[c, 1]
             d = X[i] - X[j]
             L = np.sqrt((d * d).sum(1))
@@ -175,9 +185,17 @@ class Solver:
             den = s * s * (ws * K * K).sum(1) + 1.0 / (self.kb[c] * h2)
             dl = -C / den[:, None]
             X[S] += (ws * K * s[:, None])[:, :, None] * dl[:, None, :]
+        # holds
+        if len(self.hold_idx) and self.hold_k > 0:
+            i = self.hold_idx
+            dl = (wp[i] / (wp[i] + 1.0 / (self.hold_k * h2)))[:, None]
+            X[i] -= dl * (X[i] - self.hold_pos)
         # layers: set A stays outside set B along B's outward normal by `gap`
         for A, B, gap in self.layers:
             self._layer(A, B, gap)
+        # self-contact
+        if self.self_ref is not None and self.self_r > 0:
+            self._self_contact(X, wp)
         # collisions
         if self.sdf is not None:
             d, gr = self.sdf(X)
@@ -192,6 +210,33 @@ class Solver:
         self.V = (X - P0) / h
         self.V[~free] = 0.0
         self.X = X
+
+    def _self_contact(self, X, wp):
+        r = self.self_r
+        idx = np.arange(len(X)) if self.self_skip is None else np.nonzero(~self.self_skip)[0]
+        i, j = close_pairs(X[idx], r)
+        if not len(i):
+            return
+        i, j = idx[i], idx[j]
+        far = np.linalg.norm(self.self_ref[i] - self.self_ref[j], axis=1) > self.self_excl
+        i, j = i[far], j[far]
+        if not len(i):
+            return
+        d = X[i] - X[j]
+        L = np.sqrt((d * d).sum(1))
+        n = d / np.maximum(L, 1e-12)[:, None]
+        ws = wp[i] + wp[j]
+        ok = ws > 0
+        i, j, n, L, ws = i[ok], j[ok], n[ok], L[ok], ws[ok]
+        C = (r - L) / ws
+        acc = np.zeros_like(X)
+        cnt = np.zeros(len(X))
+        np.add.at(acc, i, (wp[i] * C)[:, None] * n)
+        np.add.at(acc, j, -(wp[j] * C)[:, None] * n)
+        np.add.at(cnt, i, 1.0)
+        np.add.at(cnt, j, 1.0)
+        m = cnt > 0
+        X[m] += acc[m] / cnt[m][:, None]
 
     def _layer(self, A, B, gap):
         X = self.X
@@ -221,6 +266,42 @@ class Solver:
                 self.step(h, g, ks)
             if cb is not None:
                 cb(f, self)
+
+
+_HASH = np.array([73856093, 19349663, 83492791], np.int64)
+_OFFS = np.array([(a, b, c) for a in (-1, 0, 1) for b in (-1, 0, 1) for c in (-1, 0, 1)], np.int64)
+
+
+def close_pairs(P, r):
+    """All pairs (i < j) of points closer than r (uniform grid hash, cell r). Deterministic."""
+    n = len(P)
+    q = np.floor(P / r).astype(np.int64)
+    key = np.bitwise_xor.reduce(q * _HASH, axis=1)
+    order = np.argsort(key, kind="stable")
+    ks = key[order]
+    I, J = [], []
+    for off in _OFFS:
+        nk = np.bitwise_xor.reduce((q + off) * _HASH, axis=1)
+        lo = np.searchsorted(ks, nk, "left")
+        hi = np.searchsorted(ks, nk, "right")
+        cnt = hi - lo
+        tot = int(cnt.sum())
+        if not tot:
+            continue
+        ii = np.repeat(np.arange(n), cnt)
+        start = np.repeat(lo - (np.cumsum(cnt) - cnt), cnt)
+        jj = order[start + np.arange(tot)]
+        keep = ii < jj
+        I.append(ii[keep])
+        J.append(jj[keep])
+    if not I:
+        return np.zeros(0, int), np.zeros(0, int)
+    I, J = np.concatenate(I), np.concatenate(J)
+    d2 = ((P[I] - P[J]) ** 2).sum(1)
+    near = d2 < r * r
+    I, J = I[near], J[near]
+    u = np.unique(I.astype(np.int64) * n + J)
+    return (u // n).astype(int), (u % n).astype(int)
 
 
 def mass_from_flat(Tflat, Rflat, n, density):

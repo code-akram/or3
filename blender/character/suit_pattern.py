@@ -52,6 +52,8 @@ DEFAULTS = {
     "scye_below_armpit_cm": 2.5,  # armhole bottom below the body's armpit
     "scye_rise_cm": 5.0,          # lower armhole: its ends sit this far above its bottom
     "side_front_frac": 0.35,      # the front panel takes this share of the armhole bottom
+    "back_scye_frac": 0.18,       # the back takes this share of it: the back/side seam meets the
+                                  # armhole where it has turned, square to it (not tangent: a sliver)
     "shoulder_out_cm": 1.75,      # jacket shoulder point past the acromion (fable 3.5: 1.5-2)
     "shoulder_drop_deg": 3.0,     # extra shoulder slope against the body's (fable 3.5)
     "back_shoulder_ease_cm": 0.6,
@@ -73,7 +75,7 @@ DEFAULTS = {
     "gorge_past_roll_cm": 3.0,    # gorge point this far on the lapel side of the roll line
     "roll_past_np_cm": 2.0,       # roll line crosses the shoulder line this far past the neck point
     "collar": {"stand_cm": 3.0, "fall_cm": 4.2, "end_width_cm": 4.0, "spread": 1.22},
-    "sleeve": {"head_ease_cm": 3.0, "pitch_cm": 2.0, "elbow_ease_cm": 1.0, "cuff_slant_cm": 1.2,
+    "sleeve": {"head_ease_cm": 3.0, "pitch_cm": 2.0, "bend_deg": 25.0, "bend_zone_cm": 5.0, "cuff_slant_cm": 1.2,
                "under_offset_cm": 3.0, "hind_offset_cm": 1.5, "end_above_wrist_cm": 1.0},
     "seam_allowance_cm": 1.0,     # drawn on the pattern sheet; the sim sews on the sew lines
 }
@@ -382,16 +384,27 @@ def bezier(p0, p1, p2, p3, n=24):
     return (1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * p1 + 3 * (1 - t) * t ** 2 * p2 + t ** 3 * p3
 
 
-def catmull(pts, n=16):
-    """Uniform Catmull-Rom spline through pts (open), n samples per span."""
+def catmull(pts, n=16, alpha=0.5):
+    """Centripetal Catmull-Rom spline through pts (open), n samples per span. Uniform
+    Catmull-Rom (alpha 0) overshoots and loops where the spacing jumps (a short span at a
+    seam end next to a long one); centripetal does not."""
     P = np.asarray(pts, float)
     P = np.vstack([2 * P[0] - P[1], P, 2 * P[-1] - P[-2]])
     out = []
-    t = np.linspace(0, 1, n, endpoint=False)[:, None]
+    u = np.linspace(0, 1, n, endpoint=False)[:, None]
     for i in range(1, len(P) - 2):
         p0, p1, p2, p3 = P[i - 1], P[i], P[i + 1], P[i + 2]
-        out.append(0.5 * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t ** 2
-                          + (-p0 + 3 * p1 - 3 * p2 + p3) * t ** 3))
+        t0 = 0.0
+        t1 = t0 + max(np.linalg.norm(p1 - p0), 1e-9) ** alpha
+        t2 = t1 + max(np.linalg.norm(p2 - p1), 1e-9) ** alpha
+        t3 = t2 + max(np.linalg.norm(p3 - p2), 1e-9) ** alpha
+        t = t1 + (t2 - t1) * u
+        a1 = (t1 - t) / (t1 - t0) * p0 + (t - t0) / (t1 - t0) * p1
+        a2 = (t2 - t) / (t2 - t1) * p1 + (t - t1) / (t2 - t1) * p2
+        a3 = (t3 - t) / (t3 - t2) * p2 + (t - t2) / (t3 - t2) * p3
+        b1 = (t2 - t) / (t2 - t0) * a1 + (t - t0) / (t2 - t0) * a2
+        b2 = (t3 - t) / (t3 - t1) * a2 + (t - t1) / (t3 - t1) * a3
+        out.append((t2 - t) / (t2 - t1) * b1 + (t - t1) / (t2 - t1) * b2)
     out.append(P[-2][None])
     return np.vstack(out)
 
@@ -524,12 +537,14 @@ class Draft:
         for s in self.seams:
             (pa, ca, La), (pb, cb, Lb) = self.chain(s["a"]), self.chain(s["b"])
             n = max(2, int(math.ceil(max(La, Lb) / h)))
+            g = self.ease_map(s, La, Lb)          # t on a -> t on b
+            cb_a = np.interp(cb, g[1], g[0])     # b's corners in a's parameter
             ts = list(np.linspace(0, 1, n + 1))
-            for c in list(ca) + list(cb):
+            for c in list(ca) + list(cb_a):
                 ts.append(float(c))
             ts = np.array(sorted(ts))
             keep = [ts[0]]
-            corner = set(np.round(np.concatenate([ca, cb]), 9))
+            corner = set(np.round(np.concatenate([ca, cb_a]), 9))
             for t in ts[1:]:
                 if t - keep[-1] < 0.35 / n:
                     if round(t, 9) in corner:
@@ -538,11 +553,16 @@ class Draft:
                 keep.append(t)
             ts = np.array(keep)
             idx = {}
-            for side, (polys, corners, ch) in (("a", (pa, ca, s["a"])), ("b", (pb, cb, s["b"]))):
+            tb = np.interp(ts, g[0], g[1])
+            for c_ in cb:                        # b's corners land exactly
+                j = int(np.argmin(np.abs(tb - c_)))
+                if abs(tb[j] - c_) < 1e-6:
+                    tb[j] = c_
+            for side, (polys, corners, ch, tt) in (("a", (pa, ca, s["a"], ts)), ("b", (pb, cb, s["b"], tb))):
                 for k, (poly, (p, e, rev)) in enumerate(zip(polys, ch)):
                     t0, t1 = corners[k], corners[k + 1]
-                    sel = (ts >= t0 - 1e-9) & (ts <= t1 + 1e-9)
-                    loc = np.clip((ts[sel] - t0) / max(t1 - t0, 1e-12), 0, 1)
+                    sel = (tt >= t0 - 1e-9) & (tt <= t1 + 1e-9)
+                    loc = np.clip((tt[sel] - t0) / max(t1 - t0, 1e-12), 0, 1)
                     q = at_params(poly, loc)
                     gi = np.nonzero(sel)[0]
                     if rev:
@@ -562,6 +582,25 @@ class Draft:
                     n = max(1, int(math.ceil(arclen(poly) / h)))
                     pts[(name, e)] = at_params(poly, np.linspace(0, 1, n + 1))
         return pts, pairs
+
+    @staticmethod
+    def ease_map(s, La, Lb):
+        """The seam's pairing: (t_a, t_b) knots, both 0..1. Even (t_b = t_a) unless the seam
+        names an ease zone: s["ease_zero"] = (ta0, ta1) is sewn 1:1 (the sleeve's underarm, as
+        a tailor sews it), and the rest of b's extra length goes in as a smooth bump that is
+        largest at the chain's ends (the crown) and nothing at the zone's edges."""
+        t = np.linspace(0, 1, 2001)
+        if "ease_zero" not in s or Lb <= La:
+            return t, t
+        a0, a1 = s["ease_zero"]
+        w = np.zeros_like(t)
+        m0 = t < a0
+        w[m0] = 1 - smoothstep(t[m0] / max(a0, 1e-9))
+        m1 = t > a1
+        w[m1] = smoothstep((t[m1] - a1) / max(1 - a1, 1e-9))
+        W = np.concatenate([[0], np.cumsum(0.5 * (w[1:] + w[:-1]) * np.diff(t))])
+        sb = t * La + (Lb - La) * W / max(W[-1], 1e-12)
+        return t, sb / Lb
 
     def svg(self, path, h=None):
         """The pattern sheet: sew lines, seam allowance, roll lines, notches."""
@@ -675,6 +714,12 @@ def draft(M, opts=None):
     x_sf = x_fp - o["side_front_frac"] * (x_fp - x_bp)
     t_sf = math.acos(np.clip((xm - x_sf) / hw, -1, 1))
     P_bs = np.array([x_bp, ysc - e])
+    x_b = x_bp + o["back_scye_frac"] * (x_fp - x_bp)
+    t_bs = math.acos(np.clip((xm - x_b) / hw, -1, 1))
+    P_b = lower_scye(t_bs, t_bs, 1)[0]          # the back/side seam on the armhole
+    tb = np.array([hw * math.sin(t_bs), e * math.cos(t_bs)])
+    tb /= np.linalg.norm(tb)
+    P_b2 = P_b + np.array([-tb[1], tb[0]]) * 2.0   # the seam leaves square to the armhole
     P_sf = lower_scye(t_sf, t_sf, 1)[0]
     P_fe = np.array([x_fp, ysc - e])
 
@@ -725,7 +770,8 @@ def draft(M, opts=None):
     neck_b = bezier(nape, nape + (nb * 0.45, 0), NPb + (-nb * 0.1, (nape[1] - NPb[1]) * 0.7), NPb)
     shoulder_b = np.stack([np.linspace(NPb[0], SPb[0], 12), np.linspace(NPb[1], SPb[1], 12)], 1)
     arm_b = bezier(SPb, SPb + (-0.6, 0.35 * (P_bs[1] - SPb[1])), (x_bp, P_bs[1] - 4.0), P_bs)
-    side_b = catmull([P_bs, (x_bs, ysc + 2.0), (x_bs - bsw / 2, yw), (x_bs - bss / 2, ys), (x_bs - bsh / 2, yh)])
+    arm_b = join(arm_b, lower_scye(0.0, t_bs)) if t_bs > 1e-6 else arm_b
+    side_b = catmull([P_b, P_b2, (x_bs, ysc + 2.0), (x_bs - bsw / 2, yw), (x_bs - bss / 2, ys), (x_bs - bsh / 2, yh)])
     hem_b = np.array([[x_bs - bsh / 2, yh], [cbs, yh]])
     cb = catmull([(cbs, yh), (cbs, ys), (cbw, yw), (0.35 * cbw, Yc), (0.0, (Yc + nape[1]) / 2), nape])
     back = Panel("back", [("neck", neck_b), ("shoulder", shoulder_b), ("armhole", arm_b), ("side", side_b),
@@ -733,10 +779,10 @@ def draft(M, opts=None):
                  notches={"waist_cb": (cbw, yw), "back_pitch": (x_bp, P_bs[1] - 4.0)})
 
     # --- side body
-    scye_s = lower_scye(0.0, t_sf)
+    scye_s = lower_scye(t_bs, t_sf)
     front_s = catmull([P_sf, (x_sf, ysc + 1.0), (x_sf - sfw / 2, yw), (x_sf - sfs / 2, ys), (x_sf - sfh / 2, yh)])
     hem_s = np.array([[x_sf - sfh / 2, yh], [x_bs + bsh / 2, yh]])
-    back_s = catmull([(x_bs + bsh / 2, yh), (x_bs + bss / 2, ys), (x_bs + bsw / 2, yw), (x_bs, ysc + 2.0), P_bs])
+    back_s = catmull([(x_bs + bsh / 2, yh), (x_bs + bss / 2, ys), (x_bs + bsw / 2, yw), (x_bs, ysc + 2.0), P_b2, P_b])
     side = Panel("side", [("scye", scye_s), ("front", front_s), ("hem", hem_s), ("back", back_s)],
                  notches={"waist": (x_sf - sfw / 2, yw)})
 
@@ -854,10 +900,32 @@ def draft(M, opts=None):
     def seam_u(u0, v):
         return u0 * width(v) / Wb + pitch(v)
 
-    def cuff_v(u):
-        return SL - Sv["cuff_slant_cm"] * np.clip(u / (Wb / 4), -1, 1)
+    def cuff_v(u0):
+        # one smooth slanted cut round the arm (a sinusoid in the arm's angle): shorter at the
+        # front, longer at the back, and no kink where it crosses a seam
+        return SL - Sv["cuff_slant_cm"] * np.sin(2 * np.pi * np.asarray(u0, float) / Wb)
 
-    vs = np.linspace(hcap, SL, 24)
+    def cuff_line(u0a, u0b, n=40):
+        u0 = np.linspace(u0a, u0b, n)
+        v = cuff_v(u0)
+        return np.stack([u0 * width(v) / Wb + pitch(v), v], 1)
+
+    def bend(P):
+        """The sleeve cut for a bent arm: below the elbow every line round the arm is
+        shortened by r th cos(angle from the crook): the crook (front, u0 = Wb/4) loses
+        r th, the elbow point (back) gains it, the sides keep their length. The same map on
+        both panels, so the seams still match."""
+        P = np.array(P, float)
+        u, v = P[:, 0], P[:, 1]
+        u0 = (u - pitch(v)) * Wb / width(v)
+        r = We / (2 * np.pi)
+        dl = r * math.radians(Sv["bend_deg"]) * np.cos(2 * np.pi * (u0 - Wb / 4) / Wb)
+        bz = Sv["bend_zone_cm"]
+        P[:, 1] = v - dl * smoothstep((v - (v_el - bz)) / (2 * bz))
+        return P
+
+    vf = np.linspace(hcap, float(cuff_v(uf0)), 48)      # each seam ends on the cuff line
+    vh = np.linspace(hcap, float(cuff_v(uh0)), 48)
     Hs = np.array([uh0, cap_v(np.array(uh0), hcap)])
     Fs = np.array([uf0, cap_v(np.array(uf0), hcap)])
     crown = np.array([uc, 0.0])
@@ -865,12 +933,12 @@ def draft(M, opts=None):
     cap_back = np.stack([ub, cap_v(ub, hcap)], 1)
     uf = np.linspace(uc, uf0, 30)
     cap_front = np.stack([uf, cap_v(uf, hcap)], 1)
-    fore_top = join(np.array([Fs]), np.stack([seam_u(uf0, vs), vs], 1))
+    fore_top = join(np.array([Fs]), np.stack([seam_u(uf0, vf), vf], 1))
     fore_top[-1, 1] = cuff_v(uf0)
-    hind_top = join(np.array([Hs]), np.stack([seam_u(uh0, vs), vs], 1))
+    hind_top = join(np.array([Hs]), np.stack([seam_u(uh0, vh), vh], 1))
     hind_top[-1, 1] = cuff_v(uh0)
-    cuff_top = np.stack([np.linspace(fore_top[-1, 0], hind_top[-1, 0], 10),
-                         np.linspace(fore_top[-1, 1], hind_top[-1, 1], 10)], 1)
+    cuff_top = cuff_line(uf0, uh0)
+    fore_top, hind_top, cuff_top = bend(fore_top), bend(hind_top), bend(cuff_top)
     top = Panel("top_sleeve", [("cap_back", cap_back), ("cap_front", cap_front), ("fore", fore_top),
                                ("cuff", cuff_top), ("hind", hind_top[::-1])],
                 notches={"crown": crown, "elbow": (seam_u(uh0, v_el), v_el)})
@@ -878,14 +946,14 @@ def draft(M, opts=None):
     ua = np.linspace(uf0, Wb / 2, 16)
     ubk = np.linspace(-Wb / 2, uh0, 16)
     cap_u = join(np.stack([ua, cap_v(ua, hcap)], 1), np.stack([ubk + Wb, cap_v(ubk, hcap)], 1))
-    hind_u = np.stack([seam_u(uh0, vs) + width(vs), vs], 1)
+    hind_u = np.stack([seam_u(uh0, vh) + width(vh), vh], 1)
     hind_u = join(np.array([cap_u[-1]]), hind_u)
     hind_u[-1, 1] = cuff_v(uh0)
-    fore_u = np.stack([seam_u(uf0, vs), vs], 1)
+    fore_u = np.stack([seam_u(uf0, vf), vf], 1)
     fore_u = join(np.array([cap_u[0]]), fore_u)
     fore_u[-1, 1] = cuff_v(uf0)
-    cuff_u = np.stack([np.linspace(hind_u[-1, 0], fore_u[-1, 0], 8),
-                       np.linspace(hind_u[-1, 1], fore_u[-1, 1], 8)], 1)
+    cuff_u = cuff_line(uh0 + Wb, uf0)
+    hind_u, cuff_u, fore_u = bend(hind_u), bend(cuff_u), bend(fore_u)
     under = Panel("under_sleeve", [("cap", cap_u), ("hind", hind_u), ("cuff", cuff_u), ("fore", fore_u[::-1])])
 
     panels = [back, side, front, collar, top, under] + lapel_panels
@@ -923,4 +991,17 @@ def draft(M, opts=None):
                "fpitch": ("front", arm_fu[-1]), "p_bs": ("back", P_bs), "p_fe": ("front", P_fe),
                "break": ("front", B), "gorge": ("front", G), "roll_gorge": ("front", Rg),
                "lapel_point": ("front", L_pt), "roll_top": ("front", R0)}
-    return Draft(panels, seams, frame, anchors, o)
+    D = Draft(panels, seams, frame, anchors, o)
+    # the sleeve head's ease goes over the crown; the underarm (back pitch -> front pitch)
+    # is sewn without ease
+    for sm in D.seams:
+        if sm["name"].startswith("armhole"):
+            polys, corners, La = D.chain(sm["a"])
+            P = join(*polys)
+            s_ = cum_len(P) / La
+
+            def t_at(q):
+                return float(s_[int(np.argmin(np.linalg.norm(P - q, axis=1)))])
+
+            sm["ease_zero"] = (t_at(P_bs), t_at(arm_fu[-1]))
+    return D

@@ -109,6 +109,17 @@ class Surface:
         n = _norm(w @ self.N[self.T[fi]])
         return loc, n
 
+    def smooth_normal(self, P, r):
+        """The surface normal averaged over the vertices within r (m) of each point (Gaussian
+        weights): the frame at the free edge is not thrown by a pinch in one face."""
+        P = np.atleast_2d(P)
+        out = np.zeros_like(P)
+        for i, p in enumerate(P):
+            d2 = ((self.X - p) ** 2).sum(1)
+            w = np.exp(-d2 / (2 * (0.5 * r) ** 2)) * (d2 < r * r)
+            out[i] = (w[:, None] * self.N).sum(0)
+        return _norm(out)
+
 
 # --- the chart outline ---------------------------------------------------------------------------
 
@@ -264,7 +275,7 @@ class Columns:
         self.E = _gauss(P, o["edge_smooth_cm"], ds)
         self.E[0], self.E[-1] = P[0], P[-1]       # the break points stay
         Tn = _norm(np.gradient(self.E, axis=0))
-        N = np.array([surf.nearest(p)[1] for p in self.E])
+        N = surf.smooth_normal(self.E, 0.02)
         # inward: across the edge into the jacket. A step inward stays on the surface; a
         # step outward leaves it (by about the step).
         D = _norm(np.cross(N, Tn))
@@ -285,6 +296,7 @@ class Columns:
         self.T, self.D, self.N = Tn, D, N
         self.surf = surf
         self.walk_len = None
+        self.lean = None
 
     def walk(self, max_cm):
         """Columns walked inward on the jacket: positions (S, K, 3), normals, at v = -k dv."""
@@ -348,10 +360,10 @@ def map3d(Vc, C, G, o, under=None):
         return A[i0] * (1 - f) + A[i0 + 1] * f
 
     E, D, N, Tn = col(C.E), _norm(col(C.D)), _norm(col(C.N)), _norm(col(C.T))
-    lean = math.radians(o["lean_deg"]) * sp.smoothstep(st / 1.0)[:, None]   # the lapel turns straight off
+    if C.lean is None:
+        C.lean = stand_lean(C, st_f, o, under)
+    lean = col(C.lean[:, None]) * sp.smoothstep(st / 1.0)[:, None]   # the lapel turns straight off
     U = _norm(-D * np.cos(lean) - N * np.sin(lean))
-    if under is not None:
-        U = _stand_clear(E, U, N, st, under, o)
     Nst = _norm(np.cross(Tn, U))
     Nst = np.where((np.einsum("ij,ij->i", Nst, N) < 0)[:, None], -Nst, Nst)
 
@@ -395,67 +407,91 @@ def map3d(Vc, C, G, o, under=None):
     return X, Nout
 
 
-def _stand_clear(E, U, N, st, under, o):
-    """Lean the stand out (about the edge tangent) until it clears the under-garments."""
-    gap = o["shirt_gap_cm"] / 100.0
-    out = U.copy()
-    for i in range(len(E)):
-        if st[i] <= 1e-3:
-            continue
-        u = U[i]
-        for _ in range(12):
-            bad = False
-            for t in (0.33, 0.66, 1.0):
-                p = E[i] + u * st[i] * 0.01 * t
-                loc, nor, _, d = under.find_nearest(Vector(p))
-                if loc is not None and (np.dot(p - np.array(loc), np.array(nor)) < gap):
-                    bad = True
+def stand_lean(C, st_f, o, under):
+    """One lean angle per column (rad): from lean_deg (onto the neck) outward until the stand
+    clears the under-garments, then a moving max and a Gaussian along s so the stand reads as
+    one smooth band (per-vertex clearing ruffles it)."""
+    lean0 = math.radians(o["lean_deg"])
+    out = np.zeros(len(C.s))
+    if under is None:
+        out[:] = lean0
+    else:
+        gap = o["shirt_gap_cm"] / 100.0
+        st = st_f(C.s)
+        angles = lean0 - np.radians(np.arange(0.0, 50.0 + 1e-9, 2.5))
+        for i in range(len(C.s)):
+            if st[i] <= 1e-3:
+                out[i] = lean0
+                continue
+            out[i] = angles[-1]
+            for a in angles:
+                u = _norm(-C.D[i] * math.cos(a) - C.N[i] * math.sin(a))
+                bad = False
+                for t in (0.33, 0.66, 1.0):
+                    p = C.E[i] + u * st[i] * 0.01 * t
+                    loc, nor, _, _d = under.find_nearest(Vector(p))
+                    if loc is not None and np.dot(p - np.array(loc), np.array(nor)) < gap:
+                        bad = True
+                        break
+                if not bad:
+                    out[i] = a
                     break
-            if not bad:
-                break
-            u = _norm(u + N[i] * 0.09)
-        out[i] = u
-    return out
+    # a smaller lean is further out: a moving min of the angle, then smooth
+    ds = o["ds_cm"]
+    k = max(1, int(round(2.0 / ds)))
+    pad = np.pad(out, k, mode="edge")
+    m = np.array([pad[j:j + 2 * k + 1].min() for j in range(len(out))])
+    return _gauss(m, 1.5, ds)
 
-
-# --- relax, clear, thicken -------------------------------------------------------------------------
 
 def _edges(T):
     E = np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
     return np.unique(np.sort(E, 1), axis=0)
 
 
-def relax(X, T, fixed, iters, lam=0.35):
-    """Laplacian (umbrella) smoothing, fixed vertices held."""
+def relax(X, T, fixed, iters, lam=0.33, mu=-0.34):
+    """Taubin smoothing (no shrinkage), fixed vertices held. The boundary is fixed by the
+    caller: an umbrella step pulls an open sheet's edge inward."""
     E = _edges(T)
     n = len(X)
     deg = np.bincount(E.ravel(), minlength=n).astype(float)
-    for _ in range(iters):
+    for it in range(2 * iters):
         acc = np.zeros_like(X)
         np.add.at(acc, E[:, 0], X[E[:, 1]])
         np.add.at(acc, E[:, 1], X[E[:, 0]])
         L = acc / np.maximum(deg, 1)[:, None] - X
         L[fixed] = 0
-        X = X + lam * L
+        X = X + (lam if it % 2 == 0 else mu) * L
     return X
 
 
-def clear(X, bvhs, dist, skip=None):
-    """Push every vertex at least `dist` outside each BVH surface (along its normal)."""
+def clear(X, bvhs, dist, skip=None, log=None):
+    """Push every vertex at least `dist` outside each BVH surface (along its normal).
+
+    bvhs run outermost first (the jacket, then the under-garments). A test counts only
+    when the vertex is over the face (the offset mostly along the normal): beside an open
+    edge (the stand above the jacket's neck edge) the nearest point says nothing about
+    inside or out. A vertex over an outer surface is done once it is outside it: the
+    outer layer already clears the inner ones."""
     X = X.copy()
     moved = 0
     for i, p in enumerate(X):
         if skip is not None and skip[i]:
             continue
-        for b in bvhs:
+        for bi, b in enumerate(bvhs):
             loc, nor, _, d = b.find_nearest(Vector(p))
-            if loc is None:
+            if loc is None or d > 0.05:
                 continue
             loc, nor = np.array(loc), np.array(nor)
             s = np.dot(p - loc, nor)
-            if s < dist and d < 0.05:
+            if abs(s) < 0.5 * d:
+                continue        # beside an open edge, not over the face
+            if s < dist:
+                if log is not None:
+                    log.append((i, bi, s, d))
                 p = loc + nor * dist
                 moved += 1
+            break               # now outside this layer: the inner ones are behind it
         X[i] = p
     return X, moved
 
@@ -492,11 +528,16 @@ def build(X, T, chains, D, under_bvhs=(), opts=None, stats=None):
     C.walk(q_max + 2.0)
     under = under_bvhs[0] if under_bvhs else None
     Xr, Nout = map3d(Vc, C, G, o, under)
+    X_map = Xr.copy()
     attach = Vc[:, 1] < 1e-6
     # relax the map (kinks at the gorge corner and the stand/jacket corner), then clear
-    Xr = relax(Xr, Tc, attach, o["relax_iters"])
+    bnd = np.zeros(len(Vc), bool)
+    bnd[bids] = True
+    Xr = relax(Xr, Tc, attach | bnd, o["relax_iters"])
+    X_relax = Xr.copy()
+    clog = []
     Xr, moved = clear(Xr, [surf.bvh] + list(under_bvhs), o["clear_cm"] / 100.0 + o["thick_cm"] / 100.0,
-                      skip=Vc[:, 1] < 1.5)
+                      skip=Vc[:, 1] < 1.5, log=clog)
     # outward normals of the sheet (consistent with Nout)
     Nm = vertex_normals(Xr, Tc)
     if np.einsum("ij,ij->i", Nm, Nout).mean() < 0:
@@ -507,4 +548,6 @@ def build(X, T, chains, D, under_bvhs=(), opts=None, stats=None):
         stats.update({"chart": {k: round(v, 2) for k, v in G.items() if isinstance(v, float)},
                       "collar_point_sq": [round(float(c), 2) for c in CP],
                       "verts": int(len(V)), "faces": int(len(F)), "pushed_out": int(moved)})
-    return V, F, {"chart_V": Vc, "chart_T": Tc, "sheet_X": Xr, "gorge_ids": gl, "attach": attach}
+    dbg = {"col_s": C.s, "col_E": C.E, "col_D": C.D, "col_N": C.N, "col_T": C.T, "col_lean": C.lean,
+           "col_W": C.W, "X_map": X_map, "clear_log": np.array(clog, float).reshape(-1, 4), "X_relax": X_relax}
+    return V, F, {"chart_V": Vc, "chart_T": Tc, "sheet_X": Xr, "gorge_ids": gl, "attach": attach, "debug": dbg}
