@@ -186,6 +186,27 @@ export const DEFAULT_PARAMS = {
     limbalDarken: 0.35,
     irisDepth: 0.025,
     scleraDarken: 0.0,
+    // T18 (materials/index.ts eye section). 1 = the iris by ray refraction through the cornea (0: the
+    // painted bulge, no parallax)
+    refraction: 1,
+    ior: 1.376,
+    /** Iris radius (mm; eyes_hq iris_mm / 2) and its plane under the limbus plane (the hero's recess_mm). */
+    irisRadiusMm: 5.9,
+    irisRecessMm: 0.5,
+    /** Iris cone: the pupil margin forward of the root (slope of the iris normal toward the rim). */
+    irisCone: 0.05,
+    /** Scale of the eyes_normal map's slopes (iris fibres / crypts, conjunctival vessels). */
+    normalStrength: 1.0,
+    /** The caustic on the iris side away from the light. */
+    causticGain: 0.6,
+    scleraWrap: 0.15,
+    /** The hero rig's camera catchlight lights the diffuse at this share (Blender: diffuse 0.3). */
+    eyeLightDiffuse: 0.3,
+    /** 1 = cornea specular against each light's Blender rectangle (LTC), so catchlights take its shape. */
+    catchlightRect: 1,
+    /** Lid shell (eye_lidshell) opacity scale over its baked alpha; the tear meniscus specular. */
+    shellStrength: 1.0,
+    meniscusSpec: 1.0,
   },
   cloth: {
     albedoGain: 1.0,

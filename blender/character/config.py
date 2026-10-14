@@ -46,7 +46,10 @@ DEFAULTS = {
         "identity": None,
         # Bony structure fields + eye block on the base mesh (head_sculpt.DEFAULTS; {} = defaults),
         # crisp band added in head_refine; on for every build (the fan build shares it). null disables.
-        "sculpt": {},
+        # T18 lid wrap: the upper margin 0.8 mm further over the iris (2.0 -> 2.8; the Cycles portrait
+        # showed the whole iris top), the lower 0.45 mm less (0.75 -> 0.3) so the fissure stays in
+        # the 8.5-9.5 mm range (nominal 11.8 - 2.8 - 0.3 = 8.7 mm); head_sculpt.DEFAULTS["eyes"]
+        "sculpt": {"eyes": {"upper_over_iris_mm": 2.8, "lower_over_iris_mm": 0.3}},
         # Post-staging refinement (head_refine.py, skin_tex.py, eyes_hq.py):
         # dense face + hands, re-fitted planes, sculpt forms, re-packed UVs,
         # generated 4k skin. null disables the whole stage.
@@ -498,6 +501,9 @@ DEFAULTS = {
                                   "root_dark": 0.0},
                      "clump": {"shape": 0.5, "tip_spread": 0.0001, "guide_distance_m": 0.0006}},
             "atlas": [512, 512], "strip_radius_px": 1.6, "lash_line_px": 1.5, "strip_gap_m": 0.0003,
+            # T18: the upper lashes in two rows: 40 % in a back row 0.25 mm behind the front one on
+            # the margin, 0.8x as long and 1.15x the curl; a game strip per row
+            "row2_frac": 0.4, "row2_back_m": 0.00025, "row2_length": 0.8, "row2_curl": 1.15,
             "color": "#2a1f17",
         },
     },

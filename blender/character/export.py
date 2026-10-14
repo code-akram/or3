@@ -44,6 +44,8 @@ def _fix_material_alpha(mat, cutout):
     nt = mat.node_tree
     bsdf = next(n for n in nt.nodes if n.type == "BSDF_PRINCIPLED")
     link = next((l for l in nt.links if l.to_node == bsdf and l.to_socket.name == "Alpha"), None)
+    if mat.get("alpha_blend"):   # T18: a blended overlay by design (the eye lid shell, the tear meniscus)
+        return "BLEND"
     if link is None:
         return "OPAQUE"
     src = link.from_socket
