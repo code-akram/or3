@@ -691,6 +691,11 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 
 ## Decision log
 
+### 2026-10-14 — C2 full realism, full suit rebuild, costume kept (user)
+- **C2: full realism**, not painterly-stylised (supersedes the C2 recommendation in `fable_review.md` and `bench/m1/v4/checkpoint-2.md` §3). The painterly pass (T14) is dropped; the engine banded-lighting switch stays off. Realism needs, before "believable": strand-like hair with self-shadow, skin micro-detail, GTAO, DoF, a full suit rebuild, likely a larger hair budget. User: "it doesn't matter how long it takes".
+- **Suit: full realism**, the pattern-drafted, sewn and draped rebuild (`bench/m1/v4/suit-spike.md` §6, ~13 working days, range 11–16, spike 2 first as its own gate; XPBD fallback if the two-stage weld can't fix the seam hinge). The lofted v2 option is dropped.
+- **Costume ensemble kept**: long dark hair, full beard, black three-piece suit, white shirt, black tie, neon alley, for the public build too (checkpoint 2 §1, §5.7). Originality in the public build rests on the face.
+
 ### 2026-10-14 — m1 v4: engine first, structure first (user)
 - **Approved** the plan from `fable_review.md` §3–5: the engine frame is the m1 look gate and the Cycles hero render is the target; rebuild form (head sculpt + original public identity, hair v4, suit from patterns) before more surface tuning. Round 4 of the fan build is parked. Status and reports: `HANDOFF.md`, `bench/m1/v4/`.
 - **Public face prior: ICT-FaceKit (MIT)**, not FLAME: FLAME 2017–2023 are academic-licence (no public derivatives); only FLAME 2023 Open is CC BY 4.0 and its download needs a login. The private fan fit may stay on FLAME 2020 (never shipped).
