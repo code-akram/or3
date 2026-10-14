@@ -84,7 +84,7 @@ DEFAULTS = {
     # (+ = counter-clockwise seen from outside), fading over `radius_m`. `down`:
     # behind and below the whorl the comb turns down by this much. `jitter_deg`
     # of coherent angle noise round the scalp normal at `jitter_scale_m`.
-    "field": {"whorl": {"el_deg": 58.0, "az_deg": 14.0, "radius_m": 0.03, "turn_deg": 70.0},
+    "field": {"whorl": {"el_deg": 58.0, "az_deg": 14.0, "radius_m": 0.025, "turn_deg": 50.0},
               "down": 0.5, "jitter_deg": 12.0, "jitter_scale_m": 0.035, "seed": 5},
     # Share of roots per side that tuck behind the ear (the rest drape over
     # it, kept off by the ear collider). left = +x, the character's left.
@@ -110,7 +110,7 @@ DEFAULTS = {
                  "recess_side": {"left": [1.0, 0.0], "right": [1.3, 4.0]},
                  "feather_m": 0.011, "feather_min": 0.05, "ramp_pow": 1.2,
                  "nape_feather_m": 0.006,
-                 "noise": [[0.0016, 0.008], [0.001, 0.005], [0.0006, 0.003]], "noise_seed": 3,
+                 "noise": [[0.002, 0.008], [0.0015, 0.005], [0.001, 0.003]], "noise_seed": 3,
                  "density_noise": {"amp": 0.6, "scale_m": 0.004},
                  "edge": {"band_m": 0.006, "kick_m": 0.0022, "over_m": 0.005, "radius": 0.75,
                           "melanin": -0.06}},
@@ -134,17 +134,17 @@ DEFAULTS = {
     "clump": {"scalp": 0.2, "ramp_m": 0.06, "edge_m": 0.008, "preserve_length": True,
               "noise_after_clumps": True,
               "levels": [
-                  {"count": 50, "factor": 0.3, "shape": 0.3, "tip_spread_m": 0.002,
+                  {"count": 50, "factor": 0.4, "shape": 0.3, "tip_spread_m": 0.004,
                    "offset_m": 0.0, "falloff_m": 0.0},
-                  {"count": 400, "factor": 0.4, "shape": 0.0, "tip_spread_m": 0.001,
+                  {"count": 400, "factor": 0.5, "shape": 0.0, "tip_spread_m": 0.002,
                    "offset_m": 0.0, "falloff_m": 0.0},
-                  {"count": 4000, "factor": 0.35, "shape": 0.0, "tip_spread_m": 0.0004,
+                  {"count": 4000, "factor": 0.4, "shape": 0.0, "tip_spread_m": 0.0004,
                    "offset_m": 0.0, "falloff_m": 0.0},
-                  {"size": 4, "factor": 0.2, "shape": 0.0, "tip_spread_m": 0.0001,
+                  {"size": 4, "factor": 0.25, "shape": 0.0, "tip_spread_m": 0.0001,
                    "offset_m": 0.0, "falloff_m": 0.0}],
               "stray": 0.10, "stray_nape": 0.25},
     # Coherent lock wave in the hanging part (per level-1 clump): 1-2 waves per strand.
-    "wave": {"amp_m": [0.003, 0.008], "period_m": [0.18, 0.28], "jitter": 0.4},
+    "wave": {"amp_m": [0.004, 0.010], "period_m": [0.14, 0.24], "jitter": 0.4},
     # GN order (v4): clumps, then noise, then frizz (v3: noise before the clumps,
     # so the clumping erased part of it).
     "noise": {"distance_m": 0.0015, "scale": 40.0, "shape": 0.3},
@@ -172,7 +172,7 @@ DEFAULTS = {
     # per strand (each lock's end tapers over 2-3 cm), plus `layer_m` x how far
     # up the skull it is rooted (the outer, top-rooted layer ends higher).
     # Never into the first `min_hang_m` of the hanging part.
-    "cut": {"lock_m": [0.0, 0.02], "taper_m": 0.028, "taper_pow": 1.0, "layer_m": 0.025,
+    "cut": {"lock_m": [0.0, 0.03], "taper_m": 0.03, "taper_pow": 1.0, "layer_m": 0.04,
             "min_hang_m": 0.04},
     "vellus": {"count": 4000, "length_m": [0.003, 0.007], "band_m": [-0.002, 0.008],
                "radius_m": 0.000025, "lift": 0.35, "melanin": 0.7},
@@ -187,13 +187,13 @@ DEFAULTS = {
          "comb_side": 0.2, "comb_fwd": 0.3, "comb_down": 0.9, "fall_after_m": 0.025,
          "tip_above_lips_m": 0.045, "tip_jitter_m": 0.015, "hug": 0.06, "clear_m": 0.005,
          "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 360,
-         "clump_w": 1.3, "wave_m": 0.005, "guides": 6, "spread_deg": 2.5, "comb_jitter": 0.15,
+         "clump_w": 1.0, "wave_m": 0.005, "guides": 6, "spread_deg": 5.0, "comb_jitter": 0.25,
          "len_jitter": 0.12},
         {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 32,
-         "comb_side": 0.9, "comb_fwd": 0.5, "comb_down": 0.4, "fall_after_m": 0.04, "gravity": 0.55,
-         "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.08, "clear_m": 0.007,
-         "flare_after_m": 0.07, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
-         "clump_w": 1.3, "wave_m": 0.003, "guides": 5, "spread_deg": 2.5, "comb_jitter": 0.15,
+         "comb_side": 0.9, "comb_fwd": 0.35, "comb_down": 0.5, "fall_after_m": 0.04, "gravity": 0.75,
+         "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.4, "clear_m": 0.007,
+         "flare_after_m": 0.11, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
+         "clump_w": 1.0, "wave_m": 0.003, "guides": 5, "spread_deg": 5.0, "comb_jitter": 0.25,
          "len_jitter": 0.12}],
     # Principled Hair BSDF, melanin parametrisation. Melanin 0.82 (red light
     # keeps ~25 % through one hair, so TT / TRT survive: two highlights; v3's
