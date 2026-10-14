@@ -8,9 +8,10 @@
 //      &hairshadow=0 (T9b binary shadow on the hair) &fillshadow=0 (unshadowed fill / wrap) &gtao=0 (the
 //      baked direct-AO stand-in instead of GTAO) &aoview=1 (show the AO) &lights=key,rim (debug)
 //      &aa=traa|taau|msaa (T16: temporal AA with hashed hair cards, default; TAAU at &scale=0.75; msaa = the
-//      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty; dof=only: DoF with the rest of the post off) &lut=0 (analytic
-//      grade + three's AgX instead of Blender's baked LUTs) &bounce=0 (no set-bounce environment)
-//      &scene=chart (T16 grey chart under the hero rig: chart.glb next to engine_stage.json)
+//      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty; dof=only: the DoF
+//      with the rest of the post off) &lut=0 (analytic grade + three's AgX instead of Blender's baked LUTs)
+//      &bounce=0 (no set-bounce environment) &scene=chart (T16 grey chart under the hero rig: chart.glb next
+//      to engine_stage.json) &passcheck=1 (self-test of Output's pass hook, passcheck.ts)
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
@@ -25,6 +26,7 @@ import { addHairDepthPrepass, assignMaterials, type Sidecars, type WeaveSidecar 
 import { skinLUT } from './materials/sss';
 import { Output, type AAMode } from './output';
 import { bounceTexture, type BounceJson } from './bounce';
+import { installPassCheck } from './passcheck';
 import type { GradeLutJson } from './grade';
 import { SceneAO } from './ao';
 import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
@@ -405,6 +407,8 @@ async function mainChart(): Promise<void> {
   const mats = assignMaterials(gltf.scene, P, {}, aa === 'msaa');
   const stage = new Stage(stageData!, scene, mats.byName, P);
   stage.areaMode = areaMode();
+  stage.shadowFill = q.get('fillshadow') !== '0';
+  if (q.get('lights')) stage.only = q.get('lights')!.split(',');
   const vs = stage.setup('portrait', 'hero');
   output.setGrade(true, vs.exposure, stageData!.hero.grade);
   output.viewAgX.value = q.get('view_transform') === 'standard' ? 0 : 1;
@@ -499,6 +503,8 @@ async function main(): Promise<void> {
   else state.warnings.push('no grade_lut.json: analytic grade + three AgX (blender/hero/grade.py --lut)');
   output.dofOn = q.get('dof') !== '0' && !!(P.get('dof.on') as number);
   output.dofAlways = q.get('dof') === 'only';
+  output.dofDebug = q.get('dofview') ?? '';
+  if (q.get('passcheck') === '1') installPassCheck(output); // self-test of the pass hook (passcheck.ts)
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
 

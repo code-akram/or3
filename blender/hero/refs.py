@@ -15,7 +15,7 @@
             dof.json with the thin-lens CoC predicted at the visible ear.
 
     blender -b -t 6 --factory-startup --python-exit-code 1 --python blender/hero/refs.py -- \\
-        --in RUN/character.blend --out DIR --mode chart|bounce|dof [--samples N]
+        --in RUN/character.blend --out DIR --mode chart|bounce|dof [--samples N] [--lights key,fill (chart)]
 
 (run Cycles inside `flock /tmp/or3-cycles.lock`). Never writes next to the input .blend.
 """
@@ -277,9 +277,12 @@ def export_glb(objs, path):
             for m in j.get("materials", [])]
 
 
-def mode_chart(ch, out, samples):
+def mode_chart(ch, out, samples, only=None):
     import shutil
     spec, cam, settings, made, _ = setup_portrait(ch, "void", parity=True, dof=False, samples=samples)
+    if only:   # per-light chart (--lights key,fill): the other rig lights (and their twins) off
+        for name, o in made.items():
+            o.hide_render = name.split("_")[0] not in only
     depth = focus_distance(ch, cam)
     hide_character(ch)
     objs = build_chart(ch, cam, depth)
@@ -537,6 +540,7 @@ def main(argv):
     ap.add_argument("--out", required=True)
     ap.add_argument("--mode", choices=["chart", "bounce", "dof", "probe"], required=True)
     ap.add_argument("--samples", type=int, default=0)
+    ap.add_argument("--lights", help="chart: only these rig lights, e.g. key,fill (per-light decomposition)")
     a = ap.parse_args(argv)
     out = os.path.abspath(a.out)
     if os.path.dirname(os.path.abspath(a.inp)) == out:
@@ -554,7 +558,7 @@ def main(argv):
         suit_textures.cycles_weave_blend(a.inp)
     t = time.perf_counter()
     if a.mode == "chart":
-        mode_chart(ch, out, a.samples or 256)
+        mode_chart(ch, out, a.samples or 256, a.lights.split(",") if a.lights else None)
     elif a.mode == "bounce":
         sets.alley()
         mode_bounce(ch, out, a.samples or 1024)

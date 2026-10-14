@@ -379,6 +379,8 @@ export class Output {
   private lensValid = false;
   /** DoF even with the beauty post off (?dof=only: the bokeh fit against Cycles, no bloom or grain) */
   dofAlways = false;
+  /** debug: show a DoF intermediate instead of the composite (?dofview=coc_near|coc_far|near|far|input) */
+  dofDebug = '';
   private lensFit = 'VERTICAL';
 
   private ensure(w: number, h: number): [number, number] {
@@ -562,13 +564,23 @@ export class Output {
       this.dof = new ThinLensDoF(this.dofColor, texture(this.sceneRT.depthTexture), L);
       this.dof.fullRes = this.dofFullRes;
       const m = new THREE.NodeMaterial();
-      m.fragmentNode = vec4(this.dof.getTextureNode().r, 0, 0, 1);
+      // the DoF node itself in the graph (its getTextureNode() is a plain texture node, unlike TRAA's
+      // pass texture, and does not pull the node's updateBefore)
+      m.fragmentNode = T.nodeObject(this.dof);
       this.dofTrigger = new THREE.QuadMesh(m);
     }
     this.dofColor.value = ctx.color;
     this.renderer.setRenderTarget(this.triggerRT);
     this.dofTrigger!.render(this.renderer);
     this.renderer.setRenderTarget(null);
+    const d = this.dof as unknown as Record<string, THREE.RenderTarget>;
+    switch (this.dofDebug) {
+      case 'coc_near': return d._CoCRT!.textures[0]!;
+      case 'coc_far': return d._CoCRT!.textures[1]!;
+      case 'near': return d._blur16NearRT!.texture;
+      case 'far': return d._blur16FarRT!.texture;
+      case 'input': return ctx.color;
+    }
     return this.dof.getTextureNode().value as THREE.Texture;
   }
 

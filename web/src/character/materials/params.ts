@@ -227,8 +227,11 @@ export const DEFAULT_PARAMS = {
     on: 1,
     /** CoC radius (px at the output height) that maps to 1 in the CoC texture */
     maxPx: 64,
-    /** correction of the measured bokeh radius against the thin-lens formula (1 = the formula) */
-    radiusScale: 1,
+    /** correction of the measured bokeh radius against the thin-lens formula (1 = the formula). At 1 the
+     * engine's fitted disc at the ear was 3.45 / 3.24 px (helix / whole-ear ROI; the formula says 3.39),
+     * Cycles' 2.87 / 2.71 px on the same fit (lookdev_report.py bokeh): Cycles' 7-blade f/2 blur reads
+     * ~0.84 of the thin-lens disc. 0.835 matches Cycles' measured radius, not the formula. */
+    radiusScale: 0.835,
     /** near-field 16-tap max pass radius (fraction of the gather radius) */
     maxPassScale: 1,
     /** 1 = the gathers at full resolution */
