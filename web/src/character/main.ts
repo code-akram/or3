@@ -8,7 +8,7 @@
 //      &hairshadow=0 (T9b binary shadow on the hair) &fillshadow=0 (unshadowed fill / wrap) &gtao=0 (the
 //      baked direct-AO stand-in instead of GTAO) &aoview=1 (show the AO) &lights=key,rim (debug)
 //      &aa=traa|taau|msaa (T16: temporal AA with hashed hair cards, default; TAAU at &scale=0.75; msaa = the
-//      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty) &lut=0 (analytic
+//      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty; dof=only: DoF with the rest of the post off) &lut=0 (analytic
 //      grade + three's AgX instead of Blender's baked LUTs) &bounce=0 (no set-bounce environment)
 //      &scene=chart (T16 grey chart under the hero rig: chart.glb next to engine_stage.json)
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
@@ -415,6 +415,7 @@ async function mainChart(): Promise<void> {
     params: P,
     setParam: (path: string, v: number | number[]) => P.set(path, v),
     lights: () => stage.describeLights(),
+    stats: () => ({ scene: 'chart', backend: state.backend, aa: { mode: output.aa }, grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)' }),
     /** the chart frame (RGBA8, or scene-linear float32 with linear) at w x h, base64, top row first */
     captureChart: async (w: number, h: number, linear = false, frames?: number) => {
       applyCamera(camera, vs.camera, w, h);
@@ -497,6 +498,7 @@ async function main(): Promise<void> {
   if (lutJson) output.lut.load(lutJson);
   else state.warnings.push('no grade_lut.json: analytic grade + three AgX (blender/hero/grade.py --lut)');
   output.dofOn = q.get('dof') !== '0' && !!(P.get('dof.on') as number);
+  output.dofAlways = q.get('dof') === 'only';
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
 
@@ -532,7 +534,7 @@ async function main(): Promise<void> {
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, aa === 'msaa');
   state.hairMaps = hairMaps(mats.byName, mats.roles);
-  state.hairPrepass = addHairDepthPrepass(model, P, aa !== 'msaa');
+  state.hairPrepass = addHairDepthPrepass(model, P);
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName, P);
   stage.areaMode = areaMode();
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b

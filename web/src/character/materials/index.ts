@@ -431,7 +431,11 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
    * temporal target's 'hair' attachment (the hair-aware history, temporal.ts). */
   private setupHashedAlpha(a: N, P: ParamStore): void {
     const at = float(this.alphaTest);
-    const edge = smoothstep(at, at.add(fwidth(a)), a);
+    // three's A2C edge, smoothstep(at, at + fwidth(a), a), but with the width floored: inside a card the map
+    // alpha is flat, fwidth is 0, and smoothstep with edge0 == edge1 is undefined (WGSL / GLSL). SwiftShader
+    // returned 0 there, so whole card interiors failed the hash every frame (holes on the crown down to the
+    // scalp, or to the background through the depth-prepass twins)
+    const edge = smoothstep(float(0), float(1), a.sub(at).div(fwidth(a).max(1e-4)));
     const cover = mix(edge, a, P.u('aa.hairCoverage'));
     const ign = interleavedGradientNoise(screenCoordinate.xy.add(temporalFrame.mod(64).mul(5.588238)));
     (this as unknown as { maskNode: N; maskShadowNode: N }).maskNode = cover.greaterThan(ign);
@@ -451,7 +455,7 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
  * alpha-to-coverage pass that follows resolves the cards against the dense core and the front strands
  * instead of against draw order. Returns the number of twins; they carry userData.hairPrepass.
  */
-export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore, temporal = false): number {
+export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number {
   if (!(P.get('hair.depthPrepass') as number)) return 0;
   const twins: [THREE.Object3D, THREE.Mesh][] = [];
   const made = new Map<THREE.Material, THREE.MeshBasicNodeMaterial>();
@@ -472,14 +476,6 @@ export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore, tempora
       dm.colorWrite = false;
       dm.depthWrite = true;
       dm.side = THREE.DoubleSide;
-      if (temporal) {
-        // T16: on the temporal path the card's own vertex program also writes velocity, and its depth no
-        // longer matches its twin's bit for bit, so the card failed its own prepass depth in patches (dark
-        // holes on the crown); the twin is pushed back by a few depth units instead
-        dm.polygonOffset = true;
-        dm.polygonOffsetFactor = 1;
-        dm.polygonOffsetUnits = 4;
-      }
       dm.name = `${hm.name}_prepass`;
       made.set(hm, dm);
     }

@@ -377,6 +377,8 @@ export class Output {
     this.lensFit = cam.sensor_fit;
   }
   private lensValid = false;
+  /** DoF even with the beauty post off (?dof=only: the bokeh fit against Cycles, no bloom or grain) */
+  dofAlways = false;
   private lensFit = 'VERTICAL';
 
   private ensure(w: number, h: number): [number, number] {
@@ -510,7 +512,7 @@ export class Output {
       ctx.width = w;
       ctx.height = h;
       // 6. resolved: DoF (beauty) and the hook's passes
-      if (this.dofOn && this.postOn.value && this.lensValid) ctx.color = this.renderDoF(ctx, cam, w, h);
+      if (this.dofOn && (this.postOn.value || this.dofAlways) && this.lensValid) ctx.color = this.renderDoF(ctx, cam, w, h);
       this.runPasses('resolved', ctx);
       this.tex.value = ctx.color;
     }
