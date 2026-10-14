@@ -41,7 +41,8 @@ def refine(b):
     if notes is None:
         return
     from . import eyes_hq, hand_forms, skin_tex
-    hand_forms.apply(b)  # Track G: hand forms on the dense hands, before the skin bake
+    hand_forms.apply(b)  # Track G: hand forms on the dense hands, before the skin bake (+ T22 fields)
+    head_sculpt.neck(b)  # T22: SCM / larynx on the neck above the collar
     skin_tex.build(b)
     eyes_hq.build(b)
 

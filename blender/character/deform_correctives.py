@@ -69,8 +69,26 @@ SPECS = [
     # the palm and the palmar crease give way, so the fingers close further.
     {"name": "corr_fist", "bone": "middle_02", "pose": "FIST_TIGHT", "ref": "hand",
      "region": ("middle_01", 0.085), "meshes": ["body"], "self_collide": True, "power": 1.0,
-     "start": 0.45, "drive_pose": "FIST"},
+     "start": 0.45, "drive_pose": "FIST", "knuckles": True},
+    # T22: the wrist in flexion and extension (skin only: the cuffs are T13's), delta mush
+    # keeps the tendons, the ulnar head and the flat wrist (head_sculpt.hand_field) instead of
+    # LBS's collapsed tube; the shrug (clavicle abduct) keeps the neck side (SCM) and the
+    # trapezius slope, and the collar and shoulders over them
+    # inverse: the hand bone carries pronation (twist) too; the forearm's direction seen from
+    # the hand ignores it, so a pronated wrist that flexes still drives these
+    {"name": "corr_wrist_flex", "bone": "hand", "ops": [["flex", 60]], "ref": "lowerarm",
+     "region": ("hand", 0.075), "meshes": ["body"], "inverse": True},
+    {"name": "corr_wrist_ext", "bone": "hand", "ops": [["flex", -55]], "ref": "lowerarm",
+     "region": ("hand", 0.075), "meshes": ["body"], "inverse": True},
+    {"name": "corr_shrug", "bone": "clavicle", "ops": [["abduct", 16]], "ref": "spine_03",
+     "region": ("clavicle", 0.16)},
 ]
+# corr_fist's knuckle term (T22): in a fist LBS rounds the outer corner of each flexed joint
+# off; the skin is pushed back out to the bone head (the rest skin height over the joint) plus
+# extra_mm, in the bisector of the two bones, and the dips between the metacarpal heads deepen.
+FIST_KNUCKLES = {"mcp": {"extra_mm": 0.5, "sigma_mm": 4.5, "max_mm": 2.0},
+                 "pip": {"extra_mm": 0.3, "sigma_mm": 3.5, "max_mm": 1.5},
+                 "valley_mm": -0.5}
 # skin parts of a hand for self_collide: part -> bone prefixes (side added)
 HAND_PARTS = {"palm": ("hand", "thumb_01"), "thumb": ("thumb_02", "thumb_03"),
               "index": ("index_01", "index_02", "index_03"), "middle": ("middle_01", "middle_02", "middle_03"),
@@ -419,6 +437,73 @@ class Baker:
             Y[k][over] = Y0[over] + T[over] * (cap / m[over])[:, None]
         return {"before": first or {}, "after": H.report(Y[k]), "passes": it + 1}
 
+    def knuckles(self, Y, s):
+        """FIST_KNUCKLES on the posed body (Y['body'], object space): per flexed MCP and PIP, the
+        outer corner direction c = unit(d_in - d_out) (the two bones' posed directions); the rest
+        skin height r over the joint (along the rest back-of-hand direction); the posed skin is
+        pushed along c by max(0, r - h_peak) + extra (h_peak: the highest posed skin along c near
+        the corner ray), with a Gaussian falloff round the corner point."""
+        from . import head_refine as hr
+        kc = FIST_KNUCKLES
+        A = self.arm
+        mwa = np.array(A.matrix_world)
+        to_obj = np.array(self.parts["body"].matrix_world.inverted()) @ mwa
+        P = lambda n: (to_obj @ np.append(np.array(A.pose.bones[n].head[:]), 1.0))[:3]  # noqa: E731
+        R = lambda n: (to_obj @ np.append(np.array(A.data.bones[n].head_local[:]), 1.0))[:3]  # noqa: E731
+        rest, Yb = self.rest["body"], Y["body"]
+        hand = self.W["body"][:, [j for j, n in enumerate(self.names)
+                                  if n == f"hand_{s}" or (n.endswith(f"_{s}") and n.split("_")[0] in hr.FINGERS)]].sum(1) > 0.3
+        f = hr.hand_frames(A)[s]
+        Brest = f["back"]
+        D = np.zeros_like(Yb)
+        stats = {}
+        corners = {}
+        for k in hr.FINGERS:
+            chain = [f"hand_{s}", f"{k}_01_{s}", f"{k}_02_{s}", f"{k}_03_{s}"]
+            for ji, (kind, a_, j_, b_) in enumerate((("mcp", chain[0], chain[1], chain[2]),
+                                                      ("pip", chain[1], chain[2], chain[3]))):
+                c = kc[kind]
+                d_in = P(j_) - P(a_) if ji else P(chain[1]) - P(chain[0])
+                d_out = P(b_) - P(j_)
+                d_in /= np.linalg.norm(d_in)
+                d_out /= np.linalg.norm(d_out)
+                cd = d_in - d_out
+                if np.linalg.norm(cd) < 0.3:        # under ~17 deg of flexion: nothing to restore
+                    continue
+                cd /= np.linalg.norm(cd)
+                # rest skin height over the joint along the rest back direction
+                jr = R(j_)
+                rel = rest - jr
+                lat = np.linalg.norm(rel - np.outer(rel @ Brest, Brest), axis=1)
+                ring = hand & (lat < 0.004) & (rel @ Brest > 0)
+                if not ring.any():
+                    continue
+                r = float((rel[ring] @ Brest).max())
+                jp = P(j_)
+                relp = Yb - jp
+                latp = np.linalg.norm(relp - np.outer(relp @ cd, cd), axis=1)
+                ringp = hand & (latp < 0.004) & (relp @ cd > 0)
+                if not ringp.any():
+                    continue
+                h = float((relp[ringp] @ cd).max())
+                amp = min(max(0.0, r - h) + c["extra_mm"] * 0.001, c["max_mm"] * 0.001)
+                K = jp + cd * r
+                w = np.exp(-0.5 * ((Yb - K) ** 2).sum(1) / (c["sigma_mm"] * 0.001) ** 2) * hand * (relp @ cd > 0)
+                D += (amp * w)[:, None] * cd[None, :]
+                corners[(kind, k)] = K
+                stats[f"{kind}_{k}"] = round(amp * 1000, 2)
+        mcp = [corners.get(("mcp", k)) for k in hr.FINGERS]
+        for a_, b_ in zip(mcp[:-1], mcp[1:]):
+            if a_ is None or b_ is None:
+                continue
+            K = 0.5 * (a_ + b_)
+            cd = K - P(f"hand_{s}")
+            cd /= np.linalg.norm(cd)
+            w = np.exp(-0.5 * ((Yb - K) ** 2).sum(1) / 0.0035 ** 2) * hand
+            D += (kc["valley_mm"] * 0.001 * w)[:, None] * cd[None, :]
+        Y["body"] = Yb + D
+        return stats
+
     def region_group(self, o, centre, radius, mask=None):
         vg = o.vertex_groups.get("deform_region") or o.vertex_groups.new(name="deform_region")
         co = self.rest[part(o)]
@@ -487,6 +572,8 @@ class Baker:
         pushed = self.collide(Y, reg) if not spec.get("self_collide") else {}
         if spec.get("self_collide") and "body" in Y:
             pushed["skin"] = self.self_collide(Y, reg, s)
+        if spec.get("knuckles") and "body" in Y:
+            pushed["knuckles"] = self.knuckles(Y, s)
         for small, (host, idx) in self.attach.items():
             if small not in parts or host not in Y:
                 continue
@@ -517,12 +604,14 @@ class Baker:
             dp.apply_pose(self.arm, {"bones": dp.side(getattr(dp, spec["drive_pose"]), s)}, self.rig)
             self.rt.apply(morphs=False)
         q = self.rt.R(ref).inverted() @ self.rt.R(bone)
+        if spec.get("inverse"):
+            q = q.inverted()
         t = (q @ d0).normalized()
         dp.reset(self.arm)
         self.rt.apply(morphs=False)
         rule = {"type": "cone", "name": name, "bone": bone, "ref": ref,
                 "rest_dir": drt.bl_to_gl(d0), "target_dir": drt.bl_to_gl(t), "power": spec.get("power", 1.0),
-                "start": spec.get("start", 0.0),
+                "start": spec.get("start", 0.0), **({"inverse": True} if spec.get("inverse") else {}),
                 "meshes": [self.parts[k].name for k in stats if k in self.parts],
                 "angle_deg": round(math.degrees(d0.angle(t)), 1)}
         return rule, stats
