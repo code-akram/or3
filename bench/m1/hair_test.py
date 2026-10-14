@@ -32,7 +32,13 @@ Parts:
          RUN_DIR/lin_closeup.png when present (engine_shots.mjs --views closeup --prefix lin_
          --query view_transform=standard: Standard view at the studio exposure, so it decodes
          back to scene-linear). Metric: region mean linear luminance, engine / Cycles and
-         EEVEE / Cycles (gate: within +-20 %).
+         EEVEE / Cycles (gate: within +-20 %). T11: per region also a tone record (core of the
+         region): p10 / p50 / p90, grey fraction (light, neutral pixels), chroma (median
+         saturation, r/g, b/g) and the same by thirds of the region's height (low / mid / high),
+         engine / Cycles for grey fraction and chroma (gate: within +-20 %).
+  measure  the parity metrics again from the files, no rendering (a re-shot engine frame), with
+         --cycles-ref DIR: the Cycles frame and region mask from another run's hair_test dir
+         (valid while the hero grooms are unchanged, e.g. a game-bake-only change).
   clay   a clay turntable of the groom (strands and head one matte grey, Cycles 24 spp +
          OIDN, 512², six azimuths, head framing to the collar) and the back view in the
          neutral test light with the shipped hair material.
@@ -557,16 +563,63 @@ def parity_test(results):
     sc.view_settings.exposure = 0.0
     mpath = os.path.join(OUT, "parity_mask.exr")
     save(mpath, exr=True)
+    parity_measure(results, cyc, eev, mpath, res)
+
+
+# Facial-hair grey / chroma (T11, bench/m1/v4/t11-facial-hair.md; checkpoint-2 §5.1: every parity
+# gate carries a spatial term). In the region's core (eroded CORE_ERODE more px: the beard's edge
+# band is skin through the cheek-line fade, judged by eye), a "grey" pixel is light and neutral:
+# scene-linear luminance > GREY_LUM (about twice the Cycles beard median under the studio rig) and
+# saturation (max - min) / max < GREY_SAT. Chroma: the core's median saturation and its r/g, b/g.
+# Spatial: the core split into thirds of its height in the frame (low: chin / jaw, mid, high:
+# moustache / cheeks for the beard), each with its mean and grey fraction.
+GREY_LUM, GREY_SAT, BRIGHT_LUM = 0.3, 0.45, 0.4
+CORE_ERODE = {"hair": 2, "beard": 3, "brows": 1}
+
+
+def _tone_stats(rgb, m):
+    """Spatial and chroma terms of one frame's region m (rows bottom-up, as pixels() returns)."""
+    y = luma(rgb)
+    c = rgb[m]
+    yy = y[m]
+    sat = (c.max(1) - c.min(1)) / np.maximum(c.max(1), 1e-6)
+    g = max(float(c[:, 1].sum()), 1e-9)
+    rec = {"p10_p50_p90": [round(float(np.percentile(yy, q)), 4) for q in (10, 50, 90)],
+           "grey_frac": round(float(((yy > GREY_LUM) & (sat < GREY_SAT)).mean()), 4),
+           "bright_frac": round(float((yy > BRIGHT_LUM).mean()), 4),
+           "chroma_p50": round(float(np.median(sat)), 4),
+           "r_g": round(float(c[:, 0].sum()) / g, 3), "b_g": round(float(c[:, 2].sum()) / g, 3)}
+    rows = np.nonzero(m.any(1))[0]
+    cuts = np.linspace(int(rows.min()), int(rows.max()) + 1, 4).round().astype(int)
+    thirds = {}
+    for name, a, b in (("low", cuts[0], cuts[1]), ("mid", cuts[1], cuts[2]), ("high", cuts[2], cuts[3])):
+        sel = m.copy()
+        sel[:a] = False
+        sel[b:] = False
+        if not sel.any():
+            continue
+        cs, ys = rgb[sel], y[sel]
+        ss = (cs.max(1) - cs.min(1)) / np.maximum(cs.max(1), 1e-6)
+        thirds[name] = {"mean": round(float(ys.mean()), 4),
+                        "grey_frac": round(float(((ys > GREY_LUM) & (ss < GREY_SAT)).mean()), 4)}
+    rec["thirds"] = thirds
+    return rec
+
+
+def parity_measure(results, cyc, eev, mpath, res=512):
+    """The parity metrics from the rendered files: Cycles (cyc), EEVEE (eev, optional), the hero-groom
+    region mask (mpath) and the engine's RUN/lin_closeup.png."""
     mk = pixels(mpath)
     # brows (T9b): thin, so closed 2 px and eroded 1 px (the scalp / beard erosion of 2 px leaves
     # only the brow cores)
     regions = {"hair": _erode(_close(mk[..., 0] > 0.3, 3), 2),
                "beard": _erode(_close(mk[..., 1] > 0.3, 3), 2),
                "brows": _erode(_close(mk[..., 2] > 0.3, 2), 1)}
-    yc = luma(pixels(cyc)[..., :3])
-    ye = luma(pixels(eev)[..., :3])
+    rc = pixels(cyc)[..., :3]
+    yc = luma(rc)
+    ye = luma(pixels(eev)[..., :3]) if eev and os.path.exists(eev) else None
     eng = os.path.join(RUN, "lin_closeup.png")
-    yg = None
+    yg = lin = None
     if os.path.exists(eng):
         px = pixels(eng)[..., :3]           # stored values (Standard view: sRGB of exposed linear)
         if px.shape[0] != res:
@@ -574,20 +627,33 @@ def parity_test(results):
             lin = _srgb_decode(px).reshape(res, k, res, k, 3).mean(axis=(1, 3))
         else:
             lin = _srgb_decode(px)
-        yg = luma(lin) / 2.0 ** STUDIO_EXPOSURE
-    out = {"res": res, "cycles_samples": SAMPLES, "engine_frame": os.path.basename(eng) if yg is not None else None}
+        lin = lin / 2.0 ** STUDIO_EXPOSURE
+        yg = luma(lin)
+    out = {"res": res, "cycles_samples": SAMPLES, "engine_frame": os.path.basename(eng) if yg is not None else None,
+           "tone_def": {"grey_lum": GREY_LUM, "grey_sat": GREY_SAT, "core_erode": CORE_ERODE}}
     vis = np.zeros((res, res, 3), dtype=np.float32)
     for name, m in regions.items():
         mc = float(yc[m].mean()) if m.any() else 0.0
-        me = float(ye[m].mean()) if m.any() else 0.0
-        rec = {"mask_px": int(m.sum()), "cycles_mean_lin": round(mc, 5), "eevee_mean_lin": round(me, 5),
-               "eevee_over_cycles": round(me / mc, 3) if mc > 0 else None}
+        rec = {"mask_px": int(m.sum()), "cycles_mean_lin": round(mc, 5)}
+        if ye is not None:
+            me = float(ye[m].mean()) if m.any() else 0.0
+            rec.update({"eevee_mean_lin": round(me, 5), "eevee_over_cycles": round(me / mc, 3) if mc > 0 else None})
         if yg is not None:
             mg = float(yg[m].mean())
             rec.update({"engine_mean_lin": round(mg, 5), "engine_over_cycles": round(mg / mc, 3) if mc > 0 else None,
                         "engine_within_20pct": bool(mc > 0 and abs(mg / mc - 1) <= 0.2),
                         "engine_p50_lin": round(float(np.median(yg[m])), 5)})
         rec["cycles_p50_lin"] = round(float(np.median(yc[m])), 5)
+        core = _erode(m, CORE_ERODE[name])
+        if core.sum() > 50:
+            tone = {"core_px": int(core.sum()), "cycles": _tone_stats(rc, core)}
+            if lin is not None:
+                te, tc = _tone_stats(lin, core), tone["cycles"]
+                tone["engine"] = te
+                eoc = {k: (round(te[k] / tc[k], 3) if tc[k] > 0 else None) for k in ("grey_frac", "chroma_p50")}
+                tone["engine_over_cycles"] = eoc
+                tone["engine_within_20pct"] = all(v is not None and abs(v - 1) <= 0.2 for v in eoc.values())
+            rec["tone"] = tone
         out[name] = rec
         vis[m] += {"hair": (1, 0, 0), "beard": (0, 1, 0), "brows": (0, 0, 1)}[name]
         print(f"[hair_test] parity {name}: {rec}", flush=True)
@@ -598,6 +664,18 @@ def parity_test(results):
     ov.file_format = "PNG"
     ov.save()
     results["parity"] = out
+
+
+def parity_measure_part(results):
+    """--parts measure: the parity metrics again from the files, no rendering: a new engine frame on
+    the same build, or (--cycles-ref DIR) the Cycles frame and region mask of another run's hair_test
+    dir, valid while the hero grooms are unchanged and only the game bake moved."""
+    ref = os.path.abspath(opt("--cycles-ref", OUT))
+    eev = os.path.join(OUT, "parity_eevee.exr")
+    parity_measure(results, os.path.join(ref, "parity_cycles.exr"), eev if os.path.exists(eev) else None,
+                   os.path.join(ref, "parity_mask.exr"))
+    if ref != OUT:
+        results["parity"]["cycles_ref"] = ref
 
 
 # ---------------------------------------------------------------- clay turntable
@@ -662,7 +740,8 @@ def main():
         with open(jpath) as f:
             results = json.load(f)
     results["run"] = os.path.basename(RUN)
-    for part, fn in (("test", hair_test), ("beard", beard_test), ("parity", parity_test), ("clay", clay_test)):
+    for part, fn in (("test", hair_test), ("beard", beard_test), ("parity", parity_test),
+                     ("measure", parity_measure_part), ("clay", clay_test)):
         if part in PARTS:
             fn(results)
             with open(jpath, "w") as f:

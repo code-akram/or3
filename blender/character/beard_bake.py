@@ -411,14 +411,17 @@ def strand_rgb(mel, red, acfg, rng):
     return c * (acfg["gain"] * rng.lognormal(0, acfg["value_sigma"], len(mel)))[:, None]
 
 
-def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, skin_bvh, rng):
+def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, skin_bvh, rng, gaps=None):
     """The game facial hair as cards only (T9): the skin patch bm (it carried the skin
     weights) is replaced by one tapered strip per centre strand, following the mean of
     the strands rooted within clump_radius_m (their growth direction), with its own atlas
     cell: those strands drawn in the card's frame (hair_strand_raster: per-strand colour,
     tip alpha, flow, depth, ID, root-to-tip). rolls: per centre, 0 = lying on the skin,
     pi/2 = a fin standing off it. groom: pts (m, k, 3), root_n (m, 3), rgb (m, 3) linear,
-    radius (m,) at the root. Writes obj (finish) and its fh_root attribute; returns stats."""
+    radius (m,) at the root; optional (T11) alpha (m,) per-strand alpha scale (the cheek-line
+    fade: root density) and px (m,) per-strand width scale (grey strands finer). gaps: per
+    centre skin clearance in m past the root row (default cfg gap_m; T11: the moustache's
+    lip edge). Writes obj (finish) and its fh_root attribute; returns stats."""
     bmesh.ops.delete(bm, geom=list(bm.faces), context="FACES")
     left = [v for v in bm.verts if v.is_valid]
     if left:
@@ -447,6 +450,8 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
     tris, made, skipped, pushed = 0, 0, 0, 0
     vroots, covs, members_n, lens = [], [], [], []
     gap = cfg["gap_m"]
+    s_alpha = groom.get("alpha")
+    s_px = groom.get("px")
     for ci, j in enumerate(centres):
         if made >= ncols * nrows:
             skipped += 1
@@ -495,8 +500,12 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
             s_ = sl / max(sl[-1], 1e-9)
             tip = np.clip((s_ - (1 - cfg["tip_fade"])) / cfg["tip_fade"], 0, 1)
             w = cfg["strand_px"] * float(np.clip(groom["radius"][mem[i]] / rad_ref, 0.5, 1.6))
+            if s_px is not None:
+                w *= float(s_px[mem[i]])
             rad = w + (cfg["tip_px"] - w) * tip
             alpha = 1.0 - (1.0 - cfg["tip_alpha"]) * tip
+            if s_alpha is not None:
+                alpha = alpha * float(s_alpha[mem[i]])
             sid = float(sid_all[mem[i]])
             cell.draw((0.5 + 0.5 * u) * cw, v * ch, rad, alpha, v, dep[i] / dmax, rgb[mem[i]], sid,
                       rc["base"] + rc["jitter"] * (2 * sid - 1), jit)
@@ -518,13 +527,14 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
         rowv = []
         for q in range(rows_n):
             pair = []
+            gq = gap if (gaps is None or q == 0) else max(gap, gaps[ci])
             for sgn in (-1.0, 1.0):
                 p = Vector(P[q] + sgn * Wd[q] * hw[q])
                 loc, nrm, _, _ = skin_bvh.find_nearest(p)
                 if loc is not None:
                     h = (p - loc).dot(nrm)
-                    if h < gap:
-                        p = p + nrm * (gap - h)
+                    if h < gq:
+                        p = p + nrm * (gq - h)
                         pushed += 1
                 vv = bm.verts.new(p)
                 for g_, w_ in wts.items():
