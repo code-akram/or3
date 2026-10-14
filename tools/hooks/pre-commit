@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pre-commit guard for likeness containment (NOTES.md §14 rule 7): refuses a commit that stages
-# likeness-named paths outside the allowlisted code and docs, binary images / arrays / meshes
-# under bench/, or JSON carrying likeness content. Rules: tools/hooks/check_staged.py.
+# likeness-named paths outside the allowlisted code and docs, binary images / arrays / meshes /
+# audio / video anywhere outside the allowlist in tools/hooks/binary_policy.py, or JSON carrying
+# likeness content. Rules: tools/hooks/check_staged.py.
 # Install once per clone (worktrees share it): git config core.hooksPath tools/hooks
 set -euo pipefail
 exec python3 -I "$(git rev-parse --show-toplevel)/tools/hooks/check_staged.py"

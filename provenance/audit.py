@@ -3,6 +3,7 @@
 
     python3 -I provenance/audit.py                  # schema + licence policy on provenance/*.jsonl
     python3 -I provenance/audit.py --check-files    # also verify sha256 of files under data/
+                                                    # and refuse tracked binaries outside the allowlist
     python3 -I provenance/audit.py --release        # also fail on synthetic placeholders
 
 Exit status 1 on any error. Checks:
@@ -22,6 +23,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -79,6 +81,31 @@ def check_schema(rec: dict, schema: dict) -> list[str]:
                 elif not type_ok(sv, sp["type"]):
                     errs.append(f"'{k}.{sk}' has wrong type")
     return errs
+
+
+def tracked_binary_errors() -> list[str]:
+    """Repo-wide binary policy (tools/hooks/binary_policy.py) over `git ls-files`: catches a commit that
+    got past the pre-commit hook with --no-verify. Silently skipped when git is missing or this file is
+    not at the top of its own git checkout (e.g. an exported tarball)."""
+    root = HERE.parent
+    try:
+        top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                             capture_output=True, check=True).stdout.decode().strip()
+        if Path(top).resolve() != root.resolve():
+            return []
+        listed = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                                capture_output=True, check=True).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    sys.path.insert(0, str(root / "tools" / "hooks"))
+    try:
+        import binary_policy
+    except ImportError:
+        return []
+    finally:
+        sys.path.pop(0)
+    return [f"git ls-files: {p}: {why}" for p in listed.split("\0")
+            if p and (why := binary_policy.binary_problem(p))]
 
 
 def main() -> int:
@@ -177,6 +204,9 @@ def main() -> int:
             h = hashlib.sha256(p.read_bytes()).hexdigest()
             if h != rec["sha256"]:
                 errors.append(f"{rec['_where']}: sha256 mismatch for {p}")
+
+    if a.check_files:
+        errors += tracked_binary_errors()
 
     for w in warnings:
         print(f"warning: {w}")
