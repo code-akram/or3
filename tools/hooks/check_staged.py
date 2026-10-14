@@ -33,7 +33,7 @@ import containment  # noqa: E402
 NAMED = re.compile(r"fan|likeness", re.I)
 ALLOWED = [re.compile(p) for p in (
     r"^pipeline/likeness/[^/]+\.(py|sh)$",  # generic likeness code: every input and output is a private path
-    r"^blender/character/head_fan\.py$",    # the fan layer's build stage (no data in it)
+    r"^blender/character/head_(fan|layer)\.py$",    # the identity / fan layer build stage (no data in it)
     r"^bench/m1/v\d+/[^/]+\.md$",           # track briefs and reports (text only)
 )]
 TEXT_MARKERS = re.compile(r'"fan"\s*:|' + re.escape(containment.MARKER))
