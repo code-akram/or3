@@ -66,6 +66,9 @@ def open_blend():
         if o.type in ("LIGHT", "CAMERA"):
             bpy.data.objects.remove(o, do_unlink=True)
     arm = next(o for o in sc.objects if o.type == "ARMATURE")
+    # The rest pose, as the GLB imports (the kept .blend can carry a pose).
+    arm.data.pose_position = "REST"
+    bpy.context.view_layer.update()
     hero = bpy.data.collections.get("hero_only")
     for o in sc.objects:
         # the game hair cards give way to the groom; hero_only shows
@@ -93,6 +96,7 @@ def camera(name, target, az, el, frame_h, lens):
     a, e = math.radians(az), math.radians(el)
     cam.location = target + Vector((math.sin(a) * math.cos(e), -math.cos(a) * math.cos(e), math.sin(e))) * dist
     look_at(cam, target)
+    bpy.context.view_layer.update()   # matrix_world is read back (beard_test)
     sc.camera = cam
     return cam
 
