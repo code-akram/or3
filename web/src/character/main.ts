@@ -4,7 +4,7 @@
 //
 // URL: character.html?asset=<dir under /asset/>&view=front|three_quarter|profile|closeup|portrait
 //      &rig=neutral|hero&turntable=1&pose=rest|stand|arms_up|...&amount=0..1&gl=1&dpr=1&params=<json>
-//      &area=none|rims|all&post=0&gaze=0&scene=balls
+//      &area=none|rims|all&post=0&gaze=0&scene=balls&view_transform=standard
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
@@ -465,6 +465,9 @@ async function main(): Promise<void> {
     if (q.get('gaze') !== '0') gaze.apply(g);
     state.gaze = g ? { deg: g.deg, meshes: gaze.count } : null;
     output.setGrade(r === 'hero', vs.exposure, stage.data.hero.grade);
+    // ?view_transform=standard: clamp + sRGB instead of AgX, so a capture decodes back to scene-linear
+    // (hair / beard tone parity against Cycles EXRs, bench/m1/hair_parity.py)
+    output.viewAgX.value = q.get('view_transform') === 'standard' ? 0 : 1;
     // beauty post (bloom, halation, grain) on the interactive hero frames; ?post=0 for parity
     output.setPost(r === 'hero' && q.get('post') !== '0');
     userOrbit = false;

@@ -1,7 +1,7 @@
 """Hair test renders and metrics for one look-dev run (hair v4, bench/m1/v4/t8-hair.md).
 
     blender -b -t 6 --factory-startup --python bench/m1/hair_test.py -- RUN_DIR \
-        [--parts test,beard,clay] [--models current|CHIANG,HUANG] [--res 768] [--samples 64] \
+        [--parts test,beard,parity,clay] [--models current|CHIANG,HUANG] [--res 768] [--samples 64] \
         [--out DIR]
 
 Needs RUN_DIR/character.blend (KEEP_BLEND=1) and, for `beard`, RUN_DIR/character.glb.
@@ -23,6 +23,15 @@ Parts:
          cards, as lookdev renders them, 16 samples). Beard mask: the GLB beard mesh as an
          opaque emitter, everything else a holdout, eroded 2 px. Metric: the beard-region
          mean linear luminance of each and their ratio (EEVEE / Cycles).
+  parity hair and beard tone parity, engine vs Cycles (track T9, bench/m1/v4/t9-cards.md): the
+         look-dev closeup (as `beard`) in Cycles on the kept .blend (hero strands: scalp groom,
+         beard, brows) and in EEVEE on the GLB; regions from the hero grooms themselves (the
+         scalp groom and the beard curves as emitters, every mesh a holdout, closed and eroded
+         2 px), so the metric does not move with the game geometry. The engine frame is
+         RUN_DIR/lin_closeup.png when present (engine_shots.mjs --views closeup --prefix lin_
+         --query view_transform=standard: Standard view at the studio exposure, so it decodes
+         back to scene-linear). Metric: region mean linear luminance, engine / Cycles and
+         EEVEE / Cycles (gate: within +-20 %).
   clay   a clay turntable of the groom (strands and head one matte grey, Cycles 24 spp +
          OIDN, 512², six azimuths, head framing to the collar) and the back view in the
          neutral test light with the shipped hair material.
@@ -441,6 +450,139 @@ def beard_test(results):
           flush=True)
 
 
+# ---------------------------------------------------------------- hair / beard parity (T9)
+
+def _close(m, r):
+    """Binary closing then nothing else: dilate r px, erode r px (np.roll, wraps; the masks sit
+    well inside the frame)."""
+    d = m.copy()
+    for _ in range(r):
+        d = d | np.roll(d, 1, 0) | np.roll(d, -1, 0) | np.roll(d, 1, 1) | np.roll(d, -1, 1)
+    for _ in range(r):
+        d = d & np.roll(d, 1, 0) & np.roll(d, -1, 0) & np.roll(d, 1, 1) & np.roll(d, -1, 1)
+    return d
+
+
+def _erode(m, r):
+    for _ in range(r):
+        m = m & np.roll(m, 1, 0) & np.roll(m, -1, 0) & np.roll(m, 1, 1) & np.roll(m, -1, 1)
+    return m
+
+
+def _srgb_decode(x):
+    return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+
+
+def parity_test(results):
+    res = 512
+    # EEVEE on the GLB: the camera (as lookdev_render frames it), floor and the game frame.
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.gltf(filepath=os.path.join(RUN, "character.glb"))
+    sc = bpy.context.scene
+    arm = next(o for o in sc.objects if o.type == "ARMATURE")
+    meshes = [o for o in sc.objects if o.type == "MESH" and o.parent == arm]
+    for o in sc.objects:
+        if o.type == "MESH" and o not in meshes:
+            o.hide_render = True
+    floor_z = floor_of(meshes)
+    studio_lights(floor_z)
+    cam = closeup_camera(arm, floor_z)
+    cam_mw = cam.matrix_world.copy()
+    r = sc.render
+    r.engine = "BLENDER_EEVEE"
+    sc.eevee.taa_render_samples = 16
+    r.resolution_x = r.resolution_y = res
+    r.resolution_percentage = 100
+    r.film_transparent = False
+    eev = os.path.join(OUT, "parity_eevee.exr")
+    save(eev, exr=True)
+    save(os.path.join(OUT, "parity_eevee.png"))
+    # Cycles on the kept .blend: hero strands, the same camera, floor and lights.
+    open_blend()
+    sc = bpy.context.scene
+    studio_lights(floor_z)
+    cd = bpy.data.cameras.new("closeup")
+    cd.lens = 85.0
+    cd.clip_start = 0.01
+    cam = bpy.data.objects.new("closeup", cd)
+    sc.collection.objects.link(cam)
+    cam.matrix_world = cam_mw
+    sc.camera = cam
+    cycles(res, SAMPLES, False)
+    sc.view_settings.exposure = STUDIO_EXPOSURE
+    cyc = os.path.join(OUT, "parity_cycles.exr")
+    save(cyc, exr=True)
+    save(os.path.join(OUT, "parity_cycles.png"))
+    # Region masks from the hero grooms: scalp groom red, beard green, every mesh a holdout.
+    def emit(name, rgb):
+        m_ = bpy.data.materials.new(name)
+        m_.use_nodes = True
+        nt = m_.node_tree
+        for n in list(nt.nodes):
+            nt.nodes.remove(n)
+        e = nt.nodes.new("ShaderNodeEmission")
+        e.inputs[0].default_value = (*rgb, 1)
+        o_ = nt.nodes.new("ShaderNodeOutputMaterial")
+        nt.links.new(e.outputs[0], o_.inputs[0])
+        return m_
+    red, green, black = emit("m_hair", (1, 0, 0)), emit("m_beard", (0, 1, 0)), emit("m_other", (0, 0, 0))
+    for o in sc.objects:
+        if o.type == "MESH":
+            o.is_holdout = True
+        elif o.type == "CURVES" and not o.hide_render:
+            mt = red if o.name.startswith("hair_groom") else green if o.name.startswith("beard_hero") else black
+            o.data.materials.clear()
+            o.data.materials.append(mt)
+    fl = bpy.data.objects.get("lookdev_floor")
+    if fl:
+        fl.hide_render = True
+    sc.render.film_transparent = True
+    sc.cycles.samples = 8
+    sc.cycles.use_denoising = False
+    sc.view_settings.view_transform = "Standard"
+    sc.view_settings.exposure = 0.0
+    mpath = os.path.join(OUT, "parity_mask.exr")
+    save(mpath, exr=True)
+    mk = pixels(mpath)
+    regions = {"hair": _erode(_close(mk[..., 0] > 0.3, 3), 2),
+               "beard": _erode(_close(mk[..., 1] > 0.3, 3), 2)}
+    yc = luma(pixels(cyc)[..., :3])
+    ye = luma(pixels(eev)[..., :3])
+    eng = os.path.join(RUN, "lin_closeup.png")
+    yg = None
+    if os.path.exists(eng):
+        px = pixels(eng)[..., :3]           # stored values (Standard view: sRGB of exposed linear)
+        if px.shape[0] != res:
+            k = px.shape[0] // res
+            lin = _srgb_decode(px).reshape(res, k, res, k, 3).mean(axis=(1, 3))
+        else:
+            lin = _srgb_decode(px)
+        yg = luma(lin) / 2.0 ** STUDIO_EXPOSURE
+    out = {"res": res, "cycles_samples": SAMPLES, "engine_frame": os.path.basename(eng) if yg is not None else None}
+    vis = np.zeros((res, res, 3), dtype=np.float32)
+    for name, m in regions.items():
+        mc = float(yc[m].mean()) if m.any() else 0.0
+        me = float(ye[m].mean()) if m.any() else 0.0
+        rec = {"mask_px": int(m.sum()), "cycles_mean_lin": round(mc, 5), "eevee_mean_lin": round(me, 5),
+               "eevee_over_cycles": round(me / mc, 3) if mc > 0 else None}
+        if yg is not None:
+            mg = float(yg[m].mean())
+            rec.update({"engine_mean_lin": round(mg, 5), "engine_over_cycles": round(mg / mc, 3) if mc > 0 else None,
+                        "engine_within_20pct": bool(mc > 0 and abs(mg / mc - 1) <= 0.2),
+                        "engine_p50_lin": round(float(np.median(yg[m])), 5)})
+        rec["cycles_p50_lin"] = round(float(np.median(yc[m])), 5)
+        out[name] = rec
+        vis[m] += (1, 0, 0) if name == "hair" else (0, 1, 0)
+        print(f"[hair_test] parity {name}: {rec}", flush=True)
+    # region overlay for the record (Blender rows are bottom-up; the PNG writer flips them back)
+    ov = bpy.data.images.new("parity_regions", res, res, alpha=True)
+    ov.pixels.foreach_set(np.concatenate([vis, np.ones((res, res, 1), np.float32)], 2).ravel())
+    ov.filepath_raw = os.path.join(OUT, "parity_regions.png")
+    ov.file_format = "PNG"
+    ov.save()
+    results["parity"] = out
+
+
 # ---------------------------------------------------------------- clay turntable
 
 def clay_test(results):
@@ -503,7 +645,7 @@ def main():
         with open(jpath) as f:
             results = json.load(f)
     results["run"] = os.path.basename(RUN)
-    for part, fn in (("test", hair_test), ("beard", beard_test), ("clay", clay_test)):
+    for part, fn in (("test", hair_test), ("beard", beard_test), ("parity", parity_test), ("clay", clay_test)):
         if part in PARTS:
             fn(results)
             with open(jpath, "w") as f:
