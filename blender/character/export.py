@@ -177,5 +177,25 @@ def write_sidecars(b, out):
     return b.notes["sidecars"]
 
 
+def ktx2(b, out):
+    """KTX2 copy of the GLB for the engine (web/tools/ktx2.mjs: UASTC q2 for normals and
+    ORM, ETC1S q128 for albedo) as <stem>.ktx2.glb; the PNG GLB stays the source of
+    truth (Blender cannot import KTX2). Needs the web/ node deps (npm ci --prefix web)."""
+    import subprocess
+    import time
+    repo = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    dst = out[:-4] + ".ktx2.glb"
+    t = time.perf_counter()
+    r = subprocess.run(["node", os.path.join(repo, "web", "tools", "ktx2.mjs"), out, dst],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"ktx2 failed: {r.stderr[-2000:]}")
+    rec = json.loads(r.stdout.strip().splitlines()[-1])
+    rec["bytes"] = os.path.getsize(dst)
+    rec["seconds"] = round(time.perf_counter() - t, 1)
+    b.notes["ktx2"] = rec
+    return rec
+
+
 def save_blend(b, path):
     bpy.ops.wm.save_as_mainfile(filepath=path, compress=True)

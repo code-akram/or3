@@ -10,6 +10,7 @@
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DeformRuntime, type RigRules } from './deform';
 import { Poser, PRESETS, applyPreset } from './poses';
@@ -364,7 +365,11 @@ async function main(): Promise<void> {
   const progress = { loaded: 0, total: 0 };
   hud.textContent = 'loading…';
   const loader = new GLTFLoader();
-  const glbP = loader.loadAsync(base + 'character.glb', (e) => {
+  // ?ktx2=1: the Basis Universal copy (web/tools/ktx2.mjs, build_character.py --ktx2); the transcoder is
+  // served at /basis/ (engine_shots.mjs from three's examples/jsm/libs/basis)
+  const useKTX2 = q.get('ktx2') === '1';
+  if (useKTX2) loader.setKTX2Loader(new KTX2Loader().setTranscoderPath('/basis/').detectSupport(renderer));
+  const glbP = loader.loadAsync(base + (useKTX2 ? 'character.ktx2.glb' : 'character.glb'), (e) => {
     progress.loaded = e.loaded;
     progress.total = e.total;
     hud.textContent = `loading character.glb ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;

@@ -49,6 +49,7 @@ const extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/
 const outPrefix = opt('prefix', 'game_');
 const poseArg = opt('pose', null); // debug preset for every view (e.g. arms_up), else the view's own
 const dist = join(repo, 'web', opt('dist', 'dist-viewer'));
+const BASIS = join(repo, 'web', 'node_modules', 'three', 'examples', 'jsm', 'libs', 'basis');
 const ballsArg = opt('balls', 'auto');
 const beauty = opt('beauty', 'on') !== 'off'; // --beauty off: no game_portrait_beauty.png
 const wantBalls = ballsArg === 'on' || (ballsArg === 'auto' && existsSync(join(build, 'shader_balls.json')));
@@ -80,13 +81,18 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|hair_atlas_(flow|data)\.png)$/;
+const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|hair_atlas_(flow|data)\.png)$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');
   let rel = decodeURIComponent(url.pathname);
   let root = dist;
-  if (rel.startsWith('/asset/')) {
+  if (rel.startsWith('/basis/')) {
+    // the KTX2 transcoder (two files) from three's examples, for ?ktx2=1
+    rel = rel.slice('/basis/'.length);
+    if (!/^basis_transcoder\.(js|wasm)$/.test(rel)) return send(res, 404);
+    root = BASIS;
+  } else if (rel.startsWith('/asset/')) {
     rel = rel.slice('/asset/'.length);
     if (!ASSET_OK.test(rel)) return send(res, 404);
     root = build;
