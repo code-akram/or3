@@ -19,20 +19,27 @@ The user approved the plan from `fable_review.md` §3–5 (2026-10-14): stop pol
 | T6 | Engine look parity: shader-ball gate 6/6, weave as a tiled detail map (moiré gone), SSS LUT, post pass, KTX2 (`--ktx2`, 69 → 32 MB), device capture (`?capture=1&upload=1`) | `t6-engine-parity.md` |
 | T7 | Original public face from ICT-FaceKit (MIT, `CREDITS.md`) + shared head sculpt layer (`head_layer.py`, `head_sculpt.py`), new head measures all in range, ArcFace 0.045 vs the private reference | `t7-head.md` |
 | T8 | Hair v4 groom: 70k strands, direction field, 4-level clumps, layered uneven cut, melanin 0.90, front falls as dark locks; beard tone matched to the hero strands | `t8-hair.md` |
+| T7b | Calm lids (aperture 9.0 mm, robust measure), skull vault, teal back-face fix (viewer + geometry) | `t7b-head.md` |
+| T9 | Layered scalp cards from the v4 groom, strand maps in the GLB, beard/moustache/brows as cards (shells retired), hair 0.98× and beard 1.15× Cycles | `t9-cards.md` |
+| T9b | Silver hair plates fixed, hair rim pickup and warm scatter fitted per light, brows 1.03× Cycles | `t9b-hair.md` |
 | suit spike | Pattern-drafted, sewn jacket (`suit_pattern.py`, additive): sleeve pitch and skirt pass, collar/seams/back fail; conditional go, ~13 days for the full rebuild | `suit-spike.md` |
 
-Integrated build of main: `data/build/lookdev/20261014T131343Z-int1-main/` (0 glTF errors, 127k tris, 83 bones, all head measures in range; read40 eye band 71 % vs 75 % still fails).
+Latest integrated build of main: `data/build/lookdev/20261014T155504Z-t9b-b1/` (engine frames `game_*.png`), its Cycles hero `data/build/hero/20261014T161745Z-t9b-b1/`; 0 glTF errors, all head measures in range, hair+beard+brows 36k tris.
 
-**Running at handoff time** (see the session; results land in `bench/m1/v4/`): T7b (staring eyes, skull vault, engine teal back-face bug) and T9 (scalp, beard and brow cards rebuilt from the v4 groom; beard shells replaced; engine hair tone parity).
+**Checkpoint 2 (Fable, `bench/m1/v4/checkpoint-2.md`)**: head form and the engine frame are real steps; the look is not yet "believable AAA hero". Weakest links: the suit at full-body distance, waxy skin at portrait distance, a hero hair colour that drifted warm-brown, a beard that reads 55+ in the engine. The engine frame is trustworthy for geometry/rig/tone, not yet for look (no hair self-shadow, unshadowed fill, no AO, no Air capture). The public face reads original; the **costume ensemble** (long dark hair, full beard, black suit, neon alley) still reads as the film character, which is a design decision for the user, alongside C2.
+
+**Running at handoff time** (results land in `bench/m1/v4/`): T10 engine gate completion (hair shadow maps, shadowed fill, GTAO, hero closeup capture, framing mismatch, spatial parity metrics, regression strip), T11 facial-hair age and edge, T12 skin mid-frequency + hero hair colour back to near-black + read40 margin + identity v2 promotion. Queued: T13 suit spike 2 and T14 C2 painterly pass (both need the user), T15 hair volume/hairline (after T12).
 
 **Engine viewer from the Mac:** in `web/`, `npm run dev` (127.0.0.1:5173); tunnel `ssh -N -L 5173:127.0.0.1:5173 archlinux`; open `http://127.0.0.1:5173/character.html?asset=lookdev/<run>&view=portrait&rig=hero`. Device capture for the Air: see `t6-engine-parity.md`.
 
 **User decisions open:**
-1. **C2 style**: painterly-stylised realism on the character (recommended by both Fable passes) vs realism. The engine material code has a banded-lighting switch ready; the painted-albedo + ink pass waits on this.
-2. **Suit**: go/no-go on a 1.5–2 day second spike, then ~11 day rebuild (`suit-spike.md`).
+0. **Air session** (standing ask): one 10-minute capture on the Mac (`t6-engine-parity.md`, device capture). Every engine number so far is SwiftShader.
+1. **C2 style**: painterly-stylised realism on the character (recommended by both Fable passes; checkpoint 2 §3 costs it at 2–3 days vs 2–3 weeks for realism) vs realism. The engine material code has a banded-lighting switch ready; the painted-albedo + ink pass waits on this.
+2. **Suit**: go/no-go on a 1.5-day second spike (checkpoint 2 recommends go, without pre-committing to the ~11-day rebuild; alternative a 2-day "lofted v2").
+2b. **Costume ensemble**: whether hair length, beard shape and the black suit stay as they are for the public build (checkpoint 2 §1, §5.7).
 3. **Listening gate**: accept-with-flag vs reject for the 5 sources under 18 kHz (`t4-audio-bandwidth.md` §3); the 8.6 dB calibration question applies to the alley footstep takes only.
 4. **ArcFace** ruling (still pending; T7 used it offline, private, scalar only). Old per-frame embeddings `private/likeness/work/mica/codes*.npz` kept until the ruling.
-5. Still pending from before: m1 base approval, Movieclips ruling, Air session.
+5. Still pending from before: m1 base approval, Movieclips ruling. Fan build: palpebral +9.8 % and alar −4.0 % are outside the ±3 % gate after T7b; the fix belongs in the private fan block.
 
 **Housekeeping done:** `private/` is `o-rwx`; fan builds and the worktree-attic archive moved from `data/` to `private/likeness/work/moved-from-data-20261014/`.
 
