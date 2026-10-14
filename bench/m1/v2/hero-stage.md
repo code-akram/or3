@@ -289,6 +289,12 @@ Three defects from the fan preview review came from the lights, not the characte
   - **hair**: every saturated rim or kicker, as before (`HAIR_RIM`, 40 %). Unchanged.
   - **props**: every saturated hero light, at `PROP_SAT` = 15 %.
   - **cloth** (the suit, not the shirt) and **skin** (the body mesh and vellus): opt-in per shot through the spec's `twin` key, `{group: (fraction, energy)}` or `{group: {light: (fraction, energy)}}`.
+- **Correction (m1 v4 T3, `bench/m1/v4/t3-light-twins.md`):** as written above this was not true. The per-shot `twin` was only read for lights named `rim` and `kicker`, so a cloth twin on the sign shot's magenta `key` was silently dropped. Flagged lights (the default `key`, `wrap`, `fill`, `eye`) were never split, and `PROP_SAT` could not be reached for magenta: the twin stopped at white-violet, 21–24 % of the original saturation. Since T3 (`rig.twin_plan`):
+  - Every saturated light is split, whichever its name and whether or not it is flagged: key, fill, rim, kicker, the draw's `top`, and so on.
+  - **hair** (`HAIR_RIM`, 40 %) and **props** (15 %) twin every saturated hero light by default.
+  - **cloth**, **skin** and the new **beard** group (beard, stubble and brows) are opt-in per shot. A plain `(fraction, energy)` applies to every saturated hero light; `{light: ...}` applies per light; `None` drops a default.
+  - The set's practicals can be twinned per shot under the light name `"practicals"` (the sign spill lights). A group with a practicals twin is also excluded from the neon tubes' emission (`rig.practical_emitters`).
+  - Magenta is pulled toward white-violet, then on toward white.
 
 **Pistol (draw).**
 - The plum slide is the default magenta rim. Without it the slide is (8, 8, 12); dropping the magenta top or the teal kicker changes nothing.
@@ -313,7 +319,7 @@ Three defects from the fan preview review came from the lights, not the characte
   - Back centre: unchanged, (10, 13, 21) → (9, 13, 20).
 - The hair keeps its own twin.
 
-**Bust and walk** take the same cloth twin (`shots.CLOTH_TWIN`): their far shoulder took the magenta rim too. Set lights (neon spill) have no twins.
+**Bust and walk** take the same cloth twin (`shots.CLOTH_TWIN`): their far shoulder took the magenta rim too. Set lights (neon spill) had no twins then. Since T3 a shot can twin them under `"practicals"`, but no shot does.
 
 ## What the stage shows about the character (main ede62d6, run main5-sheet)
 

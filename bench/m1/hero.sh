@@ -28,7 +28,7 @@
 #     --into RUN         add to an existing run dir (stage.json merged; e.g. the turntable
 #                        at another thread count)
 #     --fan              treat the input as a fan build (private output); normally detected
-#     --no-hair-rim      magenta rims light the hair at full saturation (rig.HAIR_RIM off)
+#     --no-hair-rim      saturated hero lights light the hair at full saturation (rig.HAIR_RIM off)
 #     --wb K             grade white point in K (default: grade.py GRADE wb_kelvin, 3900; 0 = off;
 #                        with --regrade pass it as WB=K in the environment)
 #   bench/m1/hero.sh --regrade <run dir>     re-grade the EXRs and redraw the sheet
