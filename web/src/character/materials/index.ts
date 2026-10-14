@@ -18,7 +18,7 @@ import * as TSL from 'three/tsl';
 import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 import { temporalFrame } from '../temporal';
-import { screenTerm, withSharedLighting } from '../lighting';
+import { rectFormFactor, screenTerm, withSharedLighting } from '../lighting';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, exp, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
@@ -58,27 +58,14 @@ interface RectInput {
  * it, pi L |F|, exact for a big emitter close by. (T6 took the centre direction and L A cos / d^2, which
  * is the small-emitter limit: the hero fill (2 m square at 2.5 m) came out 24 % and the wrap 16 % hot.)
  * Zero behind the emitter (it shines along its local -z). The LTC keeps the specular. */
-function edgeFormFactor(v1: N, v2: N): N {
-  // three's LTC_EdgeVectorFormFactor (not exported): cross(v1, v2) x theta / sin(theta) / 2 pi
-  const x = v1.dot(v2);
-  const y = x.abs();
-  const a = y.mul(0.0145206).add(0.4965155).mul(y).add(0.8543985);
-  const b = y.add(4.1616724).mul(y).add(3.417594);
-  const v = a.div(b);
-  const ts = x.greaterThan(0).select(v, x.mul(x).oneMinus().max(1e-7).inverseSqrt().mul(0.5).sub(v));
-  return v1.cross(v2).mul(ts);
-}
-
 function rectAsPoint(i: RectInput): { L: N; color: N } {
   const c = i.lightPosition;
-  const p = [c.add(i.halfWidth).sub(i.halfHeight), c.sub(i.halfWidth).sub(i.halfHeight), c.sub(i.halfWidth).add(i.halfHeight), c.add(i.halfWidth).add(i.halfHeight)].map((q) => q.sub(positionView).normalize());
-  let F: N = vec3(0);
-  for (let k = 0; k < 4; k++) F = F.add(edgeFormFactor(p[k], p[(k + 1) % 4]));
+  const F = rectFormFactor(c, i.halfWidth, i.halfHeight, positionView);
   const toL = c.sub(positionView);
   const n = i.halfWidth.cross(i.halfHeight);
   const front = n.dot(toL).greaterThan(0); // shines along local -z: the lit side has toL along +z
   const f = F.length();
-  const dir = F.dot(toL).lessThan(0).select(F.negate(), F).div(f.max(1e-8));
+  const dir = F.div(f.max(1e-8)); // rectFormFactor orients F toward the light
   return { L: dir, color: i.lightColor.mul(front.select(f.mul(Math.PI), float(0))) };
 }
 
@@ -777,7 +764,12 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
   const specOcc = (P.get('light.specOcclusion') as number) > 0;
   const shared = (nm: THREE.MeshPhysicalNodeMaterial, role: Role): void => {
     const orig = nm.setupLightingModel.bind(nm);
-    const opts = { specOcclusion: specOcc && role !== 'hair' && role !== 'facial' && role !== 'lash', rectDiffuseAO: role === 'eye' || role === 'generic' };
+    const opts = {
+      specOcclusion: specOcc && role !== 'hair' && role !== 'facial' && role !== 'lash',
+      rectDiffuseAO: role === 'eye' || role === 'generic',
+      // the models whose rect diffuse is three's LTC (the skin and hair models take rectAsPoint's F)
+      ltcDiffuse: role === 'eye' || role === 'generic' || role === 'cloth' || role === 'shirt',
+    };
     nm.setupLightingModel = ((b: unknown) => withSharedLighting((orig as unknown as (x: unknown) => THREE.LightingModel)(b), P, screen, opts)) as typeof nm.setupLightingModel;
   };
   root.traverse((o) => {

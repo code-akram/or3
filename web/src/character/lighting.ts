@@ -29,6 +29,15 @@
 // bounce) and each light's direct specular weighted like T10's direct-diffuse AO (the light's size over
 // distance, floored at ao.lightWeightMin), x light.specOcclusion. The hair models keep their own strand
 // occlusion (off there). It wraps the lighting model a material builds, so no material class changes.
+//
+// RECT DIFFUSE FORM FACTOR (withSharedLighting, opts.ltcDiffuse). three's LTC diffuse (the identity-matrix
+// LTC_Evaluate) turns the rect's vector form factor F into a horizon-clipped form factor with the fit
+// (|F|^2 + F.n) / (|F| + 1) (LTC.js, "a Journey" p.102), which equals F.n only for a light at the
+// zenith; off axis it is high by about |F|^2 / (|F| + 1): for the hero fill (2 m square at 2.5 m,
+// 57 deg off the chart's normal) that is +11 % (the per-light chart's fill excess after T19's exact
+// irradiance on the custom models). The wrapper rescales that diffuse to the exact clipped sphere (Snyder 1996, the
+// Frostbite illuminanceSphereOrDisk form): F.n when the equivalent cap is above the horizon, the
+// clipped cap otherwise. The custom diffuse models (skin, hair) take F directly (rectAsPoint).
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import type { ParamStore } from './materials/params';
@@ -36,7 +45,7 @@ import { temporalFrame } from './temporal';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const T = TSL as any;
-const { Fn, float, ivec2, vec2, vec3, reference, renderGroup, perspectiveDepthToViewZ, viewZToPerspectiveDepth, interleavedGradientNoise, vogelDiskSample, screenCoordinate, texture, uniform, normalView, positionViewDirection, roughness, mix, screenUV } = T;
+const { Fn, float, ivec2, vec2, vec3, reference, renderGroup, perspectiveDepthToViewZ, viewZToPerspectiveDepth, interleavedGradientNoise, vogelDiskSample, screenCoordinate, texture, uniform, normalView, positionView, positionViewDirection, roughness, mix, screenUV } = T;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -202,6 +211,47 @@ export function lagardeSO(ao: N, nv: N, r: N): N {
   return nv.add(ao).pow(r.mul(-16).sub(1).exp2()).sub(1).add(ao).clamp(0, 1);
 }
 
+/** A rect edge's vector form factor term: three's LTC_EdgeVectorFormFactor (not exported), cross(v1, v2)
+ * theta / sin(theta) / 2 pi for unit vectors v1, v2 toward two corners. */
+export function edgeFormFactor(v1: N, v2: N): N {
+  const x = v1.dot(v2);
+  const y = x.abs();
+  const a = y.mul(0.0145206).add(0.4965155).mul(y).add(0.8543985);
+  const b = y.add(4.1616724).mul(y).add(3.417594);
+  const v = a.div(b);
+  const ts = x.greaterThan(0).select(v, x.mul(x).oneMinus().max(1e-7).inverseSqrt().mul(0.5).sub(v));
+  return v1.cross(v2).mul(ts);
+}
+
+/** The vector form factor of a rect light (three's RectAreaLight input: centre, half axes, view space) at
+ * view-space point p: the sum of its four edge terms, oriented toward the light (three's corner order
+ * gives -F in view space; its LTC basis has a negated tangent, which flips it back). */
+export function rectFormFactor(c: N, hw: N, hh: N, p: N): N {
+  const q = [c.add(hw).sub(hh), c.sub(hw).sub(hh), c.sub(hw).add(hh), c.add(hw).add(hh)].map((x) => x.sub(p).normalize());
+  let F: N = vec3(0);
+  for (let k = 0; k < 4; k++) F = F.add(edgeFormFactor(q[k], q[(k + 1) % 4]));
+  return F.dot(c.sub(p)).lessThan(0).select(F.negate(), F);
+}
+
+/** Exact horizon-clipped form factor of the sphere cap equivalent to vector form factor F (|F| = sin^2
+ * sigma, F.n = |F| cos theta) on normal n: Snyder 1996 in Frostbite's illuminanceSphereOrDisk form / pi. */
+export function clippedSphereFF(F: N, n: N): N {
+  const l = F.length().max(1e-7).min(0.9999);
+  const ct = F.dot(n).div(l).clamp(-1, 1);
+  const st = ct.mul(ct).oneMinus().max(1e-7).sqrt();
+  const x = l.reciprocal().sub(1).sqrt(); // cot sigma
+  const y = x.negate().mul(ct.div(st)).clamp(-1, 1);
+  const sy = st.mul(y.mul(y).oneMinus().max(0).sqrt());
+  const part = ct.mul(T.acos(y)).sub(x.mul(sy)).mul(l).add(T.atan(sy.div(x))).div(Math.PI);
+  return ct.mul(ct).greaterThan(l).select(l.mul(ct).max(0), part.max(0));
+}
+
+/** three's fit of the same (LTC_ClippedSphereFormFactor). */
+function threeClippedFF(F: N, n: N): N {
+  const l = F.length();
+  return l.mul(l).add(F.dot(n)).div(l.add(1)).max(0);
+}
+
 interface Wrappable {
   direct?: (input: any, builder?: any) => void;
   directRectArea?: (input: any, builder?: any) => void;
@@ -210,9 +260,26 @@ interface Wrappable {
 
 /** Wrap a lighting model with the shared terms: specular occlusion from the screen AO on the direct
  * (per light) and indirect specular. `screen` = the GTAO term at this fragment (null: off). */
-export function withSharedLighting(model: THREE.LightingModel, P: ParamStore, screen: N | null, opts: { specOcclusion: boolean; rectDiffuseAO?: boolean }): THREE.LightingModel {
-  if (!screen || (!opts.specOcclusion && !opts.rectDiffuseAO)) return model;
+export function withSharedLighting(
+  model: THREE.LightingModel,
+  P: ParamStore,
+  screen: N | null,
+  opts: { specOcclusion: boolean; rectDiffuseAO?: boolean; ltcDiffuse?: boolean },
+): THREE.LightingModel {
   const m = model as unknown as Wrappable;
+  if (opts.ltcDiffuse && m.directRectArea) {
+    // three's LTC diffuse x exact / fitted clipped form factor (see the header); before the AO wrap below
+    const orig = m.directRectArea;
+    m.directRectArea = (input: any, builder?: any) => {
+      const diff = vec3(0).toVar();
+      orig.call(model, { ...input, reflectedLight: { ...input.reflectedLight, directDiffuse: diff } }, builder);
+      const F = rectFormFactor(input.lightPosition, input.halfWidth, input.halfHeight, positionView);
+      const fit = threeClippedFF(F, normalView);
+      const fix = fit.greaterThan(1e-7).select(clippedSphereFF(F, normalView).div(fit.max(1e-7)), float(1));
+      input.reflectedLight.directDiffuse.addAssign(diff.mul(fix));
+    };
+  }
+  if (!screen || (!opts.specOcclusion && !opts.rectDiffuseAO)) return model;
   const so = (): N => lagardeSO(screen, normalView.dot(positionViewDirection).clamp(0, 1), roughness.clamp(0.02, 1));
   const k = P.u('light.specOcclusion');
   const wrapDirect = (name: 'direct' | 'directRectArea', diffuseAO: boolean) => {
