@@ -35,7 +35,7 @@ import soundfile as sf
 from . import bed, clean, loop, spatialise
 from . import loudness as Lz
 from . import provenance as prov
-from .common import BUILD, REAL_IR, ffmpeg, ffmpeg_version, file_sha256, log
+from .common import BUILD, REAL_IR, clear_outputs, ffmpeg, ffmpeg_version, file_sha256, log
 
 SR = 48000
 WEB = BUILD / "web"
@@ -165,6 +165,9 @@ def master_ambience(recs: dict, tool: dict, ir_id: str | None) -> list[dict]:
         g = t["tp_ceiling_dbtp"] - hottest
         log(f"ambience-v2: TP-bound, preview lands {g + Lz.integrated(prev):.1f} LUFS-I")
     k = 10 ** (g / 20)
+    for sub in ("layers", "events"):   # stale masters and encodes from a bigger earlier run
+        clear_outputs(root / sub, "*.flac")
+        clear_outputs(WEB / "ambience-v2" / sub, "*.opus")
     outputs = []
     by_name = {l["name"]: l for l in meta["layers"]}
     ev_meta = {e["name"]: e for e in meta["events"]}
@@ -271,6 +274,10 @@ def main() -> None:
     # contact-mic A/B pool (user picked the main pool)
     for rid in [r for r in recs if r.startswith(("audio:ambience/", "audio:foley/dress-concrete-contactmic/"))]:
         del recs[rid]
+    # everything this stage writes is re-recorded below; drop the previous run's records first so
+    # files no longer built (fewer takes or events) do not linger in the manifest
+    for rid in [r for r in recs if r.startswith(("audio:ambience-v2/", "audio:foley/dress-concrete/"))]:
+        del recs[rid]
     recs.pop("plateau:13104-shinjuku-ku-2025", None)   # canonical copy is in data.jsonl (see ir_records)
     ir_id, placeholder = ir_records(recs)
     outputs = master_ambience(recs, tool, None if placeholder else ir_id)
@@ -280,6 +287,8 @@ def main() -> None:
     root = BUILD / "masters" / "foley" / pool_name
     pool = json.loads((root / "pool.json").read_text())
     src_id = "freesound:" + pool["source"].split("-")[-1]
+    for variant in ("dry", "wet", "wet-v1", "alley-dry", "alley-wet"):
+        clear_outputs(WEB / "foley" / pool_name / variant, "*.opus")
     for variant in ("dry", "wet", "wet-v1", "alley-dry", "alley-wet"):
         for f in sorted((root / variant).glob("*.flac")):
             x, _ = sf.read(f, dtype="float64", always_2d=True)

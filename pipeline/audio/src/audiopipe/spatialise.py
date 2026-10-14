@@ -36,7 +36,7 @@ import numpy as np
 import soundfile as sf
 
 from . import loudness as Lz
-from .common import BUILD, REAL_IR, ffmpeg, file_sha256, log
+from .common import BUILD, REAL_IR, clear_outputs, ffmpeg, file_sha256, log
 
 SR = 48000
 IR_DIR = BUILD / "spatialise"   # our working files; data/build/audio/ir/ belongs to spike 6
@@ -159,6 +159,8 @@ def run(force_placeholder: bool = False) -> dict:
     results = []
     for pool in POOLS:
         root = BUILD / "masters" / "foley" / pool
+        for variant in ("dry", "wet"):   # master globs these folders
+            clear_outputs(root / f"alley-{variant}", "*.flac")
         pairs = []
         for variant in ("dry", "wet"):
             for take in sorted((root / variant).glob("*.flac")):

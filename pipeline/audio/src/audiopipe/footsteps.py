@@ -36,7 +36,7 @@ import soundfile as sf
 from scipy import signal
 
 from . import loudness as L
-from .common import BUILD, ffmpeg, log
+from .common import BUILD, clear_outputs, ffmpeg, log
 from .steps import SR, detect, load
 
 FOLEY_STEP_LUFS_M = -30.0   # per-take loudness match before variation (relative; see TP_CEIL_DBTP)
@@ -210,13 +210,33 @@ def splash_v2(n: int, at: list[int], rng: np.random.Generator, level: float) -> 
 SPLASH = {"v1": splash_v1, "v2": splash_v2}
 
 
-def eq_wet(y: np.ndarray, version: str = WET_VERSION) -> np.ndarray:
+def _eq_raw(y: np.ndarray, version: str) -> np.ndarray:
     with tempfile.TemporaryDirectory() as td:
         i, o = Path(td) / "i.wav", Path(td) / "o.wav"
         sf.write(i, y, SR, subtype="FLOAT")
         ffmpeg("-i", str(i), "-af", WET[version]["eq"], "-c:a", "pcm_f32le", str(o))
         z, _ = sf.read(o, dtype="float64")
-    return z[: len(y)]
+    return z
+
+
+_EQ_DELAY: dict[str, int] = {}
+
+
+def eq_delay(version: str = WET_VERSION) -> int:
+    """Group delay of the linear-phase firequalizer in samples, measured once with an impulse
+    (the FIR is symmetric, so its peak sits at the delay; ~480 samples = firequalizer's 10 ms)."""
+    if version not in _EQ_DELAY:
+        imp = np.zeros(SR // 2)
+        imp[0] = 1.0
+        _EQ_DELAY[version] = int(np.argmax(np.abs(_eq_raw(imp, version))))
+    return _EQ_DELAY[version]
+
+
+def eq_wet(y: np.ndarray, version: str = WET_VERSION) -> np.ndarray:
+    """EQ with its group delay removed, so the wet take stays sample-aligned with the dry one."""
+    d = eq_delay(version)
+    z = _eq_raw(np.concatenate([y, np.zeros(d)]), version)
+    return z[d: d + len(y)]
 
 
 def wet_parts(dry: np.ndarray, hits: list[int], seed: int, version: str = WET_VERSION) -> dict[str, np.ndarray]:
@@ -255,6 +275,8 @@ def build(source_slug: str, name: str, seed: int, profile: str = "default") -> d
     cents = rng.permutation(CENTS).tolist()
     gains = rng.permutation(GAINS_DB).tolist()
     root = BUILD / "masters" / "foley" / name
+    for variant in ("dry", "wet", "wet-v1"):   # spatialise and master glob these folders
+        clear_outputs(root / variant, "*.flac")
     takes, audio = [], []
     for k, e in enumerate(chosen, 1):
         y = extract(x, e)
