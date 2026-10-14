@@ -97,16 +97,15 @@
    }
   },
   "identity": {
-   "delta": "$DATA/build/identity/v2/public_face.npz",
+   "delta": "$DATA/build/identity/public_face.npz",
    "coeffs": "$REPO/bench/m1/variants/public_identity.json",
-   "base_embedding": "$DATA/build/identity/v2/base_embedding.npz",
-   "ict_embedding": "$DATA/build/identity/v2/ict_embedding.npz",
+   "base_embedding": "$DATA/build/identity/base_embedding.npz",
+   "ict_embedding": "$DATA/build/identity/ict_embedding.npz",
    "ict": "$DATA/raw/ict-facekit",
    "weight": 1.0,
    "auto": true
   },
   "sculpt": {
-   "embedding": "$DATA/build/identity/v2/base_embedding.npz",
    "fields": {
     "socket": {
      "lower_mm": -5.5
