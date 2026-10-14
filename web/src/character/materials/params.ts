@@ -168,8 +168,10 @@ export const DEFAULT_PARAMS = {
     spec1: 0.01,
     spec2: 0.002,
     // the brow body: T9 brow region p50 0.08 vs 0.16 (Cycles), near-black strokes over skin; 0.01 with
-    // the T9b brow under-layer and finer strands: brow region 1.03x, p50 0.135 vs 0.161
-    scatter: 0.01,
+    // the T9b brow under-layer and finer strands: brow region 1.03x, p50 0.135 vs 0.161.
+    // T11: 0.004: the band is the under-layer now (a neutral dark brown); the wrapped scatter in
+    // the albedo's (near-black red) tint lit the strokes ginger under the hero rig's warm key
+    scatter: 0.004,
     tt: 0.0,
     alphaTest: 0.22,
   },

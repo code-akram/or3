@@ -320,7 +320,8 @@ DEFAULTS = {
                            "min_halfwidth_m": 0.0009, "max_halfwidth_m": 0.003,
                            "jaw_nz": [-0.95, -0.45], "moustache_edge_m": 0.006,
                            # T9b: jaw fins 80 -> 55 deg and a longer tip fade (the jaw edge read spiky)
-                           "roll_jaw_deg": 55, "roll_moustache_deg": 35, "roll_chin_deg": 20,
+                           # T11: moustache 35 -> 20 deg (it stood off the lip as a bar)
+                           "roll_jaw_deg": 55, "roll_moustache_deg": 20, "roll_chin_deg": 20,
                            "roll_lying_deg": 12, "roll_sigma_deg": 12,
                            "cell": [32, 128], "atlas_px": [2048, 4096], "ss": 2, "data_scale": 2,
                            "strand_px": 0.8, "tip_px": 0.3, "tip_fade": 0.4, "tip_alpha": 0.1,
@@ -330,11 +331,28 @@ DEFAULTS = {
                            "roughness": {"base": 0.55, "jitter": 0.12},
                            "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.3},
                            "gap_m": 0.0003, "cast_shadow": False,
-                           "material": {"roughness": 0.6, "specular": 0.25}},
+                           "material": {"roughness": 0.6, "specular": 0.25},
+                           # T11 (bench/m1/v4/t11-facial-hair.md): the bake's grey is the hero's
+                           # *visible* grey: a share `keep` of the hero's grey strands stays grey
+                           # (keep_chin at the chin, keep_moustache on it), the rest take the dark
+                           # tone; those left x gain, desaturated, x px wide; body: a neutral
+                           # floor on every strand (the hero's dark mass reads charcoal, not black),
+                           # x body_moustache on the moustache
+                           "grey": {"keep": 0.6, "keep_chin": 1.0, "keep_moustache": 0.3,
+                                    "dark_melanin": 0.99, "dark_redness": 0.3,
+                                    "gain": 0.7, "desat": 0.5, "px": 0.85, "body": "#2a2622",
+                                    "body_moustache": 0.6},
+                           # T11: cheek-line fade: strand alpha (and width, px_min) ramp with the
+                           # root density
+                           "edge_fade": {"density": [0.08, 0.8], "pow": 1.5, "min": 0.0, "px_min": 0.5},
+                           # T11: the moustache's lip-edge cards clear the lip and fade longer to the tip
+                           "lip_gap_m": 0.0012, "lip_tip_fade": 0.65},
             # The darker under-layer in the game skin albedo (hair_beard.paint_underlayer,
             # after head_refine): beard + stubble root density -> cover -> toward the beard colour.
-            "underlayer": {"radius_m": 0.003, "full_per_cm2": 200, "stubble_weight": 0.5,
-                           "blur_px": 3, "gamma": 0.7, "strength": 0.85, "colour_gain": 1.0},
+            # T11: gamma 0.7 -> 0.6, stubble 0.5 -> 0.8, blur 3 -> 8 px: the grown-in shadow past the
+            # cheek line, where the cards now fade out
+            "underlayer": {"radius_m": 0.003, "full_per_cm2": 200, "stubble_weight": 0.8,
+                           "blur_px": 8, "gamma": 0.6, "strength": 0.85, "colour_gain": 1.0},
             # Game shells (enabled False since T9: kept for comparison): the decimated patch
             # stacked along the normal at t_k x the local groom canopy; tile k is the groom slice.
             "shells": {"enabled": False, "layers": 14, "t_pow": 1.3, "base_tris": 420, "lift_m": 0.0,
@@ -411,14 +429,17 @@ DEFAULTS = {
                      "frizz": {"distance_m": 0.0004, "shape": 0.6}},
             "base_tris": 0,            # (unused; shells.base_tris)
             # Game (T9): cards over the whole brow (beard_bake.build_groom_cards), as the beard.
-            "game_cards": {"seed": 213, "count": 256, "spacing_m": 0.0016, "clump_radius_m": 0.0016,
+            # T11: fewer, fuller cards (count 256 -> 220, clump 1.6 -> 2.1 mm), finer strands
+            "game_cards": {"seed": 213, "count": 220, "spacing_m": 0.0017, "clump_radius_m": 0.0021,
                            "min_members": 3, "min_len_m": 0.003, "min_density": 0.05, "segments": 2,
                            "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
                            "min_halfwidth_m": 0.0006, "max_halfwidth_m": 0.0018,
                            "roll_deg": 8, "roll_sigma_deg": 8,
                            "cell": [32, 64], "atlas_px": [1024, 512], "ss": 2, "data_scale": 2,
-                           # T9b: finer strands, longer tip fade (the cards read as spiky strokes)
-                           "strand_px": 0.42, "tip_px": 0.25, "tip_fade": 0.45, "tip_alpha": 0.05,
+                           # T9b: finer strands, longer tip fade (the cards read as spiky strokes);
+                           # T11: 0.42 -> 0.36 px (`alpha` < 1: semi-transparent strands; dithers under A2C)
+                           "strand_px": 0.36, "tip_px": 0.18, "tip_fade": 0.5, "tip_alpha": 0.05,
+                           "body": "#2a1e18",  # T11: a dark-brown floor (brows.py)
                            "flow_jitter_deg": 6,
                            "albedo": {"radial_roughness": 0.55, "path": 0.68, "gain": 1.0,
                                       "random_color": 0.0, "value_sigma": 0.12},
@@ -429,7 +450,10 @@ DEFAULTS = {
                            # T9b: a soft under-layer in the game skin (hair_beard.paint_underlayer):
                            # the hero brow is a soft band, the cards alone a set of strokes
                            "underlayer": {"radius_m": 0.002, "full_per_cm2": 300, "stubble_weight": 1.0,
-                                          "blur_px": 10, "gamma": 1.0, "strength": 0.4, "colour_gain": 1.0}},
+                                          # T11: strength 0.4 -> 0.88 (it did not show), a dark
+                                          # neutral brown, not the strands' near-black red
+                                          "blur_px": 12, "gamma": 1.0, "strength": 0.88, "colour_gain": 1.0,
+                                          "colour": "#262220"}},
             # shells: enabled False since T9 (kept for comparison)
             "shells": {"enabled": False, "layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
                        "atlas_cols": 2, "tile": [512, 192], "px_per_m": 6000.0,

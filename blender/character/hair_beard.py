@@ -538,8 +538,48 @@ def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
     blue-noise centres over every strand longer than min_len_m (the silhouette zones
     first: jaw fins, the moustache's lip edge, the chin), lying cards elsewhere."""
     crng = np.random.default_rng(gc["seed"])
-    rgb = beard_bake.strand_rgb(mel, red, gc["albedo"], crng)
+    # T11: the bake's grey is the hero's *visible* grey, not its strand share. In the hero beard
+    # a grey strand sits inside a dense dark mass that shadows and covers it; drawn on a card it
+    # is a full-width light stroke (the T9 bake read as 55+, "steel wool"). So only a share of
+    # the hero's grey strands stay grey in the bake: most at the chin, few on the moustache and
+    # the sides (NOTES §7: greying concentrated at the chin, dark moustache and sides); the rest
+    # take the dark base tone. Those left are dimmer (gain), more neutral (desat) and finer (px).
+    # Own RNG, so the card centres and the rest of the bake keep their streams.
+    gy = gc.get("grey")
+    bmel, bred = mel.copy(), red.copy()
+    grey0 = mel < 0.4
+    if gy:
+        grng = np.random.default_rng(gc["seed"] + 7)
+        keep = gy["keep"] + (gy["keep_chin"] - gy["keep"]) * np.clip(f["chin"], 0, 1)
+        keep = np.where(f["moustache"] > 0.5, gy["keep_moustache"], keep)
+        drop = grey0 & (grng.random(len(mel)) >= keep)
+        bmel[drop] = np.clip(gy["dark_melanin"] + grng.normal(0, 0.015, int(drop.sum())), 0, 1)
+        bred[drop] = gy["dark_redness"]
+    grey = bmel < 0.4
+    rgb = beard_bake.strand_rgb(bmel, bred, gc["albedo"], crng)
+    if gy and grey.any():
+        lum = (rgb[grey] @ np.array([0.2126, 0.7152, 0.0722]))[:, None]
+        rgb[grey] = (lum + (rgb[grey] - lum) * (1.0 - gy["desat"])) * gy["gain"]
+    if gy and gy.get("body"):
+        # the dark strands' body: Chiang at melanin 0.99 is linear ~(1e-3, 1e-4, 0), so with the grey
+        # thinned the cards render near-black where the hero's dense beard reads charcoal (its multiple
+        # scattering and under-coat; the engine's facial hair has no scatter lobe). A small neutral
+        # floor on every strand (sRGB hex) stands in for it.
+        # (x body_moustache on the moustache: the hero's darkest zone)
+        bs = np.where(f["moustache"] > 0.5, gy.get("body_moustache", 1.0), 1.0)
+        rgb = rgb + bs[:, None] * beard_bake.linear(hair_mesh.hex_rgb(gy["body"]))[None, :]
     gb = {"pts": ev, "root_n": rn, "rgb": rgb, "radius": rad0}
+    px = np.where(grey, gy["px"], 1.0) if gy else np.ones(len(mel))
+    # T11: cheek-line fade: each strand's alpha in its card ramps with the groom's root density
+    # (the hero thins over fade.in_m; the cards drew the thin edge strands at full alpha: a hard
+    # arc), and the strand narrows with it (px_min at no density)
+    ef = gc.get("edge_fade")
+    if ef:
+        d0, d1 = ef["density"]
+        a = np.clip((f["density"] - d0) / (d1 - d0), 0, 1) ** ef["pow"]
+        gb["alpha"] = ef["min"] + (1 - ef["min"]) * a
+        px = px * (ef.get("px_min", 1.0) + (1 - ef.get("px_min", 1.0)) * a)
+    gb["px"] = px
     L = np.linalg.norm(np.diff(ev, axis=1), axis=2).sum(1)
     zone, zprio, zroll = card_candidates(gb, f, frame, gc)
     ok = L > gc["min_len_m"]
@@ -554,15 +594,32 @@ def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
         kd.insert(v.co, i)
     kd.balance()
     wcache = {i: dict(v[dl].items()) for i, v in enumerate(bm.verts)}
+    # T11: lip clearance: the moustache's lip-edge cards stand lip_gap_m off the skin past the root
+    # row (at the 0.3 mm gap the overhang lay on the vermilion: a ragged bar along the lip)
+    lip_edge = (f["moustache"] > 0.5) & (ev[:, 0, 2] < frame.lips_max.z + gc["moustache_edge_m"])
+    gaps = [gc.get("lip_gap_m", gc["gap_m"]) if lip_edge[j] else gc["gap_m"] for j in centres]
+    # ... and its tips fade over a longer stretch (a soft overhang, not a fringe of dark spikes)
+    tfs = [gc.get("lip_tip_fade", gc["tip_fade"]) if lip_edge[j] else gc["tip_fade"] for j in centres]
     stats = beard_bake.build_groom_cards(b, obj, bm, gb, centres, rolls, lambda r: wcache[kd.find(Vector(r))[1]],
-                                         gc, "beard", frame.skin_bvh, crng)
+                                         gc, "beard", frame.skin_bvh, crng, gaps=gaps, tip_fades=tfs)
     stats["zone_cards"] = int(sum(1 for j in centres if zone[j]))
+    stats["lip_edge_cards"] = int(sum(1 for j in centres if lip_edge[j]))
     stats["albedo_median_linear"] = [round(float(x), 5) for x in np.median(rgb, 0)]
-    grey = mel < 0.4
     chin = f["chin"] > 0.5
-    if (grey & chin).any() or chin.any():
-        stats["grey_share_chin"] = round(float(grey[chin].mean()), 4) if chin.any() else None
-    stats["_albedo_median"] = np.median(rgb, 0).tolist()
+    must = f["moustache"] > 0.5
+    rest = ~chin & ~must
+
+    def share(g, sel):
+        return round(float(g[sel].mean()), 4) if sel.any() else None
+    stats["grey_share_chin"] = share(grey0, chin)
+    # T11: grey share by zone, the hero strands' and the bake's
+    stats["bake_grey"] = {z: {"hero": share(grey0, sel), "bake": share(grey, sel)}
+                          for z, sel in (("all", np.ones(len(mel), bool)), ("chin", chin),
+                                         ("moustache", must), ("sides", rest))}
+    if "alpha" in gb:
+        stats["edge_fade_alpha_p10_p50"] = [round(float(np.percentile(gb["alpha"], q)), 3) for q in (10, 50)]
+    # the under-layer colour: the dark strands' median (as before; the grey strands are a minority)
+    stats["_albedo_median"] = np.median(rgb[~grey] if (~grey).any() else rgb, 0).tolist()
     return stats
 
 
@@ -644,6 +701,11 @@ def paint_underlayer(b, key="beard"):
     px = px.reshape(h, w, 4)
     lin = beard_bake.linear(px[..., :3])
     col = np.array(ul["beard_albedo"] if key == "beard" else ul["albedo"]) * cfg["colour_gain"]
+    if cfg.get("colour"):
+        # T11: an explicit colour (sRGB hex). The strands' median is a near-black red (Chiang at
+        # melanin ~0.99: linear ~(1e-3, 1e-4, 0)); a strong brow band in it reads ginger under
+        # the hero rig's warm key
+        col = beard_bake.linear(np.array([hair_mesh.hex_rgb(cfg["colour"])]))[0] * cfg["colour_gain"]
     out = lin * (1 - a[..., None]) + col[None, None] * a[..., None]
     px[..., :3] = hair_mesh.linear_to_srgb(out)
     img.pixels.foreach_set(px.ravel())
