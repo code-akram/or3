@@ -52,6 +52,8 @@ DEFAULTS = {
     "lean_deg": 10.0,            # the stand leans onto the neck by this much off the jacket surface
     "shirt_gap_cm": 0.25,        # stand clear of the shirt collar
     "h_lay_cm": 0.42,            # fall height over its base where it lies down
+    "h_break_cm": 0.27,          # ... falling to this (the rever's own thickness) at the break
+    "break_taper_cm": 4.0,
     "lay_len_collar_cm": 1.2,
     "lay_len_lapel_cm": 2.2,
     "corner_blend_cm": 0.8,      # the fall's normal turns over the stand/jacket corner within this
@@ -346,6 +348,11 @@ def profile(G, o):
     return st, r, lay
 
 
+def break_taper(s, G, o):
+    """1 away from the break, 0 at it (over the last break_taper_cm of the lapel)."""
+    return sp.smoothstep((G["s_B"] - np.abs(s)) / o["break_taper_cm"])
+
+
 def map3d(Vc, C, G, o, under=None):
     """Chart (s, q) -> 3D (m). C: Columns (walked). Returns X (n, 3) and the base normal."""
     st_f, r_f, lay_f = profile(G, o)
@@ -394,6 +401,9 @@ def map3d(Vc, C, G, o, under=None):
     qq = q - st - math.pi * r                              # past the roll
     v = st - qq                                            # base coordinate: + on the stand, - on the jacket
     h = o["h_lay_cm"] + (2 * r - o["h_lay_cm"]) * np.exp(-qq / lay)
+    # toward the break the lapel lies down onto the front: its edge meets the front edge there
+    tb = break_taper(s, G, o)
+    h = o["h_break_cm"] + (h - o["h_break_cm"]) * tb
     Pb_st = E + U * (np.maximum(v, 0) * cm)[:, None]
     Pb_bd, Nb_bd = body(np.minimum(v, 0))
     b = o["corner_blend_cm"]
@@ -480,9 +490,11 @@ def clear(X, bvhs, dist, skip=None, log=None, max_push=0.01):
     a jacket neck edge that rolls in, and snapping it there folds the collar flat."""
     X = X.copy()
     moved = 0
+    dist_all = np.broadcast_to(np.asarray(dist, float), (len(X),))
     for i, p in enumerate(X):
         if skip is not None and skip[i]:
             continue
+        dist = float(dist_all[i])
         for bi, b in enumerate(bvhs):
             loc, nor, _, d = b.find_nearest(Vector(p))
             if loc is None or d > 0.05:
@@ -612,8 +624,10 @@ def build(X, T, chains, D, under_bvhs=(), opts=None, stats=None):
     X_relax = Xr.copy()
     clog = []
     Xr0 = Xr
-    Xr, moved = clear(Xr, [surf.bvh] + list(under_bvhs), o["clear_cm"] / 100.0 + o["thick_cm"] / 100.0,
-                      skip=Vc[:, 1] < 1.5, log=clog)
+    dist = o["clear_cm"] / 100.0 + o["thick_cm"] / 100.0
+    tb = break_taper(Vc[:, 0], G, o)
+    dist = o["h_break_cm"] / 100.0 + (dist - o["h_break_cm"] / 100.0) * tb
+    Xr, moved = clear(Xr, [surf.bvh] + list(under_bvhs), dist, skip=Vc[:, 1] < 1.5, log=clog)
     if o["lift_spread_cm"] > 0:
         Xr = spread_lift(Xr0, Xr, Vc, o["lift_spread_cm"], fixed=Vc[:, 1] < 1.5)
     # outward normals of the sheet (consistent with Nout)

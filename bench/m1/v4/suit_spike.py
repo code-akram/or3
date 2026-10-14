@@ -1016,6 +1016,8 @@ def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=
                                       "rim": (160, 30, 50, 1.0)}.items():
             L = bpy.data.objects.new(f"spike_{nm}", bpy.data.lights.new(f"spike_{nm}", "AREA"))
             L.data.energy, L.data.size = en, sz
+            if hasattr(L.data, "shadow_maximum_resolution"):
+                L.data.shadow_maximum_resolution = 0.0002   # finer shadow maps: the rim shadows alias
             sc.collection.objects.link(L)
             L["az"], L["el"] = az, el
     cam.data.type = "ORTHO"
@@ -1071,6 +1073,8 @@ SPIKE = {
 # --- spike 2 (T13): two-stage weld, hull back collider, modelled rever --------------------------
 
 SPIKE2 = {
+    "details": True,             # the made jacket (blender/character/suit_detail.py); a dict overrides
+    "lods": [0.4, 0.15],         # LOD1, LOD2 decimate ratios of the made jacket
     "v2": True,
     "h_cm": 1.2,                      # finer than spike 1: a fold at the elbow crook needs it
     # the draft for the XPBD drape: the neckline at the neck's own length (spike 1's 1.15
@@ -1756,6 +1760,78 @@ CLOSE = {"close_34": (35.0, (0.0, 0.0, 1.42), 0.62), "close_back": (180.0, (0.0,
          "close_collar_back": (160.0, (0.0, 0.05, 1.57), 0.24, 0.05)}
 
 
+DETAIL_CLOSE = {
+    # the wearer's left hip pocket, breast welt, front button and buttonhole, cuff buttons, vent
+    "close_pocket": (20.0, (0.12, -0.12, 1.02), 0.24),
+    "close_welt": (15.0, (0.10, -0.12, 1.36), 0.20),
+    "close_button": (5.0, (0.0, -0.13, 1.125), 0.10),
+    "close_cuff_btn": (110.0, (0.47, -0.12, 1.12), 0.18),
+    "close_vent": (165.0, (0.10, 0.08, 0.98), 0.32),
+    "close_hem_edge": (35.0, (0.06, -0.10, 0.95), 0.18, -0.25),
+}
+
+
+def render_detail_close(out_dir, tag, show):
+    for v, (az, tgt, sc_, *dz) in DETAIL_CLOSE.items():
+        render_views(out_dir, tag, show, [v], target=tgt, scale=sc_, az_override=az,
+                     cam_dz=dz[0] if dz else 0.15)
+
+
+def set_parts(ob, part):
+    """Store the made jacket's part tag (0 wool, 1 lining, 2 edge, 3 button) as a face
+    attribute (materials come later: T13 item 2)."""
+    a = ob.data.attributes.new("part", "INT", "FACE")
+    a.data.foreach_set("value", [int(x) for x in part])
+
+
+def detail_clearance(X, T, det):
+    """How far each detail stands off the drape (mm): min, p01 of the signed distance of the
+    pockets' and buttons' vertices to the draped outside (negative = sunk in)."""
+    from mathutils.bvhtree import BVHTree
+    bvh = BVHTree.FromPolygons([tuple(p) for p in X], [tuple(int(i) for i in t) for t in T])
+    out = {}
+    for k in ("pockets", "buttons", "buttonhole"):
+        if det.get(k) is None:
+            continue
+        d = []
+        for p in det[k][0]:
+            loc, nor, _, dd = bvh.find_nearest(Vector(p))
+            if loc is None or dd > 0.03:
+                continue
+            d.append(float(np.dot(np.asarray(p) - np.array(loc), np.array(nor))))
+        d = np.array(d) * 1000
+        out[k] = {"min": round(float(d.min()), 2), "p01": round(float(np.percentile(d, 1)), 2),
+                  "below_0": int((d < 0).sum()), "n": int(len(d))}
+    return out
+
+
+def make_lods(obs, ratios):
+    """LOD1/LOD2: the made jacket joined and collapse-decimated. Returns {k: (object, tris)}."""
+    out = {}
+    for k, r in enumerate(ratios, start=1):
+        cps = []
+        for ob in obs:
+            if k >= 2 and ob.name.endswith(("buttonhole",)):
+                continue                       # LOD2 drops the buttonhole cord
+            c = ob.copy()
+            c.data = ob.data.copy()
+            bpy.context.scene.collection.objects.link(c)
+            cps.append(c)
+        with bpy.context.temp_override(active_object=cps[0], selected_editable_objects=cps,
+                                       selected_objects=cps):
+            bpy.ops.object.join()
+        j = cps[0]
+        j.name = f"spike_jacket_lod{k}"
+        m = j.modifiers.new("dec", "DECIMATE")
+        m.ratio = float(r)
+        dg = bpy.context.evaluated_depsgraph_get()
+        me2 = bpy.data.meshes.new_from_object(j.evaluated_get(dg))
+        j.modifiers.clear()
+        j.data = me2
+        out[k] = (j, int(sum(len(p.vertices) - 2 for p in me2.polygons)))
+    return out
+
+
 def render_close(out_dir, tag, show):
     for v, (az, tgt, sc_, *dz) in CLOSE.items():
         render_views(out_dir, tag, show, [v], target=tgt, scale=sc_, az_override=az,
@@ -1973,14 +2049,41 @@ def main_v2(O):
         stats["rever"]["inside_under_ray"] = len(cov)
         stats["rever"]["inside_under_ray_at"] = [[round(float(cv[i, 0]), 1), round(float(cv[i, 1]), 1)] for i in cov[:12]]
     cov3 = [p for p in X3 if real.covered(p)]
+    # inside by both rules (the nearest face says inside and a ray says covered)
+    stats["inside_both"] = int(sum(1 for p in cov3 if real.signed(p)[0] < -0.0005))
     stats["inside_after_push_ray"] = len(cov3)
     stats["inside_after_push_ray_at"] = [[round(float(c), 3) for c in p] for p in cov3[:12]]
     if O.get("debug_rever"):
         np.savez_compressed(os.path.join(A.out_dir, "rever_dbg.npz"), chart_V=rinfo["chart_V"], chart_T=rinfo["chart_T"],
                             sheet_X=rinfo["sheet_X"], **rinfo["debug"])
     tick("rever", t)
-    jk = mesh_object("spike_jacket_body", X3, Tw)
     rv = mesh_object("spike_jacket_rever", Vr, Fr)
+    det_obs = []
+    if O.get("details"):
+        # the made jacket: shell with turned edges and lining, pockets, vents, buttons
+        t = time.perf_counter()
+        from character import suit_detail
+        dst = {}
+        det = suit_detail.build(C, D, wm, X3, Tw, O["details"] if isinstance(O["details"], dict) else None, dst)
+        Vs_, Fs_, ps_ = det["shell"]
+        jk = mesh_object("spike_jacket_body", Vs_, Fs_)
+        set_parts(jk, ps_)
+        for k in ("pockets", "buttons", "buttonhole"):
+            if det.get(k) is not None:
+                ob_ = mesh_object(f"spike_jacket_{k}", det[k][0], det[k][1])
+                set_parts(ob_, det[k][2])
+                det_obs.append(ob_)
+        dst["clearance_mm"] = detail_clearance(X3, Tw, det)
+        stats["detail"] = dst
+        np.savez_compressed(os.path.join(A.out_dir, "made.npz"),
+                            **{f"{k}_V": v[0] for k, v in det.items() if v is not None},
+                            **{f"{k}_F": np.array([list(f) + [-1] * (4 - len(f)) for f in v[1]]) for k, v in det.items()
+                               if v is not None},
+                            **{f"{k}_part": v[2] for k, v in det.items() if v is not None})
+        tick("details", t)
+    else:
+        jk = mesh_object("spike_jacket_body", X3, Tw)
+    stats["made_tris"] = sum(len(p.vertices) - 2 for ob_ in [jk, rv] + det_obs for p in ob_.data.polygons)
     stats["kept_tris"] = int(len(Tw)) + sum(len(f) - 2 for f in Fr)
     stats["body_tris"] = int(len(Tw))
     stats["rever_tris"] = sum(len(f) - 2 for f in Fr)
@@ -2006,9 +2109,17 @@ def main_v2(O):
     base["jacket"].hide_viewport = False
     bpy.context.scene.frame_set(1)
     render_views(A.out_dir, "lofted", under + [base["jacket"].name], list(VIEWS))
-    render_views(A.out_dir, "pattern", under + [jk.name, rv.name], list(VIEWS))
+    pat = [jk.name, rv.name] + [o_.name for o_ in det_obs]
+    render_views(A.out_dir, "pattern", under + pat, list(VIEWS))
     render_close(A.out_dir, "lofted", under + [base["jacket"].name])
-    render_close(A.out_dir, "pattern", under + [jk.name, rv.name])
+    render_close(A.out_dir, "pattern", under + pat)
+    if det_obs:
+        render_detail_close(A.out_dir, "pattern", under + pat)
+    if O.get("lods"):
+        lods = make_lods([jk, rv] + det_obs, O["lods"])
+        stats["lod_tris"] = {k: v[1] for k, v in lods.items()}
+        for k, (ob_, _) in lods.items():
+            render_views(A.out_dir, f"lod{k}", under + [ob_.name], ["front", "three_quarter"])
     if O.get("debug_rever"):
         render_close(A.out_dir, "rever", [body.name, rv.name])
         render_close(A.out_dir, "jbody", [body.name, jk.name])
