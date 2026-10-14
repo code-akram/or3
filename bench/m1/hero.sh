@@ -8,8 +8,10 @@
 #       -> $DATA/build/hero/<UTC>-<label>/
 #       -> <main>/private/likeness/hero/<UTC>-<label>/ for a fan build (private: see
 #          bench/m1/v3/BRIEF.md). A fan build is detected from its stats.json
-#          (config has a "fan" block), from an input under private/, or from
-#          FAN_CONFIG / --fan; its runs never go under data/.
+#          (likeness content: a "fan" block or a private/likeness/ path), from an
+#          input under private/, or from FAN_CONFIG / --fan; its runs never go under
+#          data/. Fails closed: an input without a readable <stem>.stats.json next to
+#          it is treated as a fan build.
 #     --preview          (default) 50 % resolution, 64 spp adaptive
 #     --final            100 % (1920x1080, 1152x2048 poster, 1080x1620 turntable), 256 spp adaptive 0.02
 #     --max              100 %, 768 spp adaptive 0.012 (single hero frames; ~3x --final)
@@ -90,16 +92,20 @@ LABEL="${2:?label}"
 THREADS="${THREADS:-$([[ $QUALITY == final || $QUALITY == max ]] && echo 16 || echo 8)}"
 
 # Fan builds (private likeness content) render under private/, never data/.
-PRIVATE="$MAIN_ROOT/private"
+# Fails closed: a missing, unreadable or malformed stats file counts as a fan build.
+PRIVATE="$(realpath -m "$MAIN_ROOT/private")"
 STATS="${IN%.*}.stats.json"
 if [[ -z "$FAN" ]]; then
   [[ -n "${FAN_CONFIG:-}" || "$IN" == "$PRIVATE"/* ]] && FAN=1
-  [[ -f "$STATS" ]] && python3 -I -c 'import json,sys; sys.exit(0 if "fan" in json.load(open(sys.argv[1])).get("config", {}) else 1)' "$STATS" && FAN=1
+  if [[ -z "$FAN" ]] && ! python3 -I "$REPO/pipeline/likeness/containment.py" clean "$STATS"; then
+    echo "hero: treating $IN as a fan build (private output)" >&2
+    FAN=1
+  fi
 fi
 [[ -n "$FAN" ]] && ROOT="$PRIVATE/likeness/hero"
 RUN="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
 [[ -n "${INTO:-}" ]] && RUN="$(cd "$INTO" && pwd)"   # add to an existing run (stage.json is merged)
-if [[ -n "$FAN" && "$RUN" != "$PRIVATE"/* ]]; then echo "fan build: refusing to write outside $PRIVATE ($RUN)" >&2; exit 2; fi
+if [[ -n "$FAN" && "$(realpath -m "$RUN")" != "$PRIVATE"/* ]]; then echo "fan build: refusing to write outside $PRIVATE ($RUN)" >&2; exit 2; fi
 mkdir -p "$RUN"
 echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS${FAN:+ fan(private)} loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 T0=$(date +%s)

@@ -1,7 +1,8 @@
 """Optional private face layer: a per-vertex offset field on the base mesh.
 
-Active only when the build has a fan config (build_character.py --fan FILE, or the FAN_CONFIG
-environment variable), which adds a "fan" block to the build config:
+Active only when the build has a fan config (build_character.py --fan FILE; bench/m1/lookdev.sh
+also takes it from $FAN_CONFIG), which adds a "fan" block to the build config. Such a build must
+write under <main checkout>/private/ (build_character.py refuses any other --out or dump_base):
 
     {"face_delta": "/abs/path/face_delta.npz",   # offsets for every base-mesh vertex
      "weight": 1.0,                              # shape-key value

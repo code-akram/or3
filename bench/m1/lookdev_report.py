@@ -8,6 +8,9 @@ finalize merges build stats (character.stats.json), glTF validation
 and draws RUN/sheet.png. compare writes DIR/compare.{json,md} (every numeric
 metric: A, B, delta) and DIR/sheet.png: both sheets stacked plus per-view
 mask overlays (white = both, red = only A, cyan = only B).
+
+Both refuse to write likeness content outside <main checkout>/private/: a run or a compare whose
+inputs are private or carry a fan block (pipeline/likeness/containment.py, NOTES.md §14 rule 7).
 """
 
 import argparse
@@ -15,6 +18,9 @@ import json
 import os
 import subprocess
 import sys
+
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "pipeline", "likeness")))
+import containment  # noqa: E402
 
 VIEWS = ["front", "three_quarter", "profile", "closeup"]
 FACE_VIEWS = ["face_front", "face_profile"]  # mask-only (body + eyes), IoU only
@@ -64,6 +70,8 @@ def finalize(a):
     rm = load(os.path.join(run, "render_metrics.json"))
     if not rm:
         sys.exit(f"no render_metrics.json in {run}")
+    if containment.likeness(build):
+        containment.assert_private(run, "lookdev run of a likeness build")
     val = glb.get("validation", {})
     glb_max_w = max((int(k) for m in glb.get("meshes", [])
                      for k, n in (m.get("weightsPerVertex") or {}).items() if n),
@@ -207,6 +215,8 @@ def compare(a):
     ma, mb = load(os.path.join(A, "metrics.json")), load(os.path.join(B, "metrics.json"))
     if not ma or not mb:
         sys.exit("both runs need metrics.json (finalised runs)")
+    if containment.is_private(A) or containment.is_private(B) or containment.likeness([ma, mb]):
+        containment.assert_private(a.out, "compare of a private or likeness run")
     fa, fb = flatten(ma), flatten(mb)
     rows = []
     for k in sorted(set(fa) | set(fb)):
