@@ -58,7 +58,7 @@ from . import hair_strand_raster as hsr
 
 CARDS = {
     "atlas": {"size": [2048, 4096], "cell_w": 128, "ss": 2, "data_scale": 2,
-              "lock_cells": 12, "under_cells": 2,
+              "lock_cells": 10, "front_cells": 2, "under_cells": 2,
               # column 14: fly cells (fly_cells x 64 px wide), column 15: hairline cells
               # (hairline_cells x 1024 px tall)
               "fly_cells": 2, "hairline_cells": 4,
@@ -90,7 +90,7 @@ CARDS = {
     "ear_margin_m": 0.004, "ear_lateral_m": 0.035,
     "ear_test": "box",
     "gap_m": 0.0012,                 # card vertices kept this far off the skin / suit (after GN)
-    "layer_shade": {"under": 0.7, "mid": 0.88, "top": 1.0, "front": 0.95, "fly": 0.95, "hairline": 1.0},
+    "layer_shade": {"under": 0.7, "mid": 0.88, "top": 1.0, "front": 0.85, "fly": 0.95, "hairline": 1.0},
     "lock_sigma": 0.08,
     "top_lift": {"pct": 80, "max_m": 0.012},
     "material": {"roughness": 0.55, "specular": 0.25},
@@ -606,12 +606,30 @@ def build(b, frame, ccfg, g):
                                rough_cfg=cfg["roughness"], sids=sids[p["members"]])
         put(f"lock{i}", res, ns, i * cw, 0)
         p["rep_len"] = len(p["members"])
+    # front cells: the front falls' own strands (their colour and cut, not a random lock's)
+    flc = cfg["front_lock"]
+    nfr = acfg["front_cells"]
+    falls = []
+    for pc in np.unique(prim[(kind == 2)]):
+        members = np.where((prim == pc) & (kind == 2))[0]
+        if len(members) >= 10:
+            falls.append(members)
+    falls.sort(key=len, reverse=True)
+    front_names = []
+    for i, members in enumerate(falls[:nfr]):
+        p = clump_profile(frame, E, members, cloth_gap, flc["width_pct"], flc["pad_m"], cfg["min_halfwidth_m"],
+                          flc["max_halfwidth_m"])
+        res, ns = raster_clump(p, cols[members], rng, cw, Hh, ss, acfg, acfg["max_strands"],
+                               rough_cfg=cfg["roughness"], sids=sids[members])
+        put(f"front{i}", res, ns, (nl + i) * cw, 0)
+        front_names.append(f"front{i}")
+    nl_all = nl + len(front_names)
     under_reps = sorted(unders, key=lambda p: -len(p["members"]))[:acfg["under_cells"]]
     for i, p in enumerate(under_reps):
         res, ns = raster_clump(p, cols[p["members"]], rng, cw, Hh, ss, acfg, acfg["under_max_strands"],
                                rough_cfg=cfg["roughness"], sids=sids[p["members"]])
-        put(f"under{i}", res, ns, (nl + i) * cw, 0)
-    col_fly = nl + acfg["under_cells"]
+        put(f"under{i}", res, ns, (nl_all + i) * cw, 0)
+    col_fly = nl_all + acfg["under_cells"]
     # fly cells: a few loose strands of a hanging clump each, spread wide
     nf = acfg["fly_cells"]
     for i in range(nf):
@@ -786,8 +804,7 @@ def build(b, frame, ccfg, g):
             continue
         count("under", add_card(p, f"under{int(rng.integers(len(under_reps)))}", "under", path_from=st,
                                 max_seg=uc["max_segments"], flip=bool(rng.random() < 0.5)))
-    # front locks: all of a fall's strands
-    flc = cfg["front_lock"]
+    # front locks: all of a fall's strands, on the front cells
     for pc in np.unique(prim[(kind == 2)]):
         members = np.where((prim == pc) & (kind == 2))[0]
         if len(members) < 10:
@@ -796,7 +813,8 @@ def build(b, frame, ccfg, g):
                           flc["max_halfwidth_m"])
         p["C"] = p["C"] - p["N"] * flc["inset_m"]
         p.update(members=members, kind="front", layer="front", hang=H[members].mean(0))
-        count("front_lock", add_card(p, lock_names[-1 - int(rng.integers(3))], "front"))
+        fcell = front_names[int(rng.integers(len(front_names)))] if front_names else lock_names[-1]
+        count("front_lock", add_card(p, fcell, "front"))
     # mid / top (and the front falls' own sub-clumps). The top cards ride on the clump's outer
     # strands (a percentile of their offset along the outward normal), not its mean: the strands'
     # outer envelope is the silhouette the hero renders.
@@ -814,7 +832,9 @@ def build(b, frame, ccfg, g):
     for p in profs:
         if p["kind"] != "front" and drop_ear(p, p["layer"]):
             continue
-        count(p["layer"], add_card(p, lock_cell(p), p["layer"], flip=bool(rng.random() < 0.5)))
+        cell = (front_names[int(rng.integers(len(front_names)))] if p["kind"] == "front" and front_names
+                else lock_cell(p))
+        count(p["layer"], add_card(p, cell, p["layer"], flip=bool(rng.random() < 0.5)))
     # hairline cards
     for gm in hl_groups:
         p = clump_profile(frame, E, gm, cloth_gap, 90, 0.0008, hc["halfwidth_m"][0], hc["halfwidth_m"][1])
@@ -847,6 +867,11 @@ def build(b, frame, ccfg, g):
             count("fly", add_card(p, f"fly{int(rng.integers(nf))}", "fly", path_from=s0,
                                   halfwidth_m=fc["halfwidth_m"], max_seg=fc["max_segments"]))
 
+    # --- the hero strands after GN (info, §5.3 #5): a sample of points inside the skin / suit
+    prng = np.random.default_rng(acfg["seed"] + 4)
+    sj, si = prng.integers(0, n, 20000), prng.integers(2, m, 20000)
+    inside = sum(1 for j_, i_ in zip(sj, si) if (lambda r: r[0] is not None and r[2] < 0.0)(
+        frame.signed(Vector(E[j_, i_]), cloth_gap)))
     # --- keep every card vertex off the skin / suit (after GN; the groom's push_out ran before)
     gap = cfg["gap_m"]
     pushed = 0
@@ -894,6 +919,7 @@ def build(b, frame, ccfg, g):
     b.notes["hair"] = {
         "source": "groom", "baker": "v4 (T9)", "cards": counts, "card_tris": tris, "cap_faces": cap_faces,
         "tris": total, "ear_dropped": ear_dropped, "pushed_card_verts": pushed,
+        "strand_points_inside_after_gn_per_20k": int(inside),
         "top_lift_mm_p50_max": [round(float(np.median(lifted)) * 1e3, 2), round(float(max(lifted)) * 1e3, 2)] if lifted else None,
         "atlas": {"size": [W, Hh], "cell_w": cw, "data_scale": acfg["data_scale"],
                   "mm_per_px_along_0.55m": round(0.55e3 / Hh, 3), "cells": cell_stats,
