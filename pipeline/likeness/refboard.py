@@ -45,6 +45,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import containment  # noqa: E402
+
 # MediaPipe Face Mesh indices used below (478-point model with irises).
 IRIS_R, IRIS_L = 468, 473                 # iris centres (subject's right, left)
 EYE_R = (33, 133, 159, 145)               # outer, inner corner, upper lid, lower lid (subject's right)
@@ -615,6 +618,12 @@ def main(argv=None):
     s.add_argument("--out-dir", default="")
     s.add_argument("images", nargs="+")
     a = ap.parse_args(argv)
+    # every output is likeness data; ident and ratios default to a file next to their input
+    containment.assert_outputs(a, "out", "out_dir")
+    if a.cmd == "ident" and not a.out:
+        containment.assert_private(Path(a.cands) / "ident.json", "ident output")
+    if a.cmd == "ratios" and not a.out:
+        containment.assert_private(Path(a.ref) / "ratios.json", "ratios output")
     os.environ.setdefault("OMP_NUM_THREADS", "3")
     cv2.setNumThreads(3)
     {"scan": cmd_scan, "sheet": cmd_sheet, "ident": cmd_ident, "board": cmd_board, "ratios": cmd_ratios,

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Download FLAME 2020 into private/body-models/flame/ with your flame.is.tue.mpg.de login.
 #   fetch_flame.sh --login   (your terminal) saves the login to a 600 file under private/, nothing else
-#   fetch_flame.sh           downloads with the saved login, or asks for it; the saved login is removed after success
+#   fetch_flame.sh           downloads with the saved login, or asks for it; the saved login is removed after
+#                            success and kept (mode 600, private/body-models/flame/.login) after a failed
+#                            download, so a rerun needs no prompt; delete it yourself if you give up
 # Credentials are read silently and sent on stdin, never in argv.
 set -euo pipefail
 dest="$(cd "$(dirname "$0")/../.." && pwd)/private/body-models/flame"

@@ -10,8 +10,9 @@
 # a bot". The Lionsgate Movies YouTube entries therefore need browser cookies: use
 # fetch-youtube.sh, which checks private/youtube-cookies.txt and calls this script.
 # The Lionsgate UK TikTok entries download without auth.
-# YTDLP overrides the yt-dlp binary. With --cookies in YTDLP_EXTRA no info.json is written
-# (yt-dlp copies cookie values into the formats in it); a cookie-free meta.txt is written instead.
+# YTDLP overrides the yt-dlp binary. YTDLP_COOKIES names a cookies file (one argument, so the path
+# may contain spaces); YTDLP_EXTRA adds whitespace-split yt-dlp options. With cookies no info.json is
+# written (yt-dlp copies cookie values into the formats in it); a cookie-free meta.txt is written instead.
 set -euo pipefail
 
 # Worktrees share the main checkout's private/ directory.
@@ -61,6 +62,7 @@ candidates=(
 want=("$@")
 fmt='bv*[height<=1080][vcodec^=avc1]/bv*[height<=1080][vcodec^=h264]/bv*[height<=1080]/b'
 read -r -a extra <<<"${YTDLP_EXTRA:-}"
+[[ -n "${YTDLP_COOKIES:-}" ]] && extra+=(--cookies "$YTDLP_COOKIES")
 ytdlp="${YTDLP:-yt-dlp}"
 
 for entry in "${candidates[@]}"; do

@@ -20,6 +20,8 @@ import pickle
 
 import numpy as np
 
+import containment
+
 N_SHAPE = 300
 
 
@@ -169,6 +171,7 @@ def load_embedding(path):
 
 
 def write_obj(path, v, faces):
+    containment.assert_private(path, "mesh")
     with open(path, "w") as f:
         f.writelines(f"v {p[0]:.6f} {p[1]:.6f} {p[2]:.6f}\n" for p in v)
         f.writelines(f"f {t[0]} {t[1]} {t[2]}\n" for t in faces + 1)

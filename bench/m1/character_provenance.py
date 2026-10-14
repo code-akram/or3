@@ -8,6 +8,10 @@ and rewrites the `mesh:character/character.glb` record in
 provenance/mesh.jsonl (bytes, sha256, and transformations from the build
 config). Run it after a build you intend to ship, then audit:
 python3 -I provenance/audit.py --data-root DATA --check-files
+
+Refuses (exit 1, nothing written) a GLB under private/ or stats carrying likeness content (a
+"fan" block or a private/likeness/ path anywhere, e.g. a fan build's config): mesh.jsonl is
+tracked, and the fan build never ships (NOTES.md §14 rule 7).
 """
 
 import argparse
@@ -15,11 +19,15 @@ import datetime
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 MANIFEST = REPO / "provenance" / "mesh.jsonl"
 RID = "mesh:character/character.glb"
+
+sys.path.append(str(REPO / "pipeline" / "likeness"))
+import containment  # noqa: E402
 
 
 def transformations(stats):
@@ -53,6 +61,10 @@ def main():
     glb = a.data_root / a.glb
     stats_path = glb.with_suffix(".stats.json")
     stats = json.loads(stats_path.read_text())
+    hits = containment.likeness(stats)
+    if hits or containment.is_private(glb):
+        sys.exit(f"refusing: {glb} is a likeness build ({', '.join(hits[:4]) or 'under private/'}); "
+                 f"nothing written to {MANIFEST.relative_to(REPO)}")
     data = glb.read_bytes()
     rec = {
         "id": RID, "kind": "derived", "domain": "mesh",

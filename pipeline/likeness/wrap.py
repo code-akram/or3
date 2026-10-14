@@ -37,6 +37,7 @@ from scipy.sparse import coo_matrix, diags
 from scipy.spatial import cKDTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import containment  # noqa: E402
 
 RIGID_HELPERS = ("helper-l-eye", "helper-r-eye", "helper-upper-teeth", "helper-lower-teeth", "helper-tongue")
 FIELD_HELPERS = ("helper-hair", "helper-l-eyelashes-1", "helper-l-eyelashes-2", "helper-r-eyelashes-1",
@@ -422,6 +423,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.selftest:
         return selftest(a)
+    containment.assert_outputs(a, "out")
     base = Base(a.base)
     be = np.load(a.base_embedding)
     TV, TF = read_obj(a.target)

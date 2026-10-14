@@ -32,6 +32,7 @@ from scipy.sparse import lil_matrix
 from scipy.spatial.transform import Rotation
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import containment  # noqa: E402
 import flame as fl
 
 IRIS_R, IRIS_L = 468, 473
@@ -344,6 +345,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.selftest:
         return selftest()
+    containment.assert_outputs(a, "out", "obj", "obj_init")
     m = fl.load(a.flame)
     emb = fl.load_embedding(a.embedding)
     ids = [int(x) for x in a.ids.split(",") if x.strip()]

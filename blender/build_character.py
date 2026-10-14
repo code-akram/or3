@@ -9,9 +9,13 @@ optional --config JSON override, then the legacy CLI flags). Run:
         --suit-assets   data/raw/makehuman/suits01/unpacked \
         --out           data/build/character/character.glb [--config cand.json] [--fan fan.json]
 
---fan (or the FAN_CONFIG environment variable) names an optional private layer: a JSON file
-whose "fan" block (paths relative to the file) feeds character/head_fan.py and whose optional
-"config" block is deep-merged over the build config. Without it the build is unchanged.
+--fan names an optional private layer: a JSON file whose "fan" block (paths relative to the
+file) feeds character/head_fan.py and whose optional "config" block is deep-merged over the build
+config. Without it the build is unchanged. The FAN_CONFIG environment variable is not read here
+(bench/m1/lookdev.sh reads it and passes --fan). A build that carries likeness content (--fan, a
+"fan" block or a private/likeness/ path in the --config file, or a --config file under private/)
+must write under <main checkout>/private/: any other --out is refused before Blender does any
+work (pipeline/likeness/containment.py, NOTES.md §14 rule 7).
 
 --factory-startup keeps the user's saved scene/prefs out of the run; the MPFB
 extension is enabled explicitly. Asset roots are injected into MPFB's
@@ -30,6 +34,9 @@ import time
 import bpy
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pipeline", "likeness")))
+
+import containment  # noqa: E402
 
 from character import (beard_groom, body, budgets, config, export, hair,  # noqa: E402
                        hand_nails, head, rig, stats, suit)
@@ -43,8 +50,7 @@ def parse_args():
     ap.add_argument("--suit-assets", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--config", help="JSON override, deep-merged over the defaults")
-    ap.add_argument("--fan", default=os.environ.get("FAN_CONFIG") or None,
-                    help="optional private layer (default: $FAN_CONFIG); see character/head_fan.py")
+    ap.add_argument("--fan", help="optional private layer; see character/head_fan.py")
     # Legacy spike-1 flags; when given they override the config.
     ap.add_argument("--suit")
     ap.add_argument("--shoes")
@@ -86,9 +92,25 @@ def load_fan(path):
     return config.merge(spec.get("config", {}), {"fan": fan})
 
 
+def contain(a, cfg):
+    """Refuse a build carrying likeness content unless every output it writes is private."""
+    if os.environ.get("FAN_CONFIG") and not a.fan:
+        print("[build] note: FAN_CONFIG is not read by build_character.py; pass --fan for a fan build")
+    why = (["--fan"] if a.fan else []) + containment.likeness(cfg)
+    if a.config and containment.is_private(a.config):
+        why.append(f"--config under {containment.private_root()}/")
+    if not why:
+        return
+    containment.assert_private(a.out, f"--out of a likeness build ({', '.join(why[:3])})")
+    if (cfg.get("fan") or {}).get("dump_base"):
+        containment.assert_private(cfg["fan"]["dump_base"], "fan dump_base")
+
+
 def main():
     a = parse_args()
-    b = Build(build_config(a))
+    cfg = build_config(a)
+    contain(a, cfg)
+    b = Build(cfg)
     b.out_dir = os.path.dirname(os.path.abspath(a.out))
 
     def enable(b):

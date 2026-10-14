@@ -8,12 +8,21 @@
 # (licence accepted at registration). Credentials are read from SMPL_USER /
 # SMPL_PASS / SMPLX_USER / SMPLX_PASS if set, otherwise prompted for without echo.
 # They are never written to disk. These files must never be committed (NOTES.md §14).
+# The session cookies live in a mode-700 temp dir under private/downloads/, removed on any exit
+# (including Ctrl-C).
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 downloads="$root/private/downloads/body-models"
 out="$root/private/body-models"
 server='https://download.is.tue.mpg.de/download.php'
+
+mkdir -p "$downloads"
+tmp="$(mktemp -d "$downloads/.session.XXXXXX")"   # mktemp -d: mode 700
+stage=
+cleanup() { rm -rf "$tmp" ${stage:+"$stage"}; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM   # exit runs the EXIT trap
 
 prompt_credentials() {
   if [[ -z "${SMPL_USER:-}" ]]; then read -rp 'SMPL email: ' SMPL_USER; fi
@@ -37,8 +46,7 @@ fetch() {
   # cookie engine must be on or the redirect lands back on the sign-in page.
   # Credentials go in through /dev/fd pipes (printf is a builtin), never as
   # arguments, so they don't show up in /proc/<pid>/cmdline or ps output.
-  local cookies status
-  cookies="$(mktemp)"
+  local cookies="$tmp/cookies" status
   status="$(curl --fail --location --continue-at - --progress-bar \
     --cookie "$cookies" --cookie-jar "$cookies" \
     --data-urlencode "username@"<(printf %s "$3") --data-urlencode "password@"<(printf %s "$4") \
@@ -63,8 +71,7 @@ fetch smpl SMPL_python_v.1.1.0.zip "$SMPL_USER" "$SMPL_PASS"
 fetch smplx models_smplx_v1_1.zip "$SMPLX_USER" "$SMPLX_PASS"
 
 # Extract into fresh directories, then copy only the files we need.
-stage="$(mktemp -d "$downloads/extract.XXXXXX")"
-trap 'rm -rf "$stage"' EXIT
+stage="$(mktemp -d "$downloads/extract.XXXXXX")"   # removed by the EXIT trap
 mkdir "$stage/smpl" "$stage/smplx"
 bsdtar -xf "$downloads/SMPL_python_v.1.1.0.zip" -C "$stage/smpl"
 bsdtar -xf "$downloads/models_smplx_v1_1.zip" -C "$stage/smplx"

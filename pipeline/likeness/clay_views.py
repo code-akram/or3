@@ -33,7 +33,9 @@ from mathutils.geometry import barycentric_transform, intersect_point_tri
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "blender", "hero"))
 sys.path.insert(0, os.path.join(HERE, "..", "..", "blender"))
-import rig
+sys.path.append(HERE)
+import containment  # noqa: E402
+import rig  # noqa: E402
 
 
 def parse_views(spec):
@@ -261,6 +263,7 @@ def main():
     e.add_argument("--consistent-mm", type=float, default=4.0)
     e.add_argument("--tri-max-mm", type=float, default=3.0, help="use the triangulated point when its ray rms is below")
     a = ap.parse_args(argv)
+    containment.assert_outputs(a, "out")
     {"render": cmd_render, "embed": cmd_embed}[a.cmd](a)
 
 

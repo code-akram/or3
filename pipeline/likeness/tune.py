@@ -46,6 +46,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import containment  # noqa: E402
 import refboard as rb
 import wrap
 
@@ -203,6 +204,7 @@ def main(argv=None):
     ap.add_argument("--ref", default="", help="reference ratios.json (medians) for the % columns")
     ap.add_argument("--symmetrise", action="store_true", help="average the edited delta with its mirror image")
     a = ap.parse_args(argv)
+    containment.assert_outputs(a, "out")
 
     base = wrap.Base(a.base)
     emb = dict(np.load(a.embedding))

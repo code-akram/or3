@@ -46,6 +46,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # -I drops the script dir from sys.path
+sys.path.append(str(Path(__file__).resolve().parent.parent / "likeness"))
+import containment  # noqa: E402
 
 ROOT = Path(os.environ.get("MAIN_ROOT", "/home/akram/code/or3"))
 MODELS = ROOT / "private/models/protagonist-id"
@@ -510,6 +512,11 @@ def main() -> None:
     p.add_argument("--out", required=True)
     p.add_argument("--per-sheet", type=int, default=8)
     a = ap.parse_args()
+    # embeddings, galleries, sheets and protagonist.json derive from film frames: private only
+    containment.assert_outputs(a, "out")
+    if a.cmd in ("embed", "score"):
+        for rd in run_list(a):
+            containment.assert_private(rd, "run dir (embeddings / protagonist.json)")
     {"embed": cmd_embed, "gallery": cmd_gallery, "score": cmd_score, "validate": cmd_validate,
      "sheet": cmd_sheet}[a.cmd](a)
 
