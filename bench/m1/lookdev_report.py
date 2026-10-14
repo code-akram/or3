@@ -4,6 +4,9 @@
     python3 -I bench/m1/lookdev_report.py compare A B --out DIR
     python3 -I bench/m1/lookdev_report.py engine RUN [--cycles HERO_DIR] [--crop x,y,w,h]
     python3 -I bench/m1/lookdev_report.py parity RUN [--cycles PARITY_HERO_DIR]
+    python3 -I bench/m1/lookdev_report.py hairparity RUN [--engine F] [--lights key,fill,rim]
+        [--portrait F --cycles-portrait EXR]
+    python3 -I bench/m1/lookdev_report.py strip RUN [--cycles HERO_DIR] [--out PNG]
 
 `parity` (T6) measures the engine against Cycles: shader-ball luminance ratios
 (RUN/cycles_balls.png vs RUN/game_balls.png, blender/lookdev_render.py
@@ -291,6 +294,8 @@ def engine_sheet(a):
         os.remove(p)
     parity_rows(a, run, out, W)
     print(f"-> {out}")
+    if a.cycles:
+        regression_strip(run, a.cycles)
 
 
 # ---------------------------------------------------------------- engine parity (T6)
@@ -389,6 +394,25 @@ def portrait_ssim(cyc, eng, width=PARITY_SSIM_W):
     return round(ssim(a, b), 4)
 
 
+# T10: the head at 100 % as well (the whole-frame SSIM is mostly background and suit): the hero
+# camera's head box in the 1920x1080 portrait, w,h,x,y.
+PARITY_HEAD_CROP = "560,560,800,20"
+
+
+def portrait_head_ssim(cyc, eng, crop=PARITY_HEAD_CROP):
+    """SSIM on luma of the head box at 100 % (both frames scaled to 1920x1080 first)."""
+    import numpy as np
+    if not cyc or not os.path.exists(cyc) or not os.path.exists(eng):
+        return None
+    w, h, x, y = (int(c) for c in crop.split(","))
+
+    def luma(path):
+        raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-vf", f"scale=1920:1080,crop={w}:{h}:{x}:{y}",
+                              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+        return np.frombuffer(raw, np.uint8).reshape(h, w, 3).astype(np.float64) @ np.array([0.2126, 0.7152, 0.0722])
+    return round(ssim(luma(cyc), luma(eng)), 4)
+
+
 def parity_metrics(a, run):
     cyc_p = os.path.join(a.cycles, "portrait.png") if getattr(a, "cycles", None) else None
     balls = ball_metrics(run)
@@ -397,6 +421,8 @@ def parity_metrics(a, run):
     res = {"run": os.path.basename(run), "cycles": os.path.abspath(a.cycles) if getattr(a, "cycles", None) else None,
            "cycles_is_parity": bool(stage.get("parity")),
            "portrait_ssim_luma_512": ssim, "portrait_ssim_ok": ssim is not None and ssim >= PARITY_SSIM_MIN,
+           "portrait_head_ssim_luma_100pct": portrait_head_ssim(cyc_p, os.path.join(run, "game_portrait.png")),
+           "head_crop": PARITY_HEAD_CROP,
            "balls": balls,
            "balls_mean_ok": sum(1 for v in (balls or {}).values() if isinstance(v, dict) and v.get("mean_ok")),
            "balls_n": len([v for v in (balls or {}).values() if isinstance(v, dict) and "mean_ratio" in v]),
@@ -408,7 +434,8 @@ def parity_metrics(a, run):
 
 def parity_text(res):
     lines = [f"PARITY  portrait SSIM (luma, {PARITY_SSIM_W} px) {res['portrait_ssim_luma_512']} "
-             f"(target >= {PARITY_SSIM_MIN}; cycles {'parity' if res['cycles_is_parity'] else 'BEAUTY (not parity)'})   "
+             f"(target >= {PARITY_SSIM_MIN}; cycles {'parity' if res['cycles_is_parity'] else 'BEAUTY (not parity)'}; "
+             f"head at 100 % {res.get('portrait_head_ssim_luma_100pct')})   "
              f"balls within +-{int(PARITY_MEAN_TOL * 100)} %: {res['balls_mean_ok']}/{res['balls_n']}"]
     for k, v in (res.get("balls") or {}).items():
         if isinstance(v, dict) and "mean_ratio" in v:
@@ -621,6 +648,334 @@ def hair_test_sheet(a):
     print(f"-> {out}")
 
 
+# ---------------------------------------------------------------- hair parity, spatial (T10)
+# checkpoint-2 §5 item 1: a mean-ratio gate passed twice while the picture was wrong (T9's silver
+# plates at 0.98x, T9b's uniform warm crown at 0.94x). Every hair / beard parity number therefore
+# comes with a spatial term: per region p10 / p50 / p90, a four-box hair profile (crown / front /
+# side / back) on the closeup, and the beard's grey fraction; and on the hero portrait the crown-box
+# vs back-box luminance ratio, engine vs Cycles. Needs OpenImageIO's Python module for the EXRs.
+HP_EXPOSURE = -2.5          # look-dev studio exposure (hair_test.STUDIO_EXPOSURE)
+HP_GREY_SAT = 0.25          # a beard pixel is grey when (max - min) / max < this ...
+HP_GREY_LUM_PCT = 50        # ... and it is at least as bright as the region's median (lit strands, not shadow)
+# Portrait boxes as fractions of the frame (x0, x1, y0, y1); the engine and Cycles hero portraits
+# register within 2 px at 1920 x 1080 (t10-engine-gate.md §5), so one set serves both.
+HP_PORTRAIT_BOXES = {
+    "crown": (1000 / 1920, 1150 / 1920, 70 / 1080, 130 / 1080),      # top of the head above the forehead
+    "top_back": (1160 / 1920, 1240 / 1920, 60 / 1080, 130 / 1080),   # top of the head behind the parting
+    "back": (1240 / 1920, 1300 / 1920, 180 / 1080, 340 / 1080),      # the mass behind the temple (rim side)
+    "front_side": (870 / 1920, 900 / 1920, 240 / 1080, 420 / 1080),  # the lengths on the far cheek
+    "lengths": (1320 / 1920, 1370 / 1920, 440 / 1080, 620 / 1080),   # the lengths behind the jaw
+    "forehead": (980 / 1920, 1100 / 1920, 180 / 1080, 240 / 1080),   # skin, the normaliser
+}
+HP_LUM = (0.2126, 0.7152, 0.0722)
+
+
+def _hp_read(path):
+    import numpy as np
+    try:
+        import OpenImageIO as oiio
+    except ImportError:
+        sys.exit("hairparity needs the OpenImageIO Python module (pacman -S openimageio)")
+    i = oiio.ImageInput.open(path)
+    if not i:
+        sys.exit(f"cannot read {path}")
+    a = np.asarray(i.read_image(format="float"))
+    i.close()
+    if a.ndim == 2:
+        a = a[..., None]
+    return a[..., :3] if a.shape[-1] >= 3 else np.repeat(a[..., :1], 3, -1)
+
+
+def _hp_srgb_decode(x):
+    import numpy as np
+    return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+
+
+def _hp_engine_linear(path, res=None, exposure=HP_EXPOSURE):
+    """Scene-linear RGB of a Standard-view engine frame (sRGB of the exposed linear), box-downsampled
+    to `res` px square when given."""
+    lin = _hp_srgb_decode(_hp_read(path)) / 2.0 ** exposure
+    if res and lin.shape[0] != res:
+        k = lin.shape[0] // res
+        lin = lin.reshape(res, k, res, k, 3).mean(axis=(1, 3))
+    return lin
+
+
+def _hp_morph(m, r, close=False):
+    import numpy as np
+    d = m.copy()
+    if close:
+        for _ in range(r):
+            d = d | np.roll(d, 1, 0) | np.roll(d, -1, 0) | np.roll(d, 1, 1) | np.roll(d, -1, 1)
+    for _ in range(r):
+        d = d & np.roll(d, 1, 0) & np.roll(d, -1, 0) & np.roll(d, 1, 1) & np.roll(d, -1, 1)
+    return d
+
+
+def _hp_regions(mask_rgb):
+    """hair_test.parity_test's regions: scalp groom red, beard green (closed 3, eroded 2), brows blue."""
+    mk = mask_rgb
+    return {"hair": _hp_morph(_hp_morph(mk[..., 0] > 0.3, 3, close=True), 2),
+            "beard": _hp_morph(_hp_morph(mk[..., 1] > 0.3, 3, close=True), 2),
+            "brows": _hp_morph(_hp_morph(mk[..., 2] > 0.3, 2, close=True), 1)}
+
+
+def _hp_stats(lin, m):
+    import numpy as np
+    y = lin @ np.array(HP_LUM)
+    v = y[m]
+    if v.size == 0:
+        return None
+    rgb = lin[m].mean(0)
+    return {"mean": round(float(v.mean()), 5), "p10": round(float(np.percentile(v, 10)), 5),
+            "p50": round(float(np.median(v)), 5), "p90": round(float(np.percentile(v, 90)), 5),
+            "r_g": round(float(rgb[0] / max(rgb[1], 1e-9)), 3), "b_g": round(float(rgb[2] / max(rgb[1], 1e-9)), 3),
+            "px": int(m.sum())}
+
+
+def _hp_hair_boxes(hair, beard):
+    """Four boxes over the hair mask (closeup): crown = the top 25 % of its rows; the rest split into
+    thirds across x, named from the face side (the beard's centroid) as front / side / back."""
+    import numpy as np
+    ys, xs = np.nonzero(hair)
+    y0, y1 = ys.min(), ys.max() + 1
+    x0, x1 = xs.min(), xs.max() + 1
+    yc = y0 + (y1 - y0) // 4
+    bx = np.nonzero(beard)[1].mean() if beard.any() else (x0 + x1) / 2
+    face_left = bx < (x0 + x1) / 2
+    cuts = [x0, x0 + (x1 - x0) // 3, x0 + 2 * (x1 - x0) // 3, x1]
+    names = ["front", "side", "back"] if face_left else ["back", "side", "front"]
+    out = {}
+    rows = np.zeros_like(hair)
+    rows[y0:yc] = True
+    out["crown"] = hair & rows
+    for n, (a, b) in zip(names, zip(cuts[:-1], cuts[1:])):
+        sel = np.zeros_like(hair)
+        sel[yc:y1, a:b] = True
+        out[n] = hair & sel
+    return out
+
+
+def _hp_grey(lin, m):
+    """Beard grey fraction: of the region's pixels at or above its median luminance, the share with
+    HSV saturation (max - min) / max under HP_GREY_SAT."""
+    import numpy as np
+    y = lin @ np.array(HP_LUM)
+    v = y[m]
+    if v.size == 0:
+        return None
+    lit = m & (y >= np.percentile(v, HP_GREY_LUM_PCT))
+    px = lin[lit]
+    mx = px.max(1)
+    sat = (mx - px.min(1)) / np.maximum(mx, 1e-9)
+    return {"grey_fraction": round(float((sat < HP_GREY_SAT).mean()), 4), "sat_p50": round(float(np.median(sat)), 4),
+            "px_lit": int(lit.sum())}
+
+
+def _hp_closeup(ht, engine, cyc_name):
+    import numpy as np
+    mk = _hp_read(os.path.join(ht, "parity_mask.exr"))
+    res = mk.shape[0]
+    reg = _hp_regions(mk)
+    cyc = _hp_read(os.path.join(ht, cyc_name))
+    eng = _hp_engine_linear(engine, res)
+    out = {"engine": os.path.basename(engine), "cycles": cyc_name, "regions": {}}
+    for n, m in reg.items():
+        e, c = _hp_stats(eng, m), _hp_stats(cyc, m)
+        if not e or not c:
+            continue
+        out["regions"][n] = {"engine": e, "cycles": c, "ratio": round(e["mean"] / max(c["mean"], 1e-9), 3)}
+    boxes = _hp_hair_boxes(reg["hair"], reg["beard"])
+    prof = {}
+    he = out["regions"]["hair"]["engine"]["mean"]
+    hc = out["regions"]["hair"]["cycles"]["mean"]
+    for n, m in boxes.items():
+        e, c = _hp_stats(eng, m), _hp_stats(cyc, m)
+        if not e or not c:
+            continue
+        # rel: the box over the whole hair region (the profile shape); ratio: engine over Cycles
+        prof[n] = {"engine": e, "cycles": c, "ratio": round(e["mean"] / max(c["mean"], 1e-9), 3),
+                   "rel_engine": round(e["mean"] / max(he, 1e-9), 3), "rel_cycles": round(c["mean"] / max(hc, 1e-9), 3)}
+    out["hair_profile"] = prof
+    if "crown" in prof and "back" in prof:
+        ce = prof["crown"]["engine"]["mean"] / max(prof["back"]["engine"]["mean"], 1e-9)
+        cc = prof["crown"]["cycles"]["mean"] / max(prof["back"]["cycles"]["mean"], 1e-9)
+        out["crown_over_back"] = {"engine": round(ce, 3), "cycles": round(cc, 3), "ratio": round(ce / max(cc, 1e-9), 3)}
+    ge, gc = _hp_grey(eng, reg["beard"]), _hp_grey(cyc, reg["beard"])
+    if ge and gc:
+        out["beard_grey"] = {"engine": ge, "cycles": gc,
+                             "ratio": round(ge["grey_fraction"] / max(gc["grey_fraction"], 1e-9), 3)}
+    return out, boxes, reg
+
+
+def _hp_portrait(engine, cycles_exr):
+    """Crown / back / side boxes on the hero portrait, engine (Standard view, post off: the graded,
+    exposed linear) vs the Cycles parity EXR (scene-linear); each box relative to the forehead box
+    (cancels exposure and white balance) and crown / back."""
+    import numpy as np
+    out = {}
+    for tag, path, is_png in (("engine", engine, True), ("cycles", cycles_exr, False)):
+        a = _hp_read(path)
+        lin = _hp_srgb_decode(a) if is_png else a
+        h, w = lin.shape[:2]
+        y = lin @ np.array(HP_LUM)
+        rec = {}
+        for n, (x0, x1, y0, y1) in HP_PORTRAIT_BOXES.items():
+            v = y[int(y0 * h):int(y1 * h), int(x0 * w):int(x1 * w)]
+            rec[n] = {"mean": float(v.mean()), "p10": float(np.percentile(v, 10)), "p50": float(np.median(v)),
+                      "p90": float(np.percentile(v, 90))}
+        fh = rec["forehead"]["mean"]
+        for n in rec:
+            r = rec[n]
+            rec[n] = {k: round(v / fh, 4) for k, v in r.items()}  # relative to the forehead mean
+        rec["crown_over_back"] = round(rec["crown"]["mean"] / max(rec["back"]["mean"], 1e-9), 3)
+        out[tag] = rec
+    out["crown_over_back_ratio"] = round(out["engine"]["crown_over_back"] / max(out["cycles"]["crown_over_back"], 1e-9), 3)
+    out["boxes_frac"] = HP_PORTRAIT_BOXES
+    return out
+
+
+def hair_parity(a):
+    """RUN/hair_parity.json (or --out): closeup regions (mean, p10 / p50 / p90, chroma) engine vs
+    Cycles, the four-box hair profile, the beard grey fraction, per light when --lights is given
+    (engine frames --pattern with {light}, Cycles hair_test/parity_cycles_<light>.exr), and the hero
+    portrait boxes when --portrait and --cycles-portrait are given. Writes into RUN only."""
+    run = os.path.abspath(a.run)
+    if containment.is_private(run) or containment.likeness(load(os.path.join(run, "character.stats.json"))):
+        containment.assert_private(run, "hair parity of a likeness build")
+    ht = os.path.join(run, "hair_test")
+    res = {"run": os.path.basename(run), "targets": {"region_ratio": [0.8, 1.2], "per_light_ratio": [0.8, 1.2],
+                                                       "crown_over_back_within": 0.2}}
+    lines = []
+    eng = os.path.join(run, a.engine)
+    if os.path.exists(eng):
+        res["closeup"], boxes, reg = _hp_closeup(ht, eng, "parity_cycles.exr")
+        c = res["closeup"]
+        lines.append(f"closeup {a.engine}: " + "  ".join(f"{n} {v['ratio']}" for n, v in c["regions"].items()))
+        lines.append("  hair profile (engine / Cycles, rel to the hair mean): " + "  ".join(
+            f"{n} {v['ratio']} ({v['rel_engine']} vs {v['rel_cycles']})" for n, v in c["hair_profile"].items()))
+        if "crown_over_back" in c:
+            lines.append(f"  crown / back: engine {c['crown_over_back']['engine']}  Cycles {c['crown_over_back']['cycles']}")
+        if "beard_grey" in c:
+            g = c["beard_grey"]
+            lines.append(f"  beard grey fraction: engine {g['engine']['grey_fraction']}  Cycles {g['cycles']['grey_fraction']}  (x{g['ratio']})")
+    if a.lights:
+        res["per_light"] = {}
+        for ln in a.lights.split(","):
+            ef = os.path.join(run, a.pattern.format(light=ln))
+            cf = f"parity_cycles_{ln}.exr"
+            if not (os.path.exists(ef) and os.path.exists(os.path.join(ht, cf))):
+                continue
+            r, _, _ = _hp_closeup(ht, ef, cf)
+            res["per_light"][ln] = r
+            lines.append(f"light {ln}: " + "  ".join(f"{n} {v['ratio']}" for n, v in r["regions"].items())
+                         + "   profile " + " ".join(f"{n} {v['ratio']}" for n, v in r["hair_profile"].items()))
+    if a.portrait and a.cycles_portrait:
+        p = _hp_portrait(os.path.join(run, a.portrait), a.cycles_portrait)
+        res["portrait"] = p
+        lines.append(f"portrait crown / back: engine {p['engine']['crown_over_back']}  Cycles {p['cycles']['crown_over_back']}"
+                     f"  (x{p['crown_over_back_ratio']}; target within +-20 %)")
+        lines.append("  boxes rel. forehead (engine / Cycles): " + "  ".join(
+            f"{n} {p['engine'][n]['mean']}/{p['cycles'][n]['mean']}" for n in HP_PORTRAIT_BOXES if n != "forehead"))
+    out = a.out or os.path.join(run, "hair_parity.json")
+    if not os.path.abspath(out).startswith(run + os.sep):
+        sys.exit("--out must be inside RUN")
+    with open(out, "w") as f:
+        json.dump(res, f, indent=1)
+    print("\n".join(lines))
+    print(f"-> {out}")
+
+
+# ---------------------------------------------------------------- regression strip (T10)
+# checkpoint-2 §5 item 5: a fixed strip main9 -> int1 -> latest, each the Cycles face crop at
+# 100 % (hero portrait_crop.png) beside the engine portrait cut to the same rectangle, so a colour
+# drift (like the T9 hair warming) shows the day it happens. int1 has no Cycles hero of its own;
+# t8-v5 is the hero of the T8 build int1 merged. Paths relative to data/build.
+STRIP_FIXED = [
+    ("main9", "lookdev/20261013T081002Z-heroE-main9", "hero/20261013T081828Z-main9-final"),
+    ("int1", "lookdev/20261014T131343Z-int1-main", "hero/20261014T130129Z-t8-v5"),
+]
+# hero portrait_crop.png (blender/hero/stage.py render_crop: half the frame around the near eye)
+# sits at this rectangle of the 1920x1080 portrait for the hero camera (registered on t9b-b1).
+STRIP_CROP = "960,540,556,98"
+STRIP_W = 640
+
+
+def _strip_register(cyc, eng, w, h, x, y, reach=128):
+    """Where the Cycles crop sits in the engine portrait: normalised cross-correlation of log
+    luminance at quarter scale, within `reach` px of (x, y). The crop follows the near eye, which
+    moved between builds."""
+    import numpy as np
+
+    def lum(path, size):
+        raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-vf", f"scale={size[0]}:{size[1]}:flags=area",
+                              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+        return np.log(_lin_lum(np.frombuffer(raw, np.uint8).reshape(size[1], size[0], 3)) + 1e-3)
+    c, e = lum(cyc, (w // 4, h // 4)), lum(eng, (480, 270))
+    c = (c - c.mean()) / (c.std() + 1e-9)
+    best = (-2.0, x, y)
+    r = reach // 4
+    for dy in range(-r, r + 1):
+        for dx in range(-r, r + 1):
+            x0, y0 = x // 4 + dx, y // 4 + dy
+            if x0 < 0 or y0 < 0 or x0 + c.shape[1] > e.shape[1] or y0 + c.shape[0] > e.shape[0]:
+                continue
+            p = e[y0:y0 + c.shape[0], x0:x0 + c.shape[1]]
+            v = float(((p - p.mean()) / (p.std() + 1e-9) * c).mean())
+            if v > best[0]:
+                best = (v, x0 * 4, y0 * 4)
+    return best[1], best[2]
+
+
+def regression_strip(run, cycles, out=None, crop=STRIP_CROP):
+    """RUN/regression_strip.png (or `out`): main9, int1 and RUN (with the Cycles hero `cycles`),
+    one row each: Cycles crop | engine crop. Rows whose inputs are missing are skipped."""
+    build = os.path.dirname(os.path.dirname(os.path.abspath(run)))
+    stages = [(n, os.path.join(build, l), os.path.join(build, h)) for n, l, h in STRIP_FIXED]
+    stages.append(("latest " + os.path.basename(os.path.abspath(run)), os.path.abspath(run),
+                   os.path.abspath(cycles) if cycles else ""))
+    for _, l, h in stages:
+        if containment.is_private(l) or containment.is_private(h) or \
+                containment.likeness(load(os.path.join(l, "character.stats.json"))):
+            containment.assert_private(out or run, "regression strip with a private or likeness run")
+    w, h, x, y = (int(c) for c in crop.split(","))
+    inputs, chains, rows, labels = [], [], [], []
+    n = 0
+    for name, lk, hero in stages:
+        cyc, eng = os.path.join(hero, "portrait_crop.png"), os.path.join(lk, "game_portrait.png")
+        if not (os.path.exists(cyc) and os.path.exists(eng)):
+            print(f"strip: skip {name} (missing {cyc if not os.path.exists(cyc) else eng})")
+            continue
+        tags = []
+        rx, ry = _strip_register(cyc, eng, w, h, x, y)
+        for path, tag, vf in ((cyc, f"{name}  Cycles {os.path.basename(hero)}", f"scale={w}:{h}"),
+                              (eng, f"{name}  engine (crop at {rx},{ry})", f"scale=1920:1080,crop={w}:{h}:{rx}:{ry}")):
+            lp = os.path.join(os.path.dirname(out) if out else run, f"strip_{n}.txt")
+            with open(lp, "w") as f:
+                f.write(tag)
+            labels.append(lp)
+            inputs += ["-i", path]
+            chains.append(f"[{n}]{vf},scale={STRIP_W}:-2,{drawtext(lp, 16)}[s{n}]")
+            tags.append(f"[s{n}]")
+            n += 1
+        chains.append("".join(tags) + f"hstack[r{len(rows)}]")
+        rows.append(f"[r{len(rows)}]")
+    if not rows:
+        print("strip: nothing to draw")
+        return None
+    out = out or os.path.join(run, "regression_strip.png")
+    fc = ";".join(chains) + ";" + ("".join(rows) + f"vstack={len(rows)}" if len(rows) > 1 else rows[0] + "null")
+    ffmpeg([*inputs, "-filter_complex", fc, out])
+    for p in labels:
+        os.remove(p)
+    print(f"-> {out}")
+    return out
+
+
+def strip_cmd(a):
+    regression_strip(os.path.abspath(a.run), a.cycles, a.out, a.crop)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -643,9 +998,22 @@ def main():
     h = sub.add_parser("hairtest", help="hair test sheet (RUN/hair_test/, bench/m1/hair_test.py)")
     h.add_argument("run")
     h.add_argument("--base", help="run to show above it (before)")
+    hp = sub.add_parser("hairparity", help="spatial hair / beard parity, engine vs Cycles (RUN/hair_parity.json, T10)")
+    hp.add_argument("run")
+    hp.add_argument("--engine", default="lin_closeup.png", help="Standard-view engine closeup in RUN")
+    hp.add_argument("--lights", help="per-light frames too, e.g. key,fill,rim")
+    hp.add_argument("--pattern", default="lin_{light}_closeup.png", help="engine per-light frame name in RUN")
+    hp.add_argument("--portrait", help="Standard-view, post-off engine hero portrait in RUN")
+    hp.add_argument("--cycles-portrait", help="Cycles parity portrait EXR (hero.sh --parity: exr/portrait.exr)")
+    hp.add_argument("--out", help="output JSON (inside RUN)")
+    rs = sub.add_parser("strip", help="regression strip main9 -> int1 -> RUN, Cycles crop | engine (T10)")
+    rs.add_argument("run")
+    rs.add_argument("--cycles", help="hero stage dir of RUN (portrait_crop.png)")
+    rs.add_argument("--crop", default=STRIP_CROP, help="w,h,x,y of the Cycles crop in the 1920x1080 portrait")
+    rs.add_argument("--out", help="output PNG (default RUN/regression_strip.png)")
     a = ap.parse_args()
     {"finalize": finalize, "compare": compare, "engine": engine_sheet, "parity": parity_cmd,
-     "hairtest": hair_test_sheet}[a.cmd](a)
+     "hairtest": hair_test_sheet, "hairparity": hair_parity, "strip": strip_cmd}[a.cmd](a)
 
 
 if __name__ == "__main__":
