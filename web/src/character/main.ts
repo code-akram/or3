@@ -99,9 +99,12 @@ async function loadTexture(url: string): Promise<THREE.Texture | null> {
   }
 }
 
+// LTC rect lights are opt-in: three's RectAreaLight casts no shadows, so a rim behind the head leaks
+// onto the collar / under the jaw; the portrait A/B scored SSIM none 0.694 > rims 0.684 > all 0.670
+// against the Cycles parity render (t6-engine-parity.md). Shadowed spots stay the default.
 function areaMode(): 'none' | 'rims' | 'all' {
   const a = q.get('area');
-  return a === 'none' || a === 'all' ? a : 'rims';
+  return a === 'rims' || a === 'all' ? a : 'none';
 }
 
 interface BuildStats {

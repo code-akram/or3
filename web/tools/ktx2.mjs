@@ -35,6 +35,32 @@ const t0 = Date.now();
 const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
 const doc = await io.readBinary(new Uint8Array(await readFile(src)));
 const before = doc.getRoot().listTextures().reduce((n, t) => n + (t.getImage()?.byteLength ?? 0), 0);
+// the WASM encoder caps a texture at ~12 Mpix: halve anything larger (the 4k head maps -> 2k; at the
+// portrait's ~600 px head a 2k map is still above 1 texel per pixel)
+const MAX_TEXELS = 12582912;
+const halved = [];
+for (const t of doc.getRoot().listTextures()) {
+  if (t.getMimeType() !== 'image/png') continue;
+  let png = PNG.sync.read(Buffer.from(t.getImage()));
+  if (png.width * png.height <= MAX_TEXELS) continue;
+  const from = [png.width, png.height];
+  while (png.width * png.height > MAX_TEXELS) {
+    const w = png.width >> 1;
+    const h = png.height >> 1;
+    const out = new PNG({ width: w, height: h });
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        for (let c = 0; c < 4; c++) {
+          const a = (i, j) => png.data[((2 * y + j) * png.width + 2 * x + i) * 4 + c];
+          out.data[(y * w + x) * 4 + c] = (a(0, 0) + a(1, 0) + a(0, 1) + a(1, 1) + 2) >> 2;
+        }
+      }
+    }
+    png = out;
+  }
+  t.setImage(new Uint8Array(PNG.sync.write(png)));
+  halved.push({ name: t.getName(), from, to: [png.width, png.height] });
+}
 const common = { generateMipmap: true, imageDecoder };
 await doc.transform(
   ktx2({ ...common, isUASTC: true, uastcLDRQualityLevel: uastcQ, needSupercompression: true, isNormalMap: true, slots: /^normalTexture$/ }),
@@ -45,4 +71,4 @@ const texs = doc.getRoot().listTextures();
 const after = texs.reduce((n, t) => n + (t.getImage()?.byteLength ?? 0), 0);
 const left = texs.filter((t) => t.getMimeType() !== 'image/ktx2').map((t) => t.getName());
 await writeFile(dst, await io.writeBinary(doc));
-console.log(JSON.stringify({ in: src, out: dst, textures: texs.length, png_left: left, image_mb_before: +(before / 1e6).toFixed(1), image_mb_after: +(after / 1e6).toFixed(1), uastc_quality: uastcQ, etc1s_quality: etc1sQ, seconds: Math.round((Date.now() - t0) / 1000) }));
+console.log(JSON.stringify({ in: src, out: dst, textures: texs.length, png_left: left, halved, image_mb_before: +(before / 1e6).toFixed(1), image_mb_after: +(after / 1e6).toFixed(1), uastc_quality: uastcQ, etc1s_quality: etc1sQ, seconds: Math.round((Date.now() - t0) / 1000) }));

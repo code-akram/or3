@@ -11,11 +11,12 @@
 // A uniform world of radiance Lw (Blender background colour x strength) is a hemisphere light with
 // sky = ground = Lw / |Lw| and intensity pi |Lw| (irradiance pi Lw on any normal).
 //
-// Area lights (T6, ?area=none|rims|all, default rims): LTC rect lights (three's RectAreaLight, Heitz et
+// Area lights (T6, ?area=none|rims|all, default none): LTC rect lights (three's RectAreaLight, Heitz et
 // al. 2016) of the Blender size. A Blender area light of power P and size w x h is a Lambertian emitter
 // of radiance L = P / (pi w h), which is three's RectAreaLight intensity (power = I w h pi). Rect lights
 // cast no shadow in three, so the key / wrap / fill stay shadowed spots unless area=all; the rims and
 // kickers (0.3 x 1.2-1.5 m strips at 1.5 m) are where the spot's narrow, hard lobe was most wrong.
+// Measured: unshadowed rims leak under the jaw, so 'none' (shadowed spots) is the default; rims/all opt-in.
 import * as THREE from 'three/webgpu';
 import { lights as lightsNodeOf } from 'three/tsl';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
@@ -196,8 +197,8 @@ export class Stage {
   private lights: { light: THREE.SpotLight | THREE.RectAreaLight; spec: StageLight }[] = [];
   view: ViewSetup | null = null;
   shadowMapSize = 2048;
-  /** Which lights become LTC rect lights: none, the rims and kickers (default), or all. */
-  areaMode: 'none' | 'rims' | 'all' = 'rims';
+  /** Which lights become LTC rect lights: none, (default: shadowed spots), the rims and kickers, or all. */
+  areaMode: 'none' | 'rims' | 'all' = 'none';
   private static ltcReady = false;
 
   constructor(

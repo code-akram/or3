@@ -351,18 +351,42 @@ def ball_metrics(run):
     return out
 
 
+def _luma_scaled(path, width):
+    """Rec.709 luma of the display-encoded (sRGB) frame, area-scaled to `width` px wide, 0..255."""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-vf", f"scale={width}:-2:flags=area",
+                          "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+    rgb = np.frombuffer(raw, np.uint8).reshape(-1, width, 3).astype(np.float64)
+    return rgb @ np.array([0.2126, 0.7152, 0.0722])
+
+
+def ssim(a, b, sigma=1.5):
+    """Mean SSIM (Wang et al. 2004: 11x11 Gaussian window, sigma 1.5, K1 0.01, K2 0.03, L 255).
+    (ffmpeg's ssim filter read ~0.40 where this reads ~0.68 on the same pair, so the gate uses this.)"""
+    import numpy as np
+    r = int(3.5 * sigma + 0.5)
+    k = np.exp(-0.5 * (np.arange(-r, r + 1) / sigma) ** 2)
+    k /= k.sum()
+
+    def blur(x):
+        x = np.pad(x, r, mode="reflect")
+        x = np.apply_along_axis(lambda m: np.convolve(m, k, mode="valid"), 0, x)
+        return np.apply_along_axis(lambda m: np.convolve(m, k, mode="valid"), 1, x)
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    ma, mb = blur(a), blur(b)
+    va, vb, cv = blur(a * a) - ma * ma, blur(b * b) - mb * mb, blur(a * b) - ma * mb
+    s = ((2 * ma * mb + c1) * (2 * cv + c2)) / ((ma * ma + mb * mb + c1) * (va + vb + c2))
+    return float(s.mean())
+
+
 def portrait_ssim(cyc, eng, width=PARITY_SSIM_W):
-    """ffmpeg's SSIM on luma (gray), both frames scaled to `width` px wide."""
+    """SSIM on luma, both frames scaled to `width` px wide."""
     if not cyc or not os.path.exists(cyc) or not os.path.exists(eng):
         return None
-    r = subprocess.run(["ffmpeg", "-loglevel", "info", "-i", cyc, "-i", eng, "-lavfi",
-                        f"[0]scale={width}:-2:flags=area,format=gray[a];"
-                        f"[1]scale={width}:-2:flags=area,format=gray[b];[a][b]ssim", "-f", "null", "-"],
-                       capture_output=True, text=True)
-    for line in r.stderr.splitlines():
-        if "SSIM" in line and "All:" in line:
-            return round(float(line.split("All:")[1].split()[0]), 4)
-    return None
+    a, b = _luma_scaled(cyc, width), _luma_scaled(eng, width)
+    if a.shape != b.shape:
+        return None
+    return round(ssim(a, b), 4)
 
 
 def parity_metrics(a, run):
