@@ -56,29 +56,40 @@ export const DEFAULT_PARAMS = {
     shift1: -0.08,
     shift2: 0.12,
     shiftJitter: 0.12,
-    exponent1: 160,
-    exponent2: 28,
-    // shader-ball calibrated (T6): the hair-card ball read 3.0x Cycles at 0.07 / 0.08 (diffuse alone 0.35x)
-    spec1: 0.0175,
-    spec2: 0.02,
+    /** T9, calibrated on the closeup parity (bench/m1/hair_test.py --parts parity: hair-region mean
+     * and median linear luminance vs the Cycles hero strands). The hero's Chiang roughness ~0.4 puts
+     * a single fibre's R lobe at sin^p, p ~23 (TRT ~6); the cards need narrower lobes (60 / 12) for
+     * the highlight tail (Cycles p90 / p99 0.76 / 1.6): the per-strand shift jitter and the flow map
+     * already spread the highlight across a card the way the strand-to-strand variation does. */
+    exponent1: 60,
+    exponent2: 12,
+    // T6 had 0.0175 / 0.02 (shader balls, exponents 160 / 28, a near-black atlas: hair region 0.24x Cycles)
+    spec1: 0.13,
+    spec2: 0.05,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,
     diffuseWrap: 0.5,
+    /** Root darkening from the ORM root-to-tip channel (A): 1 - rootAO at the root, gone by rootV. */
     rootAO: 0.45,
-    depthAO: 0.35,
+    rootV: 0.15,
+    /** Baked occlusion (ORM R: local strand density x depth across the card). */
+    bakedAO: 1.0,
+    /** Back-of-card darkening from the anisotropy map's depth (A). */
+    depthAO: 0.2,
+    /** Per-strand roughness (ORM G) relative to this scales the lobe exponents by (ref / r)^2. */
+    roughRef: 0.55,
     alphaTest: 0.32,
+    /** Depth prepass for the scalp cards (materials.addHairDepthPrepass; read at load): depth-only
+     * twins write where coverage > prepassAlpha and the strand depth (anisotropy A) > prepassDepth. */
+    depthPrepass: 1,
+    prepassAlpha: 0.85,
+    prepassDepth: 0.45,
   },
   facialHair: {
-    /** Atlas gain. 1 on any build since T2 (atlases sRGB-encoded, gains baked to 1). A pre-T2
-     * build (heroE-main9 and older) gets 0.45 from the auto rule below. */
+    /** Atlas gain: 1 (T9: no per-build decode fix or gain; the beard / brow atlases are sRGB-encoded
+     * per-strand colour from the groom, as the scalp's). */
     albedoGain: 1.0,
-    /** How to decode the beard / brow / lash atlases. -1 = auto from the build: a
-     * character.stats.json carrying beard.atlas_fill_linear means the atlas is sRGB-encoded (T2),
-     * so it is read as tagged; without it the build predates T2 and stores linear values in an
-     * sRGB-tagged image (review §1.9 S2), read as linear with gain 0.45. 0 = as tagged, 1 = as
-     * linear. Remove once main9 is retired. */
-    linearFix: -1,
     spec1: 0.05,
     spec2: 0.06,
     alphaTest: 0.22,

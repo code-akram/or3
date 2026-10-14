@@ -81,7 +81,7 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|hair_atlas_(flow|data)\.png)$/;
+const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png)$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');
@@ -264,7 +264,7 @@ async function run(backend) {
         return null;
       }
     });
-    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, facial_atlas: st.facialAtlas, gaze: st.gaze, stats, shots, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
+    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
   } finally {
     await browser.close();
   }

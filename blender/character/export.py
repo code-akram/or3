@@ -122,7 +122,105 @@ def write_glb(b, out):
         export_all_influences=False, export_animations=False,
         export_morph=morph, export_morph_normal=morph, export_yup=True, export_apply=False,
         export_tangents=True, export_image_format="AUTO")
+    pack_hair_maps(b, out)
     write_sidecars(b, out)
+
+
+def _read_glb(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    magic, version, length = struct.unpack_from("<4sII", data, 0)
+    if magic != b"glTF":
+        raise RuntimeError(f"{path}: not a GLB")
+    jlen, jtype = struct.unpack_from("<II", data, 12)
+    doc = json.loads(data[20:20 + jlen])
+    off = 20 + jlen
+    blen, btype = struct.unpack_from("<II", data, off)
+    return doc, bytearray(data[off + 8:off + 8 + blen])
+
+
+def _write_glb(path, doc, bin_):
+    js = json.dumps(doc, separators=(",", ":")).encode()
+    js += b" " * (-len(js) % 4)
+    bin_ = bytes(bin_) + b"\x00" * (-len(bin_) % 4)
+    with open(path, "wb") as f:
+        f.write(struct.pack("<4sII", b"glTF", 2, 12 + 8 + len(js) + 8 + len(bin_)))
+        f.write(struct.pack("<II", len(js), 0x4E4F534A) + js)
+        f.write(struct.pack("<II", len(bin_), 0x004E4942) + bin_)
+
+
+def pack_hair_maps(b, out):
+    """The hair / facial-hair cards' data maps (hair_strand_raster) into the GLB, in the
+    standard slots so the KTX2 copy compresses them and no sidecar is needed:
+    aniso -> KHR_materials_anisotropy texture (RG flow in tangent space, B strength,
+    A depth across the card), orm -> occlusionTexture (R) + metallicRoughnessTexture
+    (G roughness; B strand ID and A root-to-tip ride along, metallicFactor 0 so a
+    standard viewer reads no metal). Texture coordinates and sampler follow the
+    material's baseColorTexture."""
+    maps = getattr(b, "hair_maps", None) or {}
+    if not maps:
+        return None
+    from . import hair_strand_raster as hsr
+    doc, bin_ = _read_glb(out)
+    buf = doc["buffers"][0]
+    done, nbytes = {}, 0
+    images = doc.setdefault("images", [])
+    textures = doc.setdefault("textures", [])
+    tex_of = {}
+
+    def texture(img_name, sampler):
+        key = (img_name, sampler)
+        if key in tex_of:
+            return tex_of[key]
+        img = bpy.data.images.get(img_name)
+        if img is None:
+            raise RuntimeError(f"pack_hair_maps: image {img_name} missing")
+        png = hsr.image_png_bytes(img)
+        bin_.extend(b"\x00" * (-len(bin_) % 4))
+        doc["bufferViews"].append({"buffer": 0, "byteOffset": len(bin_), "byteLength": len(png)})
+        bin_.extend(png)
+        images.append({"name": img_name, "mimeType": "image/png", "bufferView": len(doc["bufferViews"]) - 1})
+        t = {"source": len(images) - 1}
+        if sampler is not None:
+            t["sampler"] = sampler
+        textures.append(t)
+        tex_of[key] = len(textures) - 1
+        nonlocal nbytes
+        nbytes += len(png)
+        return tex_of[key]
+
+    for mat in doc.get("materials", []):
+        rec = maps.get(mat.get("name"))
+        if rec is None:
+            continue
+        pbr = mat.setdefault("pbrMetallicRoughness", {})
+        base = pbr.get("baseColorTexture")
+        if base is None:
+            raise RuntimeError(f"pack_hair_maps: {mat['name']} has no baseColorTexture")
+        tc = base.get("texCoord", 0)
+        sampler = textures[base["index"]].get("sampler")
+        ta = texture(rec["anisotropy"], sampler)
+        to = texture(rec["orm"], sampler)
+        mat.setdefault("extensions", {})["KHR_materials_anisotropy"] = {
+            "anisotropyStrength": 1.0, "anisotropyRotation": 0.0,
+            "anisotropyTexture": {"index": ta, "texCoord": tc}}
+        mat["occlusionTexture"] = {"index": to, "texCoord": tc, "strength": 1.0}
+        pbr["metallicRoughnessTexture"] = {"index": to, "texCoord": tc}
+        pbr["metallicFactor"] = 0.0
+        pbr["roughnessFactor"] = 1.0
+        done[mat["name"]] = {"anisotropy": ta, "orm": to}
+    if done:
+        used = doc.setdefault("extensionsUsed", [])
+        if "KHR_materials_anisotropy" not in used:
+            used.append("KHR_materials_anisotropy")
+    bin_.extend(b"\x00" * (-len(bin_) % 4))
+    buf["byteLength"] = len(bin_)
+    _write_glb(out, doc, bin_)
+    missing = sorted(set(maps) - set(done))
+    b.notes["hair_maps"] = {"materials": done, "png_bytes": nbytes, "missing": missing}
+    if missing:
+        raise RuntimeError(f"pack_hair_maps: materials not in the GLB: {missing}")
+    return b.notes["hair_maps"]
 
 
 def _png_rgb8(path, rgb):

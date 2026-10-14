@@ -35,6 +35,7 @@ from mathutils import Vector
 from mathutils.kdtree import KDTree
 
 from . import facial_hair, hair_mesh
+from . import hair_strand_raster as hsr
 
 
 # --------------------------------------------------------------------------
@@ -395,3 +396,173 @@ def build_cards(bm, uv, uv2, dl, groom, centres, roll, weights_of, cfg, name, rn
     mat = hair_mesh.material(name + "_cards", "#ffffff", cfg["roughness"], img, cfg["specular"], wrap=False)
     return {"cards": len(centres), "card_tris": tris, "card_atlas": [W, H],
             "card_fill_linear": [round(float(x), 6) for x in fill], "_roots": vroots}, mat
+
+
+# --------------------------------------------------------------------------
+# Cards over the whole groom (T9: the shipped path; the shells above stay
+# behind shells.enabled)
+
+def strand_rgb(mel, red, acfg, rng):
+    """Linear colour per strand from its melanin / redness: the scalp's mapping
+    (hair_strand_raster.chiang_color, the hero Principled Hair's melanin model),
+    with the per-strand value jitter and one calibrated gain."""
+    m = mel * (1.0 + acfg.get("random_color", 0.0) * rng.uniform(-1, 1, len(mel)))
+    c = hsr.chiang_color(m, red, acfg["radial_roughness"], acfg["path"])
+    return c * (acfg["gain"] * rng.lognormal(0, acfg["value_sigma"], len(mel)))[:, None]
+
+
+def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, skin_bvh, rng):
+    """The game facial hair as cards only (T9): the skin patch bm (it carried the skin
+    weights) is replaced by one tapered strip per centre strand, following the mean of
+    the strands rooted within clump_radius_m (their growth direction), with its own atlas
+    cell: those strands drawn in the card's frame (hair_strand_raster: per-strand colour,
+    tip alpha, flow, depth, ID, root-to-tip). rolls: per centre, 0 = lying on the skin,
+    pi/2 = a fin standing off it. groom: pts (m, k, 3), root_n (m, 3), rgb (m, 3) linear,
+    radius (m,) at the root. Writes obj (finish) and its fh_root attribute; returns stats."""
+    bmesh.ops.delete(bm, geom=list(bm.faces), context="FACES")
+    left = [v for v in bm.verts if v.is_valid]
+    if left:
+        bmesh.ops.delete(bm, geom=left, context="VERTS")
+    dl = bm.verts.layers.deform.verify()
+    uv = bm.loops.layers.uv.verify()
+    uv2 = bm.loops.layers.uv.get("strand") or bm.loops.layers.uv.new("strand")
+    pts, rn, rgb = groom["pts"], groom["root_n"], groom["rgb"]
+    m, k, _ = pts.shape
+    roots = pts[:, 0]
+    kd = KDTree(m)
+    for i, r in enumerate(roots):
+        kd.insert(Vector(r), i)
+    kd.balance()
+    slen = np.linalg.norm(np.diff(pts, axis=1), axis=2).sum(1)
+    sid_all = rng.random(m)
+    rad_ref = float(np.median(groom["radius"]))
+    cw, ch = cfg["cell"]
+    W, H = cfg["atlas_px"]
+    ncols, nrows = W // cw, H // ch
+    atl = hsr.Atlas(W, H, cfg["data_scale"])
+    ss = cfg["ss"]
+    rows_n = cfg["segments"] + 1
+    rc = cfg["roughness"]
+    jit = math.radians(cfg.get("flow_jitter_deg", 6.0))
+    tris, made, skipped, pushed = 0, 0, 0, 0
+    vroots, covs, members_n, lens = [], [], [], []
+    gap = cfg["gap_m"]
+    for ci, j in enumerate(centres):
+        if made >= ncols * nrows:
+            skipped += 1
+            continue
+        mem = np.array([i for _, i, _ in kd.find_range(Vector(roots[j]), cfg["clump_radius_m"])])
+        if len(mem) < cfg["min_members"]:
+            skipped += 1
+            continue
+        S = pts[mem]
+        spine = S.mean(0)
+        seg = np.linalg.norm(np.diff(spine, axis=0), axis=1)
+        total = seg.sum()
+        if total < cfg["min_len_m"]:
+            skipped += 1
+            continue
+        # extend past the mean tip so the longer members' ends sit inside the card
+        target = max(float(np.percentile(slen[mem], 85)), total) * (1 + cfg["tip_extend"])
+        tip_dir = (spine[-1] - spine[-2]) / max(seg[-1], 1e-9)
+        C = np.vstack([spine, spine[-1] + tip_dir * (target - total)])
+        arcC = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(C, axis=0), axis=1))])
+        vtot = arcC[-1]
+        lens.append(vtot)
+        T = np.gradient(C, axis=0)
+        T /= np.maximum(np.linalg.norm(T, axis=1, keepdims=True), 1e-9)
+        n0 = rn[j]
+        Nn = n0[None, :] - T * (T @ n0)[:, None]
+        Nn /= np.maximum(np.linalg.norm(Nn, axis=1, keepdims=True), 1e-9)
+        Bi = np.cross(T, Nn)
+        a = rolls[ci]
+        wdir = Bi * math.cos(a) + Nn * math.sin(a)
+        cn = np.cross(T, wdir)
+        O = S - C[None, :k]
+        across = np.abs((O * wdir[None, :k]).sum(2))
+        hwk = np.percentile(across, 90, axis=0) * cfg["width_scale"]
+        hwk = np.concatenate([hwk, hwk[-1:]])
+        s01 = arcC / vtot
+        hwk = np.clip(hwk, cfg["min_halfwidth_m"], cfg["max_halfwidth_m"]) * (1 - cfg["taper"] * s01)
+        # --- cell: the members in the card frame, back to front
+        cell = hsr.Cell(cw, ch, ss)
+        dep = (O * cn[None, :k]).sum(2)
+        dmax = np.abs(dep).max() + 1e-6
+        for i in np.argsort(dep.mean(1), kind="stable"):
+            u = (O[i] * wdir[:k]).sum(1) / hwk[:k]
+            v = np.clip((arcC[:k] + (O[i] * T[:k]).sum(1)) / vtot, 0, 1)
+            sl = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[i], axis=0), axis=1))])
+            s_ = sl / max(sl[-1], 1e-9)
+            tip = np.clip((s_ - (1 - cfg["tip_fade"])) / cfg["tip_fade"], 0, 1)
+            w = cfg["strand_px"] * float(np.clip(groom["radius"][mem[i]] / rad_ref, 0.5, 1.6))
+            rad = w + (cfg["tip_px"] - w) * tip
+            alpha = 1.0 - (1.0 - cfg["tip_alpha"]) * tip
+            sid = float(sid_all[mem[i]])
+            cell.draw((0.5 + 0.5 * u) * cw, v * ch, rad, alpha, v, dep[i] / dmax, rgb[mem[i]], sid,
+                      rc["base"] + rc["jitter"] * (2 * sid - 1), jit)
+        r = cell.resolve()
+        x0, y0 = (made % ncols) * cw, (made // ncols) * ch
+        u0, v0, u1, v1 = atl.put(x0, y0, r, cfg["ao"])
+        covs.append(float(r["cov"].mean()))
+        members_n.append(len(mem))
+        # --- strip (2 vertices wide), rows even by length, kept gap_m off the skin
+        sr = np.linspace(0, vtot, rows_n)
+
+        def at(a_, x):
+            if a_.ndim == 2:
+                return np.stack([np.interp(x, arcC, a_[:, q]) for q in range(a_.shape[1])], 1)
+            return np.interp(x, arcC, a_)
+        P, Wd, hw = at(C, sr), at(wdir, sr), at(hwk, sr)
+        Wd /= np.maximum(np.linalg.norm(Wd, axis=1, keepdims=True), 1e-9)
+        wts = weights_of(roots[j])
+        rowv = []
+        for q in range(rows_n):
+            pair = []
+            for sgn in (-1.0, 1.0):
+                p = Vector(P[q] + sgn * Wd[q] * hw[q])
+                loc, nrm, _, _ = skin_bvh.find_nearest(p)
+                if loc is not None:
+                    h = (p - loc).dot(nrm)
+                    if h < gap:
+                        p = p + nrm * (gap - h)
+                        pushed += 1
+                vv = bm.verts.new(p)
+                for g_, w_ in wts.items():
+                    vv[dl][g_] = w_
+                vroots.append(Vector(roots[j]))
+                pair.append(vv)
+            rowv.append(pair)
+        for q in range(rows_n - 1):
+            f = bm.faces.new((rowv[q][0], rowv[q][1], rowv[q + 1][1], rowv[q + 1][0]))
+            f.material_index = 0
+            ta, tb = sr[q] / vtot, sr[q + 1] / vtot
+            for loop, (uu, tt) in zip(f.loops, ((u0, ta), (u1, ta), (u1, tb), (u0, tb))):
+                loop[uv].uv = (uu, v0 + (v1 - v0) * tt)
+                loop[uv2].uv = (tt, 1.0)
+            tris += 2
+        made += 1
+    fill = atl.bleed()
+    imgs = atl.images(name + "_cards")
+    hsr.save_pngs(b, imgs, name + "_cards")
+    mc = cfg["material"]
+    mat = hsr.card_material(name + "_cards", imgs, mc["roughness"], mc["specular"], vertex_color=None)
+    hsr.register_maps(b, mat, imgs)
+    hair_mesh.finish(b, obj, bm, [mat])
+    obj.visible_shadow = cfg.get("cast_shadow", True)
+    me = obj.data
+    att = me.attributes.new("fh_root", "FLOAT_VECTOR", "POINT")
+    if len(vroots) != len(me.vertices):
+        raise RuntimeError(f"fh_root: {len(vroots)} roots for {len(me.vertices)} vertices")
+    att.data.foreach_set("vector", [c for r_ in vroots for c in r_])
+    nudged, culled_tan = facial_hair.guard_tangents(obj, me.uv_layers[0].name, cfg.get("tangent_nudge_m", 2e-4),
+                                                    cfg.get("tangent_passes", 2))
+    covs = np.array(covs) if covs else np.zeros(1)
+    return {"path": "cards (T9)", "cards": made, "card_tris": tris, "centres": len(centres),
+            "skipped": skipped, "atlas": [W, H], "cell": [cw, ch], "pushed_verts": pushed,
+            "card_len_mm_p50": round(float(np.median(lens)) * 1e3, 1) if lens else None,
+            "mm_per_px_along_p50": round(float(np.median(lens)) * 1e3 / ch, 3) if lens else None,
+            "members_p10_p50_p90": [int(np.percentile(members_n, q)) for q in (10, 50, 90)] if members_n else None,
+            "cell_cov_p10_p50": [round(float(np.percentile(covs, q)), 3) for q in (10, 50)],
+            "empty_cells": int((covs < 0.01).sum()),
+            "tangent_nudged_loops": nudged, "tangent_culled_faces": culled_tan,
+            "atlas_fill_linear": [round(float(x), 6) for x in fill]}

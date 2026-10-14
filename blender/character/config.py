@@ -306,9 +306,34 @@ DEFAULTS = {
                                   "root_dark": 0.06, "tip_alpha": 0.6, "tip_fade_from": 0.55},
                      "clump": {"shape": 0.4, "tip_spread": 0.0004, "guide_distance_m": 0.004},
                      "frizz": {"distance_m": 0.0007, "shape": 0.6}},
-            # Game shells: the decimated patch stacked along the normal at
-            # t_k x the local groom canopy; tile k is the groom slice.
-            "shells": {"layers": 14, "t_pow": 1.3, "base_tris": 420, "lift_m": 0.0,
+            # Game (T9): cards over the whole groom, each with its own atlas cell drawn
+            # from the strands it carries (beard_bake.build_groom_cards: per-strand
+            # colour from melanin as the hero, tip alpha, flow / depth / ID / root-tip
+            # maps in the GLB). Zones first (card_candidates): jaw fins, the
+            # moustache's lip edge, the chin; lying cards elsewhere.
+            "game_cards": {"seed": 211, "count": 1024, "spacing_m": 0.0032, "clump_radius_m": 0.0022,
+                           "min_members": 4, "min_len_m": 0.003, "segments": 3,
+                           "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
+                           "min_halfwidth_m": 0.0009, "max_halfwidth_m": 0.003,
+                           "jaw_nz": [-0.85, 0.05], "moustache_edge_m": 0.006,
+                           "roll_jaw_deg": 80, "roll_moustache_deg": 35, "roll_chin_deg": 50,
+                           "roll_lying_deg": 12, "roll_sigma_deg": 12,
+                           "cell": [32, 128], "atlas_px": [2048, 2048], "ss": 2, "data_scale": 2,
+                           "strand_px": 0.55, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
+                           "flow_jitter_deg": 8,
+                           "albedo": {"radial_roughness": 0.6, "path": 0.35, "gain": 1.0,
+                                      "random_color": 0.0, "value_sigma": 0.15},
+                           "roughness": {"base": 0.55, "jitter": 0.12},
+                           "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.3},
+                           "gap_m": 0.0003, "cast_shadow": False,
+                           "material": {"roughness": 0.6, "specular": 0.25}},
+            # The darker under-layer in the game skin albedo (hair_beard.paint_underlayer,
+            # after head_refine): beard + stubble root density -> cover -> toward the beard colour.
+            "underlayer": {"radius_m": 0.003, "full_per_cm2": 300, "stubble_weight": 0.5,
+                           "blur_px": 3, "gamma": 0.8, "strength": 0.55, "colour_gain": 1.0},
+            # Game shells (enabled False since T9: kept for comparison): the decimated patch
+            # stacked along the normal at t_k x the local groom canopy; tile k is the groom slice.
+            "shells": {"enabled": False, "layers": 14, "t_pow": 1.3, "base_tris": 420, "lift_m": 0.0,
                        "atlas_cols": 2, "tile": [1024, 512], "px_per_m": 3000.0,
                        "radius_scale": 1.0, "min_radius_px": 0.45,
                        "canopy_radius_m": 0.005, "canopy_pct": 80, "canopy_floor_m": 0.0006,
@@ -381,7 +406,23 @@ DEFAULTS = {
                      "clump": {"shape": 0.3, "tip_spread": 0.0003, "guide_distance_m": 0.0018},
                      "frizz": {"distance_m": 0.0004, "shape": 0.6}},
             "base_tris": 0,            # (unused; shells.base_tris)
-            "shells": {"layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
+            # Game (T9): cards over the whole brow (beard_bake.build_groom_cards), as the beard.
+            "game_cards": {"seed": 213, "count": 256, "spacing_m": 0.0016, "clump_radius_m": 0.0016,
+                           "min_members": 3, "min_len_m": 0.003, "min_density": 0.05, "segments": 2,
+                           "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
+                           "min_halfwidth_m": 0.0006, "max_halfwidth_m": 0.0018,
+                           "roll_deg": 8, "roll_sigma_deg": 8,
+                           "cell": [32, 64], "atlas_px": [1024, 512], "ss": 2, "data_scale": 2,
+                           "strand_px": 0.5, "tip_px": 0.3, "tip_fade": 0.3, "tip_alpha": 0.1,
+                           "flow_jitter_deg": 6,
+                           "albedo": {"radial_roughness": 0.55, "path": 0.35, "gain": 1.0,
+                                      "random_color": 0.0, "value_sigma": 0.12},
+                           "roughness": {"base": 0.5, "jitter": 0.1},
+                           "ao": {"root": 0.0, "root_v": 0.15, "depth": 0.3},
+                           "gap_m": 0.0002, "cast_shadow": False,
+                           "material": {"roughness": 0.6, "specular": 0.25}},
+            # shells: enabled False since T9 (kept for comparison)
+            "shells": {"enabled": False, "layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
                        "atlas_cols": 2, "tile": [512, 192], "px_per_m": 6000.0,
                        "radius_scale": 1.0, "min_radius_px": 0.5,
                        "canopy_radius_m": 0.003, "canopy_pct": 85, "canopy_floor_m": 0.0005,

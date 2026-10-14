@@ -429,3 +429,8 @@ def refit(b):
             guard[obj.name] = facial_hair.guard_tangents(obj, obj.data.uv_layers[0].name, 2e-4, 2)
     b.notes["facial_hair_refit"] = {"max_move_mm": moved_mm, "strand_points_pushed": fr.pushed,
                                     "tangent_guard": guard}
+    # T9: the beard's darker under-layer in the game skin albedo (the refined skin's UVs)
+    from . import hair_beard
+    ul = hair_beard.paint_underlayer(b)
+    if ul is not None:
+        b.notes["facial_hair_refit"]["beard_underlayer"] = ul
