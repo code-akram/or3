@@ -411,7 +411,8 @@ def strand_rgb(mel, red, acfg, rng):
     return c * (acfg["gain"] * rng.lognormal(0, acfg["value_sigma"], len(mel)))[:, None]
 
 
-def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, skin_bvh, rng, gaps=None):
+def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, skin_bvh, rng, gaps=None,
+                      tip_fades=None):
     """The game facial hair as cards only (T9): the skin patch bm (it carried the skin
     weights) is replaced by one tapered strip per centre strand, following the mean of
     the strands rooted within clump_radius_m (their growth direction), with its own atlas
@@ -421,7 +422,8 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
     radius (m,) at the root; optional (T11) alpha (m,) per-strand alpha scale (the cheek-line
     fade: root density) and px (m,) per-strand width scale (grey strands finer). gaps: per
     centre skin clearance in m past the root row (default cfg gap_m; T11: the moustache's
-    lip edge). Writes obj (finish) and its fh_root attribute; returns stats."""
+    lip edge); tip_fades: per centre tip_fade (T11: the lip edge fades longer). Writes obj (finish)
+    and its fh_root attribute; returns stats."""
     bmesh.ops.delete(bm, geom=list(bm.faces), context="FACES")
     left = [v for v in bm.verts if v.is_valid]
     if left:
@@ -498,7 +500,8 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
             v = np.clip((arcC[:k] + (O[i] * T[:k]).sum(1)) / vtot, 0, 1)
             sl = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[i], axis=0), axis=1))])
             s_ = sl / max(sl[-1], 1e-9)
-            tip = np.clip((s_ - (1 - cfg["tip_fade"])) / cfg["tip_fade"], 0, 1)
+            tf = cfg["tip_fade"] if tip_fades is None else tip_fades[ci]
+            tip = np.clip((s_ - (1 - tf)) / tf, 0, 1)
             w = cfg["strand_px"] * float(np.clip(groom["radius"][mem[i]] / rad_ref, 0.5, 1.6))
             if s_px is not None:
                 w *= float(s_px[mem[i]])

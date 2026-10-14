@@ -345,7 +345,8 @@ DEFAULTS = {
                            # T11: cheek-line fade: strand alpha (and width, px_min) ramp with the
                            # root density
                            "edge_fade": {"density": [0.08, 0.8], "pow": 1.5, "min": 0.0, "px_min": 0.5},
-                           "lip_gap_m": 0.0012},  # T11: the moustache's lip-edge cards clear the lip
+                           # T11: the moustache's lip-edge cards clear the lip and fade longer to the tip
+                           "lip_gap_m": 0.0012, "lip_tip_fade": 0.65},
             # The darker under-layer in the game skin albedo (hair_beard.paint_underlayer,
             # after head_refine): beard + stubble root density -> cover -> toward the beard colour.
             # T11: gamma 0.7 -> 0.6, stubble 0.5 -> 0.8, blur 3 -> 8 px: the grown-in shadow past the
@@ -428,16 +429,17 @@ DEFAULTS = {
                      "frizz": {"distance_m": 0.0004, "shape": 0.6}},
             "base_tris": 0,            # (unused; shells.base_tris)
             # Game (T9): cards over the whole brow (beard_bake.build_groom_cards), as the beard.
-            # T11: fewer, fuller cards (count 256 -> 180, clump 1.6 -> 2.1 mm), finer strands
-            "game_cards": {"seed": 213, "count": 180, "spacing_m": 0.0019, "clump_radius_m": 0.0021,
+            # T11: fewer, fuller cards (count 256 -> 220, clump 1.6 -> 2.1 mm), finer strands
+            "game_cards": {"seed": 213, "count": 220, "spacing_m": 0.0017, "clump_radius_m": 0.0021,
                            "min_members": 3, "min_len_m": 0.003, "min_density": 0.05, "segments": 2,
                            "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
                            "min_halfwidth_m": 0.0006, "max_halfwidth_m": 0.0018,
                            "roll_deg": 8, "roll_sigma_deg": 8,
                            "cell": [32, 64], "atlas_px": [1024, 512], "ss": 2, "data_scale": 2,
                            # T9b: finer strands, longer tip fade (the cards read as spiky strokes);
-                           # T11: 0.42 -> 0.28 px, every strand at `alpha` over the under-layer band
-                           "strand_px": 0.28, "tip_px": 0.18, "tip_fade": 0.5, "tip_alpha": 0.05, "alpha": 0.6,
+                           # T11: 0.42 -> 0.36 px (`alpha` < 1: semi-transparent strands; dithers under A2C)
+                           "strand_px": 0.36, "tip_px": 0.18, "tip_fade": 0.5, "tip_alpha": 0.05,
+                           "body": "#2b211b",  # T11: a dark-brown floor (brows.py)
                            "flow_jitter_deg": 6,
                            "albedo": {"radial_roughness": 0.55, "path": 0.68, "gain": 1.0,
                                       "random_color": 0.0, "value_sigma": 0.12},
@@ -448,9 +450,9 @@ DEFAULTS = {
                            # T9b: a soft under-layer in the game skin (hair_beard.paint_underlayer):
                            # the hero brow is a soft band, the cards alone a set of strokes
                            "underlayer": {"radius_m": 0.002, "full_per_cm2": 300, "stubble_weight": 1.0,
-                                          # T11: strength 0.4 -> 0.65 (it did not show), a dark
+                                          # T11: strength 0.4 -> 0.8 (it did not show), a dark
                                           # neutral brown, not the strands' near-black red
-                                          "blur_px": 12, "gamma": 1.0, "strength": 0.65, "colour_gain": 1.0,
+                                          "blur_px": 12, "gamma": 1.0, "strength": 0.8, "colour_gain": 1.0,
                                           "colour": "#262220"}},
             # shells: enabled False since T9 (kept for comparison)
             "shells": {"enabled": False, "layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,

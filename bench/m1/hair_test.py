@@ -573,7 +573,7 @@ def parity_test(results):
 # saturation (max - min) / max < GREY_SAT. Chroma: the core's median saturation and its r/g, b/g.
 # Spatial: the core split into thirds of its height in the frame (low: chin / jaw, mid, high:
 # moustache / cheeks for the beard), each with its mean and grey fraction.
-GREY_LUM, GREY_SAT, BRIGHT_LUM = 0.3, 0.45, 0.4
+GREY_LUM, GREY_SAT, BRIGHT_LUM, GREY_MIN = 0.3, 0.45, 0.4, 0.05
 CORE_ERODE = {"hair": 2, "beard": 3, "brows": 1}
 
 
@@ -630,7 +630,7 @@ def parity_measure(results, cyc, eev, mpath, res=512):
         lin = lin / 2.0 ** STUDIO_EXPOSURE
         yg = luma(lin)
     out = {"res": res, "cycles_samples": SAMPLES, "engine_frame": os.path.basename(eng) if yg is not None else None,
-           "tone_def": {"grey_lum": GREY_LUM, "grey_sat": GREY_SAT, "core_erode": CORE_ERODE}}
+           "tone_def": {"grey_lum": GREY_LUM, "grey_sat": GREY_SAT, "grey_min": GREY_MIN, "core_erode": CORE_ERODE}}
     vis = np.zeros((res, res, 3), dtype=np.float32)
     for name, m in regions.items():
         mc = float(yc[m].mean()) if m.any() else 0.0
@@ -650,9 +650,11 @@ def parity_measure(results, cyc, eev, mpath, res=512):
             if lin is not None:
                 te, tc = _tone_stats(lin, core), tone["cycles"]
                 tone["engine"] = te
-                eoc = {k: (round(te[k] / tc[k], 3) if tc[k] > 0 else None) for k in ("grey_frac", "chroma_p50")}
+                # a grey fraction under GREY_MIN in Cycles (the brows, ~2 %) is noise: chroma only there
+                eoc = {k: (round(te[k] / tc[k], 3) if tc[k] > (GREY_MIN if k == "grey_frac" else 0) else None)
+                       for k in ("grey_frac", "chroma_p50")}
                 tone["engine_over_cycles"] = eoc
-                tone["engine_within_20pct"] = all(v is not None and abs(v - 1) <= 0.2 for v in eoc.values())
+                tone["engine_within_20pct"] = all(abs(v - 1) <= 0.2 for v in eoc.values() if v is not None)
             rec["tone"] = tone
         out[name] = rec
         vis[m] += {"hair": (1, 0, 0), "beard": (0, 1, 0), "brows": (0, 0, 1)}[name]

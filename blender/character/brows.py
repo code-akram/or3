@@ -217,6 +217,10 @@ def build(b, frame, cfg):
         # T9: cards only, over the whole brow (beard_bake.build_groom_cards)
         crng = np.random.default_rng(gc["seed"])
         gr["rgb"] = beard_bake.strand_rgb(mel, red, gc["albedo"], crng)
+        if gc.get("body"):
+            # T11: a dark-brown floor on every strand (sRGB hex): Chiang at melanin ~0.995 is linear
+            # ~(1e-3, 1e-4, 0), so the strokes rendered black where the hero brow reads dark brown
+            gr["rgb"] = gr["rgb"] + beard_bake.linear(hair_mesh.hex_rgb(gc["body"]))[None, :]
         if gc.get("alpha", 1.0) < 1.0:
             # T11: semi-transparent strands over the under-layer band (opaque near-black strokes
             # read as scratchy pen lines next to the hero's soft brow)

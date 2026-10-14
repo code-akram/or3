@@ -598,8 +598,10 @@ def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
     # row (at the 0.3 mm gap the overhang lay on the vermilion: a ragged bar along the lip)
     lip_edge = (f["moustache"] > 0.5) & (ev[:, 0, 2] < frame.lips_max.z + gc["moustache_edge_m"])
     gaps = [gc.get("lip_gap_m", gc["gap_m"]) if lip_edge[j] else gc["gap_m"] for j in centres]
+    # ... and its tips fade over a longer stretch (a soft overhang, not a fringe of dark spikes)
+    tfs = [gc.get("lip_tip_fade", gc["tip_fade"]) if lip_edge[j] else gc["tip_fade"] for j in centres]
     stats = beard_bake.build_groom_cards(b, obj, bm, gb, centres, rolls, lambda r: wcache[kd.find(Vector(r))[1]],
-                                         gc, "beard", frame.skin_bvh, crng, gaps=gaps)
+                                         gc, "beard", frame.skin_bvh, crng, gaps=gaps, tip_fades=tfs)
     stats["zone_cards"] = int(sum(1 for j in centres if zone[j]))
     stats["lip_edge_cards"] = int(sum(1 for j in centres if lip_edge[j]))
     stats["albedo_median_linear"] = [round(float(x), 5) for x in np.median(rgb, 0)]
