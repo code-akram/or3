@@ -358,6 +358,23 @@ def mesh_panel(D, name, pts_by_edge, h):
         edges += [(a, b) for a, b in zip(ids, ids[1:])]
         roll_ids = ids
         lines["roll"] = np.array([verts[i] for i in ids])
+    # inner edges (dart legs): constrained polylines; what lies between a dart's legs is cut out
+    holes = P.dart_holes() if hasattr(P, "dart_holes") else []
+    for e in getattr(P, "inner", {}):
+        q = pts_by_edge[(name, e)]
+        prev = None
+        for j, pq in enumerate(q):
+            hit = [k for k in range(nb, len(verts)) if abs(verts[k][0] - pq[0]) + abs(verts[k][1] - pq[1]) < 1e-7]
+            if hit:
+                k = hit[0]
+            else:
+                k = len(verts)
+                verts.append(tuple(pq))
+            where[(e, j)] = k
+            if prev is not None and prev != k:
+                edges.append((prev, k))
+            prev = k
+        lines[e] = np.array(q)
     # interior lattice
     lo, hi = loop.min(0), loop.max(0)
     dy = h * math.sqrt(3) / 2
@@ -373,6 +390,10 @@ def mesh_panel(D, name, pts_by_edge, h):
         far = _dist_polyline(grid, loop, closed=True) > 0.55 * h
         if "roll" in lines:
             far &= _dist_polyline(grid, lines["roll"]) > 0.45 * h
+        for e in getattr(P, "inner", {}):
+            far &= _dist_polyline(grid, lines[e]) > 0.45 * h
+        for hp in holes:
+            far &= ~_pip(grid, hp)
         grid = grid[far]
     verts += [tuple(p) for p in grid]
     vs = [Vector((x, y)) for x, y in verts]
@@ -388,6 +409,8 @@ def mesh_panel(D, name, pts_by_edge, h):
     for f in quads:   # fan anything that is not a triangle
         for a in range(1, len(f) - 1):
             T = np.vstack([T, [f[0], f[a], f[a + 1]]])
+    for hp in holes:   # the dart's cut-out
+        T = T[~_pip(V[T].mean(1), hp)]
     where = {k: remap[i] for k, i in where.items()}
     roll_ids = [remap[i] for i in roll_ids]
     return V, T, where, roll_ids
@@ -1052,8 +1075,17 @@ SPIKE2 = {
     "h_cm": 1.2,                      # finer than spike 1: a fold at the elbow crook needs it
     # the draft for the XPBD drape: the neckline at the neck's own length (spike 1's 1.15
     # made up for Blender's placed-shape rest), more waist, the sleeve 2 cm above the wrist
-    "draft": {"split_lapel": True, "neck_scale": 1.0, "waist_min_frac": 0.82,
+    # phase B review: hem at the crotch line (0.44 x nape height), a front dart and more side
+    # suppression, the skirt straight below the hip (no flare), a 13.4 cm half cuff, a squarer
+    # padded shoulder
+    "draft": {"split_lapel": True, "neck_scale": 1.0, "waist_min_frac": 0.82, "length_frac": 0.44,
+              "hem_flare_cm": 0.0, "pad_cm": 1.5, "shoulder_drop_deg": 1.0,
+              "suppression": {"cb": 0.22, "back_side": 0.40, "side_front": 0.25, "front_dart": 0.13},
+              "ease": {"cuff": 12.0},
               "sleeve": {"end_above_wrist_cm": 2.0}},
+    "pad_cm": 1.5,
+    # the hem and the cuffs are turned up 4 cm (two layers and the hem canvas): stiffer
+    "canvas_bands": {"hem_cm": 4.0, "cuff_cm": 4.0},
     "sew_frames": 30,                 # stage 1: unwelded, flat rest, sewing springs, no gravity
     "gravity_ramp": 10, "settle_frames": 35,      # stage 2: welded, sewn rest, gravity
     "rest_smooth": {"rings": 2, "iters": 6},      # stage-2 rest: the seam band relaxed
@@ -1663,7 +1695,9 @@ CLOSE = {"close_34": (35.0, (0.0, 0.0, 1.42), 0.62), "close_back": (180.0, (0.0,
          # looking up into the left armpit from the front, below
          "close_armpit": (25.0, (0.22, 0.0, 1.36), 0.22, -2.4),
          # the left cuff and forearm from behind (the hind seam)
-         "close_cuff": (120.0, (0.47, -0.12, 1.14), 0.30)}
+         "close_cuff": (120.0, (0.47, -0.12, 1.14), 0.30),
+         # the wearer's left lapel edge, from the front
+         "close_lapel": (10.0, (0.07, -0.12, 1.42), 0.16)}
 
 
 def render_close(out_dir, tag, show):
@@ -1713,6 +1747,14 @@ def main_v2(O):
             dn = _dist_polyline(I["V"], nk)
             sl = slice(I["base"], I["base"] + len(I["V"]))
             canvas[sl] = np.maximum(canvas[sl], 1.0 - sp.smoothstep(dn / O["canvas"]["neck_band_cm"]))
+        bands = O.get("canvas_bands")
+        if v2 and bands:
+            e = {"back": "hem", "side": "hem", "front": "hem", "top_sleeve": "cuff", "under_sleeve": "cuff"}.get(I["kind"])
+            if e is not None:
+                w_cm = bands["cuff_cm" if e == "cuff" else "hem_cm"]
+                dh = _dist_polyline(I["V"], D.geom(n).edge(e))
+                sl = slice(I["base"], I["base"] + len(I["V"]))
+                canvas[sl] = np.maximum(canvas[sl], 1.0 - sp.smoothstep((dh - w_cm) / 1.5 + 1.0))
     # the neckline (for the optional stage-2 pin)
     neck = np.zeros(n0, bool)
     for (pn, e, j), g in C["gid"].items():

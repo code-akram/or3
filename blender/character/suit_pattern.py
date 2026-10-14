@@ -63,7 +63,10 @@ DEFAULTS = {
                                   # out over the shirt collar (calibrated on spike sim2: placed/drafted 1.26)
     "pad_cm": 1.2,                # shoulder pad at the shoulder point (the runner builds the volume)
     "length_frac": 0.475,         # nape-to-hem = this x nape height (the classic rule is 0.5)
-    "suppression": {"cb": 0.22, "back_side": 0.43, "side_front": 0.35},   # shares of the waist suppression
+    "suppression": {"cb": 0.22, "back_side": 0.43, "side_front": 0.35, "front_dart": 0.0},   # shares of the waist suppression
+    # the front dart (a fisheye, sewn): from below the chest to the hip pocket line, at this
+    # share of the way from the side seam to the centre front
+    "front_dart": {"x_frac": 0.5, "top_below_chest_cm": 4.0, "pocket_below_waist_cm": 8.0},
     "cb_seat_frac": 0.8,          # CB seam in at seat and hem, x its waist value
     "hem_flare_cm": 1.0,          # half hem wider than the half seat
     "button_ext_cm": 2.0,         # button extension past CF
@@ -470,9 +473,12 @@ class Panel:
     """A closed outline of named edges (each an open polyline, cm, in order,
     end of one = start of the next), internal lines and notches."""
 
-    def __init__(self, name, edges, lines=None, notches=None, mirror=True, kind=None):
+    def __init__(self, name, edges, lines=None, notches=None, mirror=True, kind=None, inner=None):
         self.name = name
         self.edges = [(n, np.asarray(p, float)) for n, p in edges]
+        # inner edges: open polylines inside the panel that are sewn (a dart's two legs); the
+        # mesher cuts out what lies between a dart's legs
+        self.inner = {n: np.asarray(p, float) for n, p in (inner or {}).items()}
         self.lines = {k: np.asarray(v, float) for k, v in (lines or {}).items()}
         self.notches = {k: np.asarray(v, float) for k, v in (notches or {}).items()}
         self.mirror = mirror
@@ -482,7 +488,17 @@ class Panel:
                 raise ValueError(f"{name}: edge {n0} does not meet {n1} ({a[-1]} vs {b[0]})")
 
     def edge(self, n):
+        if n in self.inner:
+            return self.inner[n]
         return next(p for k, p in self.edges if k == n)
+
+    def dart_holes(self):
+        """Closed polygons between each dart's legs (<name>_b and <name>_f, bottom to top)."""
+        out = []
+        for n in self.inner:
+            if n.endswith("_b") and n[:-2] + "_f" in self.inner:
+                out.append(join(self.inner[n], self.inner[n[:-2] + "_f"][::-1]))
+        return out
 
     def outline(self):
         return join(*[p for _, p in self.edges])[:-1]
@@ -815,6 +831,17 @@ def draft(M, opts=None):
     t_fp = arclen(arm_fu) * 0.62 / arclen(arm_f)
     arm_fu, arm_fl = split_at(arm_f, t_fp)
     Rg, t_rg = seg_intersect(B, R0, gorge)
+    # front dart: a fisheye from below the chest to the hip pocket line
+    fd = o["front_dart"]
+    w_d = sup.get("front_dart", 0.0) * tw
+    inner_f = {}
+    if w_d > 1e-3:
+        x_d = x_sf + fd["x_frac"] * (Gc - x_sf)
+        y_t, y_b = Yc + fd["top_below_chest_cm"], yw + fd["pocket_below_waist_cm"]
+        yy = np.linspace(y_b, y_t, 33)
+        hwd = np.where(yy >= yw, np.sin(0.5 * np.pi * np.clip((y_b - yy) / (y_b - yw), 0, 1)),
+                       np.sin(0.5 * np.pi * np.clip((yy - y_t) / (yw - y_t), 0, 1))) * w_d / 2
+        inner_f = {"dart_b": np.stack([x_d - hwd, yy], 1), "dart_f": np.stack([x_d + hwd, yy], 1)}
     lapel_panels = []
     if o.get("split_lapel"):
         # spike 2: the lapel is not simulated. The front ends at the roll line (break -> where
@@ -825,7 +852,8 @@ def draft(M, opts=None):
         front = Panel("front", [("side", side_f), ("hem", hem_f), ("front", front_e), ("roll", roll_e),
                                 ("gorge", g_body), ("shoulder", shoulder_f),
                                 ("armhole_upper", arm_fu), ("armhole_lower", arm_fl)],
-                      notches={"button": (Gc, y_btn), "break": B, "front_pitch": arm_fu[-1]})
+                      notches={"button": (Gc, y_btn), "break": B, "front_pitch": arm_fu[-1]},
+                      inner=inner_f)
         lapel_panels = [Panel("lapel", [("roll", roll_e[::-1]), ("lapel", lapel), ("lapel_top", lapel_top),
                                         ("gorge", g_lap)])]
     else:
@@ -979,6 +1007,8 @@ def draft(M, opts=None):
     ]
     if lapel_panels:
         seams.append({"name": "roll", "a": [("front", "roll", False)], "b": [("lapel", "roll", True)]})
+    if inner_f:
+        seams.append({"name": "front_dart", "a": [("front", "dart_b", False)], "b": [("front", "dart_f", False)]})
     frame = {"Gc": Gc, "Gw": Gw, "Gs": Gs, "Gh": Gh, "Yc": Yc, "Zc": Zc, "Zn": Zn, "Znpj": Znpj, "Zh": Zh,
              "kb": kb, "kf": kf, "ysc": ysc, "yw": yw, "ys": ys, "yh": yh, "y_btn": y_btn, "sigma": sig,
              "x_bp": x_bp, "x_fp": x_fp, "x_bs": x_bs, "x_sf": x_sf, "sp3": sp3.tolist(), "np3": np3.tolist(),
