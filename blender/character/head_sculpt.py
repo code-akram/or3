@@ -70,7 +70,8 @@ DEFAULTS = {
         "temporal": {"mm": 0.5, "hollow_mm": -1.2},
     },
     "eyes": {"globe_mm": 12.0, "forward_mm": 0.6, "iris_mm": 5.9, "upper_over_iris_mm": 1.5, "aperture_mm": 10.0,
-             "canthal_tilt_deg": 3.0, "core_mm": 1.5, "fade_mm": 6.0},
+             "canthal_tilt_deg": 3.0, "core_mm": 1.5, "fade_mm": 6.0,
+             "lids_on_fan": False},   # the lid targets (aperture, tilt) apply to the public face only
 }
 
 # MediaPipe left/right landmark pairs (subject's right first) and midline points.
@@ -280,7 +281,7 @@ def fields(an, co, nrm, eyes_c, ears, fcfg, widen):
                 out[:, 2] -= m(f["drop_mm"]) * w
         f = fcfg.get("nasal")
         if f:
-            C = an.pts([168, 6, 197, 195], side)
+            C = an.pts([168, 6, 197], side)          # dorsum sides above the alae (alar width untouched)
             if f.get("side_mm"):
                 out += ridge(co, nrm, C + lat * 0.0065, fwd, up, m(f["side_mm"]), 0.0025, 0.0025, 0.012, widen,
                              taper=0.2)
@@ -366,7 +367,7 @@ def eye_block(obj, co, ecfg, notes):
     clear = float(ecfg.get("clearance_mm", 0.0)) * MM      # base-mesh clearance (off: head_refine's is on)
     side_of = co[:, 0] > fr.origin[0]
     npush_total = 0
-    for it in range(4):
+    for it in range(4 if ecfg.get("lid_targets", True) else 0):
         if clear > 0:
             out, npush = clear_globes(obj, out, skin, lash, side_of, eye_c, clear)
             npush_total += npush
@@ -476,7 +477,10 @@ def apply(b):
     notes = {}
     edited = co
     if c["eyes"]:
-        edited = eye_block(obj, co, c["eyes"], notes)
+        ecfg = dict(c["eyes"])
+        if b.cfg.get("fan") and not ecfg.get("lids_on_fan", False):
+            ecfg["lid_targets"] = False      # the fan face keeps its own fissure: globe and re-seat only
+        edited = eye_block(obj, co, ecfg, notes)
     helpers = head_shape._group_weights(obj, "HelperGeometry") > 0
     eyes = (head_shape._group_weights(obj, "helper-l-eye") > 0) | (head_shape._group_weights(obj, "helper-r-eye") > 0)
     ears = head_shape._group_weights(obj, "ears") > 0
