@@ -5,7 +5,8 @@
 //   skin   wrap-lit diffuse with per-channel wrap + normal blur (curvature-scaled; cheap pre-integrated
 //          SSS stand-in), a terminator scatter tint, dual-lobe GGX specular
 //   hair   dual-lobe Kajiya-Kay (white primary shifted to the root, albedo-tinted secondary to the tip,
-//          shifts jittered per strand ID, exponents scaled by per-strand roughness), flow / depth /
+//          shifts jittered per strand ID / card / along-strand wave, exponents scaled by per-strand
+//          roughness), a tinted TT (backlit) lobe and a wrapped multiple-scatter body (T9b), flow / depth /
 //          ORM strand maps from the GLB (KHR_materials_anisotropy + occlusion / metallicRoughness),
 //          alpha to coverage (4x MSAA) with hashed alpha when there is no MSAA
 //   facial beard / brow cards on the same path and maps (prefix facialHair); lashes along the UV bitangent
