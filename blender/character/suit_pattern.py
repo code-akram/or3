@@ -768,12 +768,26 @@ def draft(M, opts=None):
     arm_f = join(arm_fu, arm_fl)
     t_fp = arclen(arm_fu) * 0.62 / arclen(arm_f)
     arm_fu, arm_fl = split_at(arm_f, t_fp)
-    Rg, _ = seg_intersect(B, R0, gorge)
-    front = Panel("front", [("side", side_f), ("hem", hem_f), ("front", front_e), ("lapel", lapel),
-                            ("lapel_top", lapel_top), ("gorge", gorge), ("shoulder", shoulder_f),
-                            ("armhole_upper", arm_fu), ("armhole_lower", arm_fl)],
-                  lines={"roll": np.array([B, Rg])},
-                  notches={"button": (Gc, y_btn), "break": B, "front_pitch": arm_fu[-1]})
+    Rg, t_rg = seg_intersect(B, R0, gorge)
+    lapel_panels = []
+    if o.get("split_lapel"):
+        # spike 2: the lapel is not simulated. The front ends at the roll line (break -> where
+        # the roll line crosses the gorge); the lapel is its own panel on the other side, and
+        # the modelled rever (collar + lapel) is built on the draped front's roll edge.
+        g_lap, g_body = split_at(gorge, t_rg)
+        roll_e = np.stack([np.linspace(B[0], Rg[0], 16), np.linspace(B[1], Rg[1], 16)], 1)
+        front = Panel("front", [("side", side_f), ("hem", hem_f), ("front", front_e), ("roll", roll_e),
+                                ("gorge", g_body), ("shoulder", shoulder_f),
+                                ("armhole_upper", arm_fu), ("armhole_lower", arm_fl)],
+                      notches={"button": (Gc, y_btn), "break": B, "front_pitch": arm_fu[-1]})
+        lapel_panels = [Panel("lapel", [("roll", roll_e[::-1]), ("lapel", lapel), ("lapel_top", lapel_top),
+                                        ("gorge", g_lap)])]
+    else:
+        front = Panel("front", [("side", side_f), ("hem", hem_f), ("front", front_e), ("lapel", lapel),
+                                ("lapel_top", lapel_top), ("gorge", gorge), ("shoulder", shoulder_f),
+                                ("armhole_upper", arm_fu), ("armhole_lower", arm_fl)],
+                      lines={"roll": np.array([B, Rg])},
+                      notches={"button": (Gc, y_btn), "break": B, "front_pitch": arm_fu[-1]})
 
     # --- undercollar (whole; CB at u = 0)
     Co = o["collar"]
@@ -874,16 +888,18 @@ def draft(M, opts=None):
                        np.linspace(hind_u[-1, 1], fore_u[-1, 1], 8)], 1)
     under = Panel("under_sleeve", [("cap", cap_u), ("hind", hind_u), ("cuff", cuff_u), ("fore", fore_u[::-1])])
 
-    panels = [back, side, front, collar, top, under]
+    panels = [back, side, front, collar, top, under] + lapel_panels
+    gorge_l = [("front", "gorge", True)] + ([("lapel", "gorge", True)] if lapel_panels else [])
+    gorge_r = [(p + "_r", e, rev) for p, e, rev in gorge_l]
     seams = [
         {"name": "cb", "a": [("back", "cb", False)], "b": [("back_r", "cb", False)], "mirror": False},
         {"name": "shoulder", "a": [("back", "shoulder", False)], "b": [("front", "shoulder", False)]},
         {"name": "back_side", "a": [("back", "side", False)], "b": [("side", "back", True)]},
         {"name": "side_front", "a": [("side", "front", False)], "b": [("front", "side", False)]},
         {"name": "collar_l", "a": [("collar", "neck_l", False)],
-         "b": [("back", "neck", False), ("front", "gorge", True)], "mirror": False},
+         "b": [("back", "neck", False)] + gorge_l, "mirror": False},
         {"name": "collar_r", "a": [("collar", "neck_r", True)],
-         "b": [("back_r", "neck", False), ("front_r", "gorge", True)], "mirror": False},
+         "b": [("back_r", "neck", False)] + gorge_r, "mirror": False},
         # the sleeve head round the whole armhole, crown on the shoulder point,
         # the head ease spread evenly
         {"name": "armhole", "a": [("back", "armhole", False), ("side", "scye", False),
@@ -893,6 +909,8 @@ def draft(M, opts=None):
         {"name": "sleeve_fore", "a": [("top_sleeve", "fore", False)], "b": [("under_sleeve", "fore", True)]},
         {"name": "sleeve_hind", "a": [("top_sleeve", "hind", True)], "b": [("under_sleeve", "hind", False)]},
     ]
+    if lapel_panels:
+        seams.append({"name": "roll", "a": [("front", "roll", False)], "b": [("lapel", "roll", True)]})
     frame = {"Gc": Gc, "Gw": Gw, "Gs": Gs, "Gh": Gh, "Yc": Yc, "Zc": Zc, "Zn": Zn, "Znpj": Znpj, "Zh": Zh,
              "kb": kb, "kf": kf, "ysc": ysc, "yw": yw, "ys": ys, "yh": yh, "y_btn": y_btn, "sigma": sig,
              "x_bp": x_bp, "x_fp": x_fp, "x_bs": x_bs, "x_sf": x_sf, "sp3": sp3.tolist(), "np3": np3.tolist(),
@@ -903,5 +921,6 @@ def draft(M, opts=None):
     anchors = {"nape": ("back", nape), "np_b": ("back", NPb), "sp_b": ("back", SPb), "np_f": ("front", NPf),
                "sp_f": ("front", SPf), "bpitch": ("back", np.array([x_bp, P_bs[1] - 4.0])),
                "fpitch": ("front", arm_fu[-1]), "p_bs": ("back", P_bs), "p_fe": ("front", P_fe),
-               "break": ("front", B), "gorge": ("front", G)}
+               "break": ("front", B), "gorge": ("front", G), "roll_gorge": ("front", Rg),
+               "lapel_point": ("front", L_pt), "roll_top": ("front", R0)}
     return Draft(panels, seams, frame, anchors, o)
