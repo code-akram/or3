@@ -896,10 +896,11 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
       const vis = smoothstep(sh.thetaC.add(0.03), sh.thetaC.sub(0.03), thE);
       const cosIn = Nen.dot(L).clamp();
       const fresIn = float(1).sub(float(0.04).add(float(0.96).mul(float(1).sub(cosIn).pow(5))));
-      // irradiance: the flux through the cornea patch (cos at entry) spread on the iris plane, tilted
-      // onto the iris normal (refraction alone does not brighten: a flat interface keeps E = T cos)
+      // irradiance: the flux through the cornea patch (T cos at entry) in the refracted beam, whose
+      // cross-section grows by 1 / cos(t) at the interface, onto the iris normal: E = T E0 cos(i) nI / cos(t)
+      // (the cornea's curvature, which converges the beam, is the caustic term below)
       const nI = sh.irisN.dot(Lr).clamp();
-      const tilt = nI.div(sh.A.dot(Lr).max(0.25)).min(2);
+      const tilt = nI.div(Nen.dot(Lr).max(0.25)).min(2);
       // caustic: the cornea converges the light onto the iris side away from it (outer half)
       const Llat = L.sub(sh.A.mul(L.dot(sh.A)));
       const far = sh.eRho.dot(Llat.normalize()).negate().clamp().mul(smoothstep(0.2, 0.9, sh.H.sub(sh.A.mul(sh.H.dot(sh.A))).length().div(sh.rhoI)));
