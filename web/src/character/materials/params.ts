@@ -51,7 +51,8 @@ export const DEFAULT_PARAMS = {
     directAO: 0.5,
   },
   hair: {
-    albedoGain: 1.0,
+    /** T10: 1.3 (was 1.0), with the R lobe halved and TRT off (see spec1 / spec2). */
+    albedoGain: 1.3,
     /** Primary (white, shifted toward the root) and secondary (albedo tinted, toward the tip) lobes. */
     shift1: -0.08,
     shift2: 0.12,
@@ -68,12 +69,12 @@ export const DEFAULT_PARAMS = {
     specAO: 1.0,
     /** Warm multiple-scattering body (T9b): a fully wrapped diffuse in the scatter tint, the albedo's
      * chroma ^ scatterSat at luminance 1; the TRT lobe (spec2) takes the same tint. */
-    scatter: 0.004,
+    scatter: 0.008,
     scatterSat: 0.4,
     /** TT (T9b): backlit transmission in the scatter tint: gain x the R-like cone (ttExponent) x the
      * forward-scattering azimuth term ((1 - Lp.Vp) / 2)^ttPow. */
-    tt: 0.13,
-    ttPow: 2.0,
+    tt: 0.36,
+    ttPow: 6.0,
     ttExponent: 16,
     /** T9, calibrated on the closeup parity (bench/m1/hair_test.py --parts parity: hair-region mean
      * and median linear luminance vs the Cycles hero strands). The hero's Chiang roughness ~0.4 puts
@@ -89,8 +90,14 @@ export const DEFAULT_PARAMS = {
     // white R. T9b, fitted per light with the TT lobe, then trimmed on the hero portrait (hair beside the
     // face 1.5x the Cycles hero relative to the forehead at R 0.05 / TT 0.15): R 0.035, TRT 0.007 (in the
     // unit-luminance scatter tint), TT 0.13, scatter 0.004: hair region 0.94x, portrait hair 1.27x / 0.95x.
-    spec1: 0.035,
-    spec2: 0.007,
+    // T10, with the deep hair shadow and GTAO: fitted on per-term basis frames (each lobe alone, per studio
+    // light on the closeup and with the hero rig on the portrait) against the Cycles per-light closeups and
+    // the parity portrait's crown / back boxes (bench/m1/v4/t10-engine-gate.md): the Kajiya R lobe lit the
+    // side mass behind the temple (Cycles lights the top), and a broad TT (ttPow 2) lit everything the rim
+    // reached; the fit wants a narrow forward TT (ttPow 6) at 2.8x, more diffuse / scatter body, R at half
+    // and no TRT. Per light 0.98 / 1.13 / 0.98, portrait crown / back 3.07 vs Cycles 3.21.
+    spec1: 0.0175,
+    spec2: 0.0,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,

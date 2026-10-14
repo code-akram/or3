@@ -394,6 +394,25 @@ def portrait_ssim(cyc, eng, width=PARITY_SSIM_W):
     return round(ssim(a, b), 4)
 
 
+# T10: the head at 100 % as well (the whole-frame SSIM is mostly background and suit): the hero
+# camera's head box in the 1920x1080 portrait, w,h,x,y.
+PARITY_HEAD_CROP = "560,560,800,20"
+
+
+def portrait_head_ssim(cyc, eng, crop=PARITY_HEAD_CROP):
+    """SSIM on luma of the head box at 100 % (both frames scaled to 1920x1080 first)."""
+    import numpy as np
+    if not cyc or not os.path.exists(cyc) or not os.path.exists(eng):
+        return None
+    w, h, x, y = (int(c) for c in crop.split(","))
+
+    def luma(path):
+        raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-vf", f"scale=1920:1080,crop={w}:{h}:{x}:{y}",
+                              "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], check=True, capture_output=True).stdout
+        return np.frombuffer(raw, np.uint8).reshape(h, w, 3).astype(np.float64) @ np.array([0.2126, 0.7152, 0.0722])
+    return round(ssim(luma(cyc), luma(eng)), 4)
+
+
 def parity_metrics(a, run):
     cyc_p = os.path.join(a.cycles, "portrait.png") if getattr(a, "cycles", None) else None
     balls = ball_metrics(run)
@@ -402,6 +421,8 @@ def parity_metrics(a, run):
     res = {"run": os.path.basename(run), "cycles": os.path.abspath(a.cycles) if getattr(a, "cycles", None) else None,
            "cycles_is_parity": bool(stage.get("parity")),
            "portrait_ssim_luma_512": ssim, "portrait_ssim_ok": ssim is not None and ssim >= PARITY_SSIM_MIN,
+           "portrait_head_ssim_luma_100pct": portrait_head_ssim(cyc_p, os.path.join(run, "game_portrait.png")),
+           "head_crop": PARITY_HEAD_CROP,
            "balls": balls,
            "balls_mean_ok": sum(1 for v in (balls or {}).values() if isinstance(v, dict) and v.get("mean_ok")),
            "balls_n": len([v for v in (balls or {}).values() if isinstance(v, dict) and "mean_ratio" in v]),
@@ -413,7 +434,8 @@ def parity_metrics(a, run):
 
 def parity_text(res):
     lines = [f"PARITY  portrait SSIM (luma, {PARITY_SSIM_W} px) {res['portrait_ssim_luma_512']} "
-             f"(target >= {PARITY_SSIM_MIN}; cycles {'parity' if res['cycles_is_parity'] else 'BEAUTY (not parity)'})   "
+             f"(target >= {PARITY_SSIM_MIN}; cycles {'parity' if res['cycles_is_parity'] else 'BEAUTY (not parity)'}; "
+             f"head at 100 % {res.get('portrait_head_ssim_luma_100pct')})   "
              f"balls within +-{int(PARITY_MEAN_TOL * 100)} %: {res['balls_mean_ok']}/{res['balls_n']}"]
     for k, v in (res.get("balls") or {}).items():
         if isinstance(v, dict) and "mean_ratio" in v:
