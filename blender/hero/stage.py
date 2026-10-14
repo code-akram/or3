@@ -267,6 +267,11 @@ def main(argv):
     os.makedirs(os.path.join(out, "exr"), exist_ok=True)
     t0 = time.perf_counter()
     ch = rig.load_character(a.inp)
+    from character import suit_textures
+    # the suit twill as the engine's tiled detail (no longer baked, T6): from the .blend's material
+    # records, or the suit_detail.json sidecar next to a GLB
+    weave = (suit_textures.cycles_weave_sidecar(a.inp) if a.inp.endswith(".glb")
+             else suit_textures.cycles_weave())
     for o in ch.objs:
         o.pass_index = 1
     if a.parity:
@@ -274,7 +279,7 @@ def main(argv):
     rec = {"in": os.path.abspath(a.inp), "quality": a.quality, "set": a.set_kind, "parity": a.parity,
            "blender": bpy.app.version_string, "threads": bpy.context.scene.render.threads,
            "hero_only": [o.name for o in ch.objs if any(c.name == "hero_only" for c in o.users_collection)],
-           "skin_sss_added": skin_sss(ch) if a.skin_sss == "auto" else [],
+           "skin_sss_added": skin_sss(ch) if a.skin_sss == "auto" else [], "cycles_weave": weave,
            "shots": [], "turntable": []}
     names = shots.ORDER if a.shots == "all" else ([] if a.shots == "none" else a.shots.split(","))
     # a second pass into an existing run dir (hero.sh --into, e.g. the

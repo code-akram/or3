@@ -122,6 +122,18 @@ def timed(name):
 
 # ---------------------------------------------------------------- scene
 
+def cycles_weave():
+    """The suit twill for Cycles from the GLB's suit_detail.json sidecar (T6: the weave is no longer
+    baked into the atlas; the engine tiles it, suit_textures.cycles_weave mirrors that in nodes)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from character import suit_textures
+    done = suit_textures.cycles_weave_sidecar(ARGS.glb)
+    print(f"[lookdev] cycles weave: {done or 'none (pre-T6 build: weave baked)'}", flush=True)
+    return done
+
+
 def import_character(path):
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o, do_unlink=True)
@@ -410,6 +422,38 @@ def _patch_centre(meshes, mat_name, anchor):
     return best[1], best[0]
 
 
+def _ball_colors(ob, mat, meshes):
+    """Give the ball every colour layer the material reads (Color Attribute / Attribute nodes, e.g. the
+    hair cards' per-lock tint), filled with the area-weighted mean over the faces carrying the material.
+    Without it Cycles reads the missing layer as black while the GLB copy has no COLOR_0 (three: white)."""
+    nodes = mat.node_tree.nodes if mat.use_nodes and mat.node_tree else []
+    names = {n.layer_name for n in nodes if n.type == "VERTEX_COLOR"}
+    names |= {n.attribute_name for n in nodes if n.type == "ATTRIBUTE" and n.attribute_type == "GEOMETRY"}
+    filled = {}
+    for name in sorted(names):
+        acc, wsum = [0.0, 0.0, 0.0, 0.0], 0.0
+        for o in meshes:
+            idx = [i for i, m in enumerate(o.data.materials) if m and m.name == mat.name]
+            ca = o.data.color_attributes
+            lay = ca.get(name) if name else (ca.active_color or (ca[0] if len(ca) else None))
+            if not idx or lay is None:
+                continue
+            for p in o.data.polygons:
+                if p.material_index not in idx:
+                    continue
+                ids = p.loop_indices if lay.domain == "CORNER" else p.vertices
+                c = [sum(lay.data[i].color[k] for i in ids) / len(ids) for k in range(4)]
+                for k in range(4):
+                    acc[k] += c[k] * p.area
+                wsum += p.area
+        mean = [x / wsum for x in acc] if wsum > 0 else [1.0, 1.0, 1.0, 1.0]
+        lay = ob.data.color_attributes.new(name or "Color", "FLOAT_COLOR", "CORNER")
+        for d in lay.data:
+            d.color = mean
+        filled[name or "Color"] = [round(x, 4) for x in mean]
+    return filled
+
+
 def shader_balls(out, meshes, floor_z, head):
     """cycles_balls.png + shader_balls.glb + shader_balls.json (see BALLS)."""
     from bpy_extras.object_utils import world_to_camera_view
@@ -431,8 +475,10 @@ def shader_balls(out, meshes, floor_z, head):
         c = centre + Vector(((col - 1) * BALL_DX, 0.0, (0.5 - row) * 2 * BALL_DZ))
         ob = _ball_mesh(f"ball_{name}", c, mode, uv_c, half)
         ob.data.materials.append(mat)
+        colors = _ball_colors(ob, mat, meshes)
         balls.append(ob)
         rec.append({"material": name, "centre_blender": [round(x, 6) for x in c], "radius": BALL_R,
+                    "vertex_colors": colors,
                     "uv": mode, "uv_centre": [round(x, 5) for x in uv_c] if uv_c else None,
                     "uv_half": half, "anchor_dist_m": round(dist, 4) if dist is not None else None})
     # camera: in front (-Y), level with the row centre
@@ -483,6 +529,7 @@ def shader_balls(out, meshes, floor_z, head):
     bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_yup=True,
                               export_apply=False, export_tangents=True, export_image_format="AUTO",
                               export_skins=False, export_animations=False, export_morph=False)
+    weave = cycles_weave()  # after the export: the exporter needs Image -> Normal Map
     skin = bpy.data.materials.get("skin_head")
     sss = None
     if skin is not None:
@@ -504,7 +551,7 @@ def shader_balls(out, meshes, floor_z, head):
     j = {"version": 1, "script": "blender/lookdev_render.py --shader-balls",
          "res": list(BALL_RES), "exposure": BALL_EXPOSURE, "view_transform": "Standard",
          "cycles": {"samples": BALL_SPP, "denoise": "OIDN", "filter_px": 1.0, "seconds": secs,
-                    "skin_sss": sss},
+                    "skin_sss": sss, "weave": weave},
          "camera": {"position": gl(cam.location), "target": gl(centre), "up": [0, 1, 0], "lens_mm": BALL_LENS,
                     "sensor_fit": "AUTO", "sensor_mm": cd.sensor_width,
                     "vfov_deg": round(math.degrees(2 * math.atan(cd.sensor_width * 0.5 / BALL_LENS)), 6),
@@ -1004,6 +1051,7 @@ def main():
     if ARGS.shader_balls:
         shader_balls(os.path.abspath(ARGS.out_dir), meshes, floor_z, head)
         return
+    metrics["cycles_weave"] = cycles_weave()
     if ARGS.calibrate:
         calibrate(os.path.abspath(ARGS.out_dir), head, floor)
         return

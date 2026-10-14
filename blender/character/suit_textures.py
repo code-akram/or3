@@ -419,6 +419,95 @@ def detail_record(mat, side_m, w):
     return rec
 
 
+def cycles_weave(records=None, tile=None, gain=1.0):
+    """Render-time weave for Cycles (lookdev_render, hero/stage): the twill left the baked atlas for the
+    engine's tiled detail normal, so Blender needs the same detail or its renders lose the weave. Adds,
+    per material with a detail record, the engine's arithmetic (web ClothMaterial) in front of the
+    existing Normal Map node: uv_tile = rotate(gltf_uv * repeat, angle); d = tile * 2 - 1 rotated back;
+    n = normalize(base.xy + d.xy * strength, base.z). Never call it before a glTF export (the exporter
+    needs Image -> Normal Map). records: {material: suit_detail record}, default each material's
+    "suit_detail" property; tile: the tile image (default the packed DETAIL_TILE). Returns the names done."""
+    if records is None:
+        records = {m.name: json.loads(m["suit_detail"]) for m in bpy.data.materials if "suit_detail" in m}
+    tile = tile or bpy.data.images.get(DETAIL_TILE)
+    if not records or tile is None:
+        return []
+    tile.colorspace_settings.name = "Non-Color"
+    done = []
+    for name, rec in sorted(records.items()):
+        mat = bpy.data.materials.get(name)
+        if mat is None or not mat.use_nodes or mat.get("cycles_weave"):
+            continue
+        nt = mat.node_tree
+        bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        lk = bsdf and bsdf.inputs["Normal"].links
+        nm = lk[0].from_node if lk else None
+        if nm is None or nm.type != "NORMAL_MAP" or not nm.inputs["Color"].links:
+            continue
+        base = nm.inputs["Color"].links[0].from_socket
+        uv_src = base.node.inputs["Vector"].links[0].from_socket if (
+            base.node.type == "TEX_IMAGE" and base.node.inputs["Vector"].links) else None
+
+        def vm(op, a, b=None, c=None, scale=None):
+            n = nt.nodes.new("ShaderNodeVectorMath")
+            n.operation = op
+            for i, x in enumerate((a, b, c)):
+                if x is None:
+                    continue
+                if isinstance(x, (tuple, list)):
+                    n.inputs[i].default_value = x
+                else:
+                    nt.links.new(x, n.inputs[i])
+            if scale is not None:
+                n.inputs["Scale"].default_value = scale
+            return n.outputs[0]
+
+        def rot(v, ang):
+            n = nt.nodes.new("ShaderNodeVectorRotate")
+            n.rotation_type = "Z_AXIS"
+            n.inputs["Angle"].default_value = ang
+            n.inputs["Center"].default_value = (0.0, 0.0, 0.0)
+            nt.links.new(v, n.inputs["Vector"])
+            return n.outputs[0]
+
+        if uv_src is None:
+            uvn = nt.nodes.new("ShaderNodeUVMap")
+            uv_src = uvn.outputs["UV"]
+        ang, k = float(rec.get("angle_rad", 0.0)), float(rec["strength"]) * gain
+        uvg = vm("MULTIPLY_ADD", uv_src, (1.0, -1.0, 0.0), (0.0, 1.0, 0.0))        # Blender v -> glTF v
+        uvt = rot(vm("SCALE", uvg, scale=float(rec["repeat"])), ang)
+        st = vm("MULTIPLY_ADD", uvt, (1.0, -1.0, 0.0), (0.0, 1.0, 0.0))            # back to Blender v
+        tx = nt.nodes.new("ShaderNodeTexImage")
+        tx.image = tile
+        tx.extension = "REPEAT"
+        tx.interpolation = "Linear"
+        nt.links.new(st, tx.inputs["Vector"])
+        d = vm("MULTIPLY_ADD", tx.outputs["Color"], (2.0, 2.0, 2.0), (-1.0, -1.0, -1.0))
+        dxy = vm("MULTIPLY", rot(d, -ang), (k, k, 0.0))
+        b = vm("MULTIPLY_ADD", base, (2.0, 2.0, 2.0), (-1.0, -1.0, -1.0))
+        n = vm("NORMALIZE", vm("ADD", b, dxy))
+        nt.links.new(vm("MULTIPLY_ADD", n, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), nm.inputs["Color"])
+        mat["cycles_weave"] = 1
+        done.append(name)
+    return done
+
+
+def cycles_weave_sidecar(glb_path, gain=1.0):
+    """cycles_weave for a GLB import: suit_detail.json and its tile next to the GLB (export.write_sidecars)."""
+    import os
+    d = os.path.dirname(os.path.abspath(glb_path))
+    jp = os.path.join(d, "suit_detail.json")
+    if not os.path.exists(jp):
+        return []
+    with open(jp) as f:
+        recs = json.load(f).get("materials", {})
+    tiles = {r["tile"] for r in recs.values()}
+    if len(tiles) != 1 or not os.path.exists(os.path.join(d, next(iter(tiles)))):
+        return []
+    img = bpy.data.images.load(os.path.join(d, next(iter(tiles))), check_existing=True)
+    return cycles_weave(recs, img, gain)
+
+
 # --- marks ---------------------------------------------------------------------------------
 
 def draw_marks(H, layout, marks, side):
