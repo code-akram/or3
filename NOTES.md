@@ -691,6 +691,11 @@ Each milestone has measurable pass criteria and a git tag. Thresholds marked *(c
 
 ## Decision log
 
+### 2026-10-14 — m1 v4: engine first, structure first (user)
+- **Approved** the plan from `fable_review.md` §3–5: the engine frame is the m1 look gate and the Cycles hero render is the target; rebuild form (head sculpt + original public identity, hair v4, suit from patterns) before more surface tuning. Round 4 of the fan build is parked. Status and reports: `HANDOFF.md`, `bench/m1/v4/`.
+- **Public face prior: ICT-FaceKit (MIT)**, not FLAME: FLAME 2017–2023 are academic-licence (no public derivatives); only FLAME 2023 Open is CC BY 4.0 and its download needs a login. The private fan fit may stay on FLAME 2020 (never shipped).
+- **Model routing for agents** (user): Opus by default, Fable only for checkpoints and strategy, Sonnet/Haiku for trivial work.
+
 ### 2026-10-13 — fan likeness pivot (user)
 - **Ruling:** or3 is a non-commercial fan tribute and an evaluation framework for long-horizon agentic work. The character is John Wick, with a likeness tribute to Keanu Reeves, attributed with credit. This supersedes the "face stays original" rule (§3, §7.7, §14 rule 7, the 2026-10-12 m1 rulings and `bench/m1/v2/BRIEF.md` rule 1) for the **private fan build only**.
 - **Public / private split:** likeness reference, fitted face shapes and likeness parameters live in `private/` (gitignored). The public repo keeps building the original face by default; the fan face is a private build input. Going public or commercial later means dropping that input, or licensing the likeness.

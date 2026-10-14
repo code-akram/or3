@@ -1,6 +1,44 @@
-# Handoff: m1 v3 fan-likeness renders delivered, waiting on the user's review
+# Handoff: m1 v4 "engine first, structure first" in progress
 
-_Updated 2026-10-14 by the m1 v3 orchestrator session. The m1 v2 section and the Phase 0 (m0) handoff below still apply._
+_Updated 2026-10-14 by the m1 v4 orchestrator session (user AFK, autonomous run). The m1 v3, m1 v2 and m0 sections below still apply where not superseded._
+
+## m1 v4: where things stand
+
+The user approved the plan from `fable_review.md` §3–5 (2026-10-14): stop polishing in Cycles, build the engine character viewer and make its frame the look gate, then rebuild form (head, hair, suit). Round 4 of the fan build is parked. Reports for every track are in `bench/m1/v4/`; the Fable checkpoint with specs is `bench/m1/v4/checkpoint-1.md`.
+
+**Merged to `main`:**
+
+| Track | What | Report |
+|---|---|---|
+| T1 | Likeness containment is structural: `pipeline/likeness/containment.py` `assert_private()` at every writer, fan builds refuse non-private outputs, `--compare` and run routing fail closed, gitignore patterns | `t1-containment.md` |
+| hook | `tools/hooks/` pre-commit (installed: `core.hooksPath tools/hooks`) refuses likeness paths and any tracked binary repo-wide; `provenance/audit.py --check-files` repeats the binary check | `test_containment.sh` (69 cases) |
+| T2 | Facial-hair atlases sRGB-encoded (were ~10× too dark), trousers own ORM, deterministic shoe vertex order | `t2-asset-fixes.md` |
+| T3 | Light twins for every saturated hero light (sign-shot suit no longer purple), PROP_SAT fix | `t3-light-twins.md` |
+| T4 | 18 kHz bandwidth gate works; 5 sources flagged (incl. the approved Artninja footsteps at 15.4 kHz) for the listening gate; wet steps aligned | `t4-audio-bandwidth.md` |
+| T5 | Engine character viewer (`web/character.html`, `web/src/character/`): GLB, rig.json correctives (match Blender to 1e-5), TSL materials, Blender-exported stages, headless capture into look-dev (`ENGINE_SHOTS=1`) | `t5-viewer.md` |
+| T6 | Engine look parity: shader-ball gate 6/6, weave as a tiled detail map (moiré gone), SSS LUT, post pass, KTX2 (`--ktx2`, 69 → 32 MB), device capture (`?capture=1&upload=1`) | `t6-engine-parity.md` |
+| T7 | Original public face from ICT-FaceKit (MIT, `CREDITS.md`) + shared head sculpt layer (`head_layer.py`, `head_sculpt.py`), new head measures all in range, ArcFace 0.045 vs the private reference | `t7-head.md` |
+| T8 | Hair v4 groom: 70k strands, direction field, 4-level clumps, layered uneven cut, melanin 0.90, front falls as dark locks; beard tone matched to the hero strands | `t8-hair.md` |
+| suit spike | Pattern-drafted, sewn jacket (`suit_pattern.py`, additive): sleeve pitch and skirt pass, collar/seams/back fail; conditional go, ~13 days for the full rebuild | `suit-spike.md` |
+
+Integrated build of main: `data/build/lookdev/20261014T131343Z-int1-main/` (0 glTF errors, 127k tris, 83 bones, all head measures in range; read40 eye band 71 % vs 75 % still fails).
+
+**Running at handoff time** (see the session; results land in `bench/m1/v4/`): T7b (staring eyes, skull vault, engine teal back-face bug) and T9 (scalp, beard and brow cards rebuilt from the v4 groom; beard shells replaced; engine hair tone parity).
+
+**Engine viewer from the Mac:** in `web/`, `npm run dev` (127.0.0.1:5173); tunnel `ssh -N -L 5173:127.0.0.1:5173 archlinux`; open `http://127.0.0.1:5173/character.html?asset=lookdev/<run>&view=portrait&rig=hero`. Device capture for the Air: see `t6-engine-parity.md`.
+
+**User decisions open:**
+1. **C2 style**: painterly-stylised realism on the character (recommended by both Fable passes) vs realism. The engine material code has a banded-lighting switch ready; the painted-albedo + ink pass waits on this.
+2. **Suit**: go/no-go on a 1.5–2 day second spike, then ~11 day rebuild (`suit-spike.md`).
+3. **Listening gate**: accept-with-flag vs reject for the 5 sources under 18 kHz (`t4-audio-bandwidth.md` §3); the 8.6 dB calibration question applies to the alley footstep takes only.
+4. **ArcFace** ruling (still pending; T7 used it offline, private, scalar only). Old per-frame embeddings `private/likeness/work/mica/codes*.npz` kept until the ruling.
+5. Still pending from before: m1 base approval, Movieclips ruling, Air session.
+
+**Housekeeping done:** `private/` is `o-rwx`; fan builds and the worktree-attic archive moved from `data/` to `private/likeness/work/moved-from-data-20261014/`.
+
+**Machine:** the other project (or4) runs headless Chrome on up to ~14 cores; v4 agents ran at `nice 10`, Blender `-t 3/4`, Cycles one at a time via `flock /tmp/or3-cycles.lock`.
+
+---
 
 ## m1 v3: where things stand
 
