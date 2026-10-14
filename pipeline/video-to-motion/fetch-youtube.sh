@@ -55,10 +55,10 @@ if [[ ! -x "$venv/bin/yt-dlp" ]]; then
 fi
 echo "yt-dlp $("$venv/bin/yt-dlp" --version)"
 
-# --- 3. fetch (fetch-footage.sh appends YTDLP_EXTRA to every yt-dlp call)
+# --- 3. fetch (fetch-footage.sh passes YTDLP_COOKIES to every yt-dlp call as one argument)
 ids=("$@")
 ((${#ids[@]})) || ids=($(grep -oE '"yt-[A-Za-z0-9_-]+' "$here/fetch-footage.sh" | tr -d '"'))
-YTDLP="$venv/bin/yt-dlp" YTDLP_EXTRA="--cookies $cookies" "$here/fetch-footage.sh" "${ids[@]}"
+YTDLP="$venv/bin/yt-dlp" YTDLP_COOKIES="$cookies" "$here/fetch-footage.sh" "${ids[@]}"
 chmod 600 "$cookies"  # yt-dlp rewrites the jar on exit; keep it private
 rc=0
 for id in "${ids[@]}"; do
