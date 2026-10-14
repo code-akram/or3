@@ -37,7 +37,7 @@ ssh -N -L 8793:127.0.0.1:8793 -L 8792:127.0.0.1:8792 -L 8791:127.0.0.1:8791 -L 8
 
 **Machine:** the user okayed heavier compute (2026-10-13): agents may run renders at `-t 6` in parallel; final renders still run alone at full threads. Another project's session (or4) shares the machine.
 
-**Housekeeping:** 28 agent worktrees under `.claude/worktrees/`, all merged into `main`; remove them with `git worktree remove` once no session holds them.
+**Housekeeping:** agent worktrees cleaned up 2026-10-14; their untracked scratch files are archived in `data/build/worktree-attic/leftovers-20261014.tgz`.
 
 ## m1 v2: where things stand
 
@@ -199,7 +199,6 @@ python3 -I provenance/audit.py --data-root /home/akram/code/or3/data --check-fil
 ```
 
 **Housekeeping:**
-- `.claude/worktrees/agent-a6b466bebcbfb1e15` is fully merged but still locked by its agent session. Remove it with `git worktree remove -f -f .claude/worktrees/agent-a6b466bebcbfb1e15 && git branch -d worktree-agent-a6b466bebcbfb1e15` once nothing holds it.
 - Headless spike-4 telemetry is archived in `data/build/spike4-headless-telemetry/`.
 
 ## 4. What comes next
