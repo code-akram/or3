@@ -1,6 +1,43 @@
-# Handoff: m1 v2 hero character rendered, waiting on the user's review
+# Handoff: m1 v3 fan-likeness renders delivered, waiting on the user's review
 
-_Updated 2026-10-13 by the m1 v2 orchestrator session. Sections 1–5 below are the earlier Phase 0 (m0) handoff and still apply._
+_Updated 2026-10-14 by the m1 v3 orchestrator session. The m1 v2 section and the Phase 0 (m0) handoff below still apply._
+
+## m1 v3: where things stand
+
+The private fan build (likeness tribute, NOTES §14 rule 7 and the 2026-10-13 Decision log entry) is fitted, groomed and rendered as a final review set. **The run waits on the user's review.** All generic code is merged to `main` and pushed; every likeness input and output lives in `private/` and is never committed.
+
+- **Likeness pipeline** (`pipeline/likeness/`): `fetch_flame.sh` downloads FLAME 2020 (login saved once with `--login` in the user's terminal; the host needs a browser User-Agent), then `fit.py` fits FLAME to private reference stills, `wrap.py` wraps the fit onto the MPFB head (eye cores keep the lids on the eyeballs), `tune.py` applies hand edits (scale, ellipsoid falloff, symmetrise, relax, rigid) and `review_board.py`, `clay_views.py`, `refboard.py` build comparison boards. Gate: bizygomatic, mouth width, nose length, alar width and lower-face ratios within ±3 %.
+- **Fan build:** `private/likeness/fan.json` (face delta, skin and lip colours, lashes, hair). Run `bench/m1/lookdev.sh --fan` then `bench/m1/hero.sh --fan` (`--preview`, `--final`, `--shots`, `--crop`, `--tt-poses`, `--tt-views`); fan runs are routed to `private/likeness/{lookdev,hero,review}/`, never `data/`. A copy of the final config is archived in `private/likeness/work/fan_final_hair3.json`.
+- **Final review set:** `private/likeness/review/fan-final/` (9 shots, crops, painterly variants, turntables in beauty, clay and normal; 256 spp, 95 min at 16 threads). Preview set: `private/likeness/review/fan-preview/`.
+- **Generic features added this round, all off by default** (public build unchanged):
+  - skin: lip seam, soft vermilion border, beard-to-lip fill and shadow colour, expression-line albedo; float32-safe lip distances.
+  - scalp hair: ragged tapered ends, flyaway melanin and roughness, cling.
+  - beard: philtrum roots, moustache overhang, grown-in cheek line, per-strand roughness, salt-and-pepper zones (chin and mouth corners).
+  - hero rig: light-linking twins (hair, props, cloth, skin) so saturated rims don't stain hair, pistol or suit (`shots.CLOTH_TWIN`).
+- **Reports:** `bench/m1/v3/BRIEF.md`, `bench/m1/v3/hair.md`, `bench/m1/v2/hero-stage.md`.
+
+**Viewing the review pages from the Mac.** The servers bind to `127.0.0.1` on this machine only (private content). Tunnel from the Mac and leave it open:
+```bash
+ssh -N -L 8793:127.0.0.1:8793 -L 8792:127.0.0.1:8792 -L 8791:127.0.0.1:8791 -L 8790:127.0.0.1:8790 archlinux
+```
+8793 fan final, 8792 fan preview, 8791 m1 v2 review, 8790 audio round 2. If the session ended, restart one with `python3 -I -m http.server <port> --bind 127.0.0.1 --directory <dir>`.
+
+**User gates now open:**
+1. Review the fan final set (8793) and say what reads wrong; that drives round 4.
+2. Still pending: m1 base approval, the Movieclips and ArcFace rulings, audio round 2 listening (8790).
+3. City work using the cybercity techniques (NOTES §19, study only, licence unclear): offered, not started.
+
+**Known defects in the fan final** (round 4 candidates):
+- Lower lip a pale, too-regular lozenge; the upper lip barely shows.
+- Fine hair strands cross the face like cobweb; a lock sits over the near eye; the side lock curtains the face at turntable 270–315°; the ear pokes through the hair.
+- Crown is a smooth shell with one broad highlight and a hard bright part; the back reads as one clump.
+- Forehead lines read as thin scratches; lids heavy and slightly uneven.
+- Magenta rash-like patch near the nose (eye shot); suit reads purple in the sign shot (needs a cloth twin on the sign key); pink under the eye and teal on the beard edge in the profile.
+- v2 carry-overs: boxy suit shoulders, back band, wrist crease, doughy fingers.
+
+**Machine:** the user okayed heavier compute (2026-10-13): agents may run renders at `-t 6` in parallel; final renders still run alone at full threads. Another project's session (or4) shares the machine.
+
+**Housekeeping:** 28 agent worktrees under `.claude/worktrees/`, all merged into `main`; remove them with `git worktree remove` once no session holds them.
 
 ## m1 v2: where things stand
 
