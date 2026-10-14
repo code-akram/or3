@@ -305,7 +305,10 @@ def wrap_args(**over):
     return SimpleNamespace(**a)
 
 
-def clean_delta(base, delta, TV, TFt, notes, band_iters=12, relax_iters=40, spike_mm=1.0):
+NOSTRIL_LM = (64, 294, 129, 358, 98, 327, 48, 278)    # MediaPipe alar base / alar crease points
+
+
+def clean_delta(base, delta, TV, TFt, notes, band_iters=12, relax_iters=40, spike_mm=1.0, emb=None):
     """Post-wrap clean-up of the public delta (the fan path keeps wrap.py as it is):
     1. seam: where the wrapped skin did not land on the trusted target surface (beyond 1 mm),
        the field is extrapolated, and its edge shows as a crease at the temple and jaw; blend
@@ -313,7 +316,10 @@ def clean_delta(base, delta, TV, TFt, notes, band_iters=12, relax_iters=40, spik
     2. ears: rigid, with the mean field of the skin ring around each ear (the ear shape is the
        base's; the wrap distrusts it);
     3. spikes: a vertex whose offset differs from its neighbours' mean by more than spike_mm
-       takes the mean (mouth corners, lid folds)."""
+       takes the mean (mouth corners, lid folds);
+    4. nostrils: around the alar base (emb: the base landmark embedding) the field is relaxed, so
+       the outer skin and the nostril's inner wall move together (the snapped outer skin otherwise
+       sinks behind the inner wall, which then shows through the cheek)."""
     import wrap
     co = base.co
     skin = base.skin
@@ -342,7 +348,15 @@ def clean_delta(base, delta, TV, TFt, notes, band_iters=12, relax_iters=40, spik
         bad = skin & ~base.helper & base.has_nbr & (np.linalg.norm(out - avg, axis=1) > spike_mm / 1000.0)
         nspike += int(bad.sum())
         out[bad] = avg[bad]
-    notes["clean"] = {"on_target_verts": int(on.sum()), "spikes_fixed": nspike}
+    nrel = 0
+    if emb is not None:
+        ok = [i for i in NOSTRIL_LM if emb["valid"][i]]
+        P = np.einsum("lk,lkd->ld", emb["bary"][ok], co[emb["tri_verts"][ok]])
+        d = np.min(np.linalg.norm(co[:, None, :] - P[None, :, :], axis=2), axis=1)
+        wn = (1 - np.clip((d - 0.008) / 0.010, 0, 1)) * (skin & ~base.helper)
+        out = out + wn[:, None] * (base.smooth(out, 2 * relax_iters) - out)
+        nrel = int((wn > 0).sum())
+    notes["clean"] = {"on_target_verts": int(on.sum()), "spikes_fixed": nspike, "nostril_relaxed_verts": nrel}
     return out
 
 
@@ -367,7 +381,7 @@ def cmd_wrap(a):
     trusted = m.fitting & m.verts_of("skin")
     TF = m.faces[m.part == 0]
     delta, notes, TVa = wrap.wrap(base, wrap.embedded_points(base.co, tri_b, bary_b), lm_t, TV, TF, trusted, wa)
-    delta = clean_delta(base, delta, TVa, TF[trusted[TF].all(1)], notes)
+    delta = clean_delta(base, delta, TVa, TF[trusted[TF].all(1)], notes, emb=be)
     notes["shared_landmarks"] = len(mp)
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
