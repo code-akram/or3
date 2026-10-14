@@ -512,7 +512,8 @@ def bake_cap(frame, g, E, bm, uv, cfg, cols_main, rng, sids):
     if cc.get("phys_alpha"):
         # texel size over the cap (3D area / UV area), the drawn strand width, a real strand's
         A3 = float(sum(np.linalg.norm(np.cross(V[t[1]] - V[t[0]], V[t[2]] - V[t[0]])) for t in tri_v)) * 0.5
-        Au = float(np.abs(np.cross(tri_uv[:, 1] - tri_uv[:, 0], tri_uv[:, 2] - tri_uv[:, 0])).sum()) * 0.5
+        e1, e2 = tri_uv[:, 1] - tri_uv[:, 0], tri_uv[:, 2] - tri_uv[:, 0]
+        Au = float(np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum()) * 0.5
         texel_m = math.sqrt(A3 / max(Au * size * size, 1e-12))
         drawn_m = 2.0 * cc["strand_px"] * texel_m
         d_m = 2.0 * float(np.mean(g["cfg"]["radius_m"]))
@@ -930,7 +931,7 @@ def build(b, frame, ccfg, g):
 
     def crng(layer, *uid):
         return np.random.default_rng([acfg["seed"], LAYER_CODE[layer], *[int(u) for u in uid]])
-    bend_rows = []           # T20: (left, centre, right) bmesh verts per card row, for the bent normals
+    bend_rows = []           # T20: (left, centre, right) vertex indices per card row, for the bent normals
 
     def add_card(p, cell, layer, r, path_from=0, halfwidth_m=None, k_end=None, max_seg=None, flip=False,
                  twist=None, curve=None):
@@ -983,7 +984,7 @@ def build(b, frame, ccfg, g):
             v[col] = (x, x, x, 1.0)
             v[hang_l] = float(hs[min(int(round(t * nrow)), nrow)])
             v[sector_l] = sector
-            made.append(v)
+            made.append(len(bm.verts) - 1)    # appended last (no vertex is removed before finish)
 
         x0, y0, x1, y1 = cells[cell]
         if flip:
@@ -1180,8 +1181,7 @@ def build(b, frame, ccfg, g):
     card_mat = hsr.card_material("hair_cards", imgs, mcfg["roughness"], mcfg["specular"])
     hsr.register_maps(b, cap_mat, cap_imgs)
     hsr.register_maps(b, card_mat, imgs)
-    bm.verts.index_update()
-    rows_idx = np.array([[v.index for v in row] for row in bend_rows], dtype=np.int64).reshape(-1, 3)
+    rows_idx = np.array(bend_rows, dtype=np.int64).reshape(-1, 3)
     hair_mesh.finish(b, obj, bm, [cap_mat, card_mat])
     b.cutouts.append("hair_export")
 
