@@ -419,6 +419,8 @@ def synth_head(m, c, cl, cr):
     # groove under the lower lid)
     mid += c["crisp"] * m.crisp * smoothstep(0.0175, 0.0205, fr.eye_d)
     hgt_hero = (lines + grain + mid).astype(np.float32)    # pores come from the hero shader
+    # the hero preview denoiser (OIDN at 64 spp) flattens the mid band: the hero displaces it harder
+    hgt_hero_out = (hgt_hero + (c["hero_mid_gain"] - 1.0) * (mid_tex + fine)).astype(np.float32)
     hgt_game = (hgt_hero - pores).astype(np.float32)
 
     cav = m.cavity(hgt_game)
@@ -578,7 +580,7 @@ def synth_head(m, c, cl, cr):
     micro = np.clip(0.6 + 0.4 * R["cheek"] - 0.3 * R["nose"] - 0.5 * R["scalp"], 0, 1) * (1 - lips) * lid_clear \
         * no_beard * (1 - 0.5 * np.clip(R["lid"] * 1.5, 0, 1))
     mask_hero = np.stack([oil, fuzz, micro], -1).astype(np.float32)
-    return {"albedo": alb, "albedo_hero": alb_hero, "rough": rough, "hgt_game": hgt_game, "hgt_hero": hgt_hero,
+    return {"albedo": alb, "albedo_hero": alb_hero, "rough": rough, "hgt_game": hgt_game, "hgt_hero": hgt_hero_out,
             "occl": occl, "mask_pores": mask_pores, "mask_hero": mask_hero}
 
 
@@ -703,6 +705,7 @@ DEFAULT_HEAD = {
     "mid_tex_mm": 0.06, "mid_cell_mm": 0.015, "mid_cell_w": 0.12,
     "forehead_fine_mm": 0.08, "fine_line_w": 0.05, "crows_fine_mm": 0.08, "nasolabial_fine_mm": 0.05,
     "rough_patch": 0.05, "rough_mid": 0.04, "rough_line": 0.05,
+    "hero_mid_gain": 1.5,                      # hero displacement of the mid band and fine lines, x
     "rough": 0.47, "rough_tzone": 0.37, "rough_beard": 0.58, "rough_ears": 0.48, "rough_lips": 0.45,
 }
 
