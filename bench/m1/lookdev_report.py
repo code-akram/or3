@@ -1084,6 +1084,10 @@ def chart_sheet(chart, res, ref_png, frames, out_png, pad=40):
             s += f"   {'%+6.1f %+6.1f %+6.1f' % tuple(d)} {'ok' if row[lab]['pass'] else ('FAIL' if ':' not in row['sample'] else '  ')}"
         lines.append(s)
     lines.append(f"patches within +-{res['tolerance_255']}/255: " + ", ".join(f"{k} {'PASS' if v else 'FAIL'}" for k, v in res["pass_patches"].items()))
+    go = res.get("grade_only")
+    if go:
+        lines.append("grade only (own linear -> grade_lut.json on the CPU vs own graded frame): max |d| "
+                     + ", ".join(f"{k} {v:.2f}/255 {'PASS' if go['pass_patches'][k] else 'FAIL'}" for k, v in go["max_abs"].items()))
     tp = os.path.join(tmp, ".chart_table.txt")
     with open(tp, "w") as f:
         f.write("\n".join(lines))
@@ -1095,6 +1099,80 @@ def chart_sheet(chart, res, ref_png, frames, out_png, pad=40):
     for p in labels:
         os.remove(p)
     return out_png
+
+
+def _lut_pipeline(lut, lin, uv, ev):
+    """grade_lut.json applied on the CPU as the engine does (web/src/character/grade.ts, output.ts):
+    log2 shaper -> 33^3 grade LUT (log2 out) -> vignette map at uv -> x 2^ev -> view LUT (display).
+    lin (k, 3) scene-linear -> (k, 3) display 0..255."""
+    import base64
+    import numpy as np
+    n = lut["size"]
+
+    def dec(d, shape):
+        return np.frombuffer(base64.b64decode(d), np.float32).reshape(shape)
+
+    def tri(t, x):
+        p = np.clip(x, 0, 1) * (n - 1)
+        i0 = np.minimum(np.floor(p).astype(int), n - 2)
+        f = p - i0
+        out = np.zeros_like(x)
+        for db in (0, 1):
+            for dg in (0, 1):
+                for dr in (0, 1):
+                    w = (f[:, 0] if dr else 1 - f[:, 0]) * (f[:, 1] if dg else 1 - f[:, 1]) * (f[:, 2] if db else 1 - f[:, 2])
+                    out += w[:, None] * t[i0[:, 2] + db, i0[:, 1] + dg, i0[:, 0] + dr]
+        return out
+
+    def shaper(c, lo, hi):
+        return np.clip((np.log2(np.maximum(c, 2.0 ** lo)) - lo) / (hi - lo), 0, 1)
+
+    G = dec(lut["grade"]["data"], (n, n, n, 3))
+    V = dec(lut["view"]["data"], (n, n, n, 3))
+    g = 2.0 ** tri(G, shaper(lin, lut["grade"]["min"], lut["grade"]["max"]))
+    vg = lut.get("vignette")
+    if vg:
+        m = dec(vg["data"], (vg["h"], vg["w"]))
+        g = g * m[min(int(uv[1] * vg["h"]), vg["h"] - 1), min(int(uv[0] * vg["w"]), vg["w"] - 1)]
+    return tri(V, shaper(g * 2.0 ** ev, lut["view"]["min"], lut["view"]["max"])) * 255.0
+
+
+def chart_grade_only(chart, lut_path, ref_png, ref_exr, eng_png, eng_npy, tol=CHART_TOL):
+    """The grade alone, in each renderer: its own scene-linear chart through the CPU LUT pipeline
+    against its own graded frame (Cycles: grade.py's PNG of the EXR; engine: the viewer's GPU LUT
+    path). Separates the grade from the lighting, which the full chart row mixes."""
+    import numpy as np
+    lut = load(lut_path)
+    res = chart["res"]
+    centres = {}
+    for r in chart["patches"]:
+        if r["kind"] == "patch":
+            x0, y0, x1, y1 = r["bbox_px"]
+            centres[r["name"]] = ((x0 + x1) / 2, (y0 + y1) / 2)
+        else:
+            for lab, xy in r["samples_px"].items():
+                centres[f"{r['name']}:{lab}"] = tuple(xy)
+            centres[f"{r['name']}:disc"] = tuple(r["center_px"])
+    sides = {"cycles": (chart_measure(chart, _read_rgb(ref_exr)), chart_measure(chart, _read_rgb(ref_png)))}
+    if eng_npy:
+        e = np.load(eng_npy)[..., :3].astype(np.float64)
+        sides["engine"] = (chart_measure(chart, e), chart_measure(chart, _read_rgb(eng_png)))
+    rows, ok = [], {k: True for k in sides}
+    for name, xy in centres.items():
+        row = {"sample": name}
+        for k, (lin, disp) in sides.items():
+            cpu = _lut_pipeline(lut, lin[name][None], (xy[0] / res[0], xy[1] / res[1]), chart["exposure"])[0]
+            d = disp[name] - cpu
+            p = bool(np.all(np.abs(d) <= tol))
+            row[k] = {"linear": [round(float(v), 5) for v in lin[name]], "frame_minus_lut": [round(float(v), 2) for v in d], "pass": p}
+            if ":" not in name:
+                ok[k] = ok[k] and p
+        rows.append(row)
+    return {"lut": lut_path, "rows": rows, "pass_patches": ok,
+            "max_abs": {k: round(max(float(np.abs(r[k]["frame_minus_lut"]).max()) for r in rows
+                                     if not r["sample"].endswith(":disc")), 2) for k in sides},
+            "note": "max_abs and pass leave out the ball disc (a mean of display values against the LUT of a mean "
+                    "of linear values over a gradient)"}
 
 
 def chart_cmd(a):
@@ -1109,6 +1187,13 @@ def chart_cmd(a):
         if containment.is_private(p):
             containment.assert_private(a.out, "chart row with private inputs")
     res = chart_rows(chart, ref, frames, a.tol)
+    if a.lut:
+        exr = chart.get("cycles", {}).get("exr")
+        if exr and not os.path.isabs(exr):
+            exr = os.path.join(os.path.dirname(os.path.abspath(a.chart)), exr)
+        if not exr or not os.path.exists(exr):
+            exr = os.path.join(os.path.dirname(ref), "exr", "chart.exr")
+        res["grade_only"] = chart_grade_only(chart, a.lut, ref, exr, a.engine, a.engine_linear, a.tol)
     with open(a.out, "w") as f:
         json.dump(res, f, indent=1)
     if a.sheet:
@@ -1118,6 +1203,9 @@ def chart_cmd(a):
         print(f"{row['sample']:<26} cycles {row['cycles']}  " + "  ".join(
             f"{lab}: {row[lab]['diff']}{'' if row[lab]['pass'] else ' !'}" for lab, _ in frames))
     print(f"-> {a.out}; patches within +-{a.tol}/255: {res['pass_patches']}")
+    if "grade_only" in res:
+        go = res["grade_only"]
+        print(f"grade only (own linear -> CPU LUT vs own graded frame): max |d| {go['max_abs']}, patches pass {go['pass_patches']}")
 
 
 # ---------------------------------------------------------------- bokeh radius (T16)
@@ -1243,6 +1331,8 @@ def main():
     ch.add_argument("--engine2-label", default="engine2")
     ch.add_argument("--cycles", help="Cycles graded frame (default: chart.json cycles.png)")
     ch.add_argument("--tol", type=float, default=CHART_TOL)
+    ch.add_argument("--lut", help="grade_lut.json: add the grade-only check (each renderer's linear through the LUT)")
+    ch.add_argument("--engine-linear", help="the engine's scene-linear chart (engine_shots --chart: <prefix>chart_linear.npy)")
     ch.add_argument("--out", required=True, help="output JSON")
     ch.add_argument("--sheet", help="output PNG: chart crops side by side with the numbers")
     bk = sub.add_parser("bokeh", help="fit the DoF disc radius (px) between a sharp and a DoF frame (T16)")

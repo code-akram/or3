@@ -230,7 +230,8 @@ export const DEFAULT_PARAMS = {
     /** correction of the measured bokeh radius against the thin-lens formula (1 = the formula). At 1 the
      * engine's fitted disc at the ear was 3.45 / 3.24 px (helix / whole-ear ROI; the formula says 3.39),
      * Cycles' 2.87 / 2.71 px on the same fit (lookdev_report.py bokeh): Cycles' 7-blade f/2 blur reads
-     * ~0.84 of the thin-lens disc. 0.835 matches Cycles' measured radius, not the formula. */
+     * ~0.84 of the thin-lens disc. At 0.835 the engine fits 3.04 / 2.89 px (+6 % / +7 % of Cycles; the
+     * half-res gather and the 0.5-1.5 px composite fade keep it from scaling linearly). */
     radiusScale: 0.835,
     /** near-field 16-tap max pass radius (fraction of the gather radius) */
     maxPassScale: 1,
