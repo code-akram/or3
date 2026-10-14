@@ -30,22 +30,20 @@ Latest integrated build of main: `data/build/lookdev/20261014T155504Z-t9b-b1/` (
 
 **Merged since:** T11 facial hair (249aa40; beard grey fraction 1.46x -> 1.05x and chroma 1.31x -> 0.96x of the Cycles hero, brows a dark-brown band; report `bench/m1/v4/t11-facial-hair.md`; left for later: hero-rig beard warmth, moustache spikes, the lash wedge at the right inner eyelid, the beard back edge). T12 skin/hair colour/eye band (be74470; eye band 0.7547 -> 0.8163, hero hair r/g +7.5 % of main9, skin 0.5-3 mm relief, identity v2 at default paths; report `bench/m1/v4/t12-skin-hair-colour.md`; left: engine card hair still light brown (T15), thin eye-band margin, cheeks smooth at portrait distance, warm lid tint).
 
-**Running at handoff time** (results land in `bench/m1/v4/`): T10 engine gate completion (hair shadow maps, shadowed fill, GTAO, hero closeup capture, framing mismatch, spatial parity metrics, regression strip), T15 hair volume/hairline/silhouette IoU + engine card hair colour (after T12). Queued: T13 suit spike 2 and T14 C2 painterly pass (both need the user).
+**Running at handoff time** (results land in `bench/m1/v4/`): T10 engine gate completion (hair shadow maps, shadowed fill, GTAO, hero closeup capture, framing mismatch, spatial parity metrics, regression strip), T15 hair volume/hairline/silhouette IoU + engine card hair colour (after T12). T13 suit rebuild (spike 2 gate, then the full rebuild); checkpoint 3 (Fable) writes the realism roadmap. T14 painterly dropped.
 
 **Engine viewer from the Mac:** in `web/`, `npm run dev` (127.0.0.1:5173); tunnel `ssh -N -L 5173:127.0.0.1:5173 archlinux`; open `http://127.0.0.1:5173/character.html?asset=lookdev/<run>&view=portrait&rig=hero`. Device capture for the Air: see `t6-engine-parity.md`.
 
 **User decisions open:**
 0. **Air session** (standing ask): one 10-minute capture on the Mac (`t6-engine-parity.md`, device capture). Every engine number so far is SwiftShader.
-1. **C2 style**: painterly-stylised realism on the character (recommended by both Fable passes; checkpoint 2 §3 costs it at 2–3 days vs 2–3 weeks for realism) vs realism. The engine material code has a banded-lighting switch ready; the painted-albedo + ink pass waits on this.
-2. **Suit**: go/no-go on a 1.5-day second spike (checkpoint 2 recommends go, without pre-committing to the ~11-day rebuild; alternative a 2-day "lofted v2").
-2b. **Costume ensemble**: whether hair length, beard shape and the black suit stay as they are for the public build (checkpoint 2 §1, §5.7).
+1–2b. **Decided 2026-10-14 (user):** C2 full realism, suit full pattern rebuild, costume ensemble kept (NOTES Decision log).
 3. **Listening gate**: accept-with-flag vs reject for the 5 sources under 18 kHz (`t4-audio-bandwidth.md` §3); the 8.6 dB calibration question applies to the alley footstep takes only.
 4. **ArcFace** ruling (still pending; T7 used it offline, private, scalar only). Old per-frame embeddings `private/likeness/work/mica/codes*.npz` kept until the ruling.
 5. Still pending from before: m1 base approval, Movieclips ruling. Fan build: palpebral +9.8 % and alar −4.0 % are outside the ±3 % gate after T7b; the fix belongs in the private fan block.
 
 **Housekeeping done:** `private/` is `o-rwx`; fan builds and the worktree-attic archive moved from `data/` to `private/likeness/work/moved-from-data-20261014/`.
 
-**Machine:** the other project (or4) runs headless Chrome on up to ~14 cores; v4 agents ran at `nice 10`, Blender `-t 3/4`, Cycles one at a time via `flock /tmp/or3-cycles.lock`.
+**Machine:** the other project (or4) was stopped by the user 2026-10-14 evening (it ran headless Chrome on up to ~14 cores); v4 agents ran at `nice 10`, Blender `-t 3/4`, Cycles one at a time via `flock /tmp/or3-cycles.lock`.
 
 ---
 
