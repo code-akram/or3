@@ -69,7 +69,11 @@ DEFAULTS = {
         # hero strands (hero_only) and the source of the game cards
         # (hair_groom_cards.py). null = the hair_clumps cards only. The guide
         # shaping (length, part, gravity, ...) is read from `clumps`.
-        "groom": {},
+        # T12: the hero hair back toward near-black, melanin unchanged (0.90). The ginger back-lengths
+        # were the lightened tips (tip_light 0.03) and the pheomelanin, not the lobe width: Chiang
+        # 0.30-0.36 / radial 0.4 moved the portrait hair r/g by 4 % and dropped the hair-test p10 to
+        # 1.4x the T8 base (bench/m1/v4/t12-skin-hair-colour.md), so the T8 lobes stay.
+        "groom": {"shader": {"redness": 0.04, "tip_light": 0.0, "random_color": 0.08}},
         # Generated clump hair (hair_clumps.py). Default variant: shoulder.
         # Hero budget (user, 2026-10-12): hair + beard up to ~35k tris.
         "clumps": {
