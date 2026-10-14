@@ -42,6 +42,9 @@ export class Output {
   readonly power = uniform(new THREE.Vector3(1, 1, 1));
   readonly saturation = uniform(1);
   readonly vignette = uniform(0);
+  /** 1 = AgX view transform (the look-dev and hero frames); 0 = Standard (clamp + sRGB), the
+   * shader-ball parity row, whose Cycles side renders with Blender's Standard view. */
+  readonly viewAgX = uniform(1);
 
   constructor(
     private readonly renderer: THREE.WebGPURenderer,
@@ -60,7 +63,7 @@ export class Output {
     const d = uv().sub(0.5).mul(2);
     g = g.mul(pow(float(2), this.vignette.mul(d.dot(d).mul(0.5))));
     c = mix(c, g, this.gradeOn);
-    const mapped = agxToneMapping(c, float(1));
+    const mapped = mix(c, agxToneMapping(c, float(1)), this.viewAgX);
     this.mat.fragmentNode = vec4(srgbEncode(mapped.clamp(0, 1)), 1);
     this.quad = new THREE.QuadMesh(this.mat);
   }

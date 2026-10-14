@@ -75,9 +75,17 @@ export interface EngineStage {
         bones: Record<string, number[]>;
         corrective_weights: Record<string, number>;
         helper_world_quats?: Record<string, number[]>;
+        gaze?: Gaze | null;
       }
     >;
   };
+}
+
+/** Eye turn of a hero shot (blender/hero/wet.gaze_rotations): rest-world centre + rotation per eye. */
+export interface Gaze {
+  deg: number[];
+  l: { centre: number[]; quat: number[] };
+  r: { centre: number[]; quat: number[] };
 }
 
 export const VIEWS = ['front', 'three_quarter', 'profile', 'closeup', 'portrait'] as const;

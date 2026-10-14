@@ -86,14 +86,38 @@ def render_crop(ch, name, spec, cam, out_dir, size=0.5):
             "samples": sc.cycles.samples, "peak_mb": mb}
 
 
-def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False):
+# Engine parity (bench/m1/v4/checkpoint-1.md §1.3 #5): what the web viewer renders, and nothing it
+# does not: the bare hero rig on the void floor, no set, haze, rain, beads or wet hair, no DoF, a 1 px
+# Blackman-Harris filter; eyes still turn (the viewer applies the exported gaze). grade.py --parity
+# drops bloom, halation, dispersion and grain to match.
+PARITY_FILTER_PX = 1.0
+
+
+def parity_spec(spec):
+    s = dict(spec)
+    for k in ("haze", "rain", "beads"):
+        s.pop(k, None)
+    return s
+
+
+def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False, parity=False):
     clear_transient()
     wet.restore(ch)
+    if parity:
+        spec, set_kind = parity_spec(spec), "void"
     ch.pose_log = poses.apply(ch.arm, spec["pose"])
     rig.sync_props(ch)
     res = spec["res"]
     settings = rig.cycles(quality, res)
-    cam = rig.camera(ch, spec["cam"])
+    if parity:
+        sc_ = bpy.context.scene
+        if hasattr(sc_.cycles, "filter_width"):
+            sc_.cycles.filter_width = PARITY_FILTER_PX
+        if hasattr(sc_.render, "filter_size"):
+            sc_.render.filter_size = PARITY_FILTER_PX
+        settings["parity"] = {"filter_px": PARITY_FILTER_PX, "dof": False, "set": "void",
+                              "skipped": ["haze", "rain", "beads", "wet_hair", "dof"]}
+    cam = rig.camera(ch, spec["cam"], dof=not parity)
     # wet look (render side): hair tips in every rain shot, beads on the
     # shoulders in the close-ups, eyes to camera (or `gaze` deg off it)
     wet_hair = wet.hair_tips(ch, 1.0 if spec.get("rain") else 0.0)
@@ -231,6 +255,9 @@ def main(argv):
                          "focus point: a list, 'close' (shots.CLOSE) or 'none'")
     ap.add_argument("--hair-rim", choices=["on", "off"], default="on",
                     help="split magenta rims: a desaturated twin lights the hair (rig.HAIR_RIM)")
+    ap.add_argument("--parity", action="store_true",
+                    help="engine-parity variant: void set, no haze/rain/beads/wet hair, DoF off, 1 px filter "
+                         "(grade with grade.py --parity)")
     ap.add_argument("--skin-sss", choices=["auto", "off"], default="auto",
                     help="auto: fill in Cycles SSS when the build's skin has none (render-side)")
     a = ap.parse_args(argv)
@@ -242,7 +269,9 @@ def main(argv):
     ch = rig.load_character(a.inp)
     for o in ch.objs:
         o.pass_index = 1
-    rec = {"in": os.path.abspath(a.inp), "quality": a.quality, "set": a.set_kind,
+    if a.parity:
+        a.set_kind = "void"
+    rec = {"in": os.path.abspath(a.inp), "quality": a.quality, "set": a.set_kind, "parity": a.parity,
            "blender": bpy.app.version_string, "threads": bpy.context.scene.render.threads,
            "hero_only": [o.name for o in ch.objs if any(c.name == "hero_only" for c in o.users_collection)],
            "skin_sss_added": skin_sss(ch) if a.skin_sss == "auto" else [],
@@ -264,7 +293,8 @@ def main(argv):
         rec["set_build_s"] = round(time.perf_counter() - t, 2)
     crops = shots.CLOSE if a.crop == "close" else ([] if a.crop == "none" else a.crop.split(","))
     for n in names:
-        rec["shots"] += render_shot(ch, n, shots.SHOTS[n], a.quality, out, a.set_kind, crop=n in crops)
+        rec["shots"] += render_shot(ch, n, shots.SHOTS[n], a.quality, out, a.set_kind, crop=n in crops,
+                                    parity=a.parity)
         with open(os.path.join(out, "stage.json"), "w") as f:
             json.dump(rec, f, indent=1)
     if a.turntable:

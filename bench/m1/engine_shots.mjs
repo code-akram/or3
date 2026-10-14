@@ -6,6 +6,7 @@
 //   node bench/m1/engine_shots.mjs --build RUN_DIR [--views front,three_quarter,profile,closeup,portrait]
 //        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8791] [--timeout 600]
 //        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_] [--pose arms_up]
+//        [--balls auto|on|off]  shader-ball parity frame (game_balls.png) when RUN_DIR has shader_balls.json
 //
 // Containment: the server exposes only web/dist-viewer and RUN_DIR (under /asset/), bound to 127.0.0.1, and
 // every output file goes into RUN_DIR. For a fan build RUN_DIR is the private run dir, so nothing
@@ -43,6 +44,8 @@ const extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/
 const outPrefix = opt('prefix', 'game_');
 const poseArg = opt('pose', null); // debug preset for every view (e.g. arms_up), else the view's own
 const dist = join(repo, 'web', opt('dist', 'dist-viewer'));
+const ballsArg = opt('balls', 'auto');
+const wantBalls = ballsArg === 'on' || (ballsArg === 'auto' && existsSync(join(build, 'shader_balls.json')));
 
 if (!existsSync(join(build, 'character.glb'))) {
   console.error(`no character.glb in ${build}`);
@@ -71,7 +74,7 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.rig\.json|engine_stage\.json|material_params\.json|hair_atlas_(flow|data)\.png)$/;
+const ASSET_OK = /^(character\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|hair_atlas_(flow|data)\.png)$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');
@@ -178,6 +181,23 @@ async function run(backend) {
       console.error(`[engine_shots] ${backend} ${v} ${w}x${h}: ${Date.now() - t} ms`);
     }
     const stats = await page.evaluate(() => window.__viewer.stats());
+    let balls = null;
+    if (wantBalls) {
+      const bj = JSON.parse(await readFile(join(build, 'shader_balls.json'), 'utf8'));
+      const [bw, bh] = bj.res;
+      const qb = new URLSearchParams(q);
+      qb.set('scene', 'balls');
+      const t = Date.now();
+      await page.goto(`http://127.0.0.1:${port}/character.html?${qb}`, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.__viewerState?.ready || window.__viewerState?.phase === 'error', null, { timeout: timeoutS * 1000, polling: 500 });
+      const sb = await page.evaluate(() => window.__viewerState);
+      if (sb.phase === 'error') throw new Error(`balls viewer error: ${sb.error}`);
+      const r = await page.evaluate(([w, h]) => window.__viewer.captureBalls(w, h), [bw, bh]);
+      const px = Buffer.from(r.b64, 'base64');
+      await writeFile(join(build, `${outPrefix}balls.png`), png(bw, bh, px));
+      balls = { file: `${outPrefix}balls.png`, res: [bw, bh], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, warnings: sb.warnings };
+      console.error(`[engine_shots] ${backend} balls ${bw}x${bh}: ${Date.now() - t} ms`);
+    }
     const adapter = await page.evaluate(async () => {
       try {
         const a = await navigator.gpu?.requestAdapter();
@@ -186,7 +206,7 @@ async function run(backend) {
         return null;
       }
     });
-    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, stats, shots, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
+    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, facial_atlas: st.facialAtlas, gaze: st.gaze, stats, shots, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
   } finally {
     await browser.close();
   }

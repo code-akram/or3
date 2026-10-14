@@ -46,6 +46,10 @@ GRADE = {
 }
 
 
+# grade.py --parity: the output-pass effects the engine frame is compared without
+PARITY_OFF = {"bloom_strength": 0.0, "halation_strength": 0.0, "dispersion": 0.0, "grain": 0.0}
+
+
 def _new(nt, t, **kw):
     n = nt.nodes.new(t)
     for k, v in kw.items():
@@ -154,24 +158,26 @@ def build(exr_path, paint, g=GRADE):
             fac = _math(nt, "MULTIPLY", _math(nt, "SUBTRACT", 1.0, sep.outputs["Red"]), paint)
         x = _mix(nt, "MIX", x, k.outputs["Image"], fac)
 
-    bloom = _new(nt, "CompositorNodeGlare")
-    _menu(bloom, "Type", "Bloom")
-    _menu(bloom, "Quality", "High")
-    _set(bloom, "Threshold", g["bloom_threshold"])
-    _set(bloom, "Strength", g["bloom_strength"])
-    _set(bloom, "Size", g["bloom_size"])
-    nt.links.new(x, bloom.inputs["Image"])
-    x = bloom.outputs["Image"]
+    if g["bloom_strength"]:
+        bloom = _new(nt, "CompositorNodeGlare")
+        _menu(bloom, "Type", "Bloom")
+        _menu(bloom, "Quality", "High")
+        _set(bloom, "Threshold", g["bloom_threshold"])
+        _set(bloom, "Strength", g["bloom_strength"])
+        _set(bloom, "Size", g["bloom_size"])
+        nt.links.new(x, bloom.inputs["Image"])
+        x = bloom.outputs["Image"]
 
-    hal = _new(nt, "CompositorNodeGlare")
-    _menu(hal, "Type", "Fog Glow")
-    _menu(hal, "Quality", "Medium")
-    _set(hal, "Threshold", g["halation_threshold"])
-    _set(hal, "Strength", g["halation_strength"])
-    _set(hal, "Size", 0.35)
-    _set(hal, "Tint", (*g["halation_tint"], 1.0))
-    nt.links.new(x, hal.inputs["Image"])
-    x = hal.outputs["Image"]
+    if g["halation_strength"]:
+        hal = _new(nt, "CompositorNodeGlare")
+        _menu(hal, "Type", "Fog Glow")
+        _menu(hal, "Quality", "Medium")
+        _set(hal, "Threshold", g["halation_threshold"])
+        _set(hal, "Strength", g["halation_strength"])
+        _set(hal, "Size", 0.35)
+        _set(hal, "Tint", (*g["halation_tint"], 1.0))
+        nt.links.new(x, hal.inputs["Image"])
+        x = hal.outputs["Image"]
 
     if g["dispersion"]:
         ld = _new(nt, "CompositorNodeLensdist")
@@ -234,6 +240,9 @@ def build(exr_path, paint, g=GRADE):
     nt.links.new(comb.outputs[0], mul.inputs[7])
     x = mul.outputs[2]
 
+    if not g["grain"]:
+        nt.links.new(x, out.inputs[0])
+        return sc
     # grain: white noise on pixel coordinates, luminance-proportional
     co = _new(nt, "CompositorNodeImageCoordinates")
     nt.links.new(rgb, co.inputs["Image"])
@@ -277,9 +286,15 @@ def main(argv):
     ap.add_argument("--paint", type=float, default=0.6)
     ap.add_argument("--wb", type=float, default=None, help="white point in K (overrides GRADE wb_kelvin; 0 = off)")
     ap.add_argument("--suffix", default="", help="appended to the output names (grade A/Bs)")
+    ap.add_argument("--parity", action="store_true",
+                    help="engine-parity grade: no bloom, halation, dispersion or grain, no paint A/B "
+                         "(exposure, white balance, CDL, saturation, vignette and AgX stay)")
     a = ap.parse_args(argv)
     if a.wb is not None:
         GRADE["wb_kelvin"] = a.wb or None
+    if a.parity:
+        GRADE.update(PARITY_OFF)
+        a.paint = 0.0
     os.makedirs(a.out, exist_ok=True)
     meta = {}
     sj = os.path.join(a.out, "stage.json")
@@ -298,7 +313,7 @@ def main(argv):
         res.append({"shot": name, "exposure": ev, "grade_s": s1, "paint_s": s2})
         print(f"[grade] {name}: {s1} s, paint {s2} s", flush=True)
     with open(os.path.join(a.out, "grade.json"), "w") as f:
-        json.dump({"grade": GRADE, "look": LOOK, "paint": a.paint, "shots": res}, f, indent=1)
+        json.dump({"grade": GRADE, "look": LOOK, "paint": a.paint, "parity": a.parity, "shots": res}, f, indent=1)
 
 
 if __name__ == "__main__":

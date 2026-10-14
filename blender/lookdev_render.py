@@ -98,6 +98,10 @@ def parse_args():
                          "smooth-by-angle at DEG (a planarity test; not what ships)")
     ap.add_argument("--calibrate", action="store_true",
                     help="render grey cards under the studio rig, write calibration.json, exit")
+    ap.add_argument("--shader-balls", action="store_true",
+                    help="engine parity (T6): one sphere per shipped material under the studio rig, "
+                         "Cycles 64 spp + OIDN, Standard view; writes cycles_balls.png, shader_balls.glb "
+                         "and shader_balls.json (the engine renders the same GLB), exit")
     return ap.parse_args(argv)
 
 
@@ -308,6 +312,208 @@ def render(path):
     t = time.perf_counter()
     bpy.ops.render.render(write_still=True)
     return round(time.perf_counter() - t, 3)
+
+
+# ---------------------------------------------------------------- shader balls (T6)
+# Engine parity, checkpoint-1 §2 item 3: each material on a sphere under the
+# neutral studio, Cycles vs the web viewer. The spheres are exported as their own
+# GLB with the materials the character GLB imported, so both renderers shade the
+# same inputs; only the BRDFs and lights differ. Standard view transform (no
+# AgX) at BALL_EXPOSURE so the metric is a scene-linear luminance ratio.
+# name, column, row, UV mapping ("patch" around the face nearest the anchor, or
+# the eye's polar map), anchor (metres from the character's feet / head mid),
+# patch half-size in UV
+BALLS = [
+    ("skin_head", 0, 0, "patch", ("head", (0.045, -0.25, -0.035)), 0.025),
+    ("suit_wool", 1, 0, "patch", ("floor", (0.12, -0.6, 1.30)), 0.02),
+    ("suit_silk", 2, 0, "patch", ("floor", (0.0, -0.6, 1.36)), 0.04),
+    ("suit_leather", 0, 1, "patch", ("floor", (0.1, -0.8, 0.04)), 0.03),
+    ("hair_cards", 1, 1, "patch", ("head", (0.0, 0.0, 0.35)), 0.02),
+    ("eyes_hq", 2, 1, "polar", None, 0.0),
+]
+BALL_R = 0.1
+BALL_DX = 0.26
+BALL_DZ = 0.12
+BALL_Z = 1.31             # row centre height over the floor
+BALL_RES = (1024, 512)
+BALL_FRAME_W = 1.0        # metres across the frame at the balls
+BALL_LENS = 85.0
+BALL_EXPOSURE = -3.5
+BALL_SPP = 64
+# Cycles skin ball: the hero skin's random-walk SSS (skin_tex.HERO), which the
+# engine's pre-integrated SSS is calibrated against; the GLB carries none.
+BALL_SKIN_SSS = {"radius": (1.0, 0.22, 0.10), "scale": 0.0034, "anisotropy": 0.8, "ior": 1.4}
+
+
+def _ball_mesh(name, centre, mode, uv_c, half, segs=96, rings=48):
+    """A UV sphere whose pole faces the camera (-Y); per-loop UVs either a
+    planar patch of the material's atlas around uv_c (front hemisphere: x, z),
+    or the eye's polar map (eyes_hq.py: v = sqrt(theta / pi) from the front
+    pole, u = phi / 2pi on the left half)."""
+    import bmesh
+    from mathutils import Matrix
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=segs, v_segments=rings, radius=BALL_R)
+    bmesh.ops.transform(bm, matrix=Matrix.Rotation(math.radians(90), 4, "X"), verts=bm.verts)  # +Z pole -> -Y
+    uvl = bm.loops.layers.uv.new("UVMap")
+    for f in bm.faces:
+        f.smooth = True
+        uvs = []
+        for lp in f.loops:
+            d = lp.vert.co.normalized()
+            if mode == "polar":
+                th = math.acos(max(-1.0, min(1.0, -d.y)))
+                ph = math.atan2(d.z, d.x) % (2 * math.pi)
+                uvs.append([ph / (2 * math.pi) * 0.5, math.sqrt(th / math.pi)])
+            else:
+                uvs.append([uv_c[0] + d.x * half, uv_c[1] + d.z * half])
+        if mode == "polar":
+            us = [u for u, _ in uvs]
+            if max(us) - min(us) > 0.25:
+                for t in uvs:
+                    if t[0] < 0.25:
+                        t[0] += 0.5
+            if min(abs(lp.vert.co.normalized().y + 1.0) for lp in f.loops) < 1e-6:
+                # the pole vertex: u of the face centre (eyes_hq does the same)
+                for t, lp in zip(uvs, f.loops):
+                    if abs(lp.vert.co.normalized().y + 1.0) < 1e-6:
+                        others = [o[0] for o, l2 in zip(uvs, f.loops) if l2 is not lp]
+                        t[0] = sum(others) / len(others)
+        for lp, t in zip(f.loops, uvs):
+            lp[uvl].uv = t
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    ob.location = centre
+    return ob
+
+
+def _patch_centre(meshes, mat_name, anchor):
+    """UV (Blender convention) of the face carrying mat_name nearest to anchor (world)."""
+    best = (1e9, (0.5, 0.5))
+    for o in meshes:
+        idx = [i for i, m in enumerate(o.data.materials) if m and m.name == mat_name]
+        if not idx or not o.data.uv_layers:
+            continue
+        uv = o.data.uv_layers.active.data
+        mw = o.matrix_world
+        for p in o.data.polygons:
+            if p.material_index not in idx:
+                continue
+            d = (mw @ p.center - anchor).length
+            if d < best[0]:
+                u = sum(uv[li].uv.x for li in p.loop_indices) / p.loop_total
+                v = sum(uv[li].uv.y for li in p.loop_indices) / p.loop_total
+                best = (d, (u, v))
+    return best[1], best[0]
+
+
+def shader_balls(out, meshes, floor_z, head):
+    """cycles_balls.png + shader_balls.glb + shader_balls.json (see BALLS)."""
+    from bpy_extras.object_utils import world_to_camera_view
+    sc = bpy.context.scene
+    for o in meshes:
+        o.hide_render = True
+    centre = Vector((0.0, 0.0, floor_z + BALL_Z))
+    balls, rec = [], []
+    for name, col, row, mode, anchor, half in BALLS:
+        mat = bpy.data.materials.get(name)
+        if mat is None:
+            rec.append({"material": name, "missing": True})
+            continue
+        uv_c, dist = (None, None)
+        if mode == "patch":
+            base, off = anchor
+            a = (head if base == "head" else Vector((0.0, 0.0, floor_z))) + Vector(off)
+            uv_c, dist = _patch_centre(meshes, name, a)
+        c = centre + Vector(((col - 1) * BALL_DX, 0.0, (0.5 - row) * 2 * BALL_DZ))
+        ob = _ball_mesh(f"ball_{name}", c, mode, uv_c, half)
+        ob.data.materials.append(mat)
+        balls.append(ob)
+        rec.append({"material": name, "centre_blender": [round(x, 6) for x in c], "radius": BALL_R,
+                    "uv": mode, "uv_centre": [round(x, 5) for x in uv_c] if uv_c else None,
+                    "uv_half": half, "anchor_dist_m": round(dist, 4) if dist is not None else None})
+    # camera: in front (-Y), level with the row centre
+    cd = bpy.data.cameras.new("balls")
+    cd.lens = BALL_LENS
+    cd.sensor_fit = "AUTO"
+    dist = (BALL_FRAME_W * 0.5) / math.tan(math.atan(cd.sensor_width * 0.5 / cd.lens))
+    cam = bpy.data.objects.new("balls", cd)
+    sc.collection.objects.link(cam)
+    cam.location = centre + Vector((0.0, -dist, 0.0))
+    look_at(cam, centre)
+    sc.camera = cam
+    r = sc.render
+    r.engine = "CYCLES"
+    r.resolution_x, r.resolution_y = BALL_RES
+    r.resolution_percentage = 100
+    r.film_transparent = False
+    r.image_settings.file_format = "PNG"
+    r.image_settings.color_mode = "RGB"
+    r.image_settings.color_depth = "8"
+    c = sc.cycles
+    c.device = "CPU"
+    c.samples = BALL_SPP
+    c.use_adaptive_sampling = False
+    c.use_denoising = True
+    c.denoiser = "OPENIMAGEDENOISE"
+    if hasattr(c, "denoising_use_gpu"):
+        c.denoising_use_gpu = False
+    c.max_bounces = 8
+    c.transparent_max_bounces = 32
+    if hasattr(c, "filter_width"):
+        c.filter_width = 1.0
+    sc.view_settings.view_transform = "Standard"
+    sc.view_settings.look = "None"
+    sc.view_settings.exposure = BALL_EXPOSURE
+    sc.view_layers[0].update()
+    for ob, rr in zip(balls, [x for x in rec if not x.get("missing")]):
+        cc = world_to_camera_view(sc, cam, ob.location)
+        edge = world_to_camera_view(sc, cam, ob.location + Vector((BALL_R, 0.0, 0.0)))
+        rr["circle_px"] = [round(cc.x * BALL_RES[0], 2), round((1 - cc.y) * BALL_RES[1], 2),
+                           round(abs(edge.x - cc.x) * BALL_RES[0], 2)]
+    # the engine's copy first (the exporter ignores Cycles-only subsurface anyway)
+    bpy.ops.object.select_all(action="DESELECT")
+    for ob in balls:
+        ob.select_set(True)
+    bpy.context.view_layer.objects.active = balls[0]
+    glb = os.path.join(out, "shader_balls.glb")
+    bpy.ops.export_scene.gltf(filepath=glb, export_format="GLB", use_selection=True, export_yup=True,
+                              export_apply=False, export_tangents=True, export_image_format="AUTO",
+                              export_skins=False, export_animations=False, export_morph=False)
+    skin = bpy.data.materials.get("skin_head")
+    sss = None
+    if skin is not None:
+        p = next((n for n in skin.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if p is not None:
+            p.subsurface_method = "RANDOM_WALK_SKIN"
+            p.inputs["Subsurface Weight"].default_value = 1.0
+            p.inputs["Subsurface Radius"].default_value = BALL_SKIN_SSS["radius"]
+            p.inputs["Subsurface Scale"].default_value = BALL_SKIN_SSS["scale"]
+            if "Subsurface Anisotropy" in p.inputs:
+                p.inputs["Subsurface Anisotropy"].default_value = BALL_SKIN_SSS["anisotropy"]
+            if "Subsurface IOR" in p.inputs:
+                p.inputs["Subsurface IOR"].default_value = BALL_SKIN_SSS["ior"]
+            sss = BALL_SKIN_SSS
+    secs = render(os.path.join(out, "cycles_balls.png"))
+
+    def gl(v):
+        return [round(float(v[0]), 6), round(float(v[2]), 6), round(float(-v[1]), 6)]
+    j = {"version": 1, "script": "blender/lookdev_render.py --shader-balls",
+         "res": list(BALL_RES), "exposure": BALL_EXPOSURE, "view_transform": "Standard",
+         "cycles": {"samples": BALL_SPP, "denoise": "OIDN", "filter_px": 1.0, "seconds": secs,
+                    "skin_sss": sss},
+         "camera": {"position": gl(cam.location), "target": gl(centre), "up": [0, 1, 0], "lens_mm": BALL_LENS,
+                    "sensor_fit": "AUTO", "sensor_mm": cd.sensor_width,
+                    "vfov_deg": round(math.degrees(2 * math.atan(cd.sensor_width * 0.5 / BALL_LENS)), 6),
+                    "res": list(BALL_RES), "shift": [0.0, 0.0]},
+         "balls": [dict(x, centre=gl(Vector(x["centre_blender"]))) if "centre_blender" in x else x for x in rec]}
+    with open(os.path.join(out, "shader_balls.json"), "w") as f:
+        json.dump(j, f, indent=1)
+    print(f"[lookdev] shader balls: {secs} s -> {out}/cycles_balls.png", flush=True)
+    return j
 
 
 # ---------------------------------------------------------------- masks
@@ -795,6 +1001,9 @@ def main():
             "landmarks_glb": lm,
         }
     floor, lights = build_studio(floor_z)
+    if ARGS.shader_balls:
+        shader_balls(os.path.abspath(ARGS.out_dir), meshes, floor_z, head)
+        return
     if ARGS.calibrate:
         calibrate(os.path.abspath(ARGS.out_dir), head, floor)
         return

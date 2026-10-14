@@ -29,12 +29,19 @@
 #                        at another thread count)
 #     --fan              treat the input as a fan build (private output); normally detected
 #     --no-hair-rim      magenta rims light the hair at full saturation (rig.HAIR_RIM off)
+#     --parity           engine-parity variant (bench/m1/v4/checkpoint-1.md §1.3 #5): void set, no
+#                        haze/rain/beads/wet hair, DoF off, 1 px filter, grade without bloom,
+#                        halation, dispersion, grain or paint; implies --no-turntable and --set void.
+#                        Default shots: portrait. 64 spp (preview samples) at --pct 100 unless given.
 #     --wb K             grade white point in K (default: grade.py GRADE wb_kelvin, 3900; 0 = off;
 #                        with --regrade pass it as WB=K in the environment)
 #   bench/m1/hero.sh --regrade <run dir>     re-grade the EXRs and redraw the sheet
 #
 # Env: DATA (default <main checkout>/data), THREADS (default 16 for --final,
-# 8 otherwise), HERO_VENDOR (Poly Haven textures, default <main>/data/vendor).
+# 8 otherwise), HERO_VENDOR (Poly Haven textures, default <main>/data/vendor),
+# ENGINE_SHOTS (default 1): when the input sits in a look-dev run dir (character.glb next to it),
+# also capture the engine frames there (bench/m1/engine_shots.sh) and draw that run's
+# engine_sheet.png against this run's portrait; 0 skips it.
 # Build the input with KEEP_BLEND=1 bench/m1/lookdev.sh --config bench/m1/variants/direction.json <label>.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -50,7 +57,7 @@ grade_and_sheet() {
   for e in "$run"/exr/*.exr; do [[ -e "$e" ]] && exrs+=(--exr "$e"); done
   if [[ ${#exrs[@]} -gt 0 ]]; then
     "${BL[@]}" --python "$REPO/blender/hero/grade.py" -- "${exrs[@]}" --out "$run" --paint "$paint" \
-      ${WB:+--wb "$WB"} \
+      ${WB:+--wb "$WB"} ${PARITY:+--parity} \
       > "$run/grade.log" 2>&1 || { echo "grade failed: $run/grade.log" >&2; tail -20 "$run/grade.log" >&2; exit 1; }
   fi
   python3 -I "$REPO/blender/hero/sheet.py" "$run"
@@ -62,7 +69,7 @@ if [[ "${1:-}" == "--regrade" ]]; then
   exit 0
 fi
 
-FAN=; HAIR_RIM=on
+FAN=; HAIR_RIM=on; PARITY=
 QUALITY=preview; STAGE_FAIL=; SHOTS=all; TT=(--turntable); SET=alley; PAINT=0.6; TTV=(); TTP=(); CROP=none; PCT=()
 while [[ $# -gt 2 ]]; do
   case "$1" in
@@ -82,9 +89,15 @@ while [[ $# -gt 2 ]]; do
     --into)    INTO="$2"; shift 2 ;;
     --fan)     FAN=1; shift ;;
     --no-hair-rim) HAIR_RIM=off; shift ;;
+    --parity)  PARITY=1; shift ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
+if [[ -n "$PARITY" ]]; then
+  TT=(); SET=void; PAINT=0
+  [[ "$SHOTS" == all ]] && SHOTS=portrait
+  [[ ${#PCT[@]} -eq 0 && "$QUALITY" == preview ]] && PCT=(--pct 100)
+fi
 IN="$(realpath "${1:?usage: $0 [options] <character.blend> <label>}")"
 LABEL="${2:?label}"
 [[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "label: letters, digits, . _ - only" >&2; exit 2; }
@@ -111,6 +124,7 @@ echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS${FA
 T0=$(date +%s)
 "${BL[@]}" -t "$THREADS" --python "$REPO/blender/hero/stage.py" -- --in "$IN" --out "$RUN" \
   --quality "$QUALITY" --shots "$SHOTS" --set "$SET" --crop "$CROP" --hair-rim "$HAIR_RIM" "${PCT[@]}" "${TT[@]}" "${TTV[@]}" "${TTP[@]}" \
+  ${PARITY:+--parity} \
   >> "$RUN/stage.log" 2>&1 || STAGE_FAIL=1
 grep -E '^\[stage\]' "$RUN/stage.log" || true
 # grade and draw whatever was rendered, even after a failure or a kill
@@ -118,3 +132,15 @@ grep -E '^\[stage\]' "$RUN/stage.log" || true
 if [[ -n "${STAGE_FAIL:-}" ]]; then echo "stage failed: $RUN/stage.log" >&2; tail -20 "$RUN/stage.log" >&2; exit 1; fi
 ln -sfn "$(basename "$RUN")" "$ROOT/latest"
 echo "-> $RUN ($(( $(date +%s) - T0 )) s)"
+
+# Engine frames for the same build, in the build's own run dir (a fan build's dir is private, and so
+# is this run), then that run's engine_sheet.png against this portrait.
+SRC_RUN="$(dirname "$IN")"
+if [[ "${ENGINE_SHOTS:-1}" == 1 && -s "$SRC_RUN/character.glb" && -f "$RUN/portrait.png" ]]; then
+  if "$REPO/bench/m1/engine_shots.sh" "$SRC_RUN"; then
+    python3 -I "$REPO/bench/m1/lookdev_report.py" engine "$SRC_RUN" --cycles "$RUN" \
+      || echo "warning: engine sheet failed" >&2
+  else
+    echo "warning: engine shots failed ($SRC_RUN/engine_shots.log)" >&2
+  fi
+fi

@@ -20,7 +20,8 @@ the character faces +Z, +X is its left.
              with their light-linking groups, and the corrective weights
              Blender's deformation runtime computed (to check the TS port).
 
-Set, haze, rain, beads and gaze are skipped (the engine has no set).
+Set, haze, rain and beads are skipped (the engine has no set). The gaze is
+exported as per-eye rotations (wet.gaze_rotations); DoF as f-stop + focus.
 """
 
 import argparse
@@ -37,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if os.path.dirname(HERE) not in sys.path:
     sys.path.insert(0, os.path.dirname(HERE))
 
-from hero import grade, poses, rig, shots  # noqa: E402
+from hero import grade, poses, rig, shots, wet  # noqa: E402
 
 # --------------------------------------------------------------- lookdev_render.py copies
 # Keep in sync with blender/lookdev_render.py (VIEWS, BODY_*, HEAD_FRAME_H,
@@ -254,6 +255,17 @@ def shot(ch, name, rules, groups_of):
             "use_shadow": bool(ld.use_shadow), "diffuse_factor": round(ld.diffuse_factor, 4),
             "specular_factor": round(ld.specular_factor, 4),
             "receivers": receivers(ob, groups_of)})
+    gz = None
+    if spec.get("gaze") is not None:
+        # stage.render_shot turns the eyes to the camera (wet.gaze); export the turn, not the mesh edit
+        wet.restore(ch)
+        rots, deg, objs = wet.gaze_rotations(ch, co.matrix_world.translation, off_deg=spec["gaze"])
+        if rots:
+            gz = {"off_deg": spec["gaze"], "deg": deg, "objects": [o.name for o in objs],
+                  "note": "rotate the eye meshes' bind-pose vertices about centre (rest world); "
+                          "l = +X side (the character's left)",
+                  "l": {"centre": gl(rots[1][0]), "quat": gl_quat(rots[1][1].to_quaternion())},
+                  "r": {"centre": gl(rots[-1][0]), "quat": gl_quat(rots[-1][1].to_quaternion())}}
     from character import deform_runtime as drt
     meshes = poses._meshes(ch.arm)
     weights = drt.Runtime(ch.arm, meshes, rules).morph_weights() if rules else {}
@@ -270,8 +282,8 @@ def shot(ch, name, rules, groups_of):
         "subject": gl(cam["subject"]), "aim": gl(cam["aim"]),
         "eyes": {"l": gl(ch.eyes()[0]), "r": gl(ch.eyes()[1])},
         "exposure": rig.HERO_EXPOSURE + spec.get("ev", 0.0),
-        "gaze_skipped": spec.get("gaze"),
-        "skipped": ["set", "haze", "rain", "beads", "gaze", "dof"],
+        "gaze": gz,
+        "skipped": ["set", "haze", "rain", "beads"],
         "lights": lights,
         "bones": bone_deforms(ch.arm),
         "corrective_weights": {k: round(v, 6) for k, v in sorted(weights.items())},

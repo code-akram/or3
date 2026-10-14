@@ -3,6 +3,14 @@
     python3 -I bench/m1/lookdev_report.py finalize RUN --label L [--process-s S]
     python3 -I bench/m1/lookdev_report.py compare A B --out DIR
     python3 -I bench/m1/lookdev_report.py engine RUN [--cycles HERO_DIR] [--crop x,y,w,h]
+    python3 -I bench/m1/lookdev_report.py parity RUN [--cycles PARITY_HERO_DIR]
+
+`parity` (T6) measures the engine against Cycles: shader-ball luminance ratios
+(RUN/cycles_balls.png vs RUN/game_balls.png, blender/lookdev_render.py
+--shader-balls) and the portrait SSIM (luma, 512 px wide) of RUN/game_portrait.png
+against the parity Cycles portrait (bench/m1/hero.sh --parity), into
+RUN/engine_parity.json; `engine` appends the ball row and the numbers to
+engine_sheet.png when those inputs exist.
 
 When RUN has game_<view>.png (bench/m1/engine_shots.sh), sheet.png gets an
 engine row under the EEVEE views; `engine` draws RUN/engine_sheet.png: EEVEE
@@ -281,7 +289,148 @@ def engine_sheet(a):
     ffmpeg([*inputs, "-filter_complex", fc, out])
     for p in labels:
         os.remove(p)
+    parity_rows(a, run, out, W)
     print(f"-> {out}")
+
+
+# ---------------------------------------------------------------- engine parity (T6)
+# checkpoint-1 §2 item 3 and the T6 gate: per-material mean luminance ratio within
+# +-10 %, highlight peak within +-20 %; portrait SSIM (luma, 512 px) >= 0.80.
+PARITY_MEAN_TOL = 0.10
+PARITY_PEAK_TOL = 0.20
+PARITY_SSIM_MIN = 0.80
+PARITY_SSIM_W = 512
+
+
+def _png_rgb(path):
+    """(h, w, 3) uint8 via ffmpeg (no imaging library in the stdlib)."""
+    import numpy as np
+    probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                            "stream=width,height", "-of", "csv=p=0", path],
+                           check=True, capture_output=True, text=True).stdout.strip().split(",")
+    w, h = int(probe[0]), int(probe[1])
+    raw = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                         check=True, capture_output=True).stdout
+    return np.frombuffer(raw, np.uint8).reshape(h, w, 3)
+
+
+def _lin_lum(rgb):
+    import numpy as np
+    c = rgb.astype(np.float64) / 255.0
+    lin = np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+    return lin @ np.array([0.2126, 0.7152, 0.0722])
+
+
+def ball_metrics(run):
+    """Per ball: mean and 99.5th-percentile scene-linear luminance (Standard view,
+    exposure-scaled) inside 0.85 of its projected radius, Cycles vs engine."""
+    import numpy as np
+    bj = load(os.path.join(run, "shader_balls.json"))
+    cyc, eng = os.path.join(run, "cycles_balls.png"), os.path.join(run, "game_balls.png")
+    if not bj or not os.path.exists(cyc) or not os.path.exists(eng):
+        return None
+    lc, le = _lin_lum(_png_rgb(cyc)), _lin_lum(_png_rgb(eng))
+    if lc.shape != le.shape:
+        return {"error": f"size mismatch {lc.shape} vs {le.shape}"}
+    yy, xx = np.mgrid[0:lc.shape[0], 0:lc.shape[1]]
+    out = {}
+    for b in bj.get("balls", []):
+        if "circle_px" not in b:
+            continue
+        cx, cy, r = b["circle_px"]
+        m = (xx + 0.5 - cx) ** 2 + (yy + 0.5 - cy) ** 2 <= (0.85 * r) ** 2
+        mc, me = float(lc[m].mean()), float(le[m].mean())
+        pc, pe = float(np.percentile(lc[m], 99.5)), float(np.percentile(le[m], 99.5))
+        rm = me / mc if mc > 0 else None
+        rp = pe / pc if pc > 0 else None
+        out[b["material"]] = {
+            "cycles_mean": round(mc, 5), "engine_mean": round(me, 5), "mean_ratio": round(rm, 3) if rm else None,
+            "cycles_peak": round(pc, 5), "engine_peak": round(pe, 5), "peak_ratio": round(rp, 3) if rp else None,
+            "mean_ok": rm is not None and abs(rm - 1) <= PARITY_MEAN_TOL,
+            "peak_ok": rp is not None and abs(rp - 1) <= PARITY_PEAK_TOL}
+    return out
+
+
+def portrait_ssim(cyc, eng, width=PARITY_SSIM_W):
+    """ffmpeg's SSIM on luma (gray), both frames scaled to `width` px wide."""
+    if not cyc or not os.path.exists(cyc) or not os.path.exists(eng):
+        return None
+    r = subprocess.run(["ffmpeg", "-loglevel", "info", "-i", cyc, "-i", eng, "-lavfi",
+                        f"[0]scale={width}:-2:flags=area,format=gray[a];"
+                        f"[1]scale={width}:-2:flags=area,format=gray[b];[a][b]ssim", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    for line in r.stderr.splitlines():
+        if "SSIM" in line and "All:" in line:
+            return round(float(line.split("All:")[1].split()[0]), 4)
+    return None
+
+
+def parity_metrics(a, run):
+    cyc_p = os.path.join(a.cycles, "portrait.png") if getattr(a, "cycles", None) else None
+    balls = ball_metrics(run)
+    ssim = portrait_ssim(cyc_p, os.path.join(run, "game_portrait.png"))
+    stage = load(os.path.join(a.cycles, "stage.json")) if getattr(a, "cycles", None) else {}
+    res = {"run": os.path.basename(run), "cycles": os.path.abspath(a.cycles) if getattr(a, "cycles", None) else None,
+           "cycles_is_parity": bool(stage.get("parity")),
+           "portrait_ssim_luma_512": ssim, "portrait_ssim_ok": ssim is not None and ssim >= PARITY_SSIM_MIN,
+           "balls": balls,
+           "balls_mean_ok": sum(1 for v in (balls or {}).values() if isinstance(v, dict) and v.get("mean_ok")),
+           "balls_n": len([v for v in (balls or {}).values() if isinstance(v, dict) and "mean_ratio" in v]),
+           "targets": {"mean": PARITY_MEAN_TOL, "peak": PARITY_PEAK_TOL, "ssim": PARITY_SSIM_MIN}}
+    with open(os.path.join(run, "engine_parity.json"), "w") as f:
+        json.dump(res, f, indent=1)
+    return res
+
+
+def parity_text(res):
+    lines = [f"PARITY  portrait SSIM (luma, {PARITY_SSIM_W} px) {res['portrait_ssim_luma_512']} "
+             f"(target >= {PARITY_SSIM_MIN}; cycles {'parity' if res['cycles_is_parity'] else 'BEAUTY (not parity)'})   "
+             f"balls within +-{int(PARITY_MEAN_TOL * 100)} %: {res['balls_mean_ok']}/{res['balls_n']}"]
+    for k, v in (res.get("balls") or {}).items():
+        if isinstance(v, dict) and "mean_ratio" in v:
+            lines.append(f"  {k:13s} mean {v['mean_ratio']:.3f} {'ok' if v['mean_ok'] else 'MISS'}   "
+                         f"peak {v['peak_ratio']:.3f} {'ok' if v['peak_ok'] else 'MISS'}   "
+                         f"(cycles {v['cycles_mean']:.4f} / engine {v['engine_mean']:.4f})")
+    return "\n".join(lines)
+
+
+def parity_rows(a, run, sheet, W):
+    """Append the shader-ball row (Cycles | engine) and the parity numbers to the engine sheet."""
+    res = parity_metrics(a, run)
+    cyc, eng = os.path.join(run, "cycles_balls.png"), os.path.join(run, "game_balls.png")
+    tp = os.path.join(run, "esheet_parity.txt")
+    with open(tp, "w") as f:
+        f.write(parity_text(res))
+    labels = [tp]
+    inputs = ["-i", sheet]
+    chains = []
+    rows = "[0]"
+    if os.path.exists(cyc) and os.path.exists(eng):
+        for i, (path, tag) in enumerate(((cyc, "cycles balls (Standard view, 64 spp)"), (eng, "engine balls"))):
+            lp = os.path.join(run, f"esheet_balls_{i}.txt")
+            with open(lp, "w") as f:
+                f.write(tag)
+            labels.append(lp)
+            inputs += ["-i", path]
+            chains.append(f"[{i + 1}]scale={W // 2}:-2,{drawtext(lp, 18)}[b{i}]")
+        chains.append("[b0][b1]hstack[balls]")
+        rows += "[balls]"
+    n = 2 if len(chains) else 1
+    fc = ";".join(chains + [f"{rows}vstack={n}[g]" if n > 1 else f"{rows}null[g]",
+                            f"[g]pad=iw:ih+{22 * (len(parity_text(res).splitlines()) + 1)}:0:0,"
+                            f"{drawtext(tp, 18, y=f'H-{22 * (len(parity_text(res).splitlines()) + 1) - 4}')}"])
+    tmp = sheet[:-4] + ".tmp.png"
+    ffmpeg([*inputs, "-filter_complex", fc, tmp])
+    os.replace(tmp, sheet)
+    for p in labels:
+        os.remove(p)
+    print(parity_text(res))
+
+
+def parity_cmd(a):
+    run = os.path.abspath(a.run)
+    print(parity_text(parity_metrics(a, run)))
+    print(f"-> {run}/engine_parity.json")
 
 
 def summary(m):
@@ -367,8 +516,11 @@ def main():
     e.add_argument("--cycles", help="hero stage dir with portrait.png (the Cycles target)")
     e.add_argument("--crop", default="720,90,600,600",
                    help="face crop x,y,w,h in the 1920x1080 portrait (same camera in both)")
+    pa = sub.add_parser("parity", help="engine parity numbers (RUN/engine_parity.json)")
+    pa.add_argument("run")
+    pa.add_argument("--cycles", help="hero stage dir with the parity portrait.png (hero.sh --parity)")
     a = ap.parse_args()
-    {"finalize": finalize, "compare": compare, "engine": engine_sheet}[a.cmd](a)
+    {"finalize": finalize, "compare": compare, "engine": engine_sheet, "parity": parity_cmd}[a.cmd](a)
 
 
 if __name__ == "__main__":

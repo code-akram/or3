@@ -38,6 +38,9 @@ export const DEFAULT_PARAMS = {
     roughnessBias: 0.0,
     normalScale: 1.0,
     aoIntensity: 1.0,
+    /** Baked AO into the DIRECT diffuse (three's aoMap only touches indirect light, and the hero
+     * world is 0.003, so without this the AO channel does nothing). Until GTAO lands. */
+    directAO: 0.5,
   },
   hair: {
     albedoGain: 1.0,
@@ -58,12 +61,15 @@ export const DEFAULT_PARAMS = {
     alphaTest: 0.32,
   },
   facialHair: {
-    /** With the linear fix the shells read mid-brown; the Cycles strands read near-black
-     * (melanin 0.99), so the baseline darkens them until the beard_bake gains are retuned. */
-    albedoGain: 0.45,
-    /** Beard / brow / lash atlases carry linear values in sRGB-tagged images (review §1.9 S2):
-     * 1 = read them as linear (the fix), 0 = as tagged. */
-    linearFix: 1,
+    /** Atlas gain. 1 on any build since T2 (atlases sRGB-encoded, gains baked to 1). A pre-T2
+     * build (heroE-main9 and older) gets 0.45 from the auto rule below. */
+    albedoGain: 1.0,
+    /** How to decode the beard / brow / lash atlases. -1 = auto from the build: a
+     * character.stats.json carrying beard.atlas_fill_linear means the atlas is sRGB-encoded (T2),
+     * so it is read as tagged; without it the build predates T2 and stores linear values in an
+     * sRGB-tagged image (review §1.9 S2), read as linear with gain 0.45. 0 = as tagged, 1 = as
+     * linear. Remove once main9 is retired. */
+    linearFix: -1,
     spec1: 0.05,
     spec2: 0.06,
     alphaTest: 0.22,
@@ -88,7 +94,10 @@ export const DEFAULT_PARAMS = {
     twillStrength: 0.12,
     /** Twill period in UV units^-1 (diagonal ridges). */
     twillFreq: 900,
+    /** Gain on the tiled weave detail (suit_detail.json; replaces the procedural twill when present). */
+    weaveStrength: 1.0,
     roughnessScale: 1.0,
+    directAO: 0.5,
   },
   shirt: {
     fuzzStrength: 0.12,
