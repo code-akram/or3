@@ -1,8 +1,14 @@
-"""Staging and glTF export, with the two fixes MPFB's path needs (spike 1)."""
+"""Staging and glTF export, with the two fixes MPFB's path needs (spike 1),
+the runtime sidecars next to the GLB (write_sidecars) and the optional KTX2
+post-step (ktx2)."""
 
+import json
 import os
+import struct
+import zlib
 
 import bpy
+import numpy as np
 
 
 def stage(b):
@@ -116,6 +122,59 @@ def write_glb(b, out):
         export_all_influences=False, export_animations=False,
         export_morph=morph, export_morph_normal=morph, export_yup=True, export_apply=False,
         export_tangents=True, export_image_format="AUTO")
+    write_sidecars(b, out)
+
+
+def _png_rgb8(path, rgb):
+    """8-bit RGB PNG from a (h, w, 3) float array in [0, 1], rows top-down."""
+    h, w = rgb.shape[:2]
+    a = np.clip(np.round(rgb * 255.0), 0, 255).astype(np.uint8)
+    raw = b"".join(b"\x00" + a[y].tobytes() for y in range(h))
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def _image_rgb(img):
+    """Blender image pixels (bottom-up) -> top-down (h, w, 3), glTF's UV convention."""
+    w, h = img.size
+    px = np.empty(w * h * 4, np.float32)
+    img.pixels.foreach_get(px)
+    return px.reshape(h, w, 4)[::-1, :, :3]
+
+
+def write_sidecars(b, out):
+    """Runtime-only inputs that glTF has no slot for, next to the GLB:
+    suit_detail.json + its tiles (suit_textures: the weave as a tiled detail
+    normal instead of baked into the atlas). Returns a stats record."""
+    out_dir = os.path.dirname(os.path.abspath(out))
+    mats, tiles = {}, set()
+    for o in b.export_objs:
+        if o.type != "MESH" or _hero_only(o):
+            continue
+        for m in o.data.materials:
+            if m is not None and "suit_detail" in m and m.name not in mats:
+                rec = json.loads(m["suit_detail"])
+                mats[m.name] = rec
+                tiles.add(rec["tile"])
+    written = []
+    for t in sorted(tiles):
+        img = bpy.data.images.get(os.path.splitext(t)[0])
+        if img is None:
+            raise RuntimeError(f"weave detail tile {t} missing from the .blend")
+        _png_rgb8(os.path.join(out_dir, t), _image_rgb(img))
+        written.append(t)
+    if mats:
+        with open(os.path.join(out_dir, "suit_detail.json"), "w") as f:
+            json.dump({"version": 1, "materials": mats,
+                       "note": "tile = tangent-space normal (linear, glTF +Y), wrap REPEAT, mipmapped; "
+                               "uv_tile = rotate(uv * repeat, angle_rad); XY slope x strength"}, f, indent=1)
+        written.append("suit_detail.json")
+    b.notes["sidecars"] = {"files": written, "materials": sorted(mats)}
+    return b.notes["sidecars"]
 
 
 def save_blend(b, path):
