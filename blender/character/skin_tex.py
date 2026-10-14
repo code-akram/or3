@@ -394,6 +394,97 @@ def crisp_texels(b, m, a3, chunk=1_000_000):
     return out, stats
 
 
+# --- T22 hand and neck field residual ----------------------------------------------------------
+
+# The hand fields (hand_forms.apply: head_sculpt.hand_field on the hands and wrists) and the neck
+# fields (head_sculpt.neck, times the collar weight) are geometry at the vertices; what the mesh
+# cannot hold goes into the skin height as the field's high-pass at each texel: the analytic field
+# minus its texture-space blur at about the vertex spacing (T22_BLUR_M). The vertex-interpolation
+# residual the crisp band uses was tried first (t22-a1): against smooth-shaded geometry it bakes
+# the triangles' piecewise-linear error into the normal map, a zigzag along every vein and
+# tendon. Hands: the hands map; neck: the head map. The attribute pair (encoded vertex field,
+# weight) carries the collar weight to the texels; it is piecewise linear there, so it is blurred
+# (T22_W_BLUR_M) before it scales the field, or the triangles show as facets (t22-a2, the neck).
+# On the hands only the terms finer than the mesh go to the map (T22_HAND_MAP_TERMS: the veins
+# and the palmar flexor cords); the high-pass of the broad terms (knuckles, tendons) sharpened
+# geometry that already holds them into hard creases (t22-a2).
+T22_MAX = 0.0010
+T22_BLUR_M = {"hands": 0.003, "head": 0.004}
+T22_MAP_K = {"hands": 0.6, "head": 1.0}   # the veins: half in the mesh already (t22-a3 read as beads at 1.0)
+T22_W_BLUR_M = {"hands": 0.002, "head": 0.004}
+T22_HAND_MAP_TERMS = ("vein_mm", "flexor_mm")
+T22_HAND_AMPS = ("knuckle_mm", "valley_mm", "gutter_mm", "tendon_mm", "thumb_mm", "snuff_mm", "pip_mm", "dip_mm",
+                 "joint_mm", "shaft_mm", "breadth_ulnar_mm", "breadth_radial_mm", "wrist_flat_mm", "wrist_side_mm",
+                 "ulnar_mm", "radial_mm", "flexor_mm", "vein_mm")
+
+
+def t22_vertex(b, body):
+    """(encoded field, weight) per vertex, or None when neither T22 stage ran."""
+    from . import hand_forms
+    from . import head_sculpt as hs
+    hs_state, nk = getattr(b, "t22_hands", None), getattr(b, "t22_neck", None)
+    if hs_state is None and nk is None:
+        return None
+    co = head_refine.coords(body)
+    nrm = head_refine.normals(body)
+    s = np.zeros(len(co))
+    w = np.zeros(len(co))
+    if hs_state is not None:
+        lab, dom = head_refine.classify(body, b.armature())
+        sel = hand_forms.field_verts(lab, dom, co, hs_state["hf"])
+        s[sel] = hs.hand_field(co[sel], nrm[sel], hs_state["hf"], hs_state["cfg"], hs_state["paths"])
+        w[sel] = 1.0
+    if nk is not None:
+        v = nk["verts"]
+        s[v] = hs.neck_field(co[v], nrm[v], nk["anchors"], nk["cfg"]) * nk["w"]
+        w[v] = nk["w"]
+    b._t22_ctx = {"mw_inv": np.array(body.matrix_world.inverted(), np.float64)}
+    return (0.5 + s / CRISP_ENC).astype(np.float32), w.astype(np.float32)
+
+
+def t22_texels(b, m, a4, key, chunk=500_000):
+    """Residual height (metres) on one map: 'hands' (hand fields) or 'head' (neck fields)."""
+    from . import head_sculpt as hs
+    out = np.zeros(m.P.shape[:2], np.float32)
+    ctx = getattr(b, "_t22_ctx", None)
+    st = getattr(b, "t22_hands" if key == "hands" else "t22_neck", None)
+    if ctx is None or st is None:
+        return out, None
+    t = time.perf_counter()
+    s_v = (a4[..., 0] - 0.5) * CRISP_ENC
+    w = np.clip(a4[..., 1], 0, 1)
+    where = m.valid & (w > 1e-3)
+    if key == "head":
+        # the neck only (texels in the head map near a neck vertex's weight; the face is far)
+        where &= m.P[..., 2] < max(st["anchors"][1.0]["lobe"][2], st["anchors"][-1.0]["lobe"][2]) + 0.01
+    mi = ctx["mw_inv"]
+    P = m.P[where].astype(np.float64) @ mi[:3, :3].T + mi[:3, 3]
+    N = m.N[where].astype(np.float64) @ mi[:3, :3].T
+    N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
+    a = np.empty(len(P), np.float64)
+    hcfg = {k: (v if (k not in T22_HAND_AMPS or k in T22_HAND_MAP_TERMS) else 0.0) for k, v in st["cfg"].items()}
+    for i in range(0, len(P), chunk):
+        sl = slice(i, i + chunk)
+        if key == "hands":
+            a[sl] = hs.hand_field(P[sl], N[sl], st["hf"], hcfg, st["paths"])
+        else:
+            a[sl] = hs.neck_field(P[sl], N[sl], st["anchors"], st["cfg"])
+    texel = float(np.median(m.tex_m[where])) if where.any() else 1e-3
+    ws, _ = _masked_blur(np.where(m.valid, w, 0.0).astype(np.float64), m.valid, T22_W_BLUR_M[key] / max(texel, 1e-6))
+    g = np.zeros(m.P.shape[:2], np.float64)
+    g[where] = np.clip(ws[where], 0, 1) * a
+    low, _ = _masked_blur(g, m.valid, T22_BLUR_M[key] / max(texel, 1e-6))
+    r = (g - low)[where]
+    out[where] = np.clip(r * T22_MAP_K[key], -T22_MAX, T22_MAX).astype(np.float32)
+    rr = out[where]
+    stats = {"texels": int(where.sum()), "seconds": round(time.perf_counter() - t, 1), "texel_mm": round(texel * 1000, 4),
+             "vertex_rms_mm": round(float(np.sqrt(np.mean(s_v[where] ** 2))) * 1000, 4) if where.any() else 0.0,
+             "p1_mm": round(float(np.percentile(rr, 1)) * 1000, 4) if len(rr) else 0.0,
+             "p99_mm": round(float(np.percentile(rr, 99)) * 1000, 4) if len(rr) else 0.0}
+    print(f"[skin] T22 {key} residual: {stats}", flush=True)
+    return out, stats
+
+
 def eye_spheres(b, body, eyes):
     """[(centre world, radius m)] of the globes the game ships: the sculpt layer's eye spheres
     (head_sculpt eye_c, which eyes_hq ships), else a back-half sphere fit of the eye mesh."""
@@ -656,6 +747,10 @@ def build(b):
     if cv is not None:
         set_attr(me, "sk_crisp", cv[0])
         set_attr(me, "sk_crisp_w", cv[1])
+    tv = t22_vertex(b, body) if c.get("t22", True) else None
+    if tv is not None:
+        set_attr(me, "sk_t22", tv[0])
+        set_attr(me, "sk_t22_w", tv[1])
     # The rest position the bakes see: the hero shader evaluates the same
     # procedural pores on it (pose-stable, and aligned with the game normal map).
     rest = _eval_world_coords(body)
@@ -686,12 +781,13 @@ def build(b):
         nG = bk.run("noiseG", _noises(ns["noiseG"]))
         nH = bk.run("noiseH", _noises(ns["noiseH"]))
         a3 = bk.run("attr3", _attrs(("sk_crisp", "sk_crisp_w", None))) if cv is not None else None
+        a4 = bk.run("attr4", _attrs(("sk_t22", "sk_t22_w", None))) if tv is not None else None
         ao = bk.run("ao", None, samples=int(c.get("ao_samples", 16)), bake_type="AO", down=int(c.get("ao_down", 2)))
     finally:
         bk.finish()
         for o in hidden:
             o.hide_render = False
-    for n in ("sk_lips", "sk_nails", "sk_ears", "sk_scalp", "sk_region", "sk_crisp", "sk_crisp_w"):
+    for n in ("sk_lips", "sk_nails", "sk_ears", "sk_scalp", "sk_region", "sk_crisp", "sk_crisp_w", "sk_t22", "sk_t22_w"):
         if me.attributes.get(n) is not None:
             me.attributes.remove(me.attributes[n])
 
@@ -716,7 +812,14 @@ def build(b):
     hh["base"] = c.get("base", hh["base"])
     # Track G hook: A's hand synthesis plus the hand detail layer (hand_detail.py)
     hands = hand_detail.synth(maps[1], hh, head_refine.hand_frames(arm), head_refine.FINGERS,
-                              ((b.cfg.get("hands") or {}).get("detail")))
+                              ((b.cfg.get("hands") or {}).get("detail")), getattr(b, "t22_hands", None))
+    t22_stats = {}
+    if a4 is not None:
+        # T22: the hand and neck fields' sub-vertex residual into both heights
+        for key, i, syn in (("head", 0, head), ("hands", 1, hands)):
+            r, t22_stats[key] = t22_texels(b, maps[i], a4[i], key)
+            syn["hgt_game"] = (syn["hgt_game"] + r).astype(np.float32)
+            syn["hgt_hero"] = (syn["hgt_hero"] + r).astype(np.float32)
     out_dir = b.out_dir if c.get("save_maps") else None
     imgs, hero_in = {}, {"body": body.name, "cfg": c}
     for key, m, syn in (("head", maps[0], head), ("hands", maps[1], hands)):
@@ -756,7 +859,7 @@ def build(b):
              "roughness_mean": round(float(head["rough"][maps[0].cover].mean()), 3),
              "roughness_face_mean": round(float(head["rough"][face].mean()), 3) if face.any() else None,
              "roughness_face_std": round(float(head["rough"][face].std()), 4) if face.any() else None,
-             "crisp": crisp_stats, "hero_rest": rest is not None, "curvature": curv}
+             "crisp": crisp_stats, "t22": t22_stats, "hero_rest": rest is not None, "curvature": curv}
     b.notes["skin"] = stats
     print(f"[skin] done in {stats['seconds']} s", flush=True)
     return stats

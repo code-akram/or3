@@ -47,6 +47,8 @@ export interface ConeRule {
   target_dir: number[];
   power?: number;
   start?: number;
+  /** d = (R_ref^-1 R_bone)^-1 d0: a twist of the bone about its own axis before the swing is ignored. */
+  inverse?: boolean;
   meshes?: string[];
   angle_deg?: number;
 }
@@ -194,6 +196,7 @@ export class DeformRuntime {
       const d0 = v3(m.rest_dir).normalize();
       const t = v3(m.target_dir).normalize();
       const q = this.R(m.ref).invert().multiply(this.R(m.bone));
+      if (m.inverse) q.invert();
       out[m.name] = coneWeight(d0.clone().applyQuaternion(q), d0, t, m.power ?? 1, m.start ?? 0);
     }
     return out;

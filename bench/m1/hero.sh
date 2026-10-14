@@ -40,8 +40,10 @@
 # Env: DATA (default <main checkout>/data), THREADS (default 16 for --final,
 # 8 otherwise), HERO_VENDOR (Poly Haven textures, default <main>/data/vendor),
 # ENGINE_SHOTS (default 1): when the input sits in a look-dev run dir (character.glb next to it),
-# also capture the engine frames there (bench/m1/engine_shots.sh) and draw that run's
-# engine_sheet.png against this run's portrait; 0 skips it.
+# also capture the engine frames and draw engine_sheet.png / regression_strip.png against this run's
+# portrait, in <hero run>/engine/ (bench/m1/engine_shots.sh); 0 skips it. hero.sh writes only into its
+# own hero run: the source look-dev run is read through explicit symlinks to its input files and is
+# never written, so a render for one track cannot overwrite another track's sheets.
 # Build the input with KEEP_BLEND=1 bench/m1/lookdev.sh --config bench/m1/variants/direction.json <label>.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -117,8 +119,14 @@ if [[ -z "$FAN" ]]; then
 fi
 [[ -n "$FAN" ]] && ROOT="$PRIVATE/likeness/hero"
 RUN="$ROOT/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
-[[ -n "${INTO:-}" ]] && RUN="$(cd "$INTO" && pwd)"   # add to an existing run (stage.json is merged)
+[[ -n "${INTO:-}" ]] && RUN="$(cd "$INTO" && pwd -P)"   # add to an existing run (stage.json is merged); symlinks resolved
 if [[ -n "$FAN" && "$(realpath -m "$RUN")" != "$PRIVATE"/* ]]; then echo "fan build: refusing to write outside $PRIVATE ($RUN)" >&2; exit 2; fi
+# The input's own (real) directory is the source run: hero outputs never go in or under it.
+SRC_RUN="$(dirname "$IN")"
+RUN_REAL="$(realpath -m "$RUN")"
+if [[ "$RUN_REAL" == "$SRC_RUN" || "$RUN_REAL" == "$SRC_RUN"/* ]]; then
+  echo "hero: refusing to write into the source run $SRC_RUN (output $RUN_REAL)" >&2; exit 2
+fi
 mkdir -p "$RUN"
 echo "== hero $LABEL quality=$QUALITY shots=$SHOTS set=$SET threads=$THREADS${FAN:+ fan(private)} loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 T0=$(date +%s)
@@ -133,14 +141,32 @@ if [[ -n "${STAGE_FAIL:-}" ]]; then echo "stage failed: $RUN/stage.log" >&2; tai
 ln -sfn "$(basename "$RUN")" "$ROOT/latest"
 echo "-> $RUN ($(( $(date +%s) - T0 )) s)"
 
-# Engine frames for the same build, in the build's own run dir (a fan build's dir is private, and so
-# is this run), then that run's engine_sheet.png against this portrait.
-SRC_RUN="$(dirname "$IN")"
+# Engine frames for the same build, in <this hero run>/engine/ (a fan build's run is private, and so
+# is this dir), then engine_sheet.png and regression_strip.png there against this portrait. Nothing is
+# written into the source run $SRC_RUN: engine/ gets symlinks to the source's input files only (glb,
+# rig, stats, material params, shader balls, EEVEE views), each made to the resolved source path, and
+# every file written lands under engine/ as a fresh regular file. Stale symlinks in engine/ (an earlier
+# --into) are removed first so no output name can be a link back into any run.
 if [[ "${ENGINE_SHOTS:-1}" == 1 && -s "$SRC_RUN/character.glb" && -f "$RUN/portrait.png" ]]; then
-  if "$REPO/bench/m1/engine_shots.sh" "$SRC_RUN"; then
-    python3 -I "$REPO/bench/m1/lookdev_report.py" engine "$SRC_RUN" --cycles "$RUN" \
+  ENG="$RUN/engine"
+  [[ -L "$ENG" ]] && rm -f "$ENG"
+  mkdir -p "$ENG"
+  ENG="$(cd "$ENG" && pwd -P)"
+  if [[ "$ENG" != "$(cd "$RUN" && pwd -P)/engine" || "$ENG" == "$SRC_RUN"/* ]]; then
+    echo "hero: engine dir $ENG is not inside the hero run; refusing" >&2; exit 2
+  fi
+  [[ -n "$FAN" ]] && { python3 -I "$REPO/pipeline/likeness/containment.py" check "$ENG" || exit 2; }
+  find "$ENG" -mindepth 1 -maxdepth 1 -type l -delete
+  for f in "$SRC_RUN"/*; do
+    [[ -f "$f" ]] || continue
+    b="$(basename "$f")"
+    [[ "$b" =~ ^(character\.(glb|ktx2\.glb|rig\.json|stats\.json)|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|cycles_balls\.png|(front|three_quarter|profile|closeup)\.png)$ ]] || continue
+    ln -s "$(realpath "$f")" "$ENG/$b"
+  done
+  if "$REPO/bench/m1/engine_shots.sh" "$ENG"; then
+    python3 -I "$REPO/bench/m1/lookdev_report.py" engine "$ENG" --cycles "$RUN" --build "$DATA/build" \
       || echo "warning: engine sheet failed" >&2
   else
-    echo "warning: engine shots failed ($SRC_RUN/engine_shots.log)" >&2
+    echo "warning: engine shots failed ($ENG/engine_shots.log)" >&2
   fi
 fi

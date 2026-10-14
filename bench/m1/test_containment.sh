@@ -154,6 +154,62 @@ hero_to() {  # hero_to WANT NAME BLEND LABEL
 hero_to data    "stats without likeness"  "$T/build/clean/character.blend"   "$TAG-clean"
 hero_to private "missing stats"           "$T/build/nostats/character.blend" "$TAG-nostats"
 hero_to private "malformed stats"         "$T/build/broken/character.blend"  "$TAG-broken"
+
+echo "== hero.sh never writes into the source run (fake blender/node/npm; no render)"
+# The bug: the engine sheet and regression strip went into the look-dev run of the .blend (found by
+# realpath), so a render made for one track overwrote another track's engine_sheet.png.
+HB="$T/herobin"; mkdir -p "$HB"
+cat > "$HB/blender" <<'FAKE'
+#!/bin/sh
+# fake blender: the hero stage writes a minimal run, the rig export its json; grade is a no-op
+script=; out=; prev=
+for a in "$@"; do
+  case "$prev" in --python) script="$a" ;; --out) out="$a" ;; esac
+  prev="$a"
+done
+case "$(basename "$script")" in
+  stage.py) echo '{"quality":"draft","set":"alley","blender":"fake","shots":[]}' > "$out/stage.json"
+            magick -size 1920x1080 xc:gray "$out/portrait.png"; magick -size 556x98 xc:gray "$out/portrait_crop.png" ;;
+  export_rig.py) echo '{}' > "$out" ;;
+esac
+exit 0
+FAKE
+cat > "$HB/node" <<'FAKE'
+#!/bin/sh
+# fake node (engine_shots.mjs): write the engine frames into --build
+b=; prev=
+for a in "$@"; do [ "$prev" = --build ] && b="$a"; prev="$a"; done
+for v in front three_quarter profile closeup; do magick -size 64x64 xc:blue "$b/game_$v.png"; done
+magick -size 1920x1080 xc:blue "$b/game_portrait.png"
+echo '{"ok": true, "backend": "fake", "shots": []}' > "$b/game_shots.json"
+FAKE
+printf '#!/bin/sh\nexit 0\n' > "$HB/npm"
+chmod +x "$HB/blender" "$HB/node" "$HB/npm"
+SRC="$T/data/build/lookdev/$TAG-srcrun"
+mkdir -p "$SRC" "$T/other"
+touch "$SRC/character.blend"; echo glb > "$SRC/character.glb"; cp "$T/clean.json" "$SRC/character.stats.json"
+for v in front three_quarter profile closeup; do magick -size 64x64 xc:green "$SRC/$v.png"; done
+echo sentinel-sheet > "$SRC/engine_sheet.png"; echo sentinel-strip > "$SRC/regression_strip.png"
+ln -s "$SRC" "$T/other/linked"   # reached through a symlink, as the real look-dev runs were
+snap() { (cd "$SRC" && find . -printf '%p %y %s %T@\n' | sort && sha256sum -- *); }
+snap > "$T/src.before"
+PATH="$HB:$PATH" "$REPO/bench/m1/hero.sh" --draft --no-turntable "$T/other/linked/character.blend" "$TAG-srcw" >"$T/last.log" 2>&1
+HR="$(sed -n 's/^-> \(.*\) ([0-9]* s)$/\1/p' "$T/last.log")"
+snap > "$T/src.after"
+if [[ -n "$HR" && -s "$HR/engine/game_shots.json" ]] && cmp -s "$T/src.before" "$T/src.after"; then
+  ok "source run untouched (no new or changed files), engine frames in the hero run"
+else bad "source run changed or hero run has no engine frames (hero run '${HR:-none}')"; diff "$T/src.before" "$T/src.after" | head -5; tail -5 "$T/last.log" | sed 's/^/       /'; fi
+if [[ -n "$HR" && -s "$HR/engine/engine_sheet.png" && -s "$HR/engine/regression_strip.png" ]]; then
+  ok "engine_sheet.png and regression_strip.png written under the hero run"
+else bad "engine_sheet.png / regression_strip.png not under the hero run"; tail -5 "$T/last.log" | sed 's/^/       /'; fi
+if [[ -L "$HR/engine/game_shots.json" || -L "$HR/engine/engine_sheet.png" || -L "$HR/engine/engine_stage.json" ]]; then
+  bad "an engine output is a symlink"; else ok "engine outputs are regular files"; fi
+PATH="$HB:$PATH" "$REPO/bench/m1/hero.sh" --draft --no-turntable --into "$T/other/linked" "$T/other/linked/character.blend" "$TAG-srci" >"$T/last.log" 2>&1
+rc=$?
+snap > "$T/src.after"
+if [[ $rc == 2 ]] && grep -q 'refusing to write into the source run' "$T/last.log" && cmp -s "$T/src.before" "$T/src.after"; then
+  ok "--into the source run (via a symlink) is refused"
+else bad "--into the source run not refused (exit $rc)"; tail -3 "$T/last.log" | sed 's/^/       /'; fi
 unset DATA
 
 echo "== pre-commit hook (throwaway repo)"

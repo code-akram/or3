@@ -103,6 +103,8 @@ export class Poser {
     } else {
       full = new THREE.Quaternion().setFromUnitVectors(d0, t);
     }
+    if (rule.inverse) full.invert(); // t is the ref's direction seen from the bone
+
     // current rotation of B relative to ref, replaced by the driven one: R_B = R_ref * slerp(I, full, a)
     const Rref = this.rt.R(rule.ref);
     const RB = Rref.multiply(new THREE.Quaternion().slerp(full, amount));

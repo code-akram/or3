@@ -37,6 +37,10 @@ that carries a target of that name):
             w = clamp((u - s) / (1 - s), 0, 1) ^ p
             (s > 0: no weight over the first part of the way, e.g. corr_fist
             stays 0 in a relaxed or holding hand)
+            inverse: true -> d = (R_R^-1 * R_B)^-1 * d0 (the ref's direction seen
+            from the bone): a twist of B about its own axis before the swing
+            then leaves d unchanged (corr_wrist_*: a pronated hand that flexes
+            still reads as flexion)
 
 three.js: compute these after mixer.update() and before render, in the order
 listed (helpers, then morph weights); set the helper bones' .quaternion and
@@ -157,6 +161,8 @@ class Runtime:
             d0 = gl_to_bl(m["rest_dir"]).normalized()
             t = gl_to_bl(m["target_dir"]).normalized()
             q = self.R(m["ref"]).inverted() @ self.R(m["bone"])
+            if m.get("inverse"):
+                q = q.inverted()
             out[m["name"]] = cone_weight(q @ d0, d0, t, m.get("power", 1.0), m.get("start", 0.0))
         return out
 

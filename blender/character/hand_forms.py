@@ -127,27 +127,157 @@ def displacement(co, nr, hand, hf, c):
     return disp
 
 
+# Track G terms the T22 landmark fields (head_sculpt.hand_field) replace when hands.sculpt is on:
+# the knuckles, valleys, tendons, thumb tendons and joint/shaft volumes are drawn there, crisper.
+SUPERSEDED = ("knuckle_mm", "valley_mm", "tendon_mm", "thumb_tendon_mm", "joint_mm", "shaft_mm")
+
+
+def subdivide_dorsum(b, body, arm, hf):
+    """One more grid subdivision on the back and sides of the hands, wrist to just past the
+    knuckles (head_refine subdivided the hands once; the MPFB dorsum is still ~4 mm apart there,
+    the fingers ~2 mm): ~2 mm, enough to carry tendons, veins and the knuckle planes as geometry.
+    UVs and skin weights interpolate (head_refine.subdivide), so the re-packed islands hold."""
+    lab, dom = hr.classify(body, arm)
+    co = hr.coords(body)
+    nr = hr.normals(body)
+    thumb_tip = np.array([str(d).startswith(("thumb_02", "thumb_03")) for d in dom])
+    sel = np.zeros(len(co), bool)
+    for f in hf.values():
+        W, F, B = f["wrist"], f["fingers"], f["back"]
+        a = (co - W) @ F
+        amcp = float(np.mean([(f["mcp"][k] - W) @ F for k in hr.FINGERS]))
+        # the back only (n . B > 0.15), wrist to the knuckle line, not the thumb's phalanges
+        sel |= (lab == "hand") & (np.linalg.norm(co - W, axis=1) < 0.2) & (a > -0.012) & (a < amcp + 0.004) \
+            & (nr @ B > 0.15) & ~thumb_tip
+    smooth = float(((b.cfg["head"].get("refine") or {}).get("subdiv") or {}).get("smooth", 0.5))
+    before, after = hr.subdivide(body, sel, smooth)
+    return {"verts_selected": int(sel.sum()), "faces_before": before, "faces_after": after}
+
+
+def field_verts(lab, dom, co, hf):
+    """The vertices the T22 hand fields act on: the hands and the forearm skin within 6 cm of
+    each wrist (the wrist forms reach under the cuff)."""
+    sel = lab == "hand"
+    fore = np.array([str(d).startswith("lowerarm") for d in dom])
+    for f in hf.values():
+        sel |= fore & (np.linalg.norm(co - f["wrist"], axis=1) < 0.06)
+    return sel
+
+
 def apply(b):
     """Build stage (called from head.refine, after head_refine, before the
-    skin bake). Config `hands` (null disables Track G) / `hands.forms`."""
+    skin bake). Config `hands` (null disables Track G) / `hands.forms`;
+    `hands.sculpt` (T22, head_sculpt.hand_field; null: Track G's forms only)."""
     if "hands" in b.cfg and b.cfg["hands"] is None:
         return None
+    hcfg = b.cfg.get("hands") or {}
     c = dict(FORMS)
-    c.update(((b.cfg.get("hands") or {}).get("forms")) or {})
+    sculpt_on = hcfg.get("sculpt", {}) is not None
+    if sculpt_on:
+        c.update({k: 0.0 for k in SUPERSEDED})
+    c.update(hcfg.get("forms") or {})
     if not c.get("enabled", True):
         return None
     body = hr.staged_body(b)
     arm = b.armature()
-    lab = getattr(b, "refine_labels", None)
-    if lab is None or len(lab) != len(body.data.vertices):
-        lab, _ = hr.classify(body, arm)
+    hf = hr.hand_frames(arm)
+    out = {}
+    if sculpt_on and (hcfg.get("sculpt") or {}).get("subdiv_dorsum", 1):
+        out["subdiv_dorsum"] = subdivide_dorsum(b, body, arm, hf)
+    lab, dom = hr.classify(body, arm)
+    b.refine_labels = lab
     hand = lab == "hand"
     co = hr.coords(body)
     nr = hr.normals(body)
-    hf = hr.hand_frames(arm)
     disp = displacement(co, nr, hand, hf, c)
+    out.update({"verts_moved": int((np.abs(disp) > 1e-5).sum()),
+                "max_out_mm": round(float(disp.max()) * 1000, 2), "max_in_mm": round(float(-disp.min()) * 1000, 2)})
+    if sculpt_on:
+        from . import head_sculpt as hs
+        sc = hs.field_cfg(hs.HAND_FIELDS, hcfg.get("sculpt"))
+        sel = field_verts(lab, dom, co, hf)
+        paths = hs.vein_paths(hf)
+        s = np.zeros(len(co))
+        s[sel] = hs.hand_field(co[sel], nr[sel], hf, sc, paths)
+        nails = hr.group_weights(body, "fingernails")
+        s[hand] += hs.nail_folds(nails[hand], co[hand], hf, sc)
+        disp = disp + s
+        # what skin_tex needs for the residual bake (the analytic part only; the nail folds are
+        # weight-based and stay geometry)
+        b.t22_hands = {"cfg": sc, "hf": hf, "paths": paths, "verts": np.nonzero(sel)[0]}
+        out["fields"] = {"verts": int(sel.sum()), "max_out_mm": round(float(s.max()) * 1000, 2),
+                         "max_in_mm": round(float(-s.min()) * 1000, 2)}
     hr.set_coords(body, co + nr * disp[:, None])
-    out = {"verts_moved": int((np.abs(disp) > 1e-5).sum()),
-           "max_out_mm": round(float(disp.max()) * 1000, 2), "max_in_mm": round(float(-disp.min()) * 1000, 2)}
     b.notes.setdefault("hands", {})["forms"] = out
+    b.notes["hands"]["measure"] = measure(body, arm)
+    return out
+
+
+# --- measures (T22) ----------------------------------------------------------------------------
+
+def measure(body, arm, relief_r=0.010):
+    """hand_width_ratio and dorsum relief on the rest mesh, per side, then the mean.
+
+    hand_width_ratio: hand breadth at the metacarpals (ISO 7250: across the knuckle line, the
+    thumb excluded; skin within 2 mm of the mean MCP line) over hand length (the wrist joint, the
+    hand bone's head, to the middle fingertip). Also the breadth including the thumb, at the thumb
+    MCP's level, over the same length.
+
+    dorsum relief: on the back of the hand (wrist to the knuckles, facing back > 0.5), each
+    vertex's height above a quadric fitted to the skin within relief_r (Gaussian weights, sigma
+    relief_r / 2) in its tangent frame: the forms smaller than ~1 cm with the hand's own curvature
+    taken out. p50 / p95 / p99 of |relief| in mm."""
+    from mathutils.kdtree import KDTree
+    lab, dom = hr.classify(body, arm)
+    co = hr.coords(body)
+    nr = hr.normals(body)
+    hf = hr.hand_frames(arm)
+    thumb = np.array([str(d).startswith("thumb") for d in dom])
+    middle = np.array([str(d).startswith("middle") for d in dom])
+    out = {}
+    for s, f in hf.items():
+        W, F, A, B = f["wrist"], f["fingers"], f["across"], f["back"]
+        near = (lab == "hand") & (np.linalg.norm(co - W, axis=1) < 0.24)
+        a = (co - W) @ F
+        b_ = (co - W) @ A
+        amcp = float(np.mean([(f["mcp"][k] - W) @ F for k in hr.FINGERS]))
+        band = near & ~thumb & (np.abs(a - amcp) < 0.002)
+        breadth = float(b_[band].max() - b_[band].min())
+        length = float(a[near & middle].max())
+        at = float((f["thumb"][1] - W) @ F)
+        tb = near & (np.abs(a - at) < 0.002)
+        breadth_t = float(b_[tb].max() - b_[tb].min())
+        # dorsum relief
+        L = float((f["mcp"]["middle"] - W) @ F)
+        dors = near & (a > 0.15 * L) & (a < amcp) & (nr @ B > 0.5) & ~thumb
+        pool = np.nonzero(near & (nr @ B > 0.2))[0]
+        kd = KDTree(len(pool))
+        for j, i in enumerate(pool):
+            kd.insert(co[i], j)
+        kd.balance()
+        rel = []
+        sig = relief_r * 0.5
+        for i in np.nonzero(dors)[0]:
+            nb = np.array([pool[j] for _, j, _ in kd.find_range(co[i], relief_r)])
+            if len(nb) < 10:
+                continue
+            n0 = nr[i]
+            t1 = np.cross(n0, A)
+            t1 /= np.linalg.norm(t1)
+            t2 = np.cross(n0, t1)
+            d = co[nb] - co[i]
+            x, y, h = d @ t1, d @ t2, d @ n0
+            w = np.exp(-0.5 * (x * x + y * y) / sig ** 2)
+            M = np.c_[np.ones_like(x), x, y, x * x, x * y, y * y] * np.sqrt(w)[:, None]
+            coef = np.linalg.lstsq(M, h * np.sqrt(w), rcond=None)[0]
+            rel.append(-coef[0])
+        rel = np.abs(np.array(rel)) * 1000
+        out[s] = {"breadth_mm": round(breadth * 1000, 1), "length_mm": round(length * 1000, 1),
+                  "hand_width_ratio": round(breadth / length, 3),
+                  "breadth_thumb_mm": round(breadth_t * 1000, 1), "width_ratio_thumb": round(breadth_t / length, 3),
+                  "dorsum_verts": int(len(rel)),
+                  "relief_mm": {q: round(float(np.percentile(rel, int(q[1:]))), 3) for q in ("p50", "p95", "p99")}}
+    sides = list(out.values())
+    out["hand_width_ratio"] = round(float(np.mean([v["hand_width_ratio"] for v in sides])), 3)
+    out["dorsum_relief_p99_mm"] = round(float(np.mean([v["relief_mm"]["p99"] for v in sides])), 3)
     return out
