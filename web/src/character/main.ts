@@ -4,15 +4,21 @@
 //
 // URL: character.html?asset=<dir under /asset/>&view=front|three_quarter|profile|closeup|portrait
 //      &rig=neutral|hero&turntable=1&pose=rest|stand|arms_up|...&amount=0..1&gl=1&dpr=1&params=<json>
+//      &area=none|rims|all&post=0&gaze=0&scene=balls
+//      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
+//      the page renders every view itself and POSTs the frames + timings to the loopback server of
+//      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DeformRuntime, type RigRules } from './deform';
 import { Poser, PRESETS, applyPreset } from './poses';
 import { ParamStore } from './materials/params';
-import { assignMaterials, type HairSidecars } from './materials';
+import { assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
+import { skinLUT } from './materials/sss';
 import { Output } from './output';
-import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type RigName, type ViewName } from './stage';
+import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
 import { FrameStats, textureBytes } from './hud';
 
 const q = new URLSearchParams(location.search);
@@ -29,6 +35,9 @@ interface ViewerState {
   load?: Record<string, number>;
   stats?: Record<string, unknown>;
   verify?: Record<string, unknown>;
+  facialAtlas?: string;
+  sssLutMs?: number;
+  gaze?: unknown;
   warnings: string[];
 }
 const state: ViewerState = { phase: 'start', ready: false, warnings: [] };
@@ -54,6 +63,30 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   return (await r.json()) as T;
 }
 
+/** Curvature maps + the pre-integrated SSS LUT (built here, ~0.2 s; sss.ts). */
+function skinSidecars(P: ParamStore, head: THREE.Texture | null, hands: THREE.Texture | null): Pick<Sidecars, 'curvature' | 'sssLUT'> {
+  if (!head && !hands) return {};
+  for (const t of [head, hands]) if (t) t.anisotropy = 4;
+  const t0 = performance.now();
+  const lut = skinLUT(undefined, P.get('skin.sssRadiusScale') as number);
+  state.sssLutMs = Math.round(performance.now() - t0);
+  return { curvature: { skin_head: head, skin_hands: hands }, sssLUT: lut };
+}
+
+/** suit_detail.json + its tile: the weave as a tiled, mipmapped detail normal (T6). */
+async function loadWeave(base: string): Promise<WeaveSidecar | null> {
+  const j = await fetchJson<{ materials: WeaveSidecar['materials'] }>(base + 'suit_detail.json');
+  const first = j && Object.values(j.materials)[0];
+  if (!j || !first) return null;
+  const tile = await loadTexture(base + (first as unknown as { tile: string }).tile);
+  if (!tile) return null;
+  tile.wrapS = tile.wrapT = THREE.RepeatWrapping;
+  tile.anisotropy = 8;
+  tile.generateMipmaps = true;
+  tile.minFilter = THREE.LinearMipmapLinearFilter;
+  return { tile, materials: j.materials };
+}
+
 async function loadTexture(url: string): Promise<THREE.Texture | null> {
   try {
     const t = await new THREE.TextureLoader().loadAsync(url);
@@ -66,11 +99,260 @@ async function loadTexture(url: string): Promise<THREE.Texture | null> {
   }
 }
 
+// LTC rect lights are opt-in: three's RectAreaLight casts no shadows, so a rim behind the head leaks
+// onto the collar / under the jaw; the portrait A/B scored SSIM none 0.694 > rims 0.684 > all 0.670
+// against the Cycles parity render (t6-engine-parity.md). Shadowed spots stay the default.
+// The shader balls default to 'all': no occluders, so unshadowed LTC rects are the faithful model of the
+// Blender area lights there (ball parity calibrates materials, not the light approximation).
+function areaMode(fallback: 'none' | 'all' = 'none'): 'none' | 'rims' | 'all' {
+  const a = q.get('area');
+  return a === 'none' || a === 'rims' || a === 'all' ? a : fallback;
+}
+
+interface BuildStats {
+  beard?: { atlas_fill_linear?: number[] };
+}
+
+/** facialHair.linearFix -1 (auto): T2 builds record beard.atlas_fill_linear in character.stats.json
+ * and ship sRGB-encoded atlases (read as tagged, gain 1); older builds store linear values in an
+ * sRGB-tagged image (read as linear, gain 0.45, the T5 compensation). */
+function resolveFacialAtlas(P: ParamStore, stats: BuildStats | null): void {
+  if (P.get('facialHair.linearFix') !== -1) return;
+  const encoded = !stats || Array.isArray(stats.beard?.atlas_fill_linear);
+  P.set('facialHair.linearFix', encoded ? 0 : 1);
+  if (!encoded && P.get('facialHair.albedoGain') === 1) P.set('facialHair.albedoGain', 0.45);
+  state.facialAtlas = encoded ? 'srgb (T2 build)' : 'linear-in-srgb (pre-T2 build): linearFix 1, gain 0.45';
+}
+
+/** The hero shot's eye turn (wet.gaze in Blender rotates the eyes' rest vertices about each eyeball
+ * centre; the lids stay). Applied to the bind-pose geometry of every eye-role mesh; null restores. */
+class EyeGaze {
+  private readonly meshes: { mesh: THREE.Mesh; orig: Map<string, Float32Array> }[] = [];
+  current: Gaze | null = null;
+
+  constructor(model: THREE.Object3D, isEye: (m: THREE.Mesh) => boolean) {
+    model.updateMatrixWorld(true);
+    model.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh || !isEye(m)) return;
+      // packed xyz copies via getX/Y/Z: the attribute may be interleaved (gltf-transform's default layout,
+      // e.g. the KTX2 copy), where .array is the whole vertex buffer
+      const orig = new Map<string, Float32Array>();
+      for (const k of ['position', 'normal', 'tangent']) {
+        const a = m.geometry.getAttribute(k) as THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
+        if (!a) continue;
+        const xyz = new Float32Array(a.count * 3);
+        for (let i = 0; i < a.count; i++) xyz.set([a.getX(i), a.getY(i), a.getZ(i)], i * 3);
+        orig.set(k, xyz);
+      }
+      this.meshes.push({ mesh: m, orig });
+    });
+  }
+
+  get count(): number {
+    return this.meshes.length;
+  }
+
+  apply(g: Gaze | null): void {
+    if (g === this.current) return;
+    this.current = g;
+    const v = new THREE.Vector3();
+    const w = new THREE.Vector3();
+    for (const { mesh, orig } of this.meshes) {
+      const M = mesh.matrixWorld.clone();
+      const Mi = M.clone().invert();
+      const T: Record<'l' | 'r', THREE.Matrix4> = { l: new THREE.Matrix4(), r: new THREE.Matrix4() };
+      const Nm: Record<'l' | 'r', THREE.Matrix3> = { l: new THREE.Matrix3(), r: new THREE.Matrix3() };
+      if (g) {
+        for (const side of ['l', 'r'] as const) {
+          const c = new THREE.Vector3().fromArray(g[side].centre);
+          const q = new THREE.Quaternion().fromArray(g[side].quat);
+          T[side] = Mi.clone()
+            .multiply(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z))
+            .multiply(new THREE.Matrix4().makeRotationFromQuaternion(q))
+            .multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z))
+            .multiply(M);
+          Nm[side].getNormalMatrix(T[side]);
+        }
+      }
+      const pos = orig.get('position')!;
+      const sideOf = new Uint8Array(pos.length / 3);
+      for (let i = 0; i < sideOf.length; i++) sideOf[i] = v.fromArray(pos, i * 3).applyMatrix4(M).x > 0 ? 0 : 1;
+      for (const [k, src] of orig) {
+        const attr = mesh.geometry.getAttribute(k) as THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+        for (let i = 0; i < sideOf.length; i++) {
+          w.fromArray(src, i * 3);
+          if (g) {
+            const side = sideOf[i] === 0 ? 'l' : 'r';
+            if (k === 'position') w.applyMatrix4(T[side]);
+            else w.applyMatrix3(Nm[side]).normalize();
+          }
+          attr.setXYZ(i, w.x, w.y, w.z); // tangent w (handedness) is left as loaded
+        }
+        if ('isInterleavedBufferAttribute' in attr && attr.isInterleavedBufferAttribute) attr.data.needsUpdate = true;
+        else attr.needsUpdate = true;
+      }
+    }
+  }
+}
+
+interface BallsJson {
+  res: number[];
+  exposure: number;
+  view_transform: string;
+  camera: import('./stage').StageCamera;
+  balls: { material: string; circle_px?: number[] }[];
+}
+
+/** ?scene=balls: the shader-ball parity scene (blender/lookdev_render.py --shader-balls): the balls GLB
+ * with the character's materials, the look-dev studio lights, the Blender camera, Standard view. */
+/** Device capture (?capture=1&upload=1): the page drives the views itself on this device's GPU and
+ * POSTs each frame (raw RGBA8 rows; the server writes the PNG) and a summary to /upload/ on the
+ * serving origin (engine_shots.mjs --serve, which accepts only these names and writes only into its
+ * one run dir). Then a timed loop of the portrait at the canvas size for frame / GPU times. */
+async function deviceCapture(
+  api: { capture: (v: ViewName, r: RigName, w: number, h: number, pose?: string, post?: boolean) => Promise<{ b64: string; ms: number; draw_calls: number; triangles: number }>; stats: () => unknown; setView: (v: ViewName, r: RigName) => void },
+  renderer: THREE.WebGPURenderer,
+  drawCanvas: () => void,
+): Promise<void> {
+  const views = (q.get('views') ?? 'front,three_quarter,profile,closeup,portrait').split(',').filter((v) => (VIEWS as readonly string[]).includes(v)) as ViewName[];
+  const size = Number(q.get('size') ?? 1024);
+  const [pw, ph] = (q.get('portrait') ?? '1920x1080').split('x').map(Number) as [number, number];
+  const post = async (name: string, body: BodyInit, headers: Record<string, string> = {}) => {
+    const r = await fetch(`/upload/${name}`, { method: 'POST', body, headers });
+    if (!r.ok) throw new Error(`upload ${name}: ${r.status}`);
+  };
+  const shots: unknown[] = [];
+  state.phase = 'uploading';
+  for (const v of views) {
+    for (const withPost of v === 'portrait' ? [false, true] : [false]) {
+      const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
+      const rig: RigName = v === 'portrait' ? 'hero' : 'neutral';
+      const t = performance.now();
+      const r = await api.capture(v, rig, w, h, undefined, withPost);
+      const bin = Uint8Array.from(atob(r.b64), (ch) => ch.charCodeAt(0));
+      const name = `game_${v}${withPost ? '_beauty' : ''}.png`;
+      await post(name, bin, { 'x-width': String(w), 'x-height': String(h), 'content-type': 'application/octet-stream' });
+      shots.push({ view: v, rig, post: withPost, file: name, res: [w, h], render_ms: r.ms, wall_ms: Math.round(performance.now() - t), draw_calls: r.draw_calls, triangles: r.triangles });
+      hud.textContent = `uploaded ${name}`;
+    }
+  }
+  // timed loop: the portrait at the canvas size, frame time (rAF to rAF) and GPU time (timestamp query)
+  const nPerf = Number(q.get('perf') ?? 120);
+  const frameMs: number[] = [];
+  const gpuMs: number[] = [];
+  api.setView('portrait', 'hero');
+  let last = performance.now();
+  for (let i = 0; i < nPerf; i++) {
+    await new Promise((res) => requestAnimationFrame(res));
+    drawCanvas();
+    try {
+      const g = await renderer.resolveTimestampsAsync('render');
+      if (typeof g === 'number' && g > 0) gpuMs.push(g);
+    } catch {
+      /* no timestamp-query on this adapter */
+    }
+    const now = performance.now();
+    if (i > 0) frameMs.push(now - last);
+    last = now;
+  }
+  const pct = (a: number[], p: number) => (a.length ? +[...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(p * a.length))]!.toFixed(2) : null);
+  let adapter: unknown = null;
+  try {
+    const a = await (navigator as unknown as { gpu?: { requestAdapter: () => Promise<{ info: Record<string, string> } | null> } }).gpu?.requestAdapter();
+    adapter = a ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null;
+  } catch {
+    adapter = null;
+  }
+  const summary = {
+    ok: true,
+    device_capture: true,
+    when: new Date().toISOString(),
+    user_agent: navigator.userAgent,
+    backend: state.backend,
+    adapter,
+    dpr: devicePixelRatio,
+    load: state.load,
+    verify: state.verify,
+    warnings: state.warnings,
+    facial_atlas: state.facialAtlas,
+    stats: api.stats(),
+    shots,
+    perf: { frames: frameMs.length, canvas: [canvas.width, canvas.height], frame_ms_p50: pct(frameMs, 0.5), frame_ms_p95: pct(frameMs, 0.95), gpu_ms_p50: pct(gpuMs, 0.5), gpu_ms_p95: pct(gpuMs, 0.95), gpu_samples: gpuMs.length },
+  };
+  await post('game_shots.json', JSON.stringify(summary, null, 1), { 'content-type': 'application/json' });
+  state.phase = 'uploaded';
+  hud.textContent = `done: ${shots.length} frames uploaded; frame p50 ${summary.perf.frame_ms_p50} ms, GPU p50 ${summary.perf.gpu_ms_p50} ms`;
+}
+
+async function mainBalls(): Promise<void> {
+  const base = assetBase();
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL: q.get('gl') === '1', powerPreference: 'high-performance' });
+  await renderer.init();
+  state.backend = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.setPixelRatio(1);
+  const output = new Output(renderer, 4);
+  state.phase = 'loading';
+  const [gltf, balls, stageData, flow, data, paramJson, buildStats, weave, curvHead, curvHands] = await Promise.all([
+    new GLTFLoader().loadAsync(base + 'shader_balls.glb'),
+    fetchJson<BallsJson>(base + 'shader_balls.json'),
+    fetchJson<EngineStage>(base + 'engine_stage.json'),
+    loadTexture(base + 'hair_atlas_flow.png'),
+    loadTexture(base + 'hair_atlas_data.png'),
+    fetchJson<unknown>(base + 'material_params.json'),
+    fetchJson<BuildStats>(base + 'character.stats.json'),
+    loadWeave(base),
+    loadTexture(base + 'skin_head_curvature.png'),
+    loadTexture(base + 'skin_hands_curvature.png'),
+  ]);
+  if (!balls) fatal('no shader_balls.json (blender/lookdev_render.py --shader-balls)');
+  if (!stageData) fatal('no engine_stage.json');
+  let overrides: unknown = paramJson;
+  if (q.get('params')) overrides = JSON.parse(q.get('params')!);
+  const P = new ParamStore(overrides);
+  resolveFacialAtlas(P, buildStats);
+  const scene = new THREE.Scene();
+  scene.add(gltf.scene);
+  const mats = assignMaterials(gltf.scene, P, { flow, data, weave, ...skinSidecars(P, curvHead, curvHands) }, true);
+  const stage = new Stage(stageData!, scene, mats.byName);
+  stage.areaMode = areaMode('all');
+  stage.setup('front', 'neutral');
+  output.setGrade(false, balls!.exposure);
+  output.viewAgX.value = balls!.view_transform === 'AgX' ? 1 : 0;
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 200);
+  const api = {
+    state,
+    params: P,
+    setParam: (path: string, v: number | number[]) => P.set(path, v),
+    captureBalls: async (w: number, h: number) => {
+      applyCamera(camera, balls!.camera, w, h);
+      const t = performance.now();
+      const px = await output.capture(scene, camera, w, h);
+      let s = '';
+      for (let i = 0; i < px.length; i += 0x8000) s += String.fromCharCode(...px.subarray(i, i + 0x8000));
+      return { b64: btoa(s), ms: Math.round(performance.now() - t), draw_calls: output.lastScene.drawCalls };
+    },
+  };
+  (window as unknown as { __viewer: typeof api }).__viewer = api;
+  applyCamera(camera, balls!.camera, 64, 32);
+  output.render(scene, camera, 64, 32, null);
+  state.phase = 'running';
+  state.ready = true;
+  hud.textContent = 'shader balls';
+  panel.style.display = 'none';
+}
+
 async function main(): Promise<void> {
+  if (q.get('scene') === 'balls') return mainBalls();
   const t0 = performance.now();
   const base = assetBase();
   const forceWebGL = q.get('gl') === '1';
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance' });
+  const upload = q.get('capture') === '1' && q.get('upload') === '1';
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload });
   await renderer.init();
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
@@ -89,18 +371,26 @@ async function main(): Promise<void> {
   const progress = { loaded: 0, total: 0 };
   hud.textContent = 'loading…';
   const loader = new GLTFLoader();
-  const glbP = loader.loadAsync(base + 'character.glb', (e) => {
+  // ?ktx2=1: the Basis Universal copy (web/tools/ktx2.mjs, build_character.py --ktx2); the transcoder is
+  // served at /basis/ (engine_shots.mjs from three's examples/jsm/libs/basis)
+  const useKTX2 = q.get('ktx2') === '1';
+  if (useKTX2) loader.setKTX2Loader(new KTX2Loader().setTranscoderPath('/basis/').detectSupport(renderer));
+  const glbP = loader.loadAsync(base + (useKTX2 ? 'character.ktx2.glb' : 'character.glb'), (e) => {
     progress.loaded = e.loaded;
     progress.total = e.total;
     hud.textContent = `loading character.glb ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;
   });
-  const [gltf, rules, stageData, flow, data, paramJson] = await Promise.all([
+  const [gltf, rules, stageData, flow, data, paramJson, buildStats, weave, curvHead, curvHands] = await Promise.all([
     glbP,
     fetchJson<RigRules>(base + 'character.rig.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
     loadTexture(base + 'hair_atlas_flow.png'),
     loadTexture(base + 'hair_atlas_data.png'),
     fetchJson<unknown>(base + 'material_params.json'),
+    fetchJson<BuildStats>(base + 'character.stats.json'),
+    loadWeave(base),
+    loadTexture(base + 'skin_head_curvature.png'),
+    loadTexture(base + 'skin_hands_curvature.png'),
   ]);
   const tLoaded = performance.now();
   let overrides: unknown = paramJson;
@@ -112,6 +402,7 @@ async function main(): Promise<void> {
     }
   }
   const P = new ParamStore(overrides);
+  resolveFacialAtlas(P, buildStats);
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
   if (!flow || !data) state.warnings.push('hair flow/data sidecars missing: tangent = UV bitangent, no strand ID');
@@ -130,9 +421,16 @@ async function main(): Promise<void> {
 
   const rt = new DeformRuntime(model, rules ?? { version: 1 });
   const poser = new Poser(rt);
-  const side: HairSidecars = { flow, data };
+  const side: Sidecars = { flow, data, weave, ...skinSidecars(P, curvHead, curvHands) };
+  if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
+  if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, samples > 1);
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName);
+  stage.areaMode = areaMode();
+  const gaze = new EyeGaze(model, (m) => {
+    const mm = Array.isArray(m.material) ? m.material[0] : m.material;
+    return mats.roles.get(mm?.name ?? '') === 'eye';
+  });
   const tSetup = performance.now();
 
   // ------------------------------------------------------------------ view / pose state
@@ -162,7 +460,13 @@ async function main(): Promise<void> {
     viewName = v;
     rigName = r;
     const vs = stage.setup(v, r);
+    // the hero shot turns the eyes to the camera (wet.gaze); the look-dev views keep the rest gaze
+    const g = vs.shot ? (stage.data.hero.shots[vs.shot]?.gaze ?? null) : null;
+    if (q.get('gaze') !== '0') gaze.apply(g);
+    state.gaze = g ? { deg: g.deg, meshes: gaze.count } : null;
     output.setGrade(r === 'hero', vs.exposure, stage.data.hero.grade);
+    // beauty post (bloom, halation, grain) on the interactive hero frames; ?post=0 for parity
+    output.setPost(r === 'hero' && q.get('post') !== '0');
     userOrbit = false;
     controls.target.fromArray(vs.camera.target);
     resize();
@@ -313,8 +617,9 @@ async function main(): Promise<void> {
     lights: () => stage.describeLights(),
     stats: statsNow,
     /** Render view (stage camera, rig) at w x h; returns base64 RGBA8 rows, top row first. */
-    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string) => {
+    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false) => {
       setView(view, rig);
+      output.setPost(post);
       poseName = pose ?? (view === 'portrait' ? 'stand' : 'rest');
       amount = 1;
       applyPose();
@@ -376,6 +681,7 @@ async function main(): Promise<void> {
     firstFrameMs = performance.now() - t;
     state.ready = true;
     hud.textContent = 'capture mode';
+    if (upload) await deviceCapture(api, renderer, () => output.render(scene, camera, canvas.width, canvas.height, null));
     return;
   }
   renderer.setAnimationLoop(frame);

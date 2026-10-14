@@ -201,16 +201,14 @@ def _eye_objs(ch):
     return eyes[:1] + shells
 
 
-def gaze(ch, target, off_deg=0.0, limit=28.0):
-    """Turn both eyes (eyeball + cornea, skinned to the head bone) toward
-    `target` (world), `off_deg` to the character's left of it. Rotates the
-    rest vertices of each eye about the eyeball's centre; restore() undoes
-    it. The lids don't follow, so the turn is limited to `limit` degrees."""
+def gaze_rotations(ch, target, off_deg=0.0, limit=28.0):
+    """The eye turns gaze() applies, without applying them: ({side: (rest centre,
+    3x3 rest-world rotation)}, [deg per side], eye objects). side 1 = +X (the
+    character's left). Call with the eyes restored (rest vertices)."""
     objs = [o for o in _eye_objs(ch) if not o.data.shape_keys   # keys would override the edit
             and any(m.type == "ARMATURE" for m in o.modifiers)]
     if not objs:
-        return None
-    restore(ch)
+        return None, [], []
     eo = objs[0]
     head = ch._deform("head")
     h3i = head.to_3x3().inverted()
@@ -229,6 +227,18 @@ def gaze(ch, target, off_deg=0.0, limit=28.0):
             q = Quaternion(q.axis, math.radians(limit))
         rots[side] = (c_rest, q.to_matrix())
         out.append(round(min(ang, limit), 1))
+    return rots, out, objs
+
+
+def gaze(ch, target, off_deg=0.0, limit=28.0):
+    """Turn both eyes (eyeball + cornea, skinned to the head bone) toward
+    `target` (world), `off_deg` to the character's left of it. Rotates the
+    rest vertices of each eye about the eyeball's centre; restore() undoes
+    it. The lids don't follow, so the turn is limited to `limit` degrees."""
+    restore(ch)
+    rots, out, objs = gaze_rotations(ch, target, off_deg, limit)
+    if not objs:
+        return None
     for o in objs:
         _EYES[o.name] = [v.co.copy() for v in o.data.vertices]
         mw, mwi = o.matrix_world, o.matrix_world.inverted()

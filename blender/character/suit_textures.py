@@ -32,12 +32,16 @@ import numpy as np
 from . import suit_leather
 
 # weave period in metres and amplitude (height units are metres before the
-# normal-map slope scale)
+# normal-map slope scale). "detail": True keeps the periodic weave OUT of the
+# baked atlas (it sat at ~2 px per period there and aliased into diagonal
+# moire bands in the engine, checkpoint-1 §1.3 #3); the runtime adds it from a
+# small tiled detail normal (suit_twill_detail.png, mipmapped, faded by
+# fwidth) at the same period and amplitude. The noise (slubs) stays baked.
+# The shirt's plain weave stays baked (mostly hidden; no second tile yet).
 WEAVE = {
-    # periods are a little over 2 px at the atlas density, below that the twill aliases
-    "wool": {"period_m": 0.0019, "amp": 0.000025, "noise": 0.00003, "twill": True},   # faint: the hero adds the real 0.6 mm twill (suit_hero)
+    "wool": {"period_m": 0.0019, "amp": 0.000025, "noise": 0.00003, "twill": True, "detail": True},   # faint: the hero adds the real 0.6 mm twill (suit_hero)
     "shirt": {"period_m": 0.0012, "amp": 0.00003, "noise": 0.000015, "twill": False},
-    "silk": {"period_m": 0.0014, "amp": 0.00006, "noise": 0.00001, "twill": True, "angle": 0.6},
+    "silk": {"period_m": 0.0014, "amp": 0.00006, "noise": 0.00001, "twill": True, "angle": 0.6, "detail": True},
     "leather": {"period_m": 0.0, "amp": 0.0, "noise": 0.00004, "twill": False},
     "sole": {"period_m": 0.0, "amp": 0.0, "noise": 0.00008, "twill": False},
 }
@@ -218,7 +222,7 @@ class Height:
 
     def weave(self, w):
         px = self.px
-        if w["amp"] and w["period_m"]:
+        if w["amp"] and w["period_m"] and not w.get("detail"):
             f = self.side / w["period_m"]         # periods across the atlas
             y, x = np.mgrid[0:px, 0:px].astype(np.float32) / px
             if w.get("twill"):
@@ -365,6 +369,158 @@ class Height:
         img.pixels.foreach_set(rgba.ravel())
         img.pack()
         return img
+
+
+# --- runtime weave detail ------------------------------------------------------------------
+
+DETAIL_TILE = "suit_twill_detail"
+DETAIL_PX = 256
+DETAIL_PERIODS = 8          # rib periods across the tile (32 px each at 256)
+DETAIL_REF_AMP = 0.000025   # the tile's baked amplitude (wool); other weaves scale the XY slope
+DETAIL_REF_PERIOD = 0.0019  # the tile's metric period (wool)
+
+
+def twill_tile(slope=1.0, px=DETAIL_PX, n=DETAIL_PERIODS):
+    """Tileable 2/1 twill (Height.weave's twill at angle 0) as a tangent-space
+    normal image. Height.weave's ribs, sin(2 pi f (x + y) / sqrt 2), repeat
+    every sqrt(2) * period along x; here n of them span the tile, so the tile is
+    n * sqrt(2) * period wide. The weft term is rounded to integer periods so
+    the tile wraps."""
+    y, x = np.mgrid[0:px, 0:px].astype(np.float64) / px
+    ribs = np.sin(2 * np.pi * n * (x + y))
+    k = round(n * math.sqrt(2))
+    weft = np.sin(2 * np.pi * k * x) * np.sin(2 * np.pi * k * y)
+    h = DETAIL_REF_AMP * (0.6 * ribs + 0.4 * weft)
+    tile_m = n * math.sqrt(2) * DETAIL_REF_PERIOD
+    dpx = tile_m / px
+    gx = (np.roll(h, -1, axis=1) - np.roll(h, 1, axis=1)) / (2 * dpx) * slope
+    gy = (np.roll(h, -1, axis=0) - np.roll(h, 1, axis=0)) / (2 * dpx) * slope
+    n3 = np.stack([-gx, -gy, np.ones_like(h)], axis=-1)
+    n3 /= np.linalg.norm(n3, axis=-1, keepdims=True)
+    rgba = np.empty((px, px, 4), np.float32)
+    rgba[..., :3] = n3 * 0.5 + 0.5
+    rgba[..., 3] = 1.0
+    img = bpy.data.images.get(DETAIL_TILE) or bpy.data.images.new(DETAIL_TILE, px, px, alpha=False)
+    img.use_fake_user = True  # no node uses it in the build, and the hero .blend needs it (cycles_weave)
+    img.colorspace_settings.name = "Non-Color"
+    img.pixels.foreach_set(rgba.ravel())
+    img.pack()
+    return img, float(np.abs(gx).max())
+
+
+def detail_record(mat, side_m, w):
+    """Runtime weave detail for one material (the viewer reads it from
+    suit_detail.json, which export.write_sidecars puts next to the GLB): tile
+    repeats per atlas UV unit, rotation, slope gain vs the tile."""
+    tile_m = DETAIL_PERIODS * math.sqrt(2) * w["period_m"]
+    rec = {"tile": DETAIL_TILE + ".png", "atlas_side_m": round(side_m, 6), "period_m": w["period_m"],
+           "tile_m": round(tile_m, 6), "repeat": round(side_m / tile_m, 4), "angle_rad": w.get("angle", 0.0),
+           "strength": round(w["amp"] / DETAIL_REF_AMP * DETAIL_REF_PERIOD / w["period_m"], 4)}
+    mat["suit_detail"] = json.dumps(rec)
+    return rec
+
+
+def cycles_weave(records=None, tile=None, gain=1.0):
+    """Render-time weave for Cycles (lookdev_render, hero/stage): the twill left the baked atlas for the
+    engine's tiled detail normal, so Blender needs the same detail or its renders lose the weave. Adds,
+    per material with a detail record, the engine's arithmetic (web ClothMaterial) in front of the
+    existing Normal Map node: uv_tile = rotate(gltf_uv * repeat, angle); d = tile * 2 - 1 rotated back;
+    n = normalize(base.xy + d.xy * strength, base.z). Never call it before a glTF export (the exporter
+    needs Image -> Normal Map). records: {material: suit_detail record}, default each material's
+    "suit_detail" property; tile: the tile image (default the packed DETAIL_TILE). Returns the names done."""
+    if records is None:
+        records = {m.name: json.loads(m["suit_detail"]) for m in bpy.data.materials if "suit_detail" in m}
+    tile = tile or bpy.data.images.get(DETAIL_TILE)
+    if not records or tile is None:
+        return []
+    tile.colorspace_settings.name = "Non-Color"
+    done = []
+    for name, rec in sorted(records.items()):
+        mat = bpy.data.materials.get(name)
+        if mat is None or not mat.use_nodes or mat.get("cycles_weave"):
+            continue
+        nt = mat.node_tree
+        bsdf = next((n for n in nt.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        lk = bsdf and bsdf.inputs["Normal"].links
+        nm = lk[0].from_node if lk else None
+        while nm is not None and nm.type == "BUMP":  # suit_hero's fine twill bumps over the normal map
+            lk = nm.inputs["Normal"].links
+            nm = lk[0].from_node if lk else None
+        if nm is None or nm.type != "NORMAL_MAP" or not nm.inputs["Color"].links:
+            continue
+        base = nm.inputs["Color"].links[0].from_socket
+        uv_src = base.node.inputs["Vector"].links[0].from_socket if (
+            base.node.type == "TEX_IMAGE" and base.node.inputs["Vector"].links) else None
+
+        def vm(op, a, b=None, c=None, scale=None):
+            n = nt.nodes.new("ShaderNodeVectorMath")
+            n.operation = op
+            for i, x in enumerate((a, b, c)):
+                if x is None:
+                    continue
+                if isinstance(x, (tuple, list)):
+                    n.inputs[i].default_value = x
+                else:
+                    nt.links.new(x, n.inputs[i])
+            if scale is not None:
+                n.inputs["Scale"].default_value = scale
+            return n.outputs[0]
+
+        def rot(v, ang):
+            n = nt.nodes.new("ShaderNodeVectorRotate")
+            n.rotation_type = "Z_AXIS"
+            n.inputs["Angle"].default_value = ang
+            n.inputs["Center"].default_value = (0.0, 0.0, 0.0)
+            nt.links.new(v, n.inputs["Vector"])
+            return n.outputs[0]
+
+        if uv_src is None:
+            uvn = nt.nodes.new("ShaderNodeUVMap")
+            uv_src = uvn.outputs["UV"]
+        ang, k = float(rec.get("angle_rad", 0.0)), float(rec["strength"]) * gain
+        uvg = vm("MULTIPLY_ADD", uv_src, (1.0, -1.0, 0.0), (0.0, 1.0, 0.0))        # Blender v -> glTF v
+        uvt = rot(vm("SCALE", uvg, scale=float(rec["repeat"])), ang)
+        st = vm("MULTIPLY_ADD", uvt, (1.0, -1.0, 0.0), (0.0, 1.0, 0.0))            # back to Blender v
+        tx = nt.nodes.new("ShaderNodeTexImage")
+        tx.image = tile
+        tx.extension = "REPEAT"
+        tx.interpolation = "Linear"
+        nt.links.new(st, tx.inputs["Vector"])
+        d = vm("MULTIPLY_ADD", tx.outputs["Color"], (2.0, 2.0, 2.0), (-1.0, -1.0, -1.0))
+        dxy = vm("MULTIPLY", rot(d, -ang), (k, k, 0.0))
+        b = vm("MULTIPLY_ADD", base, (2.0, 2.0, 2.0), (-1.0, -1.0, -1.0))
+        n = vm("NORMALIZE", vm("ADD", b, dxy))
+        nt.links.new(vm("MULTIPLY_ADD", n, (0.5, 0.5, 0.5), (0.5, 0.5, 0.5)), nm.inputs["Color"])
+        mat["cycles_weave"] = 1
+        done.append(name)
+    return done
+
+
+def cycles_weave_blend(blend_path, gain=1.0):
+    """cycles_weave for a kept character.blend: the material records, the tile from the .blend or (builds
+    before the tile had a fake user, so the orphan image was not saved) the PNG sidecar beside it."""
+    import os
+    tile = bpy.data.images.get(DETAIL_TILE)
+    png = os.path.join(os.path.dirname(os.path.abspath(blend_path)), DETAIL_TILE + ".png")
+    if tile is None and os.path.exists(png):
+        tile = bpy.data.images.load(png, check_existing=True)
+    return cycles_weave(None, tile, gain)
+
+
+def cycles_weave_sidecar(glb_path, gain=1.0):
+    """cycles_weave for a GLB import: suit_detail.json and its tile next to the GLB (export.write_sidecars)."""
+    import os
+    d = os.path.dirname(os.path.abspath(glb_path))
+    jp = os.path.join(d, "suit_detail.json")
+    if not os.path.exists(jp):
+        return []
+    with open(jp) as f:
+        recs = json.load(f).get("materials", {})
+    tiles = {r["tile"] for r in recs.values()}
+    if len(tiles) != 1 or not os.path.exists(os.path.join(d, next(iter(tiles)))):
+        return []
+    img = bpy.data.images.load(os.path.join(d, next(iter(tiles))), check_existing=True)
+    return cycles_weave(recs, img, gain)
 
 
 # --- marks ---------------------------------------------------------------------------------
@@ -578,6 +734,7 @@ def apply(o, parts, mats, marks, folds=None):
             mat.name = f"suit_{gname}"
         attach_normal_map(mat, img, strength=1.0)
         mat["suit_atlas_side_m"] = side   # suit_hero: metric UVs for the hero-only detail
+        detail = detail_record(mat, side, WEAVE[weave]) if WEAVE[weave].get("detail") else None
         surf = None
         if weave == "wool" and o.get("surface"):
             spec = o["materials"]["vest" if gname == "vest" else "wool"]
@@ -597,6 +754,10 @@ def apply(o, parts, mats, marks, folds=None):
         strip_panel_attr(objs)
         out[gname] = {"px": px, "atlas_side_m": round(side, 4), "panels": len(layout),
                       "mm_per_px": round(1000 * side / px, 3), "marks": sum(len(v) for v in flat.values()),
-                      "folds": fold_info, "surface": surf}
+                      "folds": fold_info, "surface": surf, "weave_detail": detail}
+    if any(r.get("weave_detail") for r in out.values() if isinstance(r, dict)):
+        _, gmax = twill_tile(slope=T["slope"])
+        out["weave_detail_tile"] = {"name": DETAIL_TILE, "px": DETAIL_PX, "periods": DETAIL_PERIODS,
+                                    "max_slope": round(gmax, 4)}
     bpy.data.materials.remove(wool_bare)
     return out

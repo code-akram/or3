@@ -38,6 +38,17 @@ export const DEFAULT_PARAMS = {
     roughnessBias: 0.0,
     normalScale: 1.0,
     aoIntensity: 1.0,
+    /** Pre-integrated SSS (sss.ts): 1 = the curvature x N.L LUT replaces wrap, terminator tint and the
+     * per-channel normal blur's N.L (the blur stays for small-scale bump); 0 = the T5 wrap model.
+     * Needs skin_<part>_curvature.png (builds since T6); without it the wrap model is used. */
+    sss: 1,
+    /** Scales the profile radii (hero Cycles radii 3.4 / 0.75 / 0.34 mm) when the LUT is built (load). */
+    sssRadiusScale: 1.0,
+    /** Gain on the baked curvature before the LUT lookup. */
+    sssCurvatureGain: 1.0,
+    /** Baked AO into the DIRECT diffuse (three's aoMap only touches indirect light, and the hero
+     * world is 0.003, so without this the AO channel does nothing). Until GTAO lands. */
+    directAO: 0.5,
   },
   hair: {
     albedoGain: 1.0,
@@ -47,8 +58,9 @@ export const DEFAULT_PARAMS = {
     shiftJitter: 0.12,
     exponent1: 160,
     exponent2: 28,
-    spec1: 0.07,
-    spec2: 0.08,
+    // shader-ball calibrated (T6): the hair-card ball read 3.0x Cycles at 0.07 / 0.08 (diffuse alone 0.35x)
+    spec1: 0.0175,
+    spec2: 0.02,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,
@@ -58,12 +70,15 @@ export const DEFAULT_PARAMS = {
     alphaTest: 0.32,
   },
   facialHair: {
-    /** With the linear fix the shells read mid-brown; the Cycles strands read near-black
-     * (melanin 0.99), so the baseline darkens them until the beard_bake gains are retuned. */
-    albedoGain: 0.45,
-    /** Beard / brow / lash atlases carry linear values in sRGB-tagged images (review §1.9 S2):
-     * 1 = read them as linear (the fix), 0 = as tagged. */
-    linearFix: 1,
+    /** Atlas gain. 1 on any build since T2 (atlases sRGB-encoded, gains baked to 1). A pre-T2
+     * build (heroE-main9 and older) gets 0.45 from the auto rule below. */
+    albedoGain: 1.0,
+    /** How to decode the beard / brow / lash atlases. -1 = auto from the build: a
+     * character.stats.json carrying beard.atlas_fill_linear means the atlas is sRGB-encoded (T2),
+     * so it is read as tagged; without it the build predates T2 and stores linear values in an
+     * sRGB-tagged image (review §1.9 S2), read as linear with gain 0.45. 0 = as tagged, 1 = as
+     * linear. Remove once main9 is retired. */
+    linearFix: -1,
     spec1: 0.05,
     spec2: 0.06,
     alphaTest: 0.22,
@@ -71,7 +86,8 @@ export const DEFAULT_PARAMS = {
   eye: {
     albedoGain: 1.0,
     corneaRoughness: 0.04,
-    corneaStrength: 1.0,
+    // shader-ball calibrated (T6): 1.0 put the area-light catchlight peak at 1.35x Cycles (coat f0 ~0.025 vs 0.04)
+    corneaStrength: 0.7,
     /** Eye UV is a polar map: v from the back (0) to the cornea pole (1). Limbus and pupil rows. */
     limbusV: 0.645,
     limbalWidth: 0.012,
@@ -84,11 +100,15 @@ export const DEFAULT_PARAMS = {
     fuzzColor: [0.32, 0.33, 0.38],
     fuzzStrength: 0.15,
     fuzzPower: 3.0,
-    sheenScale: 0.6,
+    // shader-ball calibrated (T6): three's Charlie sheen vs Blender's; wool read 1.35x at 0.6, 0.88x at 0
+    sheenScale: 0.15,
     twillStrength: 0.12,
     /** Twill period in UV units^-1 (diagonal ridges). */
     twillFreq: 900,
+    /** Gain on the tiled weave detail (suit_detail.json; replaces the procedural twill when present). */
+    weaveStrength: 1.0,
     roughnessScale: 1.0,
+    directAO: 0.5,
   },
   shirt: {
     fuzzStrength: 0.12,

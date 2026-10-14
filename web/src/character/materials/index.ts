@@ -16,7 +16,7 @@ import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { BRDF_GGX, BRDF_Lambert, diffuseColor, float, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, LTC_Uv, mat3, diffuseColor, float, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -25,6 +25,29 @@ interface DirectInput {
   lightDirection: N;
   lightColor: N;
   reflectedLight: { directDiffuse: N; directSpecular: N };
+}
+interface RectInput {
+  lightColor: N;
+  lightPosition: N;
+  halfWidth: N;
+  halfHeight: N;
+  reflectedLight: { directDiffuse: N; directSpecular: N };
+  ltc_1: N;
+  ltc_2: N;
+}
+
+/** A rect light (three's LTC path, ?area=rims|all) as the point light the custom terms (skin SSS
+ * diffuse, cloth sheen + fuzz) understand: direction to the centre and the intensity of a small
+ * Lambertian emitter, I = L A cos(theta_light), over d^2. The LTC keeps the specular; three's stock
+ * directRectArea has no sheen and knows nothing of these terms, so without this they vanish. */
+function rectAsPoint(i: RectInput): { L: N; color: N } {
+  const toL = i.lightPosition.sub(positionView);
+  const d2 = toL.dot(toL).max(1e-4);
+  const L = toL.normalize();
+  const n = i.halfWidth.cross(i.halfHeight);
+  const area = n.length().mul(4);
+  const cosL = n.normalize().dot(L).max(0); // shines along local -z: the lit side has L along +z
+  return { L, color: i.lightColor.mul(area).mul(cosL).div(d2) };
 }
 
 export type Role = 'skin' | 'hair' | 'facial' | 'lash' | 'eye' | 'cloth' | 'shirt' | 'generic';
@@ -91,8 +114,22 @@ function normalNode(src: Std, scale: N): N | null {
 
 // --------------------------------------------------------------------------------------- skin
 
+/** Direct-light occlusion factor: mix(1, baked AO, k). */
+function directAO(ao: N | null, k: N): N {
+  return ao ? mix(float(1), ao, k) : float(1);
+}
+
+interface SkinSSS {
+  lut: THREE.Texture;
+  curvature: N; // encoded curvature at this fragment (skin_tex.curvature)
+}
+
 class SkinLightingModel extends THREE.PhysicalLightingModel {
-  constructor(private readonly P: ParamStore) {
+  constructor(
+    private readonly P: ParamStore,
+    private readonly ao: N | null,
+    private readonly sss: SkinSSS | null,
+  ) {
     super();
   }
 
@@ -110,7 +147,16 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     // terminator scatter band (centred on N.L = 0 of the blurred green normal)
     const band = smoothstep(P.u('skin.scatterWidth'), float(0), nl3.y.abs()).mul(P.u('skin.scatterStrength'));
     const tint = vec3(1).add(P.u('skin.scatterColor').mul(band));
-    reflectedLight.directDiffuse.addAssign(lightColor.mul(diff).mul(tint).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
+    const occ = directAO(this.ao, P.u('skin.directAO'));
+    let d: N = diff.mul(tint);
+    if (this.sss) {
+      // pre-integrated SSS: per channel D(N.L of that channel's blurred normal, curvature)
+      const cv = this.sss.curvature.mul(P.u('skin.sssCurvatureGain')).clamp(0.002, 1);
+      const at = (x: N) => texture(this.sss!.lut, vec2(x.mul(0.5).add(0.5).clamp(0, 1), cv));
+      const pre = vec3(at(nl3.x).r, at(nl3.y).g, at(nl3.z).b);
+      d = mix(d, diffuseRamp(P, pre), P.u('skin.sss'));
+    }
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(d).mul(occ).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
     // dual-lobe specular
     const r = roughness.clamp(0.08, 1);
     const f0 = vec3(P.u('skin.specF0'));
@@ -119,10 +165,24 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     const dotNL = normalView.dot(L).clamp();
     reflectedLight.directSpecular.addAssign(lightColor.mul(dotNL).mul(mix(s1, s2, P.u('skin.lobeMix'))).mul(P.u('skin.specGain')));
   }
+
+  override directRectArea(input: unknown, builder?: unknown): void {
+    const i = input as RectInput;
+    // the area-shaped (LTC) specular, scaled like the dual lobe; the stock Lambert diffuse is dropped
+    const spec = vec3(0).toVar();
+    super.directRectArea({ ...(i as object), reflectedLight: { directDiffuse: vec3(0).toVar(), directSpecular: spec } } as never, builder as never);
+    i.reflectedLight.directSpecular.addAssign(spec.mul(this.P.u('skin.specGain')));
+    // pre-integrated SSS / wrap diffuse from the point equivalent (its punctual specular dropped)
+    const pt = rectAsPoint(i);
+    this.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: { directDiffuse: i.reflectedLight.directDiffuse, directSpecular: vec3(0).toVar() } });
+  }
 }
 
 export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
-  constructor(src: Std, private readonly P: ParamStore) {
+  private aoTex: N | null = null;
+  private sss: SkinSSS | null = null;
+
+  constructor(src: Std, private readonly P: ParamStore, sss?: { lut: THREE.Texture; curvature: THREE.Texture } | null) {
     super();
     copyStd(this, src);
     const c = mapRGBA(src);
@@ -132,11 +192,15 @@ export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
       this.roughnessNode = texture(src.roughnessMap).g.mul(P.u('skin.roughnessScale')).add(P.u('skin.roughnessBias')).clamp(0.05, 1);
     }
     this.metalnessNode = float(0);
-    if (src.aoMap) this.aoNode = mix(float(1), texture(src.aoMap).r, P.u('skin.aoIntensity'));
+    if (src.aoMap) {
+      this.aoTex = texture(src.aoMap).r;
+      this.aoNode = mix(float(1), this.aoTex, P.u('skin.aoIntensity'));
+    }
+    if (sss) this.sss = { lut: sss.lut, curvature: texture(sss.curvature).r };
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new SkinLightingModel(this.P);
+    return new SkinLightingModel(this.P, this.aoTex, this.sss);
   }
 }
 
@@ -182,11 +246,26 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${this.prefix}.spec1`)).add(tint.mul(s2).mul(P.u(`${this.prefix}.spec2`)));
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
   }
+
+  override directRectArea(input: unknown): void {
+    // the anisotropic fibre lobes have no LTC form: the whole term from the rect's point equivalent
+    const i = input as RectInput;
+    const pt = rectAsPoint(i);
+    this.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: i.reflectedLight });
+  }
 }
 
 export interface HairSidecars {
   flow?: THREE.Texture | null; // RG flow (0.5 + 0.5 x), B depth, A AO
   data?: THREE.Texture | null; // R coverage, G root-to-tip, B strand ID
+}
+
+/** Runtime inputs next to the GLB that glTF has no slot for (blender/character/export.write_sidecars). */
+export interface Sidecars extends HairSidecars {
+  weave?: WeaveSidecar | null;
+  /** skin material name -> curvature map (skin_<part>_curvature.png) */
+  curvature?: Record<string, THREE.Texture | null>;
+  sssLUT?: THREE.Texture | null;
 }
 
 export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
@@ -250,6 +329,24 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
     const s = BRDF_GGX({ lightDirection: L, f0: vec3(0.04), f90: float(1), roughness: r, normalView: Ng });
     reflectedLight.directSpecular.addAssign(lightColor.mul(Ng.dot(L).clamp()).mul(s).mul(this.P.u('eye.corneaStrength')));
   }
+
+  override directRectArea(input: unknown, builder?: unknown): void {
+    const i = input as RectInput;
+    super.directRectArea(input as never, builder as never);
+    // the cornea's reflection of an area light is the light's shape: LTC GGX (f0 0.04) on the eyeball normal
+    const Ng = normalViewGeometry;
+    const V = positionViewDirection;
+    const r = float(this.P.u('eye.corneaRoughness')).clamp(0.02, 1);
+    const t1 = i.ltc_1.sample(LTC_Uv({ N: Ng, V, roughness: r })).toVar();
+    const t2 = i.ltc_2.sample(LTC_Uv({ N: Ng, V, roughness: r })).toVar();
+    const mInv = mat3(vec3(t1.x, 0, t1.y), vec3(0, 1, 0), vec3(t1.z, 0, t1.w));
+    const fres = t2.x.mul(0.04).add(t2.y.mul(0.96));
+    const c = i.lightPosition;
+    const hw = i.halfWidth;
+    const hh = i.halfHeight;
+    const ev = LTC_Evaluate({ N: Ng, V, P: positionView, mInv, p0: c.add(hw).sub(hh), p1: c.sub(hw).sub(hh), p2: c.sub(hw).add(hh), p3: c.add(hw).add(hh) });
+    i.reflectedLight.directSpecular.addAssign(i.lightColor.mul(fres).mul(ev).mul(this.P.u('eye.corneaStrength')));
+  }
 }
 
 export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
@@ -282,13 +379,17 @@ class ClothLightingModel extends THREE.PhysicalLightingModel {
     private readonly P: ParamStore,
     private readonly fuzzKey: string,
     sheen: boolean,
+    private readonly ao: N | null,
   ) {
     super(false, sheen);
   }
 
   override direct(input: unknown, builder?: unknown): void {
     const { lightDirection: L, lightColor, reflectedLight } = input as DirectInput;
-    super.direct(input as never, builder as never);
+    // the physical direct term into a scratch diffuse accumulator, so only the diffuse is occluded
+    const diffuse = vec3(0).toVar();
+    super.direct({ ...(input as object), reflectedLight: { ...reflectedLight, directDiffuse: diffuse } } as never, builder as never);
+    reflectedLight.directDiffuse.addAssign(diffuse.mul(directAO(this.ao, this.P.u('cloth.directAO'))));
     const nv = normalView.dot(positionViewDirection).clamp();
     const rim = float(1).sub(nv).pow(this.P.u('cloth.fuzzPower'));
     const wrapNL = normalView.dot(L).mul(0.5).add(0.5).clamp();
@@ -296,15 +397,71 @@ class ClothLightingModel extends THREE.PhysicalLightingModel {
       lightColor.mul(this.P.u('cloth.fuzzColor')).mul(rim).mul(wrapNL).mul(this.P.u(this.fuzzKey)).mul(1 / Math.PI),
     );
   }
+
+  override directRectArea(input: unknown, builder?: unknown): void {
+    const i = input as RectInput;
+    // LTC diffuse + specular, the diffuse occluded like direct()
+    const diffuse = vec3(0).toVar();
+    super.directRectArea({ ...(i as object), reflectedLight: { ...i.reflectedLight, directDiffuse: diffuse } } as never, builder as never);
+    i.reflectedLight.directDiffuse.addAssign(diffuse.mul(directAO(this.ao, this.P.u('cloth.directAO'))));
+    // sheen (accumulated by the physical direct()) and the fuzz rim from the point equivalent; the
+    // punctual diffuse / specular of that call are discarded (the LTC has them)
+    const pt = rectAsPoint(i);
+    const scratch = { directDiffuse: vec3(0).toVar(), directSpecular: vec3(0).toVar() };
+    super.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: scratch } as never, builder as never);
+    const nv = normalView.dot(positionViewDirection).clamp();
+    const rim = float(1).sub(nv).pow(this.P.u('cloth.fuzzPower'));
+    const wrapNL = normalView.dot(pt.L).mul(0.5).add(0.5).clamp();
+    i.reflectedLight.directDiffuse.addAssign(
+      pt.color.mul(this.P.u('cloth.fuzzColor')).mul(rim).mul(wrapNL).mul(this.P.u(this.fuzzKey)).mul(1 / Math.PI),
+    );
+  }
 }
 
+/** suit_detail.json (blender/character/suit_textures.detail_record): the weave as a tiled detail normal. */
+export interface WeaveDetail {
+  repeat: number;
+  angle_rad: number;
+  strength: number;
+}
+export interface WeaveSidecar {
+  tile: THREE.Texture;
+  materials: Record<string, WeaveDetail>;
+}
+/** Rib periods across the tile (suit_textures.DETAIL_PERIODS). */
+const WEAVE_TILE_PERIODS = 8;
+
 export class ClothMaterial extends THREE.MeshPhysicalNodeMaterial {
-  constructor(src: Std, private readonly P: ParamStore, private readonly fuzzKey: 'cloth.fuzzStrength' | 'shirt.fuzzStrength') {
+  private aoTex: N | null = null;
+
+  constructor(
+    src: Std,
+    private readonly P: ParamStore,
+    private readonly fuzzKey: 'cloth.fuzzStrength' | 'shirt.fuzzStrength',
+    weave?: WeaveSidecar | null,
+  ) {
     super();
     copyStd(this, src);
     const c = mapRGBA(src);
     this.colorNode = vec4(albedo(P, 'cloth', c.rgb), 1);
-    if (src.normalMap) {
+    const wd = weave?.materials[src.name];
+    if (src.normalMap && weave && wd) {
+      // the weave from the tiled, mipmapped detail normal (it is no longer in the baked atlas)
+      const ca = Math.cos(wd.angle_rad);
+      const sa = Math.sin(wd.angle_rad);
+      const u0 = uv().mul(wd.repeat);
+      const uvT = vec2(u0.x.mul(ca).sub(u0.y.mul(sa)), u0.x.mul(sa).add(u0.y.mul(ca)));
+      // rib periods per pixel; mips flatten the tile on their own, the fade guards the last octave
+      const perPx = fwidth(uvT).length().mul(WEAVE_TILE_PERIODS);
+      const fade = float(1).sub(smoothstep(0.3, 0.6, perPx));
+      const d = texture(weave.tile, uvT).rgb.mul(2).sub(1);
+      // back to the atlas UV frame (transpose of the rotation above)
+      const dxy = vec2(d.x.mul(ca).add(d.y.mul(sa)), d.x.mul(sa).negate().add(d.y.mul(ca)));
+      const k = fade.mul(wd.strength).mul(P.u('cloth.weaveStrength'));
+      const b = texture(src.normalMap).rgb.mul(2).sub(1);
+      const n = vec3(b.xy.add(dxy.mul(k)), b.z).normalize();
+      this.normalNode = normalMap(n.mul(0.5).add(0.5), vec2(src.normalScale.x, src.normalScale.y));
+    } else if (src.normalMap) {
       // micro-twill: diagonal ridges added to the tangent-space normal before decoding
       const ph = uv().x.add(uv().y).mul(P.u('cloth.twillFreq'));
       // fade out where a ridge is under ~3 px (no aliasing / moire: the procedural tile is unfiltered)
@@ -315,12 +472,15 @@ export class ClothMaterial extends THREE.MeshPhysicalNodeMaterial {
     }
     if (src.roughnessMap) this.roughnessNode = texture(src.roughnessMap).g.mul(P.u('cloth.roughnessScale')).clamp(0.05, 1);
     else this.roughnessNode = float(src.roughness).mul(P.u('cloth.roughnessScale')).clamp(0.05, 1);
-    if (src.aoMap) this.aoNode = texture(src.aoMap).r;
+    if (src.aoMap) {
+      this.aoTex = texture(src.aoMap).r;
+      this.aoNode = this.aoTex;
+    }
     if (this.sheen > 0) this.sheenNode = vec3(this.sheenColor.r, this.sheenColor.g, this.sheenColor.b).mul(P.u('cloth.sheenScale'));
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new ClothLightingModel(this.P, this.fuzzKey, this.useSheen);
+    return new ClothLightingModel(this.P, this.fuzzKey, this.useSheen, this.aoTex);
   }
 }
 
@@ -342,33 +502,36 @@ export interface MaterialSet {
 }
 
 /** Replace every glTF material under `root` by its node material (one instance per source material). */
-export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: HairSidecars, msaa: boolean): MaterialSet {
+export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidecars, msaa: boolean): MaterialSet {
   const byName = new Map<string, THREE.MeshPhysicalNodeMaterial>();
   const roles = new Map<string, Role>();
   const make = (src: Std): THREE.MeshPhysicalNodeMaterial => {
     const role = roleOf(src.name);
     roles.set(src.name, role);
     if (role === 'facial' || role === 'lash') {
-      // review §1.9 S2: the bytes are linear values in an sRGB-tagged image
+      // pre-T2 builds (review §1.9 S2): the bytes are linear values in an sRGB-tagged image.
+      // main.ts resolves linearFix -1 (auto) from character.stats.json before this runs.
       if (src.map && P.get('facialHair.linearFix') === 1) {
         src.map.colorSpace = THREE.NoColorSpace;
         src.map.needsUpdate = true;
       }
     }
     switch (role) {
-      case 'skin':
-        return new SkinMaterial(src, P);
+      case 'skin': {
+        const cm = side.curvature?.[src.name];
+        return new SkinMaterial(src, P, cm && side.sssLUT ? { lut: side.sssLUT, curvature: cm } : null);
+      }
       case 'hair':
-        return new HairMaterial(src, P, { prefix: 'hair', side: src.name === 'hair_cards' ? side : {}, msaa });
+        return new HairMaterial(src, P, { prefix: 'hair', side: src.name === 'hair_cards' ? { flow: side.flow ?? null, data: side.data ?? null } : {}, msaa });
       case 'facial':
       case 'lash':
         return new HairMaterial(src, P, { prefix: 'facialHair', msaa });
       case 'eye':
         return new EyeMaterial(src, P);
       case 'cloth':
-        return new ClothMaterial(src, P, 'cloth.fuzzStrength');
+        return new ClothMaterial(src, P, 'cloth.fuzzStrength', side.weave);
       case 'shirt':
-        return new ClothMaterial(src, P, 'shirt.fuzzStrength');
+        return new ClothMaterial(src, P, 'shirt.fuzzStrength', side.weave);
       default:
         return new GenericMaterial(src);
     }

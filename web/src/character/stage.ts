@@ -10,8 +10,16 @@
 // cone with full penumbra; its size by the shadow blur radius (no area-light specular shape).
 // A uniform world of radiance Lw (Blender background colour x strength) is a hemisphere light with
 // sky = ground = Lw / |Lw| and intensity pi |Lw| (irradiance pi Lw on any normal).
+//
+// Area lights (T6, ?area=none|rims|all, default none): LTC rect lights (three's RectAreaLight, Heitz et
+// al. 2016) of the Blender size. A Blender area light of power P and size w x h is a Lambertian emitter
+// of radiance L = P / (pi w h), which is three's RectAreaLight intensity (power = I w h pi). Rect lights
+// cast no shadow in three, so the key / wrap / fill stay shadowed spots unless area=all; the rims and
+// kickers (0.3 x 1.2-1.5 m strips at 1.5 m) are where the spot's narrow, hard lobe was most wrong.
+// Measured: unshadowed rims leak under the jaw, so 'none' (shadowed spots) is the default; rims/all opt-in.
 import * as THREE from 'three/webgpu';
 import { lights as lightsNodeOf } from 'three/tsl';
+import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
 import { groupOf, roleOf } from './materials';
 
 export interface StageCamera {
@@ -38,6 +46,8 @@ export interface StageLight {
   size: number[];
   use_shadow?: boolean;
   diffuse_factor?: number;
+  /** Blender light world rotation in glTF space (x, y, z, w); the light shines along its local -Z. */
+  quaternion?: number[];
   receivers?: { mode: 'all' | 'include' | 'exclude'; groups: string[] };
 }
 interface LightSpec {
@@ -75,9 +85,17 @@ export interface EngineStage {
         bones: Record<string, number[]>;
         corrective_weights: Record<string, number>;
         helper_world_quats?: Record<string, number[]>;
+        gaze?: Gaze | null;
       }
     >;
   };
+}
+
+/** Eye turn of a hero shot (blender/hero/wet.gaze_rotations): rest-world centre + rotation per eye. */
+export interface Gaze {
+  deg: number[];
+  l: { centre: number[]; quat: number[] };
+  r: { centre: number[]; quat: number[] };
 }
 
 export const VIEWS = ['front', 'three_quarter', 'profile', 'closeup', 'portrait'] as const;
@@ -176,9 +194,12 @@ export class Stage {
   readonly group = new THREE.Group();
   private readonly floor: THREE.Mesh;
   private readonly hemi = new THREE.HemisphereLight(0xffffff, 0xffffff, 0);
-  private lights: { light: THREE.SpotLight; spec: StageLight }[] = [];
+  private lights: { light: THREE.SpotLight | THREE.RectAreaLight; spec: StageLight }[] = [];
   view: ViewSetup | null = null;
   shadowMapSize = 2048;
+  /** Which lights become LTC rect lights: none (default: shadowed spots), the rims and kickers, or all. */
+  areaMode: 'none' | 'rims' | 'all' = 'none';
+  private static ltcReady = false;
 
   constructor(
     readonly data: EngineStage,
@@ -219,11 +240,46 @@ export class Stage {
 
   private clearLights(): void {
     for (const { light } of this.lights) {
-      light.shadow.map?.dispose();
+      if ((light as THREE.SpotLight).isSpotLight) {
+        const sp = light as THREE.SpotLight;
+        sp.shadow.map?.dispose();
+        this.group.remove(sp.target);
+      }
       light.dispose();
-      this.group.remove(light, light.target);
+      this.group.remove(light);
     }
     this.lights = [];
+  }
+
+  private isArea(s: StageLight): boolean {
+    if (this.areaMode === 'none' || s.name === 'eye') return false;
+    // the hair twins keep the Kajiya-Kay path (custom direct(); LTC would shade the cards as GGX)
+    if (/_hair$/.test(s.name)) return false;
+    if (this.areaMode === 'all') return true;
+    return /^(rim|kicker)/.test(s.name);
+  }
+
+  /** LTC rect light for a Blender area light (see the header for the units). */
+  private rectLight(s: StageLight): THREE.RectAreaLight {
+    if (!Stage.ltcReady) {
+      THREE.RectAreaLightNode.setLTC(RectAreaLightTexturesLib.init());
+      Stage.ltcReady = true;
+    }
+    const w = Math.max(s.size[0] ?? 0.3, 1e-3);
+    const h = Math.max(s.size[1] ?? s.size[0] ?? 0.3, 1e-3);
+    const l = new THREE.RectAreaLight(new THREE.Color().setRGB(s.color[0]!, s.color[1]!, s.color[2]!), s.power_w / (Math.PI * w * h), w, h);
+    l.name = s.name;
+    l.position.copy(v3(s.position));
+    if (s.quaternion && this.view?.name === 'portrait') {
+      // Blender local axes = three local axes (both shine along -Z); world: glTF rotation * C, where
+      // C maps a Blender-space vector into glTF space ((x, y, z) -> (x, z, -y))
+      const C = new THREE.Matrix4().set(1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1);
+      const qc = new THREE.Quaternion().setFromRotationMatrix(C);
+      l.quaternion.fromArray(s.quaternion).multiply(qc);
+    } else {
+      l.lookAt(v3(s.target));
+    }
+    return l;
   }
 
   private heroLights(cam: StageCamera, eyesMid: THREE.Vector3): StageLight[] {
@@ -280,6 +336,12 @@ export class Stage {
     fl.color.setRGB(fa[0]!, fa[1]!, fa[2]!);
     fl.roughness = hero ? 0.45 : this.data.lookdev.floor.roughness;
     for (const s of specs) {
+      if (this.isArea(s)) {
+        const r = this.rectLight(s);
+        this.group.add(r);
+        this.lights.push({ light: r, spec: s });
+        continue;
+      }
       const l = new THREE.SpotLight(new THREE.Color().setRGB(s.color[0]!, s.color[1]!, s.color[2]!), s.power_w / Math.PI, 0, (80 * Math.PI) / 180, 1, 2);
       l.name = s.name;
       l.position.copy(v3(s.position));
@@ -335,8 +397,8 @@ export class Stage {
     return this.lights.length;
   }
 
-  describeLights(): { name: string; intensity: number; shadow: boolean }[] {
-    return this.lights.map(({ light }) => ({ name: light.name, intensity: +light.intensity.toFixed(3), shadow: light.castShadow }));
+  describeLights(): { name: string; type: string; intensity: number; shadow: boolean }[] {
+    return this.lights.map(({ light }) => ({ name: light.name, type: light.type, intensity: +light.intensity.toFixed(3), shadow: light.castShadow }));
   }
 }
 
@@ -364,8 +426,9 @@ export function applyCamera(cam: THREE.PerspectiveCamera, s: StageCamera, w: num
   cam.up.copy(new THREE.Vector3(0, 1, 0));
   cam.lookAt(v3(s.target));
   let vfov = s.vfov_deg;
-  if (s.sensor_fit === 'AUTO' && w < h) {
-    // AUTO fit: the sensor spans the larger dimension
+  if (s.sensor_fit === 'AUTO' && w > h) {
+    // AUTO fit: the sensor (vfov_deg) spans the larger dimension, so a landscape frame's vertical FOV is
+    // narrower (the 2:1 shader-ball frame; lookdev frames are square, the hero portrait is VERTICAL)
     vfov = (2 * Math.atan((Math.tan((vfov * Math.PI) / 360) * h) / w) * 180) / Math.PI;
   }
   cam.fov = vfov;

@@ -58,6 +58,7 @@ def parse_args():
     ap.add_argument("--skin")
     ap.add_argument("--rig")
     ap.add_argument("--max-influences", type=int)
+    ap.add_argument("--ktx2", action="store_true", help="also write <out stem>.ktx2.glb (export.ktx2)")
     return ap.parse_args(argv)
 
 
@@ -141,6 +142,8 @@ def main():
     out = os.path.abspath(a.out)
     stem = out[:-4] if out.endswith(".glb") else out
     b.step("export_glb", export.write_glb, out)
+    if a.ktx2:
+        b.step("export_ktx2", export.ktx2, out)
     b.step("head_hero", head.hero)  # Cycles-only skin and eyes, after the GLB export (track A)
     b.step("hand_nails_hero", hand_nails.hero)  # Cycles-only nail material (track G)
     b.step("suit_hero", suit.hero)  # hero-only (Cycles) suit detail: after the GLB, into the .blend only

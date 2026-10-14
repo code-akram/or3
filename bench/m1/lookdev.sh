@@ -20,7 +20,8 @@
 # private/ or its metrics.json carries likeness content or cannot be read (fails closed).
 # build_character.py refuses a likeness build outside private/ on its own as well.
 # Env: DATA (default: <main checkout>/data), THREADS (default 4; 16 for --signoff),
-#      ENGINE_SHOTS=1 adds the engine frames (bench/m1/engine_shots.sh; minutes, off by default),
+#      ENGINE_SHOTS=1 adds the engine frames (bench/m1/engine_shots.sh; minutes; default on for
+#      --signoff, off for loop runs; ENGINE_SHOTS=0 turns it off for a sign-off),
 #      KEEP_BLEND=1 keeps the staged .blend of the build.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -114,8 +115,8 @@ blender -b -t "$THREADS" --factory-startup --python-exit-code 1 --python "$REPO/
 [[ -s "$RUN/render_metrics.json" ]] || { echo "render wrote no metrics: $RUN/render.log" >&2; tail -20 "$RUN/render.log" >&2; exit 1; }
 
 # Engine frames (T5): game_<view>.png from the web viewer, written into $RUN only (private for --fan).
-# Off by default: SwiftShader takes minutes per run on this machine. ENGINE_SHOTS=1 turns it on.
-if [[ "${ENGINE_SHOTS:-0}" == 1 ]]; then
+# Off by default for loop runs (SwiftShader takes minutes on this machine), on for --signoff.
+if [[ "${ENGINE_SHOTS:-$([[ $MODE == signoff ]] && echo 1 || echo 0)}" == 1 ]]; then
   "$REPO/bench/m1/engine_shots.sh" "$RUN" || echo "warning: engine shots failed ($RUN/engine_shots.log)" >&2
 fi
 
