@@ -39,7 +39,7 @@ import numpy as np
 from mathutils import Vector
 from mathutils.kdtree import KDTree
 
-from . import export, hair_clumps, hair_mesh
+from . import export, hair_clumps, hair_frame, hair_mesh
 
 ESSENTIALS = os.path.join(bpy.utils.system_resource("DATAFILES"), "assets", "nodes",
                           "procedural_hair_node_assets.blend")
@@ -49,9 +49,18 @@ DEFAULTS = {
     "cards": "groom",          # game cards: "groom" (baked from this groom) or "clumps"
     "seed": 21,
     "guides": 520,
-    "strands": 40000,          # main strands (vellus and front falls extra)
-    "points": 24,
-    "radius_m": [0.000045, 0.00002],   # root, tip
+    # hair v4 (fable_review §5.5 steps 1-3). The v3 values: bench/m1/variants/hair_v3_groom.json.
+    "strands": 70000,          # main strands (vellus, front falls and stray hairs extra)
+    "points": 48,              # control points per strand (the cards resample from these)
+    # Point spacing along the strand: s = L (g t + (1 - g) t^2); 1 = even. < 1 puts
+    # more points near the root (the hairline's forward edge hairs need them).
+    "point_grade": 0.55,
+    # Strand radius root, tip (m), as a power ramp (v3: 0.045 -> 0.02 mm, t^1.5).
+    # Cut hair is blunt: `tip_taper_from` > 0 keeps the root radius and drops
+    # it to `tip_taper` x only past that fraction of the strand (flyaways and
+    # vellus taper on their own).
+    "radius_m": [0.00004, 0.00004],
+    "tip_taper": 0.8, "tip_taper_from": 0.97,
     "gap_m": 0.0012,           # strand clearance over the skin
     "layer_jitter_m": 0.004,   # guide stand-off jitter (layers stack)
     "knn": 4,                  # guides blended per strand
@@ -62,10 +71,21 @@ DEFAULTS = {
     # centre-part style): `side` out from the part, `back`, `drop`; roots
     # facing forward comb `forward` and hold up (`front_hold`) until past
     # the temple, where gravity starts between `fall_az_deg` (|azimuth|).
-    "comb": {"mode": "back", "side": 0.8, "back": 0.35, "drop": 0.35, "forward": 0.25,
+    # "field": "back" turned by a direction field (`field`, hair_frame.FlowField):
+    # a crown whorl, the occiput and nape combed down, and coherent angle
+    # noise so neighbouring guides are not all combed the same way.
+    "comb": {"mode": "field", "side": 0.8, "back": 0.35, "drop": 0.35, "forward": 0.25,
              "front_hold": 0.8, "fall_az_deg": [25.0, 50.0], "fall_above_ear_m": 0.06,
              "hug": 0.0, "hug_above_ear_m": 0.0,   # pull back onto the skull while above the ear
              "free_fall_m": None},   # gravity ramps to full over 4 cm from this length, everywhere
+    # Direction field (comb.mode "field"). Whorl: on the crown at `el_deg` over
+    # the cranium centre, `az_deg` round from the back (+ = the character's
+    # left); the comb turns round the scalp normal by up to `turn_deg` there
+    # (+ = counter-clockwise seen from outside), fading over `radius_m`. `down`:
+    # behind and below the whorl the comb turns down by this much. `jitter_deg`
+    # of coherent angle noise round the scalp normal at `jitter_scale_m`.
+    "field": {"whorl": {"el_deg": 58.0, "az_deg": 14.0, "radius_m": 0.03, "turn_deg": 70.0},
+              "down": 0.5, "jitter_deg": 12.0, "jitter_scale_m": 0.035, "seed": 5},
     # Share of roots per side that tuck behind the ear (the rest drape over
     # it, kept off by the ear collider). left = +x, the character's left.
     "tuck": {"left": 1.0, "right": 1.0},
@@ -76,52 +96,133 @@ DEFAULTS = {
     "part_lift_rise_m": None,  # rise length of that lift (None: the lift profile's rise_m)
     "part_density": 0.0,       # extra root density at the part line (x within part_width_m)
     "part_back_m": 0.03,       # ... from the front back to this far behind the head centre
-    # Hairline: temples recede (two bays), the density ramps over the feather.
-    "hairline": {"recess_m": 0.009, "recess_az_deg": 44, "recess_sigma_deg": 13,
+    # Hairline: temples recede (two bays; `recess_side` per side: depth x and
+    # azimuth shift in degrees, an asymmetric M), the density ramps over the
+    # feather. `noise`: octaves [amplitude, scale] (m) of 3D noise added to the
+    # distance field, so the line is irregular instead of a smooth offset of
+    # the region boundary. `density_noise`: the feather density is modulated
+    # (a non-monotone ramp; 0 = off). `edge` (null = off): strands rooted
+    # within band_m of the line lean `kick_m` toward the face over the first
+    # `over_m` (edge hairs point forward, then sweep back), are `radius` x
+    # finer and `melanin` lighter; clump.edge_m keeps them unclumped.
+    "hairline": {"recess_m": 0.011, "recess_az_deg": 44, "recess_sigma_deg": 13,
                  "recess_above_ear_m": 0.025,
-                 "feather_m": 0.010, "feather_min": 0.08, "ramp_pow": 1.2,
-                 "nape_feather_m": 0.006},
+                 "recess_side": {"left": [1.0, 0.0], "right": [1.3, 4.0]},
+                 "feather_m": 0.011, "feather_min": 0.05, "ramp_pow": 1.2,
+                 "nape_feather_m": 0.006,
+                 "noise": [[0.0016, 0.008], [0.001, 0.005], [0.0006, 0.003]], "noise_seed": 3,
+                 "density_noise": {"amp": 0.6, "scale_m": 0.004},
+                 "edge": {"band_m": 0.006, "kick_m": 0.0022, "over_m": 0.005, "radius": 0.75,
+                          "melanin": -0.06}},
     # Volume lift (stand-off from the skull along the strand, Strand.lift):
     # front roots lift off the forehead, the crown lies flat, the occiput full.
-    "lift": {"front_m": 0.014, "front_band_m": 0.04, "crown_m": 0.008, "side_m": 0.036,
-             "back_m": 0.026, "rise_m": 0.05, "hold_m": 0.07, "fall_m": 0.14, "keep": 0.75,
-             "jitter": 0.3},
+    # v4: the sides at half of v3's 36 mm (the shell off the skull read as a helmet).
+    "lift": {"front_m": 0.014, "front_band_m": 0.04, "crown_m": 0.008, "side_m": 0.018,
+             "back_m": 0.022, "rise_m": 0.05, "hold_m": 0.07, "fall_m": 0.14, "keep": 0.75,
+             "jitter": 0.4},
     # Clumping ramps in along the strand: `scalp` x the factor while it lies
     # on the skull (combed hair lies smooth), full `ramp_m` past the hang point.
-    "clump": {"scalp": 0.2, "ramp_m": 0.06, "primary": 36, "primary_factor": 0.85, "primary_shape": 0.3,
-              "secondary": 360, "secondary_factor": 0.8, "secondary_shape": 0.0,
-              "stray": 0.10, "stray_nape": 0.25, "tip_spread": 0.0},
-    "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18], "jitter": 0.4},
+    # `levels`: nested clumps, coarse to fine; each level's centres are spread
+    # inside the previous level's clumps: `count` clumps (or `size` strands per
+    # clump), and the Essentials Clump node's factor, shape, tip spread, clump
+    # offset and distance falloff (m). Low factors so locks never fully converge
+    # (fable_review §5.4). Levels 1 and 2 are the card baker's primary and
+    # secondary clumps. The v3 keys (primary, primary_factor, primary_shape,
+    # secondary, secondary_factor, secondary_shape, tip_spread) still override
+    # levels 1 and 2; v3 is two levels at 0.85 / 0.8 with Preserve Length off.
+    # No clumping within `edge_m` of the hairline.
+    "clump": {"scalp": 0.2, "ramp_m": 0.06, "edge_m": 0.008, "preserve_length": True,
+              "noise_after_clumps": True,
+              "levels": [
+                  {"count": 50, "factor": 0.3, "shape": 0.3, "tip_spread_m": 0.002,
+                   "offset_m": 0.0, "falloff_m": 0.0},
+                  {"count": 400, "factor": 0.4, "shape": 0.0, "tip_spread_m": 0.001,
+                   "offset_m": 0.0, "falloff_m": 0.0},
+                  {"count": 4000, "factor": 0.35, "shape": 0.0, "tip_spread_m": 0.0004,
+                   "offset_m": 0.0, "falloff_m": 0.0},
+                  {"size": 4, "factor": 0.2, "shape": 0.0, "tip_spread_m": 0.0001,
+                   "offset_m": 0.0, "falloff_m": 0.0}],
+              "stray": 0.10, "stray_nape": 0.25},
+    # Coherent lock wave in the hanging part (per level-1 clump): 1-2 waves per strand.
+    "wave": {"amp_m": [0.003, 0.008], "period_m": [0.18, 0.28], "jitter": 0.4},
+    # GN order (v4): clumps, then noise, then frizz (v3: noise before the clumps,
+    # so the clumping erased part of it).
     "noise": {"distance_m": 0.0015, "scale": 40.0, "shape": 0.3},
     "frizz": {"distance_m": 0.0005, "shape": 0.6},
-    "flyaways": {"share": 0.04, "distance_m": 0.010, "scale": 20.0, "shape": 0.4, "part_weight": 0.6},
-    "trim": {"random": 0.05},
-    # Ragged ends: hanging strands lose up to `clump` of their length per
+    # Flyaways. mode "strays": `share` x strands extra stray hairs, each a copy
+    # of a main strand that leaves the mass from `start` (a fraction of its
+    # length, uniform in the range) by `lift_m` at its end (outward and
+    # sideways), `length` x the source's length, not clumped, `radius` x the
+    # strand radius tapering to `tip_radius` x; GN noise `distance_m` on them.
+    # mode "noise" (v3): `share` of the main strands get `distance_m` noise.
+    "flyaways": {"mode": "strays", "share": 0.02, "distance_m": 0.003, "scale": 20.0, "shape": 0.4,
+                 "part_weight": 0.6, "start": [0.1, 0.75], "lift_m": [0.004, 0.03],
+                 "length": [0.55, 1.0], "tip_radius": 0.3, "radius": 0.8},
+    # Length variation: each strand loses up to `random` x its length at the tip.
+    # `in_gn`: the Essentials Trim node does it (v3); it resamples every strand
+    # evenly, which undoes point_grade, so v4 cuts in Python (hanging part only).
+    "trim": {"random": 0.06, "in_gn": False},
+    # Ragged ends (v3): hanging strands lose up to `clump` of their length per
     # secondary clump (locks end at different heights) plus up to `strand`
     # per strand (tapered lock tips), cut from the tip. 0 = off.
     "ends": {"clump": 0.0, "strand": 0.0, "min_hang_m": 0.04},
-    "vellus": {"count": 1400, "length_m": [0.003, 0.006], "band_m": [-0.002, 0.006],
-               "radius_m": 0.000018, "lift": 0.35, "melanin": 0.9},
+    # The cut (v4; null = off): the guides' perimeter line, then per strand a
+    # layered taper. Each strand is cut back from its tip by `lock_m` per
+    # level-2 clump (locks end at different heights), plus `taper_m` x u^pow
+    # per strand (each lock's end tapers over 2-3 cm), plus `layer_m` x how far
+    # up the skull it is rooted (the outer, top-rooted layer ends higher).
+    # Never into the first `min_hang_m` of the hanging part.
+    "cut": {"lock_m": [0.0, 0.02], "taper_m": 0.028, "taper_pow": 1.0, "layer_m": 0.025,
+            "min_hang_m": 0.04},
+    "vellus": {"count": 4000, "length_m": [0.003, 0.007], "band_m": [-0.002, 0.008],
+               "radius_m": 0.000025, "lift": 0.35, "melanin": 0.7},
     # Front falls (hair_clumps.march with fall gravity). side -1 = the
-    # character's right. Each takes the `strands` nearest strands.
+    # character's right. Each takes the `strands` nearest strands, which blend
+    # the fall's own `guides` sub-guides (rooted within `spread_deg`, each
+    # combed `comb_jitter` and cut `len_jitter` differently) instead of all
+    # copying one guide (v3: guides 1, a rigid slab). `clump_w` scales the
+    # clump factors (v3: `factor` / the level-1 factor).
     "front_fall": [
         {"side": -1, "count": 3, "az0_deg": 30, "az_step_deg": 6.0, "el_deg": 24,
          "comb_side": 0.2, "comb_fwd": 0.3, "comb_down": 0.9, "fall_after_m": 0.025,
          "tip_above_lips_m": 0.045, "tip_jitter_m": 0.015, "hug": 0.06, "clear_m": 0.005,
          "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 360,
-         "factor": 0.75, "wave_m": 0.005},
+         "clump_w": 1.3, "wave_m": 0.005, "guides": 6, "spread_deg": 2.5, "comb_jitter": 0.15,
+         "len_jitter": 0.12},
         {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 32,
          "comb_side": 0.9, "comb_fwd": 0.5, "comb_down": 0.4, "fall_after_m": 0.04, "gravity": 0.55,
          "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.08, "clear_m": 0.007,
          "flare_after_m": 0.07, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
-         "factor": 0.75, "wave_m": 0.003}],
-    "shader": {"model": "HUANG", "melanin": 0.985, "redness": 0.12,
-               "roughness": [0.22, 0.30], "random_color": 0.08, "random_roughness": 0.1,
-               "ior": 1.55, "aspect_ratio": 0.85, "light_share": 0.10, "light_melanin": 0.93,
+         "clump_w": 1.3, "wave_m": 0.003, "guides": 5, "spread_deg": 2.5, "comb_jitter": 0.15,
+         "len_jitter": 0.12}],
+    # Principled Hair BSDF, melanin parametrisation. Melanin 0.82 (red light
+    # keeps ~25 % through one hair, so TT / TRT survive: two highlights; v3's
+    # 0.985 left only the white R lobe), Random Color 0.2; per point melanin
+    # + `root_dark` at the root and - `tip_light` at the tip. Grey: `grey_share`
+    # of the strands (weighted `grey_temple` x at the temples, a Gaussian at
+    # +-`grey_temple_az_deg` above the ears) at melanin uniform in
+    # `grey_melanin` (the top of the range is half-pigmented), redness
+    # `grey_redness`. `model` CHIANG or HUANG (the hair test renders both);
+    # `roughness` is Chiang's, `huang_roughness` Huang's (roughly its square).
+    # `offset_deg`: cuticle tilt. v3: Huang, 0.985, 10 % light strands, no grey.
+    "shader": {"model": "CHIANG", "melanin": 0.82, "redness": 0.12,
+               "roughness": [0.24, 0.30], "huang_roughness": [0.10, 0.14],
+               "random_color": 0.2, "random_roughness": 0.1,
+               "ior": 1.55, "aspect_ratio": 0.85, "offset_deg": 2.5,
+               "light_share": 0.0, "light_melanin": 0.93,
                "lock_melanin_jitter": 0.012, "tint": None,
-               "coat": None, "radial_roughness": None,    # Chiang only (wet look: coat)
+               "coat": 0.0, "radial_roughness": 0.3,     # Chiang only (coat: the wet look)
+               "root_dark": 0.06, "tip_light": 0.04,
+               "grey_share": 0.12, "grey_melanin": [0.0, 0.5], "grey_redness": 0.0,
+               "grey_temple": 2.2, "grey_temple_az_deg": 70.0, "grey_temple_sigma_deg": 22.0,
                "fly_roughness": None, "fly_melanin": None},   # flyaway strands (curve attr `fly`) blend to this: dry strays on a wet groom
-    "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
+    # Hero scalp shell under the strands: dark, fading in from fade_m[0] inside
+    # the hairline (v3: from 8 mm, so the first 8 mm read as bare skin).
+    "scalp_tint": {"offset_m": 0.0004, "color": "#4a3a31", "fade_m": [0.0, 0.014], "alpha": 0.8},
+    # Cycles settings saved with the kept .blend: hair as 3D curves (THICK, not
+    # the default ribbons) and the glossy bounces dark hair needs (fable_review
+    # §5.4). The hero rig (blender/hero/rig.py cycles()) still sets its own bounces.
+    "render": {"curve_shape": "THICK", "curve_subdivisions": 2, "glossy_bounces": 16},
 }
 
 DOWN = Vector((0.0, 0.0, -1.0))
@@ -185,15 +286,36 @@ class Surface:
         h = self.cfg["hairline"]
         if p[1] > self.c.y:
             return 0.0
-        az = abs(self.azimuth(p))
+        az = self.azimuth(p)
+        depth, shift = (h.get("recess_side") or {}).get("left" if az >= 0 else "right", (1.0, 0.0))
         gate = smoothstep(self.frame.ear_z, self.frame.ear_z + h["recess_above_ear_m"], p[2])
-        return h["recess_m"] * math.exp(-((az - h["recess_az_deg"]) / h["recess_sigma_deg"]) ** 2) * gate
+        return (h["recess_m"] * depth * gate
+                * math.exp(-((abs(az) - h["recess_az_deg"] - shift) / h["recess_sigma_deg"]) ** 2))
 
     def d_eff(self, p):
         """Distance inside the hairline (m): boundary distance minus the
-        temple recession. < 0: bare skin."""
+        temple recession, plus the hairline noise. < 0: bare skin."""
         _, _, d = self.kd.find(Vector(p))
+        h = self.cfg["hairline"]
+        if h.get("noise"):
+            d += hair_frame.fbm(p, h["noise"], h.get("noise_seed", 0))
         return d - self.recess(p)
+
+    def toward_line(self, p, nrm):
+        """Unit tangent at p pointing to the nearest hairline boundary point
+        (the way an edge hair points), or None."""
+        co, _, _ = self.kd.find(Vector(p))
+        n = Vector(nrm)
+        v = co - Vector(p)
+        v -= n * v.dot(n)
+        return v.normalized() if v.length > 1e-6 else None
+
+    def density(self, p):
+        """Root density multiplier (non-monotone feather; 1 = off)."""
+        dn = self.cfg["hairline"].get("density_noise")
+        if not dn or not dn.get("amp"):
+            return 1.0
+        return max(0.0, 1.0 + dn["amp"] * 1.6 * hair_frame.fbm(p, [[1.0, dn["scale_m"]]], 11))
 
     def feather(self, p):
         h = self.cfg["hairline"]
@@ -239,11 +361,17 @@ def fps(points, k, start=0):
     return np.array(sel)
 
 
-def resample_np(pts, m):
-    """Polyline (n, 3) -> m points evenly by arc length."""
+def grade_param(m, grade=1.0):
+    """m curve parameters in [0, 1] for the point spacing s = g t + (1 - g) t^2."""
+    t = np.linspace(0.0, 1.0, m)
+    return grade * t + (1.0 - grade) * t * t
+
+
+def resample_np(pts, m, grade=1.0):
+    """Polyline (n, 3) -> m points by arc length (even, or graded: see grade_param)."""
     seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
     acc = np.concatenate([[0.0], np.cumsum(seg)])
-    s = np.linspace(0.0, acc[-1], m)
+    s = grade_param(m, grade) * acc[-1]
     return np.stack([np.interp(s, acc, pts[:, k]) for k in range(3)], axis=1)
 
 
@@ -271,7 +399,10 @@ def comb_dir(surf, ccfg, p, nrm, rng, side=None):
     push = (math.copysign(gc["part_push"], dx if side is None or side == 0 else side)
             * math.exp(-abs(dx) / gc["part_width_m"])) if on_top else 0.0
     drop = ccfg["comb_drop"] + ccfg["side_drop"] * smoothstep(0.4, 0.8, abs(nrm[0]))
-    return Vector((push + rng.uniform(-0.08, 0.08), 1.0, -drop))
+    v = Vector((push + rng.uniform(-0.08, 0.08), 1.0, -drop))
+    if cm.get("mode") == "field" and getattr(surf, "flow", None) is not None:
+        v = surf.flow.turn(v, p, nrm)
+    return v
 
 
 def lift_profile(surf, gcfg, p, nrm, rng):
@@ -348,7 +479,7 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
         s.lift = lift_profile(surf, gcfg, p, n, rng)
         s.wave = (wv["amp"] * rng.uniform(0.3, 0.6), rng.uniform(0, 6.3),
                   wv["period_m"] * rng.uniform(0.8, 1.25))
-        G.append(_march(frame, ccfg, s, m))
+        G.append(_march(frame, ccfg, s, m, gcfg.get("point_grade", 1.0)))
     for g in G:
         h, hp = hang_of(frame, ccfg, g)
         H.append(h)
@@ -356,13 +487,13 @@ def march_guides(b, frame, ccfg, gcfg, surf, rng, roots, nrms, m):
     return np.array(G), np.array(H), hang_pts
 
 
-def _march(frame, ccfg, s, m):
+def _march(frame, ccfg, s, m, grade=1.0):
     pts = hair_clumps.march(frame, s, ccfg["step_m"], ccfg["turn"], ccfg["ear_margin_m"],
                             ccfg.get("cloth_gap_m", 0.0), ccfg.get("neck_tuck", 0.0),
                             frame.chin_z, ccfg.get("cling", 0.0), ccfg.get("hang_turn"))
     P = np.array([tuple(p) for p in pts])
     # Point 0 buried upstream, point 1 at the root, the rest even by length.
-    return np.concatenate([P[:1], resample_np(P[1:], m - 1)])
+    return np.concatenate([P[:1], resample_np(P[1:], m - 1, grade)])
 
 
 def hang_of(frame, ccfg, g, front_fall=False):
@@ -389,43 +520,68 @@ def hang_of(frame, ccfg, g, front_fall=False):
 
 def front_fall_guides(frame, ccfg, gcfg, surf, rng, m):
     """Front-fall guides: rooted on the hairline by azimuth / elevation from
-    the cranium centre, combed forward and down (hair_clumps.march)."""
+    the cranium centre, combed forward and down (hair_clumps.march). Each
+    fall has `guides` sub-guides rooted within `spread_deg` of it, combed and
+    cut a little differently; its strands blend them (build)."""
     c = frame.center
+    grade = gcfg.get("point_grade", 1.0)
     out = []
+
+    def root_at(az, el):
+        d = Vector((math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el)))
+        # Walk back from the hairline until the root is inside it.
+        for back in range(12):
+            dd = (d + Vector((0, 0.03 * back, 0.02 * back))).normalized()
+            hit, nrm, _, _ = surf.frame.skin_bvh.ray_cast(c, dd, 0.3)
+            if hit is not None and surf.d_eff(tuple(hit)) > 0.004:
+                if nrm.dot(hit - c) < 0:
+                    nrm = -nrm
+                return hit, nrm
+        return None, None
+
     for ff in gcfg["front_fall"]:
         side = ff["side"]
         for i in range(ff["count"]):
-            az = math.radians(side * (ff["az0_deg"] + ff["az_step_deg"] * i))
-            el = math.radians(ff["el_deg"] + rng.uniform(-3, 3))
-            d = Vector((math.sin(az) * math.cos(el), -math.cos(az) * math.cos(el), math.sin(el)))
-            loc = None
-            # Walk back from the hairline until the root is inside it.
-            for back in range(12):
-                dd = (d + Vector((0, 0.03 * back, 0.02 * back))).normalized()
-                hit, nrm, _, _ = surf.frame.skin_bvh.ray_cast(c, dd, 0.3)
-                if hit is not None and surf.d_eff(tuple(hit)) > 0.004:
-                    loc = hit
-                    break
+            az0 = math.radians(side * (ff["az0_deg"] + ff["az_step_deg"] * i))
+            el0 = math.radians(ff["el_deg"] + rng.uniform(-3, 3))
+            loc, nrm = root_at(az0, el0)
             if loc is None:
                 continue
-            if nrm.dot(loc - c) < 0:
-                nrm = -nrm
-            comb = Vector((side * (ff["comb_side"] + rng.uniform(-0.1, 0.1)), -ff["comb_fwd"],
-                           -ff["comb_down"]))
-            tip = frame.lips_max.z + ff["tip_above_lips_m"] + rng.uniform(-1, 1) * ff["tip_jitter_m"]
+            comb0 = Vector((side * (ff["comb_side"] + rng.uniform(-0.1, 0.1)), -ff["comb_fwd"],
+                            -ff["comb_down"]))
+            tip0 = frame.lips_max.z + ff["tip_above_lips_m"] + rng.uniform(-1, 1) * ff["tip_jitter_m"]
+            len0 = ff["max_len_m"] * rng.uniform(0.9, 1.0)
+            flare0 = ff["flare_after_m"] * rng.uniform(0.8, 1.2)
 
             def fall_gravity(p, s, ff=ff):
                 return smoothstep(0.0, ff["fall_after_m"], s) * ff.get("gravity", 0.95)
 
-            s = hair_clumps.Strand(loc, nrm, comb, tip, ff["max_len_m"] * rng.uniform(0.9, 1.0),
-                                   fall_gravity, gcfg["gap_m"] + ff["clear_m"] + 0.0015 * i, {},
-                                   side)
-            s.hug = ff["hug"]
-            s.flare = (ff["flare_after_m"] * rng.uniform(0.8, 1.2), ff["flare"])
-            s.lift = (0.0, 0.03, 0.03, 0.08, 0.5)
-            g = _march(frame, ccfg, s, m)
-            h, hp = hang_of(frame, ccfg, g, front_fall=True)
-            out.append({"guide": g, "hang": h, "hang_pt": hp, "side": side, "cfg": ff})
+            subs = []
+            for k in range(max(1, ff.get("guides", 1))):
+                if k == 0:
+                    r, rn, comb, tip, ln, fl = loc, nrm, comb0, tip0, len0, flare0
+                else:
+                    sp = math.radians(ff.get("spread_deg", 2.5))
+                    r, rn = root_at(az0 + rng.uniform(-sp, sp), el0 + rng.uniform(-sp, sp))
+                    if r is None:
+                        continue
+                    cj, lj = ff.get("comb_jitter", 0.15), ff.get("len_jitter", 0.12)
+                    comb = comb0 + Vector((rng.uniform(-cj, cj), rng.uniform(-cj, cj) * 0.5,
+                                           rng.uniform(-cj, cj) * 0.5))
+                    tip = tip0 + rng.uniform(-1, 1) * ff["tip_jitter_m"] * 0.5
+                    ln = len0 * (1.0 - lj * rng.random())
+                    fl = flare0 * rng.uniform(0.85, 1.15)
+                s = hair_clumps.Strand(r, rn, comb, tip, ln, fall_gravity,
+                                       gcfg["gap_m"] + ff["clear_m"] + 0.0015 * i, {}, side)
+                s.hug = ff["hug"]
+                s.flare = (fl, ff["flare"])
+                s.lift = (0.0, 0.03, 0.03, 0.08, 0.5)
+                g = _march(frame, ccfg, s, m, grade)
+                h, hp = hang_of(frame, ccfg, g, front_fall=True)
+                subs.append({"root": np.array(tuple(r)), "guide": g, "hang": h, "hang_pt": hp})
+            s0 = subs[0]
+            out.append({"guide": s0["guide"], "hang": s0["hang"], "hang_pt": s0["hang_pt"],
+                        "side": side, "cfg": ff, "subs": subs})
     return out
 
 
@@ -447,6 +603,9 @@ def sample_roots(surf, rng, n):
                 continue
             f = surf.feather(p)
             prob = h["feather_min"] + (1 - h["feather_min"]) * smoothstep(0.0, f, d) ** h["ramp_pow"]
+            if d < 2 * f:
+                # non-monotone: denser and sparser patches across the feather band
+                prob = min(1.0, prob * surf.density(p))
             if pd > 0:
                 # sample() is uniform: accept the rest at 1 / (1 + pd), the part line at 1.
                 near = (Nn[i][2] > 0.5 and p[1] < surf.c.y + surf.cfg.get("part_back_m", 0.03)
@@ -569,11 +728,9 @@ def groom_nodes(gcfg):
 
     cc, nz, fz, fw = gcfg["clump"], gcfg["noise"], gcfg["frizz"], gcfg["flyaways"]
     seed = gcfg["seed"]
-    noise = group("Hair Curves Noise", Distance=nz["distance_m"], Scale=nz["scale"],
-                  Shape=nz["shape"], Seed=seed)
-    noise.inputs["Cumulative Offset"].default_value = False
-    c1 = group("Clump Hair Curves", Shape=cc["primary_shape"], Seed=seed + 1)
-    c1.inputs["Tip Spread"].default_value = cc["tip_spread"]
+    levels = clump_levels(cc)
+    v4 = cc.get("noise_after_clumps", True)
+
     def clump_factor(k):
         m = N.new("ShaderNodeMath")
         m.operation = "MULTIPLY"
@@ -581,25 +738,65 @@ def groom_nodes(gcfg):
         L.new(attr("clump_ramp").outputs["Attribute"], m.inputs[1])
         return m.outputs[0]
 
-    L.new(clump_factor(cc["primary_factor"]), c1.inputs["Factor"])
-    c2 = group("Clump Hair Curves", Shape=cc["secondary_shape"], Seed=seed + 2)
-    L.new(clump_factor(cc["secondary_factor"]), c2.inputs["Factor"])
-    L.new(attr("sub_guide_index", "INT").outputs["Attribute"], c2.inputs["Guide Index"])
+    def noise_node():
+        nn = group("Hair Curves Noise", Distance=nz["distance_m"], Scale=nz["scale"],
+                   Shape=nz["shape"], Seed=seed)
+        nn.inputs["Cumulative Offset"].default_value = False
+        return nn
+
+    chain = [gin]
+    if not v4:
+        chain.append(noise_node())   # v3 order: noise before the clumps
+    for i, lv in enumerate(levels):
+        c = group("Clump Hair Curves", Shape=lv["shape"], Seed=seed + 1 + i)
+        c.label = f"Clump L{i + 1}"
+        c.inputs["Tip Spread"].default_value = lv.get("tip_spread_m", 0.0)
+        c.inputs["Clump Offset"].default_value = lv.get("offset_m", 0.0)
+        c.inputs["Distance Falloff"].default_value = lv.get("falloff_m", 0.0)
+        c.inputs["Preserve Length"].default_value = bool(cc.get("preserve_length", False))
+        L.new(clump_factor(lv["factor"]), c.inputs["Factor"])
+        if i > 0:
+            L.new(attr(CLUMP_ATTRS[i], "INT").outputs["Attribute"], c.inputs["Guide Index"])
+        chain.append(c)
+    if v4:
+        chain.append(noise_node())   # v4: noise and frizz after the clumps
     frizz = group("Frizz Hair Curves", Distance=fz["distance_m"], Shape=fz["shape"], Seed=seed + 3)
     fly = group("Hair Curves Noise", Distance=fw["distance_m"], Scale=fw["scale"],
                 Shape=fw["shape"], Seed=seed + 4)
     L.new(attr("fly").outputs["Attribute"], fly.inputs["Factor"])
-    trim = group("Trim Hair Curves", Seed=seed + 5)
-    trim.inputs["Replace Length"].default_value = False
-    trim.inputs["Length Factor"].default_value = 1.0
-    trim.inputs["Random Offset"].default_value = gcfg["trim"]["random"]
-    chain = [gin, noise, c1, c2, frizz, fly, trim, gout]
+    chain += [frizz, fly]
+    if gcfg["trim"].get("in_gn", True) and gcfg["trim"]["random"] > 0:
+        trim = group("Trim Hair Curves", Seed=seed + 5)
+        trim.inputs["Replace Length"].default_value = False
+        trim.inputs["Length Factor"].default_value = 1.0
+        trim.inputs["Random Offset"].default_value = gcfg["trim"]["random"]
+        chain.append(trim)
+    chain.append(gout)
     for a, c in zip(chain, chain[1:]):
         L.new(a.outputs[0], c.inputs[0])
     gout.location = (x[0] + 250, 0)
     return ng
 
 
+# Curve attributes holding each clump level's guide (centre strand) index.
+CLUMP_ATTRS = ["guide_curve_index", "sub_guide_index", "l3_guide_index", "l4_guide_index",
+               "l5_guide_index"]
+
+
+def clump_levels(cc):
+    """The clump levels, coarse to fine; the v3 keys override levels 1-2."""
+    levels = [dict(lv) for lv in cc.get("levels") or []]
+    if not levels:
+        levels = [{"count": 36, "factor": 0.85, "shape": 0.3}, {"count": 360, "factor": 0.8, "shape": 0.0}]
+    for i, pre in enumerate(("primary", "secondary")):
+        if i >= len(levels):
+            break
+        for key, lk in (("", "count"), ("_factor", "factor"), ("_shape", "shape")):
+            if pre + key in cc:
+                levels[i][lk] = cc[pre + key]
+    if "tip_spread" in cc and levels:
+        levels[0]["tip_spread_m"] = cc["tip_spread"]
+    return levels[:len(CLUMP_ATTRS)]
 # ---------------------------------------------------------------- shading
 
 def hair_material(gcfg):
@@ -613,18 +810,40 @@ def hair_material(gcfg):
         nt.nodes.remove(n)
     out = nt.nodes.new("ShaderNodeOutputMaterial")
     bsdf = nt.nodes.new("ShaderNodeBsdfHairPrincipled")
+    bsdf.name = "hair_bsdf"
     bsdf.model = sc["model"]
     bsdf.parametrization = "MELANIN"
     info = nt.nodes.new("ShaderNodeHairInfo")
-    # Melanin per strand (a few lighter strands; vellus lighter).
+    # Melanin per strand (curve attribute), per point darker at the root and
+    # lighter at the tip (Hair Info intercept).
     mel = nt.nodes.new("ShaderNodeAttribute")
     mel.attribute_type = "GEOMETRY"
     mel.attribute_name = "melanin"
-    nt.links.new(mel.outputs["Fac"], bsdf.inputs["Melanin"])
-    bsdf.inputs["Melanin Redness"].default_value = sc["redness"]
+    rd, tl = sc.get("root_dark", 0.0), sc.get("tip_light", 0.0)
+    if rd or tl:
+        grad = nt.nodes.new("ShaderNodeMapRange")
+        grad.name = "melanin_gradient"
+        nt.links.new(info.outputs["Intercept"], grad.inputs["Value"])
+        grad.inputs["To Min"].default_value = rd
+        grad.inputs["To Max"].default_value = -tl
+        add = nt.nodes.new("ShaderNodeMath")
+        add.operation = "ADD"
+        add.use_clamp = True
+        nt.links.new(mel.outputs["Fac"], add.inputs[0])
+        nt.links.new(grad.outputs["Result"], add.inputs[1])
+        nt.links.new(add.outputs["Value"], bsdf.inputs["Melanin"])
+    else:
+        nt.links.new(mel.outputs["Fac"], bsdf.inputs["Melanin"])
+    # Redness per strand (grey strands are neutral).
+    red = nt.nodes.new("ShaderNodeAttribute")
+    red.attribute_type = "GEOMETRY"
+    red.attribute_name = "redness"
+    nt.links.new(red.outputs["Fac"], bsdf.inputs["Melanin Redness"])
     for key, name in (("coat", "Coat"), ("radial_roughness", "Radial Roughness")):
         if sc.get(key) is not None and name in bsdf.inputs:
             bsdf.inputs[name].default_value = sc[key]
+    if sc.get("offset_deg") is not None and "Offset" in bsdf.inputs:
+        bsdf.inputs["Offset"].default_value = math.radians(sc["offset_deg"])
     if sc.get("tint") and "Tint" in bsdf.inputs:
         h = sc["tint"].lstrip("#")
         bsdf.inputs["Tint"].default_value = tuple(
@@ -635,8 +854,10 @@ def hair_material(gcfg):
     if "Aspect Ratio" in bsdf.inputs:
         bsdf.inputs["Aspect Ratio"].default_value = sc["aspect_ratio"]
     rough = nt.nodes.new("ShaderNodeMapRange")
-    rough.inputs["To Min"].default_value = sc["roughness"][0]
-    rough.inputs["To Max"].default_value = sc["roughness"][1]
+    rough.name = "hair_roughness"
+    lo, hi = shader_roughness(sc, sc["model"])
+    rough.inputs["To Min"].default_value = lo
+    rough.inputs["To Max"].default_value = hi
     nt.links.new(info.outputs["Intercept"], rough.inputs["Value"])
     if sc.get("fly_roughness") is None:
         nt.links.new(rough.outputs["Result"], bsdf.inputs["Roughness"])
@@ -652,7 +873,30 @@ def hair_material(gcfg):
         nt.links.new(mix.outputs["Result"], bsdf.inputs["Roughness"])
     nt.links.new(info.outputs["Random"], bsdf.inputs["Random"])
     nt.links.new(bsdf.outputs[0], out.inputs["Surface"])
+    mat["hair_shader"] = {"chiang_roughness": list(shader_roughness(sc, "CHIANG")),
+                          "huang_roughness": list(shader_roughness(sc, "HUANG"))}
     return mat
+
+
+def shader_roughness(sc, model):
+    """(root, tip) roughness for a hair model: `roughness` is the configured
+    model's; HUANG takes `huang_roughness` when the config model is CHIANG."""
+    if model == "HUANG" and sc["model"] != "HUANG" and sc.get("huang_roughness"):
+        return tuple(sc["huang_roughness"])
+    if model == "CHIANG" and sc["model"] == "HUANG":
+        return tuple(min(1.0, math.sqrt(r)) for r in sc["roughness"])
+    return tuple(sc["roughness"])
+
+
+def set_hair_model(mat, model):
+    """Switch a hair_groom material between CHIANG and HUANG with the
+    matching roughness (the hair test's A/B)."""
+    nt = mat.node_tree
+    bsdf = nt.nodes["hair_bsdf"]
+    bsdf.model = model
+    lo, hi = mat["hair_shader"][model.lower() + "_roughness"]
+    nt.nodes["hair_roughness"].inputs["To Min"].default_value = lo
+    nt.nodes["hair_roughness"].inputs["To Max"].default_value = hi
 
 
 def scalp_tint(b, frame, keep, surf, gcfg):
@@ -696,11 +940,20 @@ def build(b, frame, ccfg, gcfg_in):
     gcfg = merged(gcfg_in)
     rng = np.random.default_rng(gcfg["seed"])
     prng = random.Random(gcfg["seed"])
+
+    def sub_rng(k):
+        # Per-feature streams (v4 features): turning one on or off does not
+        # reshuffle the draws of the others (fable_review §1.9).
+        return np.random.default_rng([gcfg["seed"], k])
+
     m = gcfg["points"]
+    grade = gcfg.get("point_grade", 1.0)
+    upar = grade_param(m, grade)             # curve parameter of each point (~ arc fraction)
     c = frame.center
     part_x = c.x + ccfg["part_x_m"]
     keep = hair_clumps.growth_region(frame, ccfg)
     surf = Surface(frame, keep, gcfg, part_x)
+    surf.flow = hair_frame.FlowField(frame, gcfg["field"]) if gcfg["comb"].get("mode") == "field" else None
 
     # Guides: a farthest-point spread over the surface inside the hairline.
     P, Nn = surf.sample(rng, 20000)
@@ -716,8 +969,10 @@ def build(b, frame, ccfg, gcfg_in):
     roots, nrms = sample_roots(surf, rng, gcfg["strands"])
     S, kidx, kw = interpolate(surf, G, groots, gside, roots, nrms, gcfg["knn"])
     H = (GH[kidx] * kw[..., None]).sum(1)
+    droot = np.array([surf.d_eff(p) for p in roots])
 
-    # Front falls: each guide takes the strands nearest its root.
+    # Front falls: each takes the strands nearest its root, which blend the
+    # fall's sub-guides (v3: one guide copied rigidly, a slab).
     ffs = front_fall_guides(frame, ccfg, gcfg, surf, prng, m)
     kind = np.zeros(len(S), dtype=int)       # 0 main, 2 front fall
     ffid = np.full(len(S), -1)
@@ -725,51 +980,120 @@ def build(b, frame, ccfg, gcfg_in):
         root = ff["guide"][1]
         free = np.where(kind == 0)[0]
         d = np.linalg.norm(roots[free] - root, axis=1)
-        take = free[np.argsort(d)[:ff["cfg"]["strands"]]]
+        take = free[np.argsort(d, kind="stable")[:ff["cfg"]["strands"]]]
         kind[take] = 2
         ffid[take] = fi
-        rel = ff["guide"] - ff["guide"][1]
-        S[take] = roots[take][:, None, :] + rel[None]
-        H[take] = ff["hang"][None]
+        subs = ff["subs"]
+        if len(subs) == 1:
+            rel = ff["guide"] - ff["guide"][1]
+            S[take] = roots[take][:, None, :] + rel[None]
+            H[take] = ff["hang"][None]
+            continue
+        R = np.array([s_["root"] for s_ in subs])
+        rel = np.array([s_["guide"] - s_["guide"][1] for s_ in subs])
+        HH = np.array([s_["hang"] for s_ in subs])
+        k = min(3, len(subs))
+        for j in take:
+            dd = np.linalg.norm(R - roots[j], axis=1)
+            o = np.argsort(dd, kind="stable")[:k]
+            w = 1.0 / (dd[o] + 0.002) ** 2
+            w /= w.sum()
+            S[j] = roots[j] + (rel[o] * w[:, None, None]).sum(0)
+            H[j] = (HH[o] * w[:, None]).sum(0)
 
-    # Clumps: strays; primary centres; secondary centres within a primary.
+    # Clumps: strays; nested levels (level 1 = primary, 2 = secondary).
     cc = gcfg["clump"]
+    levels = clump_levels(cc)
     n = len(S)
     # Strays (unclumped) fill between the locks; more of them low at the
     # back, so the gaps between clumps over the spine don't show the collar.
     nape_w = (np.clip((roots[:, 1] - c.y) / 0.04, 0, 1)
               * np.clip((frame.ears_max.z + 0.02 - roots[:, 2]) / 0.05, 0, 1))
     stray = (rng.random(n) < cc["stray"] + cc.get("stray_nape", 0.0) * nape_w) & (kind == 0)
-    prim = np.arange(n)
-    sub = np.arange(n)
     main = np.where((kind == 0) & ~stray)[0]
+    lv = [np.arange(n) for _ in levels]
     sides = np.array([surf.part_side(p, q) for p, q in zip(roots, nrms)])
-    pc = main[fps(roots[main], cc["primary"])]
+    pc = main[fps(roots[main], levels[0]["count"])]
     for j in main:
         d = np.linalg.norm(roots[pc] - roots[j], axis=1)
         ok = (sides[pc] * sides[j]) >= 0
         d[~ok] += 1.0
-        prim[j] = pc[int(np.argmin(d))]
-    for p0 in pc:
-        members = main[prim[main] == p0]
-        k = max(1, round(cc["secondary"] * len(members) / max(len(main), 1)))
-        sc = members[fps(roots[members], k, start=int(np.where(members == p0)[0][0]))]
-        for j in members:
-            sub[j] = sc[int(np.argmin(np.linalg.norm(roots[sc] - roots[j], axis=1)))]
+        lv[0][j] = pc[int(np.argmin(d))]
+    ffm = np.where(kind == 2)[0]
     for fi in range(len(ffs)):
         members = np.where(ffid == fi)[0]
         if len(members) == 0:
             continue
-        centre = members[0]  # nearest to the guide root
-        prim[members] = centre
-        sc = members[fps(roots[members], 3)]
-        for j in members:
-            sub[j] = sc[int(np.argmin(np.linalg.norm(roots[sc] - roots[j], axis=1)))]
+        # the member nearest the fall's root (v3 took the lowest index)
+        lv[0][members] = members[int(np.argmin(np.linalg.norm(roots[members] - ffs[fi]["guide"][1], axis=1)))]
+
+    def subdivide(prev, members_all, k_of):
+        """Next level inside each group of `prev`: k_of(group size) centres by
+        farthest-point sampling, started at the group's own centre."""
+        out = np.arange(n)
+        if len(members_all) == 0:
+            return out
+        order = members_all[np.argsort(prev[members_all], kind="stable")]
+        keys = prev[order]
+        cuts = np.flatnonzero(np.diff(keys)) + 1
+        for members in np.split(order, cuts):
+            p0 = prev[members[0]]
+            start = np.flatnonzero(members == p0)
+            k = max(1, min(len(members), k_of(len(members))))
+            sc_ = members[fps(roots[members], k, start=int(start[0]) if len(start) else 0)]
+            if k == 1:
+                out[members] = sc_[0]
+                continue
+            d = np.linalg.norm(roots[members][:, None, :] - roots[sc_][None], axis=2)
+            out[members] = sc_[np.argmin(d, axis=1)]
+        return out
+
+    if len(levels) > 1:
+        c2 = levels[1].get("count")
+        lv[1] = subdivide(lv[0], main, lambda s: round(c2 * s / max(len(main), 1)) if c2
+                          else round(s / levels[1]["size"]))
+        lv[1][ffm] = subdivide(lv[0], ffm, lambda s: 3)[ffm]
+    clumped = np.concatenate([main, ffm])
+    for i in range(2, len(levels)):
+        lvl = levels[i]
+        size = lvl.get("size") or max(len(main), 1) / lvl["count"]
+        lv[i] = subdivide(lv[i - 1], clumped, lambda s, size=size: round(s / size))
+    prim, sub = lv[0], (lv[1] if len(levels) > 1 else lv[0])
     clump_w = np.where(stray, 0.0, 1.0)
     for fi, ff in enumerate(ffs):
-        clump_w[ffid == fi] = ff["cfg"]["factor"] / cc["primary_factor"]
+        fc = ff["cfg"]
+        clump_w[ffid == fi] = fc["clump_w"] if "clump_w" in fc else fc["factor"] / levels[0]["factor"]
+    # Hairline: single hairs, no clumping right at the edge.
+    if cc.get("edge_m"):
+        clump_w[kind == 0] *= np.array([smoothstep(0.0, cc["edge_m"], d) for d in droot[kind == 0]])
 
-    # Ragged ends: cut hanging strands back from the tip, per lock and per strand.
+    def recut(j, new_len):
+        arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[j], axis=0), axis=1))])
+        sn = np.concatenate([[0.0], arc[1] + (new_len - arc[1]) * grade_param(m - 1, grade)])
+        H[j] = np.interp(sn, arc, H[j])
+        S[j] = np.stack([np.interp(sn, arc, S[j][:, k]) for k in range(3)], axis=1)
+
+    # The cut (v4): per lock, per strand (the tapered lock end), per layer.
+    ct = gcfg.get("cut")
+    tr = gcfg["trim"]
+    py_trim = tr["random"] if not tr.get("in_gn", True) else 0.0
+    cut_n = 0
+    if ct or py_trim > 0:
+        ct = ct or {"lock_m": [0.0, 0.0], "taper_m": 0.0, "taper_pow": 1.0, "layer_m": 0.0, "min_hang_m": 0.04}
+        crng = sub_rng(101)
+        lock = {int(q): crng.uniform(*ct["lock_m"]) for q in np.unique(sub)}
+        top_w = np.clip((nrms[:, 2] - 0.3) / 0.6, 0, 1)
+        cut = (np.array([lock[int(q)] for q in sub]) + ct["taper_m"] * crng.random(n) ** ct["taper_pow"]
+               + ct["layer_m"] * top_w)
+        trim_f = crng.uniform(0.0, py_trim, n)
+        for j in np.where((kind == 0) & (H[:, -1] > ct["min_hang_m"]))[0]:
+            arc_len = float(np.linalg.norm(np.diff(S[j], axis=0), axis=1).sum())
+            new_len = max(arc_len - cut[j] - trim_f[j] * arc_len, arc_len - H[j, -1] + ct["min_hang_m"])
+            if new_len < arc_len - 1e-4:
+                recut(j, new_len)
+                cut_n += 1
+
+    # Ragged ends (v3): cut hanging strands back from the tip, per lock and per strand.
     en = gcfg["ends"]
     if en["clump"] > 0 or en["strand"] > 0:
         cut_l = {int(q): rng.uniform(0, en["clump"]) for q in np.unique(sub)}
@@ -777,10 +1101,7 @@ def build(b, frame, ccfg, gcfg_in):
         for j in np.where((kind == 0) & (H[:, -1] > en["min_hang_m"]))[0]:
             arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[j], axis=0), axis=1))])
             # never cut into the part on the skull (before the hang point)
-            new_len = max(arc[-1] * (1 - cut[j]), arc[-1] - H[j, -1] + en["min_hang_m"])
-            sn = np.linspace(0.0, new_len, m)
-            H[j] = np.interp(sn, arc, H[j])
-            S[j] = np.stack([np.interp(sn, arc, S[j][:, k]) for k in range(3)], axis=1)
+            recut(j, max(arc[-1] * (1 - cut[j]), arc[-1] - H[j, -1] + en["min_hang_m"]))
 
     # Lock wave in the hanging part, phase per primary clump.
     wv = gcfg["wave"]
@@ -795,6 +1116,21 @@ def build(b, frame, ccfg, gcfg_in):
         sel = ffid == fi
         lat[sel] *= ff["cfg"].get("wave_m", 0.0) / max(amp[sel].mean(), 1e-6) if sel.any() else 0.0
     S += side_vectors(frame, S) * lat[..., None]
+
+    # Hairline edge hairs: lean toward the face over the first few mm, then
+    # follow the comb (they point forward, then sweep back).
+    hl = gcfg["hairline"]
+    eg = hl.get("edge")
+    w_edge = np.zeros(n)
+    if eg:
+        w_edge = np.where(kind == 0, 1.0 - np.clip(droot / eg["band_m"], 0.0, 1.0), 0.0) ** 1.5
+        for j in np.flatnonzero(w_edge > 0.02):
+            dv = surf.toward_line(roots[j], nrms[j])
+            if dv is None:
+                continue
+            arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[j], axis=0), axis=1))])
+            s_ = np.clip((arc - arc[1]) / eg["over_m"], 0.0, 1.0)
+            S[j, 1:] += np.array(dv)[None] * (eg["kick_m"] * w_edge[j] * (s_ * s_ * (3 - 2 * s_)))[1:, None]
     pushed = push_out(frame, S, gcfg["gap_m"], ccfg.get("cloth_gap_m", 0.0))
 
     # Flyaways: mostly at the silhouette (sides, back) and the part.
@@ -803,20 +1139,68 @@ def build(b, frame, ccfg, gcfg_in):
     part_near = np.exp(-np.abs(roots[:, 0] - part_x) / 0.01) * (nrms[:, 2] > 0.5)
     wfly = (0.2 + sil + fw.get("part_weight", 1.5) * part_near) * (kind == 0)
     nfly = int(fw["share"] * n)
-    fly_idx = rng.choice(n, nfly, replace=False, p=wfly / wfly.sum())
     fly = np.zeros(n)
-    fly[fly_idx] = rng.uniform(0.5, 1.0, nfly)
-    clump_w[fly_idx] *= 0.5
+    X = np.zeros((0, m, 3))
+    src = np.zeros(0, dtype=int)
+    if fw.get("mode", "noise") == "strays":
+        # Separate stray hairs: copies of main strands that leave the mass.
+        frng = sub_rng(202)
+        src = frng.choice(n, nfly, replace=False, p=wfly / wfly.sum())
+        X = S[src].copy()
+        for k, j in enumerate(src):
+            arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(X[k], axis=0), axis=1))])
+            L = arc[-1]
+            s0 = frng.uniform(*fw["start"]) * L
+            Lk = max(L * frng.uniform(*fw["length"]), min(L, s0 + 0.03))
+            sn = np.concatenate([[0.0], arc[1] + (Lk - arc[1]) * grade_param(m - 1, grade)])
+            Xk = np.stack([np.interp(sn, arc, X[k][:, q]) for q in range(3)], axis=1)
+            rad = Xk - np.array(c)
+            rad[:, 2] = np.maximum(rad[:, 2], 0.0) * 0.5
+            rad /= np.linalg.norm(rad, axis=1, keepdims=True) + 1e-9
+            lat_ = np.stack([-rad[:, 1], rad[:, 0], np.zeros(m)], axis=1)
+            mix = (frng.uniform(0.5, 1.0), frng.uniform(-1.0, 1.0), frng.uniform(-0.2, 0.5))
+            dv = rad * mix[0] + lat_ * mix[1] + np.array([0.0, 0.0, 1.0]) * mix[2]
+            dv /= np.linalg.norm(dv, axis=1, keepdims=True) + 1e-9
+            t = np.clip((sn - s0) / max(Lk - s0, 1e-4), 0.0, 1.0)
+            X[k] = Xk + dv * (frng.uniform(*fw["lift_m"]) * t ** 1.6)[:, None]
+        if len(X):
+            push_out(frame, X, gcfg["gap_m"], ccfg.get("cloth_gap_m", 0.0))
+        fly[src] = 1.0     # the card baker draws its flyaway strips along these
+    else:
+        fly_idx = rng.choice(n, nfly, replace=False, p=wfly / wfly.sum())
+        fly[fly_idx] = rng.uniform(0.5, 1.0, nfly)
+        clump_w[fly_idx] *= 0.5
+    nx = len(X)
 
     sh = gcfg["shader"]
     melanin = np.full(n, sh["melanin"])
     light = rng.random(n) < sh["light_share"]
     melanin[light] = sh["light_melanin"]
-    if sh.get("fly_melanin") is not None:
+    if sh.get("fly_melanin") is not None and fw.get("mode", "noise") != "strays":
         melanin[fly > 0] = sh["fly_melanin"]   # thin backlit strays: no warm glow
     # Value per lock (secondary clump): some locks catch more light.
     lj = {int(q): rng.uniform(-1, 1) * sh.get("lock_melanin_jitter", 0.0) for q in np.unique(sub)}
     melanin = np.clip(melanin - np.abs(np.array([lj[int(q)] for q in sub])), 0.0, 1.0)
+    redness = np.full(n, sh["redness"])
+    # Hairline edge hairs a little lighter.
+    if eg:
+        melanin = np.clip(melanin + eg.get("melanin", 0.0) * w_edge, 0.0, 1.0)
+    # Grey: weighted to the temples, neutral, some half-pigmented.
+    grey = np.zeros(n, dtype=bool)
+    if sh.get("grey_share"):
+        grng = sub_rng(303)
+        az = np.degrees(np.arctan2(roots[:, 0] - c.x, -(roots[:, 1] - c.y)))
+        temple = (np.exp(-((np.abs(az) - sh["grey_temple_az_deg"]) / sh["grey_temple_sigma_deg"]) ** 2)
+                  * np.clip((roots[:, 2] - frame.ear_z + 0.01) / 0.04, 0, 1))
+        wg = 1.0 + (sh["grey_temple"] - 1.0) * temple
+        grey = grng.random(n) < sh["grey_share"] * wg / wg.mean()
+        melanin[grey] = grng.uniform(*sh["grey_melanin"], int(grey.sum()))
+        redness[grey] = sh["grey_redness"]
+    if nx:
+        fly_x = np.ones(nx)
+        mel_x, red_x = melanin[src], redness[src]
+    else:
+        fly_x, mel_x, red_x = np.zeros(0), np.zeros(0), np.zeros(0)
 
     # Vellus: short fine hairs along the whole hairline.
     vc = gcfg["vellus"]
@@ -836,37 +1220,47 @@ def build(b, frame, ccfg, gcfg_in):
     VS = np.array(VS) if VS else np.zeros((0, 4, 3))
     nv = len(VS)
 
-    # The Curves object.
+    # The Curves object: main strands | stray hairs | vellus.
     cv = bpy.data.hair_curves.new("hair_groom")
-    cv.add_curves([m] * n + [4] * nv)
-    pos = np.concatenate([S.reshape(-1, 3), VS.reshape(-1, 3)]).astype(np.float32)
+    cv.add_curves([m] * (n + nx) + [4] * nv)
+    pos = np.concatenate([S.reshape(-1, 3), X.reshape(-1, 3), VS.reshape(-1, 3)]).astype(np.float32)
     cv.position_data.foreach_set("vector", pos.ravel())
     r0, r1 = gcfg["radius_m"]
-    t = np.linspace(0, 1, m)
-    rad = np.tile(r0 + (r1 - r0) * t ** 1.5, n)
+    tf = gcfg.get("tip_taper_from", 0.0)
+    if tf > 0:
+        prof = r0 * (1.0 - (1.0 - gcfg.get("tip_taper", 1.0)) * np.clip((upar - tf) / max(1 - tf, 1e-6), 0, 1))
+    else:
+        prof = r0 + (r1 - r0) * upar ** 1.5
+    rad = prof[None, :] * np.ones((n, 1))
+    if eg:
+        rad *= (1.0 - (1.0 - eg.get("radius", 1.0)) * w_edge)[:, None]
+    xrad = (r0 * fw.get("radius", 1.0) * (1.0 - (1.0 - fw.get("tip_radius", 1.0)) * upar))[None, :] \
+        * np.ones((nx, 1))
     vt = np.linspace(0, 1, 4)
     vrad = np.tile(vc["radius_m"] * (1 - 0.5 * vt), nv)
-    radius = np.concatenate([rad, vrad]).astype(np.float32)
+    radius = np.concatenate([rad.ravel(), xrad.ravel(), vrad]).astype(np.float32)
     ra = cv.attributes.get("radius") or cv.attributes.new("radius", "FLOAT", "POINT")
     ra.data.foreach_set("value", radius)
     # Clump ramp per point: low while on the skull, full past the hang point.
     ramp = cc["scalp"] + (1 - cc["scalp"]) * np.clip(H / cc["ramp_m"], 0, 1) ** 1.5
     ramp[kind == 2] = np.clip(H[kind == 2] / 0.03, 0, 1)
     cr = cv.attributes.new("clump_ramp", "FLOAT", "POINT")
-    cr.data.foreach_set("value", np.concatenate([ramp.ravel(), np.zeros(nv * 4)]).astype(np.float32))
+    cr.data.foreach_set("value", np.concatenate([ramp.ravel(), np.zeros(nx * m + nv * 4)]).astype(np.float32))
 
     def curve_attr(name, dtype, values):
         a = cv.attributes.new(name, dtype, "CURVE")
         a.data.foreach_set("value", values)
 
-    nall = n + nv
+    nall = n + nx + nv
     own = np.arange(nall)
-    curve_attr("guide_curve_index", "INT", np.concatenate([prim, own[n:]]).astype(np.int32))
-    curve_attr("sub_guide_index", "INT", np.concatenate([sub, own[n:]]).astype(np.int32))
-    curve_attr("clump_w", "FLOAT", np.concatenate([clump_w, np.zeros(nv)]).astype(np.float32))
-    curve_attr("fly", "FLOAT", np.concatenate([fly, np.zeros(nv)]).astype(np.float32))
-    curve_attr("melanin", "FLOAT", np.concatenate([melanin, np.full(nv, vc["melanin"])]).astype(np.float32))
-    curve_attr("kind", "INT", np.concatenate([kind, np.ones(nv)]).astype(np.int32))
+    for i, idx in enumerate(lv):
+        curve_attr(CLUMP_ATTRS[i], "INT", np.concatenate([idx, own[n:]]).astype(np.int32))
+    curve_attr("clump_w", "FLOAT", np.concatenate([clump_w, np.zeros(nx + nv)]).astype(np.float32))
+    curve_attr("fly", "FLOAT", np.concatenate([fly if not nx else np.zeros(n), fly_x,
+                                               np.zeros(nv)]).astype(np.float32))
+    curve_attr("melanin", "FLOAT", np.concatenate([melanin, mel_x, np.full(nv, vc["melanin"])]).astype(np.float32))
+    curve_attr("redness", "FLOAT", np.concatenate([redness, red_x, np.full(nv, sh["redness"])]).astype(np.float32))
+    curve_attr("kind", "INT", np.concatenate([kind, np.full(nx, 3), np.ones(nv)]).astype(np.int32))
     cv.materials.append(hair_material(gcfg))
     obj = bpy.data.objects.new("hair_groom", cv)
     export.hero_collection().objects.link(obj)
@@ -874,6 +1268,7 @@ def build(b, frame, ccfg, gcfg_in):
     mod.node_group = groom_nodes(gcfg)
 
     tint = scalp_tint(b, frame, keep, surf, gcfg)
+    render = render_settings(gcfg.get("render"))
 
     # Evaluated strands (for the card bake), before parenting (world space).
     bpy.context.view_layer.update()
@@ -888,20 +1283,58 @@ def build(b, frame, ccfg, gcfg_in):
     bpy.context.view_layer.update()
     obj.matrix_world = mw
 
+    clumped_main = (kind == 0) & ~stray
     b.notes["hair_groom"] = {
-        "guides": int(len(G)), "strands": int(n), "vellus": int(nv),
-        "front_fall_guides": len(ffs), "front_fall_strands": int((kind == 2).sum()),
-        "primary_clumps": int(len(np.unique(prim[main]))),
-        "secondary_clumps": int(len(np.unique(sub[main]))),
-        "strays": int(stray.sum()), "flyaways": int(nfly), "points_pushed": int(pushed),
+        "guides": int(len(G)), "strands": int(n), "stray_hairs": int(nx), "vellus": int(nv),
+        "strand_count_total": int(nall), "points_per_strand": int(m), "point_grade": grade,
+        "front_fall_guides": len(ffs),
+        "front_fall_sub_guides": int(sum(len(f["subs"]) for f in ffs)),
+        "front_fall_strands": int((kind == 2).sum()),
+        "primary_clumps": int(len(np.unique(prim[clumped_main]))),
+        "secondary_clumps": int(len(np.unique(sub[clumped_main]))),
+        "clump_levels": [{"clumps": int(len(np.unique(idx[clumped_main]))),
+                          "strands_per_clump": round(float(clumped_main.sum()) / max(len(np.unique(idx[clumped_main])), 1), 1),
+                          "factor": lvl["factor"], "shape": lvl.get("shape", 0.0),
+                          "tip_spread_m": lvl.get("tip_spread_m", 0.0), "offset_m": lvl.get("offset_m", 0.0),
+                          "falloff_m": lvl.get("falloff_m", 0.0)}
+                         for idx, lvl in zip(lv, levels)],
+        "clump_preserve_length": bool(cc.get("preserve_length", False)),
+        "strays": int(stray.sum()), "flyaways": int(nfly), "flyaway_mode": fw.get("mode", "noise"),
+        "cut_strands": int(cut_n), "edge_strands": int((w_edge > 0.02).sum()),
+        "grey_share": round(float(grey.mean()), 4), "comb_mode": gcfg["comb"].get("mode"),
+        "shader_model": sh["model"], "melanin": sh["melanin"], "radius_m": gcfg["radius_m"],
+        "points_pushed": int(pushed),
         "points": int(len(pos)), "evaluated_points": int(len(ev["pos"])),
+        "render": render,
         "essentials": ESSENTIALS + " (CC0 1.0, datafiles/assets/LICENSE)",
         "tint": tint.name,
     }
-    return {"obj": obj, "surf": surf, "keep": keep, "kind": np.concatenate([kind, np.ones(nv, int)]),
+    return {"obj": obj, "surf": surf, "keep": keep,
+            "kind": np.concatenate([kind, np.full(nx, 3), np.ones(nv, int)]),
             "prim": prim, "sub": sub, "stray": stray, "fly": fly, "hang": H, "roots": roots,
             "nrms": nrms, "n": n, "m": m, "eval": ev, "guides": G, "guide_hang": GH,
+            "vellus_pt0": (n + nx) * m, "vellus_pt1": (n + nx) * m + nv * 4,
             "ff": ffs, "cfg": gcfg}
+
+
+def render_settings(rc):
+    """Cycles curve shape and bounces saved with the kept .blend."""
+    if not rc:
+        return None
+    sc = bpy.context.scene
+    out = {}
+    try:
+        if rc.get("curve_shape"):
+            sc.cycles_curves.shape = rc["curve_shape"]
+            sc.cycles_curves.subdivisions = rc.get("curve_subdivisions", 2)
+            out["curve_shape"] = rc["curve_shape"]
+        if rc.get("glossy_bounces"):
+            sc.cycles.glossy_bounces = rc["glossy_bounces"]
+            sc.cycles.max_bounces = max(sc.cycles.max_bounces, 2 * rc["glossy_bounces"])
+            out["glossy_bounces"] = rc["glossy_bounces"]
+    except AttributeError as e:   # Cycles not registered
+        out["error"] = str(e)
+    return out
 
 
 def evaluated(obj):

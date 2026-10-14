@@ -351,6 +351,103 @@ def compare(a):
     print(f"-> {a.out}/sheet.png")
 
 
+# ---------------------------------------------------------------- hair test (T8)
+
+def hair_test_sheet(a):
+    """RUN/hair_test/hair_test_sheet.png from bench/m1/hair_test.py's frames: the neutral
+    two-light hair test per model, the back view and the beard parity pair (Cycles strands,
+    EEVEE game shells); with --base RUN0 a row of RUN0's frames above, and the metric ratios
+    (p10, mode count, beard ratio) in the header. Merges the numbers into RUN/metrics.json
+    under "hair_test" when that file exists. Writes into RUN only."""
+    run = os.path.abspath(a.run)
+    if containment.is_private(run) or containment.likeness(load(os.path.join(run, "character.stats.json"))):
+        containment.assert_private(run, "hair test of a likeness build")
+    ht = load(os.path.join(run, "hair_test", "hair_test.json"))
+    if not ht:
+        sys.exit(f"no hair_test/hair_test.json in {run} (bench/m1/hair_test.py)")
+    base = load(os.path.join(os.path.abspath(a.base), "hair_test", "hair_test.json")) if a.base else {}
+    T = 384
+    inputs, chains, rows, labels = [], [], [], []
+    n = [0]
+
+    def tile(path, text):
+        if not path or not os.path.exists(path):
+            return None
+        lp = os.path.join(run, "hair_test", f"hsheet_{n[0]}.txt")
+        with open(lp, "w") as f:
+            f.write(text)
+        labels.append(lp)
+        inputs.extend(["-i", path])
+        chains.append(f"[{n[0]}]scale={T}:{T},{drawtext(lp, 14)}[h{n[0]}]")
+        n[0] += 1
+        return f"[h{n[0] - 1}]"
+
+    def row(res, root, tag):
+        out = []
+        for k, fr in sorted((res.get("test") or {}).get("frames", {}).items()):
+            if "png" in fr:
+                out.append(tile(os.path.join(root, "hair_test", os.path.basename(fr["png"])),
+                                f"{tag} {k}: p10 {fr['p10']:.3f} modes {fr['mode_count']}"))
+        out.append(tile(os.path.join(root, "hair_test", "back.png"), f"{tag} back"))
+        bd = res.get("beard") or {}
+        out.append(tile(os.path.join(root, "hair_test", "beard_cycles.png"),
+                        f"{tag} beard Cycles {bd.get('cycles_mean_lin', '-')}"))
+        out.append(tile(os.path.join(root, "hair_test", "beard_eevee.png"),
+                        f"{tag} beard EEVEE {bd.get('eevee_mean_lin', '-')} x{bd.get('ratio_eevee_over_cycles', '-')}"))
+        return [t for t in out if t]
+
+    width = 0
+    for res, root, tag in ((base, os.path.abspath(a.base) if a.base else None, "before"), (ht, run, "after")):
+        if not res:
+            continue
+        ts = row(res, root, tag)
+        if ts:
+            chains.append("".join(ts) + (f"hstack={len(ts)}" if len(ts) > 1 else "null") + f"[r{len(rows)}]")
+            rows.append((f"[r{len(rows)}]", len(ts)))
+            width = max(width, len(ts))
+    if not rows:
+        sys.exit("no hair test frames to draw")
+    padded = []
+    for name, k in rows:
+        chains.append(f"{name}pad={width * T}:{T}[p{name[2:-1]}]")
+        padded.append(f"[p{name[2:-1]}]")
+
+    def p10(res):
+        fr = (res.get("test") or {}).get("frames", {})
+        return {k: v.get("p10") for k, v in fr.items() if "p10" in v}
+
+    head = [f"hair test   {os.path.basename(run)}" + (f"   vs {os.path.basename(a.base)}" if a.base else "")]
+    for k, v in p10(ht).items():
+        b0 = max(p10(base).values(), default=None) if base else None
+        fr = ht["test"]["frames"][k]
+        head.append(f"{k}: p10 {v:.3f}" + (f" ({v / b0:.1f}x before)" if b0 else "")
+                    + f"   modes {fr['mode_count']} at {fr['modes']}   p50 {fr['p50']:.3f}  p90 {fr['p90']:.3f}")
+    bd = ht.get("beard") or {}
+    if bd:
+        head.append(f"beard mean linear: Cycles {bd['cycles_mean_lin']}  EEVEE {bd['eevee_mean_lin']}  "
+                    f"ratio {bd['ratio_eevee_over_cycles']} ({'within' if bd['within_25pct'] else 'outside'} +-25 %)")
+    hp = os.path.join(run, "hair_test", "hsheet_header.txt")
+    with open(hp, "w") as f:
+        f.write("\n".join(head))
+    labels.append(hp)
+    hh = 24 * len(head) + 16
+    fc = ";".join(chains) + ";" + "".join(padded) + (f"vstack={len(padded)}" if len(padded) > 1 else "null") \
+        + f"[g];[g]pad=iw:ih+{hh}:0:{hh},{drawtext(hp, 16, y='8')}"
+    out = os.path.join(run, "hair_test", "hair_test_sheet.png")
+    ffmpeg([*inputs, "-filter_complex", fc, out])
+    for p in labels:
+        os.remove(p)
+    mp = os.path.join(run, "metrics.json")
+    if os.path.exists(mp):
+        m = load(mp)
+        m["hair_test"] = {"test": {k: {kk: v.get(kk) for kk in ("p10", "p50", "p90", "mode_count", "modes")}
+                                   for k, v in ((ht.get("test") or {}).get("frames") or {}).items()},
+                          "beard": bd or None}
+        with open(mp, "w") as f:
+            json.dump(m, f, indent=2)
+    print(f"-> {out}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -367,8 +464,11 @@ def main():
     e.add_argument("--cycles", help="hero stage dir with portrait.png (the Cycles target)")
     e.add_argument("--crop", default="720,90,600,600",
                    help="face crop x,y,w,h in the 1920x1080 portrait (same camera in both)")
+    h = sub.add_parser("hairtest", help="hair test sheet (RUN/hair_test/, bench/m1/hair_test.py)")
+    h.add_argument("run")
+    h.add_argument("--base", help="run to show above it (before)")
     a = ap.parse_args()
-    {"finalize": finalize, "compare": compare, "engine": engine_sheet}[a.cmd](a)
+    {"finalize": finalize, "compare": compare, "engine": engine_sheet, "hairtest": hair_test_sheet}[a.cmd](a)
 
 
 if __name__ == "__main__":
