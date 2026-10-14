@@ -14,7 +14,7 @@
                         {"count": 360, "factor": 0.8, "shape": 0.0}]},
    "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18]},
    "flyaways": {"mode": "noise", "share": 0.04, "distance_m": 0.010},
-   "trim": {"random": 0.05},
+   "trim": {"random": 0.05, "in_gn": true},
    "cut": null,
    "vellus": {"count": 1400, "length_m": [0.003, 0.006], "band_m": [-0.002, 0.006],
               "radius_m": 0.000018, "melanin": 0.9},
