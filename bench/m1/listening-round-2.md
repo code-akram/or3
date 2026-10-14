@@ -41,20 +41,22 @@ Page section 2: pick a take, then play dry / wet round 1 / wet round 2. 'Walk' p
   - [ ] Does round 2 still sound like a leather sole on a wet street, not a separate splash layer, a hand slap, or hiss?
   - [ ] Walk over the bed: do wet steps stay clear of the rain? (The splash band, 1.5-6 kHz, is where the rain is too.)
   - [ ] Is round 2 too loud or too bright next to the dry set (it is about 2-3 LU louder)?
+  - [ ] Wet takes now start sample-aligned with their dry take (they were 10 ms late, the EQ's delay). Switching dry -> wet should not move the step in time.
 
 Measured through a generic laptop-speaker model (200 Hz high-pass, +2 dB at 2.5 kHz; not a measurement of the Air), median of 8 takes:
 
 | metric | round 1 | round 2 |
 |---|---|---|
-| splash_to_step_band_db | 1.945 | 1.83 |
-| unmasked_fraction | 0.907 | 0.871 |
-| tail_wet_minus_dry_db | 3.52 | 5.75 |
-| band_wet_minus_dry_db | 6.18 | 9.445 |
+| splash_to_step_band_db | 4.62 | 5.63 |
+| unmasked_fraction | 0.918 | 0.891 |
+| tail_wet_minus_dry_db | 3.345 | 5.76 |
+| band_wet_minus_dry_db | 5.3 | 8.6 |
 | dM_lu | 1.285 | 3.175 |
 
 ## 3. Alley takes (rebuilt from the current IR)
 
 - [ ] The spike-6 IR was re-baked since round 1 (tail to -60 dB now ~0.74 s, was ~1.05 s; same EDT/T20 within 5 %). Do the alley takes still sound right?
+- [ ] Alley footstep takes only (walk set 'alley dry' / 'alley wet'): the bake scales Steam Audio's reflections down 8.6 dB (its calibration against a ground-plane run), which sets these takes' direct-to-reverb balance (DRR about -8 dB). Is that right, or should the alley be wetter? This does not apply to the night bed: the bed normalises the IR itself and sets each layer's reflections level on its own, so the calibration has no effect there.
 
 ## 4. Mix at 25 % and 60 % (speaker model, rough SPL; quiet room ~30 dBA)
 
@@ -63,7 +65,21 @@ Measured through a generic laptop-speaker model (200 Hz high-pass, +2 dB at 2.5 
 | 60% | 44.7 | 52.6 | 55.6 | +14.7 |
 | 25% | 26.7 | 34.6 | 37.6 | -3.3 |
 
-## 5. Sources (all CC0 or CC-BY 4.0; credits in provenance/audio.jsonl)
+## 5. Dark sources (below the 18 kHz bandwidth floor, flagged)
+
+Page section 4. The floor measure was broken until 2026-10-14 (it always read Nyquist); fixed, it puts these sources under 18 kHz. None shows a codec or resampler wall, so they are accepted with a flag instead of rejected (bench/m1/v4/t4-audio-bandwidth.md).
+
+- [ ] These recordings are dark: by the pipeline's measure their content stops below the 18 kHz quality floor, but with a natural roll-off and no codec or resampler wall (lossy or upsampled files are still rejected). On the laptop speakers, does any of them sound dull, muffled or 'cheap' next to the others? If so, name it: it goes back for a brighter replacement. The footstep one is the approved main pool.
+
+| ok | id | title | used for | content edge, typical / loud frames | 15-18 kHz vs 1-4 kHz, typical / loud |
+|---|---|---|---|---|---|
+| [ ] | freesound:476139 | crow calling_caw .WAV | bed event crow | 4.6 / 8.8 kHz | -21.9 / -34.0 dB |
+| [ ] | freesound:612817 | Clean rain in a courtyard | bed layer rain-light | 17.2 / 17.9 kHz | -29.8 / -29.1 dB |
+| [ ] | freesound:730438 | Vending Machine Hum | bed layer vending | 16.4 / 16.4 kHz | -28.9 / -28.7 dB |
+| [ ] | freesound:742969 | Male_Leather_sole_shoes_slow_walking_footstep_sound | footsteps (dress-concrete, main pool) | 4.1 / 15.4 kHz | -10.6 / -36.0 dB |
+| [ ] | freesound:786004 | WIND_Winter.Midnight.Residential Area.Wind In The Trees.Crac | bed layer wind | 15.4 / 16.8 kHz | -10.1 / -11.0 dB |
+
+## 6. Sources (all CC0 or CC-BY 4.0; credits in provenance/audio.jsonl)
 
 | id | title | author | licence | human check (VAD / tagger) |
 |---|---|---|---|---|

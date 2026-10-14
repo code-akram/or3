@@ -6,6 +6,12 @@ Alley IR used: build/audio/ir/alley-01.wav (sha256 ccaa57f351d2…).
 
 Sign-off: tick each box (or write a note) and tell Claude. Anything unticked goes back into the pipeline.
 
+> **Superseded (2026-10-14).** Round 1 was heard on 2026-10-12. The street loop was rejected (people in it), the dry Artninja takes were approved as the main pool, and the Yuval contact-mic pool was dropped. The open gate is round 2: [`bench/m1/listening-round-2.md`](../m1/listening-round-2.md), served from `data/build/audio`.
+>
+> **Two corrections for that gate:**
+> - **The 8.6 dB IR calibration question covers only the alley footstep takes.** The calibration sets their direct-to-reverb balance. The ambience bed normalises the IR itself, so the calibration has no effect on the bed.
+> - **Bandwidth.** The 18 kHz bandwidth floor never fired before 2026-10-14. With the fix, the Artninja source 742969 (the main pool) and several bed sources measure below 18 kHz. They show a natural roll-off, not a codec wall. They are accepted with a flag and listed in round 2, section 5. See [t4](../m1/v4/t4-audio-bandwidth.md).
+
 ## 1. Ambience loop
 
 - [ ] `masters/ambience/shinjuku-night-street-loop.flac` (master) / `web/ambience/shinjuku-night-street-loop.opus` (web, 875 KiB)
