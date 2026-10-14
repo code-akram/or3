@@ -33,7 +33,7 @@ _Track T22 report, 2026-10-14. Brief: `checkpoint-3.md` §2.8 and the T22 row in
 | Fist knuckle skin height over the joint (twist pose, `corr_fist` on), MCP / PIP, mm | (info: rest height is 6.9–7.9 / 5.6–6.0) | **4.2–4.7 / 3.2–4.0** (the old corrective *lowered* the corner below LBS's 5.0–5.2) | **5.3–6.5 / 4.5–5.4** (LBS alone 4.5–4.8 / 3.3–3.7) |
 | Wrist correctives in the twist pose (pronated fist with 40° flexion / extension) | drive | none existed | `corr_wrist_flex_l` 0.78, `corr_wrist_ext_r` 0.74 |
 | Head measures (`spec … out`), landmarks, head-sculpt stats | all in range / unchanged | 0 out | **0 out**; `spec_landmarks`, `spec_checks` and `head_sculpt` stats are byte-identical ✓ |
-| ArcFace (offline scalar) | ≤ 0.25 | 0.034 (T12) | **not run** (private tooling). Face-unchanged evidence is below. |
+| ArcFace (offline scalar) | ≤ 0.25 | 0.034 (T12) | **0.033** EEVEE closeup / 0.043 engine closeup / 0.028 engine hero closeup (run by the orchestrator after the merge) ✓ |
 | glTF validator | 0 errors | 0 | **0** ✓ |
 | LOD0 triangles | ≤ 170k | 133,683 | **141,697** (+8,014: body +7,974, nails +40) ✓ |
 | Containment / provenance / web build | pass | | 69/69; audit 0 errors, 0 warnings; `npm run build` ok ✓ |
@@ -53,7 +53,7 @@ _Track T22 report, 2026-10-14. Brief: `checkpoint-3.md` §2.8 and the T22 row in
 **Face unchanged (in place of ArcFace).**
 - `head_sculpt` and the head measures are identical.
 - Lookdev face crops, before vs after RMSE: studio front 0.38 %, ¾ key 0.84 %, profile 1.29 %. The profile includes the neck.
-- **Please run the ArcFace scalar on `…-t22-a5`:** EEVEE closeup and `game_closeup_hero.png`.
+- **ArcFace, run by the orchestrator on `…-t22-a5`:** 0.033 EEVEE closeup, 0.043 engine closeup, 0.028 engine hero closeup (t12-b2 baseline 0.034).
 
 ## What changed
 
@@ -120,7 +120,7 @@ _Track T22 report, 2026-10-14. Brief: `checkpoint-3.md` §2.8 and the T22 row in
 
 ## What is left
 
-- ArcFace scalar on `…-t22-a5` (private).
+- ~~ArcFace scalar~~: done by the orchestrator (0.033 / 0.043 / 0.028).
 - If wanted:
   - irregular vein calibre and a third branch, so the network is less schematic;
   - dorsum crepe in the hands skin synth (out of scope here; it is T12/T19-style skin work).

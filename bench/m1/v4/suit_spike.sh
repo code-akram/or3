@@ -7,7 +7,7 @@
 # (KEEP_BLEND=1 bench/m1/lookdev.sh ...); default: the newest public one that has it.
 # Output: data/build/suit_spike/<UTC>-<label>/. Public build only: --fan is not accepted, and a
 # config or base under private/ is refused.
-# Env: THREADS (default 3). Runs at nice 10.
+# Env: THREADS (default 4). Runs at nice 10.
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
 MAIN_ROOT="$(dirname "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir)")"
@@ -38,7 +38,7 @@ done
 OUT="$DATA/build/suit_spike/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
 mkdir -p "$OUT"
 echo "== suit spike $LABEL base=$(basename "$BASE") out=$OUT loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
-nice -n 10 blender -b -t "${THREADS:-3}" --factory-startup --python-exit-code 1 \
+nice -n 10 blender -b -t "${THREADS:-4}" --factory-startup --python-exit-code 1 \
   --python "$REPO/bench/m1/v4/suit_spike.py" -- \
   --system-assets "$DATA/raw/makehuman/makehuman_system_assets/unpacked" \
   --suit-assets "$DATA/raw/makehuman/suits01/unpacked" \
@@ -59,7 +59,14 @@ if command -v magick >/dev/null && [[ -f "$OUT/pattern_front.png" ]]; then
     done
     magick "${rows[@]}" -append -resize 50% "$OUT/ab_bent_sheet.png"
   fi
-  rm -f "$OUT"/_ab_*.png "$OUT"/_abb_*.png
+  if [[ -f "$OUT/pattern_close_34.png" ]]; then
+    rows=()
+    for v in close_34 close_profile close_back; do
+      magick "$OUT/lofted_$v.png" "$OUT/pattern_$v.png" +append "$OUT/_abc_$v.png"; rows+=("$OUT/_abc_$v.png")
+    done
+    magick "${rows[@]}" -append -resize 75% "$OUT/closeup_sheet.png"
+  fi
+  rm -f "$OUT"/_ab_*.png "$OUT"/_abb_*.png "$OUT"/_abc_*.png
   rsvg-convert -w 1400 -b white "$OUT/pattern.svg" -o "$OUT/pattern.png" 2>/dev/null || true
 fi
 echo "$OUT"

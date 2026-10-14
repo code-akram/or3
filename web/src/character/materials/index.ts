@@ -8,7 +8,8 @@
 //          shifts jittered per strand ID / card / along-strand wave, exponents scaled by per-strand
 //          roughness), a tinted TT (backlit) lobe and a wrapped multiple-scatter body (T9b), flow / depth /
 //          ORM strand maps from the GLB (KHR_materials_anisotropy + occlusion / metallicRoughness),
-//          alpha to coverage (4x MSAA) with hashed alpha when there is no MSAA
+//          alpha to coverage (4x MSAA, the parity stills) or, on the temporal-AA path (T16), a temporally
+//          hashed coverage that TRAA averages (HairMaterial.setupHashedAlpha)
 //   facial beard / brow cards on the same path and maps (prefix facialHair); lashes along the UV bitangent
 //   eye    T18: iris by ray refraction through the cornea, iris normal + caustic, sclera vein normal,
 //          cornea GGX against the emitter rectangle (LTC); the lid shell and tear meniscus (eye_*)
@@ -18,11 +19,12 @@ import * as TSL from 'three/tsl';
 import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
+import { temporalFrame } from '../temporal';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, exp, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, exp, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
 // T18 eye: refraction, frames and the emitter-shaped catchlight
-const { asin, atan, bool, cameraViewMatrix, cross, dFdx, dFdy, refract, step, uniform } = TSL as any;
+const { asin, atan, cameraViewMatrix, cross, dFdx, dFdy, refract, step, uniform } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -422,7 +424,29 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     this.side = THREE.DoubleSide;
     this.alphaTest = P.get(`${opts.prefix}.alphaTest`) as number;
     if (opts.msaa) this.alphaToCoverage = true;
-    else this.alphaHash = true;
+    else this.setupHashedAlpha(c.a, P);
+  }
+
+  /** T16, the temporal-AA path (no MSAA): the cards' coverage is a stochastic per-pixel test against a
+   * temporally rotated interleaved gradient noise (Jimenez 2014; the frame index steps it), which the
+   * TRAA history averages back into a smooth coverage. aa.hairCoverage 0 = the alpha-to-coverage
+   * coverage (a 1-px anti-aliased step at alphaTest, as three's A2C), 1 = the map alpha itself (the
+   * strands' fractional coverage); in between, a mix. The alpha test stays on the material, so the
+   * shadow pass (three's override material reads alphaTest and the map alpha) keeps T10's binary
+   * cards; maskShadowNode keeps the screen-space hash out of it. The hair cards also write 1 into the
+   * temporal target's 'hair' attachment (the hair-aware history, temporal.ts). */
+  private setupHashedAlpha(a: N, P: ParamStore): void {
+    const at = float(this.alphaTest);
+    // three's A2C edge, smoothstep(at, at + fwidth(a), a), but with the width floored: inside a card the map
+    // alpha is flat, fwidth is 0, and smoothstep with edge0 == edge1 is undefined (WGSL / GLSL). SwiftShader
+    // returned 0 there, so whole card interiors failed the hash every frame (holes on the crown down to the
+    // scalp, or to the background through the depth-prepass twins)
+    const edge = smoothstep(float(0), float(1), a.sub(at).div(fwidth(a).max(1e-4)));
+    const cover = mix(edge, a, P.u('aa.hairCoverage'));
+    const ign = interleavedGradientNoise(screenCoordinate.xy.add(temporalFrame.mod(64).mul(5.588238)));
+    (this as unknown as { maskNode: N; maskShadowNode: N }).maskNode = cover.greaterThan(ign);
+    (this as unknown as { maskNode: N; maskShadowNode: N }).maskShadowNode = bool(true);
+    this.mrtNode = mrt({ hair: float(1) });
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {

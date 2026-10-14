@@ -53,7 +53,9 @@ ap.add_argument("--out-dir", required=True)
 ap.add_argument("--measure-only", action="store_true")
 ap.add_argument("--no-render", action="store_true")
 ap.add_argument("--place-only", action="store_true", help="stop after placing the panels (render them)")
-ap.add_argument("--opts", default="", help="JSON override for the spike options")
+ap.add_argument("--opts", default="", help="JSON override for the spike options (or @file.json)")
+ap.add_argument("--from-run", default="", help="spike 2: reuse this run's drape (drape2.npz); rever + renders only")
+ap.add_argument("--v2", action="store_true", help="spike 2 (T13): two-stage weld, hull collider, modelled rever")
 A = ap.parse_args(argv)
 os.makedirs(A.out_dir, exist_ok=True)
 T = {}
@@ -398,6 +400,9 @@ def side_of_line(p, a, b):
     return (p[:, 0] - a[0]) * d[1] - (p[:, 1] - a[1]) * d[0]
 
 
+MODELLED = ("collar", "lapel")   # spike 2: built after the drape, not simulated
+
+
 def build_cloth(D, M, BM, body_bvh, O):
     h = O["h_cm"]
     pts, pairs = D.sample(h)
@@ -405,7 +410,8 @@ def build_cloth(D, M, BM, body_bvh, O):
     info = {}
     gid = {}
     base = 0
-    names = D.names
+    v2 = bool(O.get("v2"))
+    names = [n for n in D.names if not (v2 and D.geom(n).kind in MODELLED)]
     layout_x = 0.0
     for name in names:
         P = D.geom(name)
@@ -434,7 +440,7 @@ def build_cloth(D, M, BM, body_bvh, O):
     # lapel: fold the lapel side of the roll line over the front (reflected
     # across the roll line in the block, placed there, lifted a layer off)
     for name, I in info.items():
-        if I["kind"] != "front":
+        if I["kind"] != "front" or "roll" not in D.geom(name).lines:
             continue
         V = I["V"]
         L = D.geom(name).lines["roll"]
@@ -466,25 +472,39 @@ def build_cloth(D, M, BM, body_bvh, O):
     for name, I in info.items():
         if I["mirror"]:
             I["Xw"] = I["Xw"] * np.array([-1.0, 1.0, 1.0])
-    # collar: on the placed neckline, stand up, fall folded down outside
-    place_collar(D, info, gid, pairs, O, body_bvh)
-    # rest folds (pressed lapel roll and collar roll), toward the outside
-    for name, I in info.items():
-        if I["kind"] == "front":
-            _rest_fold(I, I["lapel"], D.geom(name).lines["roll"], O["rest_fold_deg"], body_bvh)
-        if I["kind"] == "collar":
-            _rest_fold_curve(I, I["w"] > I["stand"], O["rest_fold_deg"], body_bvh)
+    if not v2:
+        # collar: on the placed neckline, stand up, fall folded down outside
+        place_collar(D, info, gid, pairs, O, body_bvh)
+        # rest folds (pressed lapel roll and collar roll), toward the outside
+        for name, I in info.items():
+            if I["kind"] == "front":
+                _rest_fold(I, I["lapel"], D.geom(name).lines["roll"], O["rest_fold_deg"], body_bvh)
+            if I["kind"] == "collar":
+                _rest_fold_curve(I, I["w"] > I["stand"], O["rest_fold_deg"], body_bvh)
+    else:
+        # one winding for the whole garment: every panel's faces point away from the body
+        for name, I in info.items():
+            Xw, T = I["Xw"], I["T"]
+            fn = np.cross(Xw[T[:, 1]] - Xw[T[:, 0]], Xw[T[:, 2]] - Xw[T[:, 0]])
+            c = Xw[T].mean(1)
+            out = _outward(c[:: max(1, len(c) // 60)], body_bvh)
+            if np.einsum("ij,ij->i", fn[:: max(1, len(c) // 60)], out).mean() < 0:
+                I["T"] = T[:, ::-1].copy()
     # assemble
     X = np.vstack([info[n]["Xw"] for n in names])
     R = np.vstack([info[n]["R"] for n in names])
     T = np.vstack([info[n]["T"] + info[n]["base"] for n in names])
     pid = np.concatenate([[i] * len(info[n]["V"]) for i, n in enumerate(names)])
     sew = set()
+    seam_of = {}
     for sname, pr in pairs:
         for A, B in pr:
+            if A not in gid or B not in gid:
+                continue           # a modelled part's seam (collar, roll line)
             i, j = gid[A], gid[B]
             if i != j:
                 sew.add((min(i, j), max(i, j)))
+                seam_of[(min(i, j), max(i, j))] = sname
     # button: the left front's button point to the right front's
     bp = np.array(D.geom("front").notches["button"])
     il = info["front"]["base"] + int(np.argmin(np.linalg.norm(info["front"]["V"] - bp, axis=1)))
@@ -492,7 +512,7 @@ def build_cloth(D, M, BM, body_bvh, O):
     button = (il, ir)
     sew = sorted(sew)
     return {"X": X, "R": R, "T": T, "sew": sew, "button": button, "pid": pid, "names": names,
-            "info": info, "pairs": pairs}
+            "info": info, "pairs": pairs, "gid": gid, "pts": pts, "seam_of": seam_of}
 
 
 def _outward(X, bvh):
@@ -931,7 +951,8 @@ def keep_geometry(C, X, name, weld=True, smooth=0):
 VIEWS = {"front": (0.0, -1), "three_quarter": (35.0, -1), "profile": (90.0, -1), "back": (180.0, -1)}
 
 
-def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=1.15):
+def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=1.15, az_override=None,
+                 cam_dz=0.15):
     sc = bpy.context.scene
     sc.render.engine = "BLENDER_EEVEE"
     sc.render.resolution_x = sc.render.resolution_y = res
@@ -980,9 +1001,9 @@ def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=
     paths = []
     tgt = Vector(target)
     for v in views:
-        az = math.radians(VIEWS[v][0] if v in VIEWS else float(v))
+        az = math.radians(az_override if az_override is not None else VIEWS[v][0] if v in VIEWS else float(v))
         d = Vector((math.sin(az), -math.cos(az), 0.0))
-        cam.location = tgt + d * 4.0 + Vector((0, 0, 0.15))
+        cam.location = tgt + d * 4.0 + Vector((0, 0, cam_dz))
         cam.rotation_euler = (tgt - cam.location).to_track_quat("-Z", "Y").to_euler()
         for o in bpy.data.objects:
             if o.name.startswith("spike_") and o.type == "LIGHT":
@@ -1020,12 +1041,901 @@ SPIKE = {
     "sew_frames": 30, "gravity_ramp": 10, "settle_frames": 30,
     "bent": {"frames": 30, "hold": 15, "flex_deg": 35.0, "elbow_deg": 30.0},
     "colliders": ["shirt", "waistcoat", "trousers"],
-    "canvas": {"hem_drop": 0.6},
+    "canvas": {"hem_drop": 0.6, "neck_band_cm": 5.0},
 }
 
 
+# --- spike 2 (T13): two-stage weld, hull back collider, modelled rever --------------------------
+
+SPIKE2 = {
+    "v2": True,
+    "h_cm": 1.2,                      # finer than spike 1: a fold at the elbow crook needs it
+    # the draft for the XPBD drape: the neckline at the neck's own length (spike 1's 1.15
+    # made up for Blender's placed-shape rest), more waist, the sleeve 2 cm above the wrist
+    "draft": {"split_lapel": True, "neck_scale": 1.0, "waist_min_frac": 0.82,
+              "sleeve": {"end_above_wrist_cm": 2.0}},
+    "sew_frames": 30,                 # stage 1: unwelded, flat rest, sewing springs, no gravity
+    "gravity_ramp": 10, "settle_frames": 35,      # stage 2: welded, sewn rest, gravity
+    "rest_smooth": {"rings": 2, "iters": 6},      # stage-2 rest: the seam band relaxed
+    "pin_neck": 0.0,                  # pin weight on the neckline in stage 2 (0 = off)
+    "hull": {"alpha_back": 0.75, "z_lo_below_hem_m": 0.05, "z_hi_m": None},
+    "push": {"clear_m": 0.0015, "smooth_iters": 3},
+    "bent": None,
+    "rever": {},
+    "crease_deg": 20.0,
+    "engine": "xpbd",
+}
+
+
+def make_tube(co, tris, BM, M, D, base, O):
+    from character import suit_hull
+    G = []
+    dg = bpy.context.evaluated_depsgraph_get()
+    for k in ("shirt", "waistcoat", "trousers"):
+        if k in base:
+            me = base[k].evaluated_get(dg).to_mesh()
+            Mw = np.array(base[k].matrix_world)
+            P = np.empty(len(me.vertices) * 3)
+            me.vertices.foreach_get("co", P)
+            P = P.reshape(-1, 3) @ Mw[:3, :3].T + Mw[:3, 3]
+            G.append(P)
+            base[k].evaluated_get(dg).to_mesh_clear()
+    H = O["hull"]
+    z_lo = D.frame["Zh"] / 100.0 - H["z_lo_below_hem_m"]
+    z_hi = H["z_hi_m"] or (M["nape"][2] - 0.025)
+    V, F, info, radial = suit_hull.build(co, tris, BM.f_trunk, z_lo, z_hi, np.vstack(G) if G else (),
+                                 {"alpha_back": H["alpha_back"]})
+    me = bpy.data.meshes.new("spike_hull")
+    me.from_pydata([tuple(p) for p in V], [], [tuple(int(i) for i in f) for f in F])
+    me.update()
+    ob = bpy.data.objects.new("spike_hull", me)
+    bpy.context.scene.collection.objects.link(ob)
+    return ob, info, radial
+
+
+def simulate_stage(ob, O, f_end, grav_keys, rest_key, pin=None):
+    """One cloth run to f_end; grav_keys [(frame, value)]. Returns the coords at f_end and the
+    frame time."""
+    sc = bpy.context.scene
+    m = ob.modifiers.new("Cloth", "CLOTH")
+    st = m.settings
+    F = O["fabric"]
+    st.quality = O["quality"]
+    st.mass = F["mass"]
+    st.tension_stiffness = F["tension"]
+    st.compression_stiffness = F["compression"]
+    st.shear_stiffness = F["shear"]
+    st.bending_stiffness = F["bending"]
+    st.air_damping = F["air"]
+    st.use_sewing_springs = True
+    st.sewing_force_max = F["sewing_max"]
+    st.rest_shape_key = ob.data.shape_keys.key_blocks[rest_key]
+    if "canvas" in ob.vertex_groups:
+        st.vertex_group_bending = "canvas"
+        st.bending_stiffness_max = F["bending_canvas"]
+    if pin is not None and "pin" in ob.vertex_groups:
+        st.vertex_group_mass = "pin"
+        st.pin_stiffness = pin
+    cs = m.collision_settings
+    cs.collision_quality = O["collision_quality"]
+    cs.distance_min = O["cloth_dist_m"]
+    cs.use_self_collision = O["self_collision"]
+    cs.self_distance_min = O["self_dist_m"]
+    cs.self_friction = 5.0
+    ew = st.effector_weights
+    for f, g in grav_keys:
+        ew.gravity = g
+        ew.keyframe_insert("gravity", frame=f)
+    m.point_cache.frame_start = 1
+    m.point_cache.frame_end = f_end
+    sc.frame_start, sc.frame_end = 1, f_end
+    t = time.perf_counter()
+    for f in range(1, f_end + 1):
+        sc.frame_set(f)
+    X = evaluated(ob)
+    dt = round(time.perf_counter() - t, 2)
+    print(f"[spike] {ob.name}: {f_end} frames {dt} s", flush=True)
+    return X.astype(float), dt
+
+
+def weld_map(n, sew):
+    par = list(range(n))
+
+    def find(a):
+        while par[a] != a:
+            par[a] = par[par[a]]
+            a = par[a]
+        return a
+    for a, b in sew:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            par[max(ra, rb)] = min(ra, rb)
+    roots = sorted({find(i) for i in range(n)})
+    new = {r: k for k, r in enumerate(roots)}
+    wm = np.array([new[find(i)] for i in range(n)])
+    return wm, len(roots)
+
+
+def weld(C, X):
+    """Weld the sewn pairs: (Xw, Tw, wm). Seam groups at their mean."""
+    wm, n = weld_map(len(X), C["sew"])
+    cnt = np.bincount(wm, minlength=n).astype(float)
+    Xw = np.zeros((n, 3))
+    np.add.at(Xw, wm, X)
+    Xw /= cnt[:, None]
+    Tw = wm[C["T"]]
+    ok = (Tw[:, 0] != Tw[:, 1]) & (Tw[:, 1] != Tw[:, 2]) & (Tw[:, 2] != Tw[:, 0])
+    return Xw, Tw[ok], wm, cnt
+
+
+def mesh_edges(T):
+    E = np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    return np.unique(np.sort(E, 1), axis=0)
+
+
+def ring_band(T, seed, rings, n):
+    E = mesh_edges(T)
+    band = np.zeros(n, bool)
+    band[seed] = True
+    for _ in range(rings):
+        nb = band[E[:, 0]] | band[E[:, 1]]
+        band[E[nb].ravel()] = True
+    return band
+
+
+def boundary_verts(T, n):
+    E = np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    E = np.sort(E, 1)
+    u, c = np.unique(E, axis=0, return_counts=True)
+    b = np.zeros(n, bool)
+    b[u[c == 1].ravel()] = True
+    return b
+
+
+def laplace(X, T, mask, iters, lam=0.5):
+    E = mesh_edges(T)
+    n = len(X)
+    deg = np.bincount(E.ravel(), minlength=n).astype(float)
+    X = X.copy()
+    for _ in range(iters):
+        acc = np.zeros_like(X)
+        np.add.at(acc, E[:, 0], X[E[:, 1]])
+        np.add.at(acc, E[:, 1], X[E[:, 0]])
+        L = acc / np.maximum(deg, 1)[:, None] - X
+        X[mask] += lam * L[mask]
+    return X
+
+
+def seam_edges(C, wm, Tw):
+    """Edges of the welded mesh that lie on a sewn seam, with the seam's name."""
+    T = C["T"]
+    E = np.sort(np.vstack([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]]), 1)
+    u, c = np.unique(E, axis=0, return_counts=True)
+    bnd = u[c == 1]                              # panel boundary edges (unwelded)
+    seam_v = {}
+    for (a, b), nm in C["seam_of"].items():
+        seam_v.setdefault(a, nm)
+        seam_v.setdefault(b, nm)
+    out = {}
+    for a, b in bnd:
+        if a in seam_v and b in seam_v:
+            nm = seam_v[a] if seam_v[a] == seam_v[b] else seam_v[a]
+            key = tuple(sorted((int(wm[a]), int(wm[b]))))
+            if key[0] != key[1]:
+                out[key] = nm.replace("_r", "")
+    # keep only edges interior to the welded mesh (two faces)
+    Ew = np.sort(np.vstack([Tw[:, [0, 1]], Tw[:, [1, 2]], Tw[:, [2, 0]]]), 1)
+    uw, cw = np.unique(Ew, axis=0, return_counts=True)
+    inner = {tuple(e) for e in uw[cw == 2]}
+    return {k: v for k, v in out.items() if k in inner}
+
+
+def dihedrals(X, T, edges):
+    """Unsigned dihedral (deg) between the two faces at each edge (consistent winding)."""
+    fn = np.cross(X[T[:, 1]] - X[T[:, 0]], X[T[:, 2]] - X[T[:, 0]])
+    fn /= np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-12)
+    adj = {}
+    for fi, t in enumerate(T):
+        for a, b in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+            adj.setdefault((min(a, b), max(a, b)), []).append(fi)
+    out = {}
+    for e in edges:
+        fs = adj.get(e, [])
+        if len(fs) == 2:
+            out[e] = float(np.degrees(np.arccos(np.clip(fn[fs[0]] @ fn[fs[1]], -1, 1))))
+    return out
+
+
+def crease_zones(X, T, sedges, J):
+    """Per-vertex zone labels where a seam dihedral is the body's shape, not a hinge: the
+    underarm corner (the armhole bottom, where sleeve and side meet at the arm's angle),
+    the elbow (the rest-pose sleeve is bent there) and the seam ends at the free edge."""
+    n = len(X)
+    zone = np.full(n, "", dtype=object)
+    near_free = ring_band(T, np.nonzero(boundary_verts(T, n))[0], 1, n)
+    zone[near_free] = "free_edge"
+    for side in ("l", "r"):
+        el = np.array(J[f"lowerarm_{side}"][0])
+        zone[np.linalg.norm(X - el, axis=1) < 0.07] = "elbow"
+    arm = [e for e, nm in sedges.items() if nm == "armhole"]
+    for sgn in (1.0, -1.0):
+        vs = np.array(sorted({v for e in arm for v in e if X[v, 0] * sgn > 0}))
+        if len(vs):
+            bot = X[vs[np.argmin(X[vs, 2])]]
+            zone[np.linalg.norm(X - bot, axis=1) < 0.04] = "underarm"
+    return zone
+
+
+def crease_stats(X, T, sedges, thr, ring_ref=True, zone=None):
+    """Per seam: edge count, count over thr, max and mean dihedral, and the excess over the
+    mean dihedral of the panel edges within 3 cm (a hinge is a crease the cloth either side
+    does not have). With `zone` (crease_zones), over_thr_clean counts the edges outside
+    the zones and zone_over the rest by zone."""
+    d = dihedrals(X, T, list(sedges))
+    allE = [tuple(e) for e in mesh_edges(T)]
+    dall = dihedrals(X, T, allE)
+    mid = {e: 0.5 * (X[e[0]] + X[e[1]]) for e in allE}
+    keys = np.array(allE)
+    mids = np.array([mid[e] for e in allE])
+    dv = np.array([dall.get(e, 0.0) for e in allE])
+    is_seam = np.array([e in sedges for e in allE])
+    # the hinge measure: the bend across the seam against the cloth's own bend in the same
+    # direction nearby (edges parallel to the seam edge, 1-4 cm off it), as curvature (the
+    # dihedral over the span between the two faces' centroids), so a round sleeve (every
+    # edge along it bent by the arm's radius) is not read as a crease
+    fc = X[T].mean(1)
+    adj = {}
+    for fi, t in enumerate(T):
+        for a_, b_ in ((t[0], t[1]), (t[1], t[2]), (t[2], t[0])):
+            adj.setdefault((min(a_, b_), max(a_, b_)), []).append(fi)
+    keys_ok = np.array([len(adj.get(e, ())) == 2 for e in allE])
+    span = np.array([np.linalg.norm(fc[adj[e][0]] - fc[adj[e][1]]) if ok else 1.0 for e, ok in zip(allE, keys_ok)])
+    kap = np.radians(dv) / np.maximum(span, 1e-6)
+    edir = X[keys[:, 1]] - X[keys[:, 0]]
+    edir /= np.maximum(np.linalg.norm(edir, axis=1, keepdims=True), 1e-12)
+    idx_of = {e: i for i, e in enumerate(allE)}
+    per = {}
+    for e, nm in sedges.items():
+        if e not in d:
+            continue
+        dist = np.linalg.norm(mids - mid[e], axis=1)
+        near = (dist < 0.03) & ~is_seam
+        ref = float(dv[near].mean()) if near.any() else 0.0
+        i = idx_of[e]
+        par = (dist > 0.01) & (dist < 0.04) & ~is_seam & keys_ok & (np.abs(edir @ edir[i]) > 0.87)
+        kref = float(np.median(kap[par])) if par.sum() >= 3 else 0.0
+        hinge = d[e] - float(np.degrees(kref * span[i]))
+        z = (zone[e[0]] or zone[e[1]]) if zone is not None else ""
+        per.setdefault(nm, []).append((d[e], d[e] - ref, z, mid[e], hinge))
+    out = {}
+    for nm, v in sorted(per.items()):
+        a = np.array([r[:2] for r in v])
+        zs = [r[2] for r in v]
+        out[nm] = {"edges": len(a), "over_thr": int((a[:, 0] > thr).sum()), "max_deg": round(float(a[:, 0].max()), 1),
+                   "mean_deg": round(float(a[:, 0].mean()), 1), "excess_over_thr": int((a[:, 1] > thr).sum()),
+                   "excess_max_deg": round(float(a[:, 1].max()), 1)}
+        hg = np.array([r[4] for r in v])
+        out[nm]["hinge_over_thr"] = int((hg > thr).sum())
+        out[nm]["hinge_max_deg"] = round(float(hg.max()), 1)
+        out[nm]["hinge_p95_deg"] = round(float(np.percentile(hg, 95)), 1)
+        worst = sorted([(r[4], r[3]) for r in v if r[4] > thr], key=lambda t: -t[0])[:4]
+        out[nm]["hinge_over_at"] = [[round(float(dd), 1)] + [round(float(c), 3) for c in m] for dd, m in worst]
+        if zone is not None:
+            clean = np.array([z == "" for z in zs])
+            out[nm]["over_thr_clean"] = int((a[clean, 0] > thr).sum())
+            out[nm]["max_deg_clean"] = round(float(a[clean, 0].max()), 1) if clean.any() else 0.0
+            zo = {}
+            for (dd, _), z in zip(a, zs):
+                if z and dd > thr:
+                    zo[z] = zo.get(z, 0) + 1
+            out[nm]["zone_over"] = zo
+            worst = sorted([(r[0], r[3]) for r in v if r[2] == "" and r[0] > thr], key=lambda t: -t[0])[:4]
+            out[nm]["clean_over_at"] = [[round(float(dd), 1)] + [round(float(c), 3) for c in m] for dd, m in worst]
+    panel = dv[~is_seam]
+    out["_panel_edges"] = {"mean_deg": round(float(panel.mean()), 2), "p99_deg": round(float(np.percentile(panel, 99)), 1)}
+    return out
+
+
+class Layers:
+    """The body and the under-garments as one surface set, read the way the drape's distance
+    field reads them: the nearest face decides. The body is closed (behind its face = inside);
+    a garment is an open shell (inside only when behind its face, not beside its edge)."""
+
+    def __init__(self, co, tris, shells=()):
+        from mathutils.bvhtree import BVHTree
+        V = [tuple(p) for p in co]
+        F = [tuple(int(i) for i in t) for t in tris]
+        self.nbody = len(F)
+        for sv, sf in shells:
+            n0 = len(V)
+            V += [tuple(p) for p in sv]
+            F += [tuple(n0 + int(i) for i in f) for f in sf]
+        self.bvh = BVHTree.FromPolygons(V, F)
+        self.body_bvh = BVHTree.FromPolygons(V[:len(co)], F[:self.nbody])
+
+    def covered(self, p, reach=0.05):
+        """A second reading of 'inside': is p under a garment (a ray from p away from the body
+        hits a garment within reach) or inside the body? The nearest-face rule misreads a
+        point beside a garment's folded edge (a shirt collar's fall); the ray does not."""
+        loc, nor, fi, d = self.body_bvh.find_nearest(Vector(p))
+        loc, nor = np.array(loc), np.array(nor)
+        if float(np.dot(np.asarray(p) - loc, nor)) < 0:
+            return True
+        u = np.asarray(p) - loc
+        u = u / max(np.linalg.norm(u), 1e-9)
+        hit, _, hfi, hd = self.bvh.ray_cast(Vector(np.asarray(p) + u * 1e-4), Vector(u), reach)
+        return hit is not None and hfi >= self.nbody
+
+    def signed(self, p):
+        """(signed distance, nearest point, normal): negative inside."""
+        loc, nor, fi, d = self.bvh.find_nearest(Vector(p))
+        loc, nor = np.array(loc), np.array(nor)
+        s = float(np.dot(np.asarray(p) - loc, nor))
+        inside = s < 0 if fi < self.nbody else s < -0.5 * d
+        return (-d if inside else d), loc, nor
+
+
+def garment_shells(base, keys):
+    dg = bpy.context.evaluated_depsgraph_get()
+    shells = []
+    for k in keys:
+        if k in base:
+            me = base[k].evaluated_get(dg).to_mesh()
+            Mw = np.array(base[k].matrix_world)
+            P = np.array([tuple(v.co) for v in me.vertices]) @ Mw[:3, :3].T + Mw[:3, 3]
+            shells.append((P, [tuple(pl.vertices) for pl in me.polygons]))
+            base[k].evaluated_get(dg).to_mesh_clear()
+    return shells
+
+
+def inside_count(X, L, tol=0.0005):
+    """Vertices inside the body or behind an under-garment (Layers L)."""
+    return int(sum(1 for p in X if L.signed(p)[0] < -tol))
+
+
+def push_out(X, T, L, clear, iters):
+    """Final layer order: every vertex `clear` outside the body and the under-garments
+    (Layers L), then a light smooth of the moved vertices and their ring, and again."""
+    X = X.copy()
+    moved_any = np.zeros(len(X), bool)
+    for it in range(iters + 1):
+        moved = np.zeros(len(X), bool)
+        for i, p in enumerate(X):
+            d, loc, nor = L.signed(p)
+            if d < clear:
+                g = (p - loc) / max(abs(d), 1e-9) * (1 if d >= 0 else -1) if abs(d) > 1e-6 else nor
+                X[i] = p + g * (clear - d)
+                moved[i] = True
+        moved_any |= moved
+        if it == iters or not moved.any():
+            break
+        band = ring_band(T, np.nonzero(moved)[0], 1, len(X)) & ~boundary_verts(T, len(X))
+        X = laplace(X, T, band, 2, 0.4)
+    # a vertex in a crevice between two layers (the shirt going into the waistband) can be
+    # pushed out of one into the other: march it out along the cloth's own normal instead
+    Nv = np.zeros_like(X)
+    fn = np.cross(X[T[:, 1]] - X[T[:, 0]], X[T[:, 2]] - X[T[:, 0]])
+    for k in range(3):
+        np.add.at(Nv, T[:, k], fn)
+    Nv /= np.maximum(np.linalg.norm(Nv, axis=1, keepdims=True), 1e-12)
+    for i, p in enumerate(X):
+        if L.signed(p)[0] >= 0:
+            continue
+        for _ in range(20):
+            p = p + Nv[i] * 0.001
+            if L.signed(p)[0] >= clear:
+                break
+        X[i] = p
+        moved_any[i] = True
+    return X, int(moved_any.sum())
+
+
+def chains_for_rever(C, wm, D):
+    """The jacket's free edge per side, welded ids and flat arc s (cm): back neck (CB -> NP),
+    front gorge reversed (NP -> roll crossing), front roll edge reversed (-> break)."""
+    out = {}
+    for side, suf in (("l", ""), ("r", "_r")):
+        ids, s = [], []
+        acc = 0.0
+        for pn, e, rev in (("back" + suf, "neck", False), ("front" + suf, "gorge", True),
+                           ("front" + suf, "roll", True)):
+            P = C["pts"][(pn, e)]
+            js = list(range(len(P)))
+            if rev:
+                js = js[::-1]
+            for k, j in enumerate(js):
+                g = int(wm[C["gid"][(pn, e, j)]])
+                if k > 0:
+                    acc += float(np.linalg.norm(P[j] - P[js[k - 1]]))
+                if ids and ids[-1] == g:
+                    continue
+                ids.append(g)
+                s.append(acc)
+        out[side] = (np.array(ids), np.array(s))
+    return out
+
+
+def mesh_object(name, V, F, smooth=True):
+    me = bpy.data.meshes.new(name)
+    me.from_pydata([tuple(p) for p in V], [], [tuple(int(i) for i in f) for f in F])
+    me.update()
+    for p in me.polygons:
+        p.use_smooth = smooth
+    ob = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(ob)
+    return ob
+
+
+def body_sdf(co, tris, lo, hi, h, band=0.03, shells=()):
+    """Signed distance to the body and the under-garments on a grid (negative inside), exact
+    within `band` of a surface, coarse elsewhere. One BVH over all of them: the nearest face
+    decides. The body is closed: the sign is the nearest face's normal. A garment is an open
+    shell: a point is inside only when it is behind the face (not beside its edge).
+    shells: [(verts (n, 3), faces)] in world space."""
+    from mathutils.bvhtree import BVHTree
+    from character.suit_xpbd import Grid
+    V = [tuple(p) for p in co]
+    F = [tuple(int(i) for i in t) for t in tris]
+    nbody = len(F)
+    for sv, sf in shells:
+        n0 = len(V)
+        V += [tuple(p) for p in sv]
+        F += [tuple(n0 + int(i) for i in f) for f in sf]
+    bvh = BVHTree.FromPolygons(V, F)
+
+    def exact(P):
+        out = np.empty(len(P))
+        for k, p in enumerate(P):
+            loc, nor, fi, d = bvh.find_nearest(Vector(p))
+            s = np.dot(p - np.array(loc), np.array(nor))
+            inside = s < 0 if fi < nbody else s < -0.5 * d
+            out[k] = -d if inside else d
+        return out
+    H = 4 * h
+    shc = np.ceil((hi - lo) / H).astype(int) + 1
+    gc = np.stack(np.meshgrid(*[lo[k] + H * np.arange(shc[k]) for k in range(3)], indexing="ij"), -1)
+    Dc = exact(gc.reshape(-1, 3)).reshape(shc)
+    coarse = Grid(Dc, lo, H)
+    shf = (shc - 1) * 4 + 1
+    gf = np.stack(np.meshgrid(*[lo[k] + h * np.arange(shf[k]) for k in range(3)], indexing="ij"), -1).reshape(-1, 3)
+    Df, _ = coarse(gf)
+    m = np.abs(Df) < band + H
+    Df[m] = exact(gf[m])
+    return Grid(Df.reshape(shf), lo, h), int(m.sum())
+
+
+class PadSDF:
+    """The body field with the shoulder pads as an outward offset: a dome of pad_cm at the
+    acromion falling to 0 at pad_r (top of the shoulder only)."""
+
+    def __init__(self, body, M, O):
+        self.body = body
+        self.ac = np.array(M["acromion"])
+        self.r, self.t = O["pad_r_m"], O["pad_cm"] / 100.0
+        self.zmin = M["armpit_z"] + 0.03
+        self.xmin = M["neck_point"][0] + 0.03
+
+    def __call__(self, P):
+        d, g = self.body(P)
+        off = np.zeros(len(P))
+        for sgn in (1.0, -1.0):
+            ac = self.ac * np.array([sgn, 1, 1])
+            q = np.linalg.norm(P - ac, axis=1) / self.r
+            w = (P[:, 2] > self.zmin) & (P[:, 0] * sgn > self.xmin)
+            off = np.maximum(off, np.where(w, self.t * np.clip(1 - q ** 2, 0, 1) ** 2, 0.0))
+        return d - off, g
+
+
+XPBD = {
+    "fps": 24, "substeps": 30, "stretch_iters": 2,
+    "density": 0.33, "density_canvas": 0.45,          # kg/m2: suiting + lining; the canvassed front
+    "k_stretch": 4000.0, "k_comp": 400.0,             # N/m per edge
+    "kb": 2.0e-5, "kb_canvas": 1.2e-4,                # N m
+    "damping": 2.0, "friction": 0.3, "thickness": 0.004,
+    "sew_frames": 30, "sew_k": (5.0, 5000.0),         # stage 1: sewing stiffness ramp (log)
+    "drape_frames": 45, "gravity_ramp": 8,
+    "button_gap_m": 0.004, "layer_gap_m": 0.003,
+    "sew_close_m": 0.002, "sew_extra_max": 40,
+    "neck_hold_k": 30.0,                              # N/m: the collar and the neck tape hold the neckline
+    "sdf_h": 0.006,
+    # self-contact (the elbow crook and the underarm fold onto themselves otherwise): vertices
+    # closer than self_r repel unless within self_excl of each other on the placed garment
+    "self_r": 0.010, "self_excl": 0.025,
+    "kb_sleeve": 6e-5,
+}
+
+
+def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
+    """Stage 1 (unwelded, sew), weld, stage 2 (welded, gravity). Returns X1 (unwelded, sewn),
+    (Xw, Tw, wm) the weld, X2 the drape."""
+    from character import suit_xpbd as xp
+    P = sp.merge(XPBD, O.get("xpbd"))
+    n0 = len(C["X"])
+    rho = P["density"] + (P["density_canvas"] - P["density"]) * canvas
+    mass = xp.mass_from_flat(C["T"], C["R"], n0, rho)
+    kb = P["kb"] + (P["kb_canvas"] - P["kb"]) * canvas
+    # the sleeves are wool and lining together (the body's lining is loose; a sleeve's is not)
+    sleeve = np.isin(np.asarray(C["names"])[C["pid"]], ["top_sleeve", "top_sleeve_r", "under_sleeve", "under_sleeve_r"])
+    kb = np.where(sleeve, np.maximum(kb, P["kb_sleeve"]), kb)
+    E0 = xp.edges_of(C["T"])
+    L0 = np.linalg.norm(C["R"][E0[:, 0]] - C["R"][E0[:, 1]], axis=1)
+    o = {"k_stretch": P["k_stretch"], "k_comp": P["k_comp"], "damping": P["damping"],
+         "friction": P["friction"], "thickness": P["thickness"], "stretch_iters": P["stretch_iters"]}
+    t = time.perf_counter()
+    S = xp.Solver(C["X"], C["T"], L0, mass, kb, o)
+    bl, br = C["button"]
+    S.set_sew(list(C["sew"]) + [(bl, br)], [0.0] * len(C["sew"]) + [P["button_gap_m"]])
+    S.sdf = sdf
+    # the left front laps over the right at the centre front
+    lay = layer_sets(C)
+    if lay is not None:
+        S.layers = [(lay[0], lay[1], P["layer_gap_m"])]
+    # the placed garment, each sewn group at its mean (the reference for holds and self-contact)
+    wm0, nw0 = weld_map(n0, C["sew"])
+    Xm = np.zeros((nw0, 3))
+    np.add.at(Xm, wm0, C["X"])
+    Xm /= np.bincount(wm0, minlength=nw0)[:, None]
+    skip0 = np.zeros(n0, bool)
+    if lay is not None:
+        skip0[lay[0]] = skip0[lay[1]] = True      # the lap has its own layer constraint
+    if P["self_r"] > 0:
+        S.self_ref, S.self_r, S.self_excl, S.self_skip = Xm[wm0], P["self_r"], P["self_excl"], skip0
+    if neck is not None and P["neck_hold_k"] > 0:
+        # hold the neckline where it was placed (a sewn corner at its pair's mean, so the
+        # hold and the seam agree): the collar and the neck tape hold it in a real jacket
+        S.hold_idx = np.nonzero(neck)[0]
+        S.hold_pos = Xm[wm0[S.hold_idx]]
+        S.hold_k = P["neck_hold_k"]
+    k0, k1 = P["sew_k"]
+    nf = P["sew_frames"]
+    S.run(nf, P["fps"], P["substeps"], g_of=lambda f: 0.0,
+          ksew_of=lambda f: k0 * (k1 / k0) ** min(1.0, f / max(nf - 8, 1)))
+    # keep sewing until every seam is closed (the weld moves each pair to its mean)
+    sw_ = np.array(C["sew"])
+    extra = 0
+    while extra < P["sew_extra_max"]:
+        gap = np.linalg.norm(S.X[sw_[:, 0]] - S.X[sw_[:, 1]], axis=1).max()
+        if gap < P["sew_close_m"]:
+            break
+        S.run(4, P["fps"], P["substeps"], g_of=lambda f: 0.0, ksew_of=lambda f: k1)
+        extra += 4
+    stats["xpbd_sew_extra_frames"] = extra
+    X1 = S.X.copy()
+    stats["xpbd_stage1_s"] = round(time.perf_counter() - t, 2)
+    # weld
+    t = time.perf_counter()
+    Xw, Tw, wm, cnt = weld(C, X1)
+    nw = len(Xw)
+    Lw = {}
+    for (a, b), l in zip(E0, L0):
+        e = (int(min(wm[a], wm[b])), int(max(wm[a], wm[b])))
+        if e[0] != e[1]:
+            Lw.setdefault(e, []).append(l)
+    Lw = {e: float(np.mean(v)) for e, v in Lw.items()}
+    Ew = xp.edges_of(Tw)
+    for a, b in Ew:     # an edge the weld creates across a seam corner (rare): its sewn length
+        Lw.setdefault((int(a), int(b)), float(np.linalg.norm(Xw[a] - Xw[b])))
+    mw = np.zeros(nw)
+    np.add.at(mw, wm, mass)
+    kbw = np.zeros(nw)
+    np.maximum.at(kbw, wm, kb)
+    S2 = xp.Solver(Xw, Tw, Lw, mw, kbw, o)
+    S2.set_sew([(int(wm[bl]), int(wm[br]))], [P["button_gap_m"]])
+    S2.sdf = sdf
+    if lay is not None:
+        S2.layers = [(np.unique(wm[lay[0]]), np.unique(wm[lay[1]]), P["layer_gap_m"])]
+    if P["self_r"] > 0:
+        skip2 = np.zeros(nw, bool)
+        skip2[wm[skip0]] = True
+        S2.self_ref, S2.self_r, S2.self_excl, S2.self_skip = Xm, P["self_r"], P["self_excl"], skip2
+    if neck is not None and P["neck_hold_k"] > 0:
+        S2.hold_idx = np.unique(wm[np.nonzero(neck)[0]])
+        S2.hold_pos = Xw[S2.hold_idx].copy()
+        S2.hold_k = P["neck_hold_k"]
+    gr = P["gravity_ramp"]
+    S2.run(P["drape_frames"], P["fps"], P["substeps"], g_of=lambda f: 9.81 * min(1.0, (f + 1) / gr),
+           ksew_of=lambda f: k1)
+    stats["xpbd_stage2_s"] = round(time.perf_counter() - t, 2)
+    stats["xpbd"] = {"stencils": int(len(S2.S)), "edge_colours": len(S2.ecol), "stencil_colours": len(S2.scol),
+                     "opts": P}
+    return X1, (Xw, Tw, wm, cnt), S2.X.copy()
+
+
+def layer_sets(C):
+    """Centre-front zones of the two fronts (the left laps over the right)."""
+    out = []
+    for nm in ("front", "front_r"):
+        I = C["info"].get(nm)
+        if I is None:
+            return None
+        Gc = None
+        V = I["V"]
+        x = V[:, 0]
+        sel = x > x.max() - 6.0
+        out.append(I["base"] + np.nonzero(sel)[0])
+    return out[0], out[1]
+
+
+CLOSE = {"close_34": (35.0, (0.0, 0.0, 1.42), 0.62), "close_back": (180.0, (0.0, 0.0, 1.30), 0.85),
+         "close_profile": (90.0, (0.0, 0.0, 1.38), 0.75),
+         # the wearer's left underarm (the armhole/side/sleeve junction), front and back
+         "close_underarm_f": (15.0, (0.22, 0.0, 1.33), 0.30), "close_underarm_b": (165.0, (0.22, 0.0, 1.33), 0.30),
+         # looking up into the left armpit from the front, below
+         "close_armpit": (25.0, (0.22, 0.0, 1.36), 0.22, -2.4),
+         # the left cuff and forearm from behind (the hind seam)
+         "close_cuff": (120.0, (0.47, -0.12, 1.14), 0.30)}
+
+
+def render_close(out_dir, tag, show):
+    for v, (az, tgt, sc_, *dz) in CLOSE.items():
+        render_views(out_dir, tag, show, [v], target=tgt, scale=sc_, az_override=az,
+                     cam_dz=dz[0] if dz else 0.15)
+
+
+def main_v2(O):
+    t = time.perf_counter()
+    body, names = capture_body()
+    tick("body_capture", t)
+    arm, base = append_base(A.base_blend)
+    am = body.modifiers.new("Armature", "ARMATURE")
+    am.object = arm
+    co, tris, dom, J = body_arrays(body, arm)
+    t = time.perf_counter()
+    BM = sp.BodyMeasure(co, tris, dom, J)
+    M = BM.run()
+    tick("measure", t)
+    with open(os.path.join(A.out_dir, "measure.json"), "w") as f:
+        json.dump(M, f, indent=1)
+    np.savez_compressed(os.path.join(A.out_dir, "body.npz"), co=co, tris=tris, dom=dom)
+    D = sp.draft(M, O.get("draft"))
+    D.svg(os.path.join(A.out_dir, "pattern.svg"))
+    from mathutils.bvhtree import BVHTree
+    body_bvh = BVHTree.FromPolygons([tuple(p) for p in co], [tuple(t) for t in tris])
+    under_bvh = under_tree(co, tris, [base[k] for k in O["colliders"] if k in base])
+    O["_joints"] = J
+    O["_neck_cy"] = 0.5 * (M["nape"][1] + M["front_neck"][1])
+    t = time.perf_counter()
+    C = build_cloth(D, M, BM, under_bvh, O)
+    n0 = len(C["X"])
+    print(f"[spike] cloth verts {n0} tris {len(C['T'])} sew edges {len(C['sew'])}", flush=True)
+    # canvas: the front, full, feathered toward the hem
+    v2 = True
+    y0, y1 = D.frame["yw"] - 6.0, D.frame["yh"]
+    canvas = np.zeros(n0)
+    for n in C["names"]:
+        I = C["info"][n]
+        if I["kind"] == "front":
+            canvas[I["base"]:I["base"] + len(I["V"])] = 1.0 - O["canvas"]["hem_drop"] * sp.smoothstep(
+                (I["V"][:, 1] - y0) / (y1 - y0))
+        if v2 and I["kind"] in ("back", "front"):
+            # the neckline is interfaced and taped: a stiff band that fades over neck_band_cm
+            nk = D.geom(n).edge("neck" if I["kind"] == "back" else "gorge")
+            dn = _dist_polyline(I["V"], nk)
+            sl = slice(I["base"], I["base"] + len(I["V"]))
+            canvas[sl] = np.maximum(canvas[sl], 1.0 - sp.smoothstep(dn / O["canvas"]["neck_band_cm"]))
+    # the neckline (for the optional stage-2 pin)
+    neck = np.zeros(n0, bool)
+    for (pn, e, j), g in C["gid"].items():
+        if e == "neck" or (e == "gorge" and pn.startswith("front")):
+            neck[g] = True
+    tick("mesh_place", t)
+    # colliders: the hull tube, the body, the shoulder pads, the under-garments
+    t = time.perf_counter()
+    tube, tube_info, tube_radial = make_tube(co, tris, BM, M, D, base, O)
+    pads = make_pad(body, M, O)
+    cols = [tube, body] + pads + [base[k] for k in O["colliders"] if k in base]
+    for c in cols:
+        add_collider(c, O)
+    for k in ("jacket", "tie", "buttons"):
+        if k in base:
+            base[k].hide_viewport = True
+    tick("colliders", t)
+    sw = np.array(C["sew"])
+    stats = {"hull": tube_info, "engine": O["engine"]}
+    Ef = mesh_edges(C["T"])
+    lf = np.linalg.norm(C["R"][Ef[:, 0]] - C["R"][Ef[:, 1]], axis=1)
+    lp = np.linalg.norm(C["X"][Ef[:, 0]] - C["X"][Ef[:, 1]], axis=1)
+    stats["placed_strain_vs_flat"] = round(float(np.abs(lp / lf - 1).mean()), 4)
+    if A.from_run:
+        # reuse a previous run's drape (iterate on the rever / renders without re-simulating)
+        d = np.load(os.path.join(A.from_run, "drape2.npz"))
+        X1, Xw, Tw, wm, X2 = (d[k] for k in ("X1", "Xw", "Tw", "wm", "X2"))
+        R2 = Xw
+        O["engine"] = "loaded"
+        stats["from_run"] = A.from_run
+    if O["engine"] == "xpbd":
+        t = time.perf_counter()
+        lo = C["X"].min(0) - 0.08
+        hi = C["X"].max(0) + 0.08
+        bgrid, nex = body_sdf(co, tris, lo, hi, sp.merge(XPBD, O.get("xpbd"))["sdf_h"],
+                              shells=garment_shells(base, O["colliders"]))
+        from character.suit_hull import TubeSDF
+        from character.suit_xpbd import union
+        sdf = union(PadSDF(bgrid, M, O), TubeSDF(tube_radial))
+        T["sdf"] = round(time.perf_counter() - t, 2)
+        print(f"[spike] sdf: {T['sdf']} s ({nex} exact samples)", flush=True)
+        X1, (Xw, Tw, wm, cnt), X2 = drape_xpbd(C, O, sdf, canvas, stats, neck)
+        T["stage1_sim"], T["stage2_sim"] = stats["xpbd_stage1_s"], stats["xpbd_stage2_s"]
+        print(f"[spike] xpbd: stage 1 {T['stage1_sim']} s, stage 2 {T['stage2_sim']} s", flush=True)
+        R2 = Xw
+    elif O["engine"] == "blender":
+        ob1 = make_cloth_object(C, "spike_stage1")
+        vg = ob1.vertex_groups.new(name="canvas")
+        for i in np.nonzero(canvas > 0)[0]:
+            vg.add([int(i)], float(canvas[i]), "REPLACE")
+        X1, t1 = simulate_stage(ob1, O, O["sew_frames"], [(1, 0.0)], "flat_rest")
+        T["stage1_sim"] = t1
+        ob1.hide_viewport = True
+        ob1.hide_render = True
+        Xw, Tw, wm, cnt = weld(C, X1)
+    gap1 = np.linalg.norm(X1[sw[:, 0]] - X1[sw[:, 1]], axis=1)
+    by_seam = {}
+    for (a, b), g in zip(C["sew"], gap1):
+        by_seam.setdefault(C["seam_of"][(a, b)].replace("_r", ""), []).append(g)
+    stats["stage1_gap_mm"] = {"mean": round(float(gap1.mean() * 1000), 2),
+                              "p95": round(float(np.percentile(gap1, 95) * 1000), 2),
+                              "max": round(float(gap1.max() * 1000), 2),
+                              "per_seam_mean": {k: round(float(np.mean(v) * 1000), 2) for k, v in by_seam.items()},
+                              "per_seam_p95": {k: round(float(np.percentile(v, 95) * 1000), 2) for k, v in by_seam.items()}}
+    nw = len(Xw)
+    sedges = seam_edges(C, wm, Tw)
+    np.savez_compressed(os.path.join(A.out_dir, "seams.npz"), edges=np.array(list(sedges.keys()), int).reshape(-1, 2),
+                        names=np.array(list(sedges.values())))
+    okE = wm[Ef[:, 0]] != wm[Ef[:, 1]]
+    stats["crease_stage1_welded"] = crease_stats(Xw, Tw, sedges, O["crease_deg"])
+    if O["engine"] == "blender":
+        # the stage-2 rest is the sewn state with the seam band relaxed
+        t = time.perf_counter()
+        seam_v = np.zeros(nw, bool)
+        seam_v[np.array(list({v for e in sedges for v in e}))] = True
+        RS = O["rest_smooth"]
+        band = ring_band(Tw, np.nonzero(seam_v)[0], RS["rings"], nw) & ~boundary_verts(Tw, nw)
+        R2 = laplace(Xw, Tw, band, RS["iters"], 0.5)
+        l2 = np.linalg.norm(R2[wm[Ef[:, 0]]] - R2[wm[Ef[:, 1]]], axis=1)
+        rs = l2[okE] / np.maximum(lf[okE], 1e-9) - 1
+        stats["stage2_rest_strain"] = {"mean_abs": round(float(np.abs(rs).mean()), 4),
+                                       "p95_abs": round(float(np.percentile(np.abs(rs), 95)), 4)}
+        bl, br = C["button"]
+        me = bpy.data.meshes.new("spike_stage2")
+        me.from_pydata([tuple(p) for p in Xw], [(int(wm[bl]), int(wm[br]))], [tuple(int(i) for i in t_) for t_ in Tw])
+        me.update()
+        ob2 = bpy.data.objects.new("spike_stage2", me)
+        bpy.context.scene.collection.objects.link(ob2)
+        ob2.shape_key_add(name="Basis")
+        k = ob2.shape_key_add(name="sewn_rest")
+        k.data.foreach_set("co", R2.astype(np.float32).ravel())
+        k.value = 0.0
+        cw = np.zeros(nw)
+        np.maximum.at(cw, wm, canvas)
+        vg = ob2.vertex_groups.new(name="canvas")
+        for i in np.nonzero(cw > 0)[0]:
+            vg.add([int(i)], float(cw[i]), "REPLACE")
+        pin = None
+        if O["pin_neck"] > 0:
+            nk = np.zeros(nw, bool)
+            nk[wm[neck]] = True
+            vg = ob2.vertex_groups.new(name="pin")
+            for i in np.nonzero(nk)[0]:
+                vg.add([int(i)], float(O["pin_neck"]), "REPLACE")
+            pin = 1.0
+        tick("weld", t)
+        g0, g1 = 1, 1 + O["gravity_ramp"]
+        f2 = g1 + O["settle_frames"]
+        X2, t2 = simulate_stage(ob2, O, f2, [(g0, 0.0), (g1, 1.0)], "sewn_rest", pin)
+        T["stage2_sim"] = t2
+        ob2.hide_viewport = True
+        ob2.hide_render = True
+    np.savez_compressed(os.path.join(A.out_dir, "drape2.npz"), X0=C["X"], X1=X1, Xw=Xw, Tw=Tw, wm=wm, R2=R2, X2=X2,
+                        sew=sw, T=C["T"], R=C["R"], pid=C["pid"], names=np.array(C["names"]))
+    # --- layer order: out of the body and the under-garments (real surfaces, not the tube)
+    t = time.perf_counter()
+    for c in cols:
+        for mm in list(c.modifiers):
+            if mm.type == "COLLISION":
+                c.modifiers.remove(mm)
+    real = Layers(co, tris, garment_shells(base, O["colliders"]))
+    stats["inside_before_push"] = inside_count(X2, real)
+    X3, moved = push_out(X2, Tw, real, O["push"]["clear_m"], O["push"]["smooth_iters"])
+    stats["pushed_verts"] = moved
+    stats["inside_after_push"] = inside_count(X3, real)
+    if stats["inside_after_push"]:
+        stats["inside_after_push_at"] = [[round(float(c), 3) for c in p] + [round(float(real.signed(p)[0]) * 1000, 1)]
+                                         for p in X3 if real.signed(p)[0] < -0.0005][:10]
+    tick("push_out", t)
+    zone = crease_zones(X3, Tw, sedges, J)
+    stats["crease_zone_refs"] = {k: [round(float(c), 3) for c in J[k][0]] for k in ("lowerarm_l", "lowerarm_r")}
+    stats["crease_final"] = crease_stats(X3, Tw, sedges, O["crease_deg"], zone=zone)
+    stats["crease_seam_over_clean"] = int(sum(v.get("over_thr_clean", 0) for k, v in stats["crease_final"].items()
+                                              if not k.startswith("_")))
+    stats["crease_seam_hinges"] = int(sum(v.get("hinge_over_thr", 0) for k, v in stats["crease_final"].items()
+                                          if not k.startswith("_")))
+    # strain against the flat pattern
+    l3 = np.linalg.norm(X3[wm[Ef[:, 0]]] - X3[wm[Ef[:, 1]]], axis=1)
+    s3 = l3[okE] / np.maximum(lf[okE], 1e-9) - 1
+    stats["strain_vs_flat"] = {"mean_abs": round(float(np.abs(s3).mean()), 4),
+                               "p99_abs": round(float(np.percentile(np.abs(s3), 99)), 4)}
+    # --- the rever (collar + lapel), modelled on the draped edge
+    t = time.perf_counter()
+    from character import suit_rever
+    chains = chains_for_rever(C, wm, D)
+    np.savez_compressed(os.path.join(A.out_dir, "chains.npz"), **{f"{k}_ids": v[0] for k, v in chains.items()},
+                        **{f"{k}_s": v[1] for k, v in chains.items()})
+    shirt_body = under_tree(co, tris, [base[k] for k in ("shirt",) if k in base])
+    rs_stats = {}
+    Vr, Fr, rinfo = suit_rever.build(X3, Tw, chains, D, [shirt_body], O["rever"], rs_stats)
+    stats["rever"] = rs_stats
+    stats["rever"]["inside_under"] = inside_count(Vr[:len(rinfo["sheet_X"])], real)
+    if stats["rever"]["inside_under"]:
+        cv = rinfo["chart_V"]
+        bad = [i for i, p in enumerate(Vr[:len(rinfo["sheet_X"])]) if real.signed(p)[0] < -0.0005]
+        stats["rever"]["inside_under_at"] = [[round(float(cv[i, 0]), 1), round(float(cv[i, 1]), 1),
+                                              round(float(real.signed(Vr[i])[0]) * 1000, 1)] for i in bad[:12]]
+        stats["rever"]["inside_under_max_mm"] = round(-min(float(real.signed(Vr[i])[0]) for i in bad) * 1000, 1)
+        cov = [i for i in bad if real.covered(Vr[i])]
+        stats["rever"]["inside_under_ray"] = len(cov)
+        stats["rever"]["inside_under_ray_at"] = [[round(float(cv[i, 0]), 1), round(float(cv[i, 1]), 1)] for i in cov[:12]]
+    cov3 = [p for p in X3 if real.covered(p)]
+    stats["inside_after_push_ray"] = len(cov3)
+    stats["inside_after_push_ray_at"] = [[round(float(c), 3) for c in p] for p in cov3[:12]]
+    if O.get("debug_rever"):
+        np.savez_compressed(os.path.join(A.out_dir, "rever_dbg.npz"), chart_V=rinfo["chart_V"], chart_T=rinfo["chart_T"],
+                            sheet_X=rinfo["sheet_X"], **rinfo["debug"])
+    tick("rever", t)
+    jk = mesh_object("spike_jacket_body", X3, Tw)
+    rv = mesh_object("spike_jacket_rever", Vr, Fr)
+    stats["kept_tris"] = int(len(Tw)) + sum(len(f) - 2 for f in Fr)
+    stats["body_tris"] = int(len(Tw))
+    stats["rever_tris"] = sum(len(f) - 2 for f in Fr)
+    stats["lofted_tris"] = sum(len(p.vertices) - 2 for p in base["jacket"].data.polygons)
+    stats["timings_s"] = T
+    stats["draft"] = {"frame": {k: (round(v, 3) if isinstance(v, float) else v) for k, v in D.frame.items()},
+                      "seam_lengths_cm": D.seam_lengths()}
+    stats["options"] = {k: v for k, v in O.items() if not k.startswith("_")}
+    np.savez_compressed(os.path.join(A.out_dir, "kept.npz"), X3=X3, Tw=Tw, Vr=Vr,
+                        Fr=np.array([list(f) + [-1] * (4 - len(f)) for f in Fr]))
+    with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
+        json.dump(stats, f, indent=1, default=float)
+    print(json.dumps({k: stats[k] for k in ("stage1_gap_mm", "inside_after_push", "kept_tris")}, indent=1), flush=True)
+    for nm, v in stats["crease_final"].items():
+        print(f"[spike] crease {nm}: {v}", flush=True)
+    if A.no_render:
+        return
+    t = time.perf_counter()
+    tube.hide_render = True
+    for p in pads:
+        p.hide_render = True
+    under = [body.name] + [base[k].name for k in ("shirt", "waistcoat", "trousers", "shoes", "tie") if k in base]
+    base["jacket"].hide_viewport = False
+    bpy.context.scene.frame_set(1)
+    render_views(A.out_dir, "lofted", under + [base["jacket"].name], list(VIEWS))
+    render_views(A.out_dir, "pattern", under + [jk.name, rv.name], list(VIEWS))
+    render_close(A.out_dir, "lofted", under + [base["jacket"].name])
+    render_close(A.out_dir, "pattern", under + [jk.name, rv.name])
+    if O.get("debug_rever"):
+        render_close(A.out_dir, "rever", [body.name, rv.name])
+        render_close(A.out_dir, "jbody", [body.name, jk.name])
+        render_views(A.out_dir, "rever", [body.name, rv.name], ["front", "back"], target=(0, 0, 1.4), scale=0.7)
+    tick("render", t)
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(A.out_dir, "spike.blend"), compress=True)
+    with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
+        stats["timings_s"] = T
+        json.dump(stats, f, indent=1, default=float)
+
+
+def _cli_opts():
+    """--opts: inline JSON, or @path to a JSON file."""
+    if not A.opts:
+        return {}
+    if A.opts.startswith("@"):
+        with open(A.opts[1:]) as f:
+            return json.load(f)
+    return json.loads(A.opts)
+
+
 def main():
-    O = sp.merge(SPIKE, json.loads(A.opts) if A.opts else {})
+    O = sp.merge(SPIKE, _cli_opts())
+    if O.get("v2") or A.v2:
+        return main_v2(sp.merge(sp.merge(SPIKE, SPIKE2), _cli_opts()))
     t = time.perf_counter()
     body, names = capture_body()
     tick("body_capture", t)
