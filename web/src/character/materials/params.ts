@@ -63,9 +63,10 @@ export const DEFAULT_PARAMS = {
      * already spread the highlight across a card the way the strand-to-strand variation does. */
     exponent1: 60,
     exponent2: 12,
-    // T6 had 0.0175 / 0.02 (shader balls, exponents 160 / 28, a near-black atlas: hair region 0.24x Cycles)
-    spec1: 0.13,
-    spec2: 0.05,
+    // T6 had 0.0175 / 0.02 (shader balls, exponents 160 / 28, a near-black atlas: hair region 0.24x Cycles).
+    // T9: 0.19 / 0.07 with the per-card layer scale (front locks 0.4, under 0.7): hair region 0.98x the hero.
+    spec1: 0.19,
+    spec2: 0.07,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,
