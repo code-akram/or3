@@ -39,7 +39,11 @@ from . import export, head_refine, skin_tex
 
 DEFAULTS = {
     "segments": 48, "rings": 36, "tex_px": 1024,
-    "cornea_bulge_mm": 1.3, "cornea_deg": 34.0,   # T18: 2.2 -> 1.3 (the hero cornea; 2.2 poked through the upper lid)
+    # T18 tried 1.3 (the hero's, anatomical: cornea radius ~7.9 mm): read40's eye-band box is
+    # anchored on the cornea apex (lookdev_render.read_test), so the 0.9 mm shorter apex moved the
+    # box one 48-px column into the lid skin, 0.827 -> 0.775 for the same frame. Kept at 2.2 so the
+    # gate measures what it measured before; the engine refraction fits whatever cornea ships.
+    "cornea_bulge_mm": 2.2, "cornea_deg": 34.0,
     # Real-size iris and pupil (mm) on the fitted sphere: they override the
     # *_deg values; the cornea edge sits cornea_margin_deg past the limbus.
     # The MPFB eye sphere is ~15 mm in radius, so iris_deg 30 gave a 15 mm iris.
@@ -57,7 +61,7 @@ DEFAULTS = {
     # T18 sclera gradient: darker and warmer toward both canthi (|cos phi| ** corner_pow) from
     # canthus_from_deg past the limbus, and a little toward the lids (the sclera is brightest
     # beside the limbus, where it is seen face-on; a porcelain band read doll-like)
-    "canthus_dark": 0.5, "canthus_pow": 1.6, "canthus_from_deg": 4.0, "canthus_to_deg": 26.0,
+    "canthus_dark": 0.6, "canthus_pow": 1.4, "canthus_from_deg": 2.0, "canthus_to_deg": 20.0,
     "canthus_tint": [0.93, 0.80, 0.76], "lid_band_dark": 0.05,
     # T18 relief (normal map, eyes_normal: tangent space on the polar UV, x = +u, y = +v):
     # iris fibres / crypts / collarette ridge and the raised conjunctival vessels (mm)
@@ -688,7 +692,9 @@ def game_parts(b, eye_obj, spheres, lids, cfg):
     def build_shell(bm, uvl, dl, gi):
         cols = int(gp["shell_cols"])
         lift = gp["shell_lift_mm"] * 0.001
-        vrows = (0.0, 0.25, 1.0)
+        # rows across the shell: under the lid, the margin, then fine steps inward (the upper shell
+        # rides the cornea bulge, where a single chord dips under the surface and the shell vanishes)
+        vrows = (0.0, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0)
         for (c, r), lm in zip(spheres, lids):
             bnd = _smooth_ring(lm.boundary, 3)
             for lid in ("lower", "upper"):
@@ -703,7 +709,9 @@ def game_parts(b, eye_obj, spheres, lids, cfg):
                     phw = ph % (2 * math.pi)
                     th_b = float(np.interp(phw, lm.ph, bnd, period=2 * math.pi))
                     row = []
-                    for th in (th_b + under, th_b, max(th_b - width, math.radians(1.0))):
+                    for vr in vrows:
+                        th = th_b + under * (0.25 - vr) / 0.25 if vr < 0.25 else th_b - width * (vr - 0.25) / 0.75
+                        th = max(th, math.radians(1.0))
                         vv = bm.verts.new(Vector(np.asarray(c) + lm.direction(th, phw) * (surf_r(r, th) + lift)))
                         vv[dl][gi] = 1.0
                         row.append(vv)

@@ -737,7 +737,8 @@ function eyeShade(src: Std, P: ParamStore, frames: EyeFrames): EyeShade {
   const hx = H.dot(Ex);
   const hz = H.dot(Ez);
   const rho1 = vec2(hx, hz).length();
-  const theta1 = asin(rho1.div(R).min(0.999));
+  // the opaque sclera bounds what the cornea shows: a ray past the iris root lands on its rim
+  const theta1 = asin(rho1.min(rhoI.mul(0.995)).div(R).min(0.999));
   const phi1 = atan(hz, hx);
   const st = vec2(fract(phi1.div(TAU)).mul(0.5).add(side.mul(0.5)), float(1).sub(theta1.div(Math.PI).sqrt()));
   const eRho = Ex.mul(phi1.cos()).add(Ez.mul(phi1.sin()));
@@ -869,13 +870,17 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
       // limbal shading: the refracted path back out must leave through the cornea, not the sclera
       const thE = atan(E.sub(sh.C).sub(sh.A.mul(E.sub(sh.C).dot(sh.A))).length(), E.sub(sh.C).dot(sh.A));
       const vis = smoothstep(sh.thetaC.add(0.03), sh.thetaC.sub(0.03), thE);
-      const fresIn = float(1).sub(float(0.04).add(float(0.96).mul(float(1).sub(Nen.dot(L).clamp()).pow(5))));
+      const cosIn = Nen.dot(L).clamp();
+      const fresIn = float(1).sub(float(0.04).add(float(0.96).mul(float(1).sub(cosIn).pow(5))));
+      // irradiance: the flux through the cornea patch (cos at entry) spread on the iris plane, tilted
+      // onto the iris normal (refraction alone does not brighten: a flat interface keeps E = T cos)
       const nI = sh.irisN.dot(Lr).clamp();
+      const tilt = nI.div(sh.A.dot(Lr).max(0.25)).min(2);
       // caustic: the cornea converges the light onto the iris side away from it (outer half)
       const Llat = L.sub(sh.A.mul(L.dot(sh.A)));
       const far = sh.eRho.dot(Llat.normalize()).negate().clamp().mul(smoothstep(0.2, 0.9, sh.H.sub(sh.A.mul(sh.H.dot(sh.A))).length().div(sh.rhoI)));
-      const caustic = P.u('eye.causticGain').mul(nI.pow(2)).mul(far).mul(Llat.length());
-      const iris = lightColor.mul(fresIn).mul(diffuseRamp(P, nI.mul(vis)).add(caustic));
+      const caustic = P.u('eye.causticGain').mul(nI.pow(2)).mul(far).mul(Llat.length()).mul(cosIn);
+      const iris = lightColor.mul(fresIn).mul(diffuseRamp(P, cosIn.mul(tilt).mul(vis).clamp()).add(caustic.mul(vis)));
       const diff = mix(scl, iris, sh.inCornea).mul(lambert).mul(occl).mul(eyeLight);
       reflectedLight.directDiffuse.addAssign(diff);
     } else {
@@ -914,6 +919,11 @@ export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
     if (src.roughnessMap) this.roughnessNode = texture(src.roughnessMap, uv()).g;
     this.normalNode = sh.scleraN;
     this.specularIntensityNode = float(1).sub(sh.inCornea);
+    // the wet surface's reflection of the surroundings (the Cycles hero's set and fill veil the iris):
+    // a constant radiance x Fresnel, a stand-in until the set-bounce environment (checkpoint 3 §2.5)
+    const nv = geometryNormal.dot(positionViewDirection).clamp();
+    const fres = float(0.04).add(float(0.96).mul(float(1).sub(nv).pow(5)));
+    this.emissiveNode = P.u('eye.envVeil').mul(fres).mul(P.u('eye.corneaStrength'));
     this.metalnessNode = float(0);
     this.clearcoat = 0; // the cornea lobe lives in EyeLightingModel
     this.normalMap = null;

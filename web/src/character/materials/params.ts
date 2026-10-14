@@ -177,7 +177,7 @@ export const DEFAULT_PARAMS = {
   },
   eye: {
     albedoGain: 1.0,
-    corneaRoughness: 0.04,
+    corneaRoughness: 0.08, // T18: 0.04 -> 0.08 with the LTC catchlight (Cycles: film 0.04 + blur_glossy 0.5)
     // shader-ball calibrated (T6): 1.0 put the area-light catchlight peak at 1.35x Cycles (coat f0 ~0.025 vs 0.04)
     corneaStrength: 0.7,
     /** Eye UV is a polar map: v from the back (0) to the cornea pole (1). Limbus and pupil rows. */
@@ -192,13 +192,13 @@ export const DEFAULT_PARAMS = {
     ior: 1.376,
     /** Iris radius (mm; eyes_hq iris_mm / 2) and its plane under the limbus plane (the hero's recess_mm). */
     irisRadiusMm: 5.9,
-    irisRecessMm: 0.5,
+    irisRecessMm: 0.0,
     /** Iris cone: the pupil margin forward of the root (slope of the iris normal toward the rim). */
     irisCone: 0.05,
     /** Scale of the eyes_normal map's slopes (iris fibres / crypts, conjunctival vessels). */
     normalStrength: 1.0,
     /** The caustic on the iris side away from the light. */
-    causticGain: 0.6,
+    causticGain: 0.25,
     scleraWrap: 0.15,
     /** The hero rig's camera catchlight lights the diffuse at this share (Blender: diffuse 0.3). */
     eyeLightDiffuse: 0.3,
@@ -207,6 +207,8 @@ export const DEFAULT_PARAMS = {
     /** Lid shell (eye_lidshell) opacity scale over its baked alpha; the tear meniscus specular. */
     shellStrength: 1.0,
     meniscusSpec: 1.0,
+    /** Radiance of the surroundings the wet eye reflects (x Fresnel x corneaStrength; emissive). */
+    envVeil: [0.05, 0.07, 0.12],
   },
   cloth: {
     albedoGain: 1.0,
