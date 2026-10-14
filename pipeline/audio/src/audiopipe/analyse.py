@@ -8,10 +8,12 @@ Per file it writes data/build/audio/analysis/<slug>.{json,png} and prints a tabl
   * astats: DC offset, peak, flat factor / peak count (clipping), effective bit depth
   * own numpy measures: clipped-sample runs, noise floor (10th pct of 50 ms RMS),
     digital-silence fraction, SNR proxy (p95 - p10 short-term RMS)
-  * spectral cutoff: content edge (highest frequency 10 dB above the spectrum's own floor)
-    and the steepest drop above 8 kHz in a 1 kHz window. A >=25 dB/kHz wall below
-    20.5 kHz = lossy-codec origin (rejected even inside a WAV); a wall at 20.5-22 kHz
-    below Nyquist = resampled from 44.1/48 kHz (accepted, noted)
+  * spectral cutoff: content edge (highest frequency 10 dB above the spectrum's own floor, on
+    the median and the power-mean Welch spectrum, edge-safe smoothing) and the steepest drop
+    above 4 kHz in a 1 kHz window. A >=25 dB/kHz wall below 20.5 kHz = lossy-codec origin or an
+    upsampled low-rate source (rejected even inside a WAV); a wall at 20.5-22 kHz below Nyquist
+    = resampled from 44.1/48 kHz (accepted, noted). A content edge below 18 kHz with no such
+    wall = a dark source with a natural roll-off: accepted with a FLAG for the listening gate
   * showspectrumpic spectrogram (linear frequency, log magnitude) for visual inspection
   * human presence (NOTES §12, human-free soundscape) for ambience roles (ambience, bed-*, event-*,
     rain): Silero VAD speech segments (audiopipe.vad) and AudioSet tagger windows (audiopipe.tagger).
@@ -38,6 +40,7 @@ OUT = BUILD / "analysis"
 
 # Quality floor (see report for the reasoning). Applied per role.
 LOSSY_WALL_HZ = 20500  # MP3/AAC encoders low-pass at 16-20 kHz; ADC/resampler walls sit at 20.5-22 kHz
+WALL_SEARCH_FROM_HZ = 4000
 
 FLOOR = {
     "min_bandwidth_hz": 18000,     # effective content must reach 18 kHz
@@ -134,30 +137,56 @@ def numpy_stats(x: np.ndarray, sr: int) -> dict:
     }
 
 
+def smooth_db(pdb: np.ndarray, k: int) -> np.ndarray:
+    """Centred k-bin moving average of a dB spectrum, same length, edge-safe.
+
+    Reflect-pads instead of zero-padding: np.convolve(mode="same") pads with 0, which in dB is
+    ~100 dB above a real noise floor, so the last k/2 bins below Nyquist were lifted and the
+    content edge always read as Nyquist (the 18 kHz floor could never fire).
+    """
+    if k <= 1:
+        return pdb.copy()
+    left, right = k // 2, k - 1 - k // 2
+    padded = np.pad(pdb, (left, right), mode="reflect")
+    return np.convolve(padded, np.ones(k) / k, mode="valid")
+
+
+def content_edge(f: np.ndarray, sm: np.ndarray) -> float:
+    """Highest frequency still 10 dB above the smoothed spectrum's own floor (its minimum above 1 kHz).
+    A spectrum that stays within 10 dB of its floor all the way up (white) has no edge: Nyquist."""
+    floor = float(np.min(sm[f > 1000]))
+    above = np.where(sm > floor + 10)[0]
+    return float(f[above[-1]]) if len(above) else float(f[-1])
+
+
 def spectral(x: np.ndarray, sr: int) -> dict:
     mono = x.mean(axis=1).astype(np.float64)
-    f, p = signal.welch(mono, sr, nperseg=8192, noverlap=4096, window="hann", average="median")
-    pdb = 10 * np.log10(p + 1e-30)
-    # smooth over ~200 Hz
-    k = max(1, int(200 / (f[1] - f[0])))
-    sm = np.convolve(pdb, np.ones(k) / k, mode="same")
+    sms = {}
+    for avg in ("median", "mean"):
+        f, p = signal.welch(mono, sr, nperseg=8192, noverlap=4096, window="hann", average=avg)
+        sms[avg] = smooth_db(10 * np.log10(p + 1e-30), max(1, int(200 / (f[1] - f[0]))))  # ~200 Hz moving average
+    # The median spectrum is the typical frame (for a gated or sparse source: the background between
+    # events); the power mean is dominated by the loud frames (the steps, calls, gusts). The source's
+    # content reaches as high as either does.
+    sm = sms["median"]
     ref = float(np.median(sm[(f >= 1000) & (f <= 4000)]))
-    floor = float(np.min(sm[f > 1000]))
-    # content edge: highest frequency still 10 dB above the spectrum's own floor
-    above = np.where(sm > floor + 10)[0]
-    cutoff = float(f[above[-1]]) if len(above) else 0.0
-    # steepest 1 kHz drop above 8 kHz
+    edge_med, edge_mean = content_edge(f, sm), content_edge(f, sms["mean"])
+    cutoff = max(edge_med, edge_mean)
+    # steepest 1 kHz drop above 4 kHz (from 4 kHz so an upsampled 8-16 kHz-rate source shows its wall too)
     step = max(1, int(1000 / (f[1] - f[0])))
     best_drop, best_f = 0.0, 0.0
-    for i in range(np.searchsorted(f, 8000), len(sm) - step):
+    for i in range(np.searchsorted(f, WALL_SEARCH_FROM_HZ), len(sm) - step):
         d = sm[i] - sm[i + step]
         if d > best_drop:
             best_drop, best_f = float(d), float(f[i])
     nyq = sr / 2
     brick = best_drop >= 25.0 and best_f < 0.9 * nyq
-    band_hi = float(np.median(sm[(f >= 15000) & (f <= 18000)]) - ref) if nyq > 18000 else None
+    band = (f >= 15000) & (f <= 18000)
+    band_hi = float(np.median(sm[band]) - ref) if nyq > 18000 else None
+    sl = sms["mean"]
+    band_hi_loud = float(np.median(sl[band]) - np.median(sl[(f >= 1000) & (f <= 4000)])) if nyq > 18000 else None
     if brick and best_f < LOSSY_WALL_HZ:
-        verdict = f"brick wall at ~{best_f/1000:.1f} kHz: lossy-codec low-pass (MP3/AAC origin)"
+        verdict = f"brick wall at ~{best_f/1000:.1f} kHz: lossy-codec low-pass (MP3/AAC origin) or upsampled from a lower rate"
     elif brick:
         verdict = f"brick wall at ~{best_f/1000:.1f} kHz: resampled from a lower rate (not lossy)"
     elif cutoff < 0.8 * nyq:
@@ -167,9 +196,12 @@ def spectral(x: np.ndarray, sr: int) -> dict:
     return {
         "ref_1_4k_db": round(ref, 1),
         "content_edge_hz": round(cutoff),
+        "content_edge_median_hz": round(edge_med),
+        "content_edge_mean_hz": round(edge_mean),
         "steepest_drop_db_per_khz": round(best_drop, 1),
         "steepest_drop_at_hz": round(best_f),
         "band_15_18k_rel_db": None if band_hi is None else round(band_hi, 1),
+        "band_15_18k_rel_db_loud": None if band_hi_loud is None else round(band_hi_loud, 1),
         "nyquist_hz": nyq,
         "brick_wall": bool(brick),
         "verdict": verdict,
@@ -196,8 +228,12 @@ def gate(role: str, fmt: dict, ff: dict, npst: dict, sp: dict, human: dict | Non
         reasons.append(f"lossy original ({fmt['codec']})")
     if sp["brick_wall"] and sp["steepest_drop_at_hz"] < LOSSY_WALL_HZ and fmt.get("codec") not in FLOOR["lossy_codecs"]:
         reasons.append(f"lossy origin hidden in a {fmt['codec']} {fmt['sample_rate']} Hz container ({sp['verdict']})")
-    if sp["effective_bandwidth_hz"] < FLOOR["min_bandwidth_hz"]:
-        reasons.append(f"effective bandwidth {sp['effective_bandwidth_hz']/1000:.1f} kHz < 18 kHz ({sp['verdict']})")
+    # Below the bandwidth floor. Behind a wall under 20.5 kHz (lossy codec, upsampled low-rate
+    # source): rejected by the rule above. A gentle roll-off with no such wall is a dark source: the
+    # recording chain reaches Nyquist, the sound does not, and the edge metric cannot tell that from
+    # a soft low-pass. Accepted with a FLAG for the listening gate (bench/m1/v4/t4-audio-bandwidth.md).
+    walled = sp["brick_wall"] and sp["steepest_drop_at_hz"] < LOSSY_WALL_HZ
+    dark = sp["effective_bandwidth_hz"] < FLOOR["min_bandwidth_hz"] and not walled
     if npst["clipped_fraction"] > FLOOR["max_clipped_fraction"]:
         reasons.append(f"clipping ({npst['clipped_samples']} samples in flat runs)")
     if npst["snr_proxy_db"] < FLOOR["min_snr_db"].get(role, 0):
@@ -205,7 +241,12 @@ def gate(role: str, fmt: dict, ff: dict, npst: dict, sp: dict, human: dict | Non
     if reasons:
         return "rejected", "; ".join(reasons)
     notes = []
-    if sp["brick_wall"] or sp["content_edge_hz"] < 0.8 * sp["nyquist_hz"]:
+    if dark:
+        notes.append(f"FLAG: below the {FLOOR['min_bandwidth_hz'] // 1000} kHz bandwidth floor with a gentle roll-off and no wall "
+                     f"(content edge {sp['content_edge_median_hz']/1000:.1f} kHz typical frame, {sp['content_edge_mean_hz']/1000:.1f} kHz "
+                     f"loud frames; 15-18 kHz band vs 1-4 kHz {sp['band_15_18k_rel_db']} / {sp['band_15_18k_rel_db_loud']} dB): "
+                     "dark source, judge by ear")
+    elif sp["brick_wall"] or sp["content_edge_hz"] < 0.8 * sp["nyquist_hz"]:
         notes.append(f"nominal {fmt['sample_rate']} Hz but content stops near {sp['effective_bandwidth_hz']/1000:.1f} kHz; fine for a 48 kHz master")
     if abs(ff.get("dc_offset") or 0) > 0.001:
         notes.append(f"DC offset {ff['dc_offset']:.4f} (removed by high-pass)")
@@ -215,7 +256,8 @@ def gate(role: str, fmt: dict, ff: dict, npst: dict, sp: dict, human: dict | Non
         n_t, n_v = len(human["tagger"]["human_spans_s"]), len(human["vad"]["speech_segments"])
         notes.append(f"human-free check passed (tagger {human['tagger']['human_windows']}/{human['tagger']['windows']} windows, "
                      f"VAD {human['vad']['speech_seconds']} s)" + (f"; {n_t + n_v} span(s) cut by the bed builder" if n_t + n_v else ""))
-    return "accepted", "passes floor" + (": " + "; ".join(notes) if notes else "")
+    head = "passes floor with a bandwidth flag" if dark else "passes floor"
+    return "accepted", head + (": " + "; ".join(notes) if notes else "")
 
 
 def main() -> None:

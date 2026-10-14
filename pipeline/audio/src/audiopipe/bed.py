@@ -41,7 +41,7 @@ from scipy import signal
 from . import loop, spatialise, tagger, vad
 from . import loudness as Lz
 from .clean import slug_of
-from .common import BUILD, file_sha256, log
+from .common import BUILD, clear_outputs, file_sha256, log
 
 SR = 48000
 OUT = BUILD / "masters" / "ambience-v2"
@@ -409,6 +409,8 @@ def write_float(path: Path, y: np.ndarray) -> None:
 
 def build() -> dict:
     PRE.mkdir(parents=True, exist_ok=True)
+    for sub in ("layers", "events"):   # master globs these: no stale takes from a bigger earlier run
+        clear_outputs(PRE / sub, "*.wav")
     rng = np.random.default_rng(SEED)
     ir, ir_info = reflections_ir()
     layer_info, layers = build_layers(ir, rng)

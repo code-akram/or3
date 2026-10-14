@@ -89,7 +89,7 @@ Analysis of the 13 files took 46 s wall time; load average went from 4.59 to 6.7
 **Quality floor:**
 - Reject lossy originals.
 - Reject a ≥ 25 dB/kHz brick wall below 20.5 kHz even inside a WAV, because that is a lossy origin that was upsampled.
-- Reject effective bandwidth under 18 kHz.
+- Reject effective bandwidth under 18 kHz. **Correction (2026-10-14, [t4](../m1/v4/t4-audio-bandwidth.md)):** this rule never fired. The content-edge smoothing zero-padded the dB spectrum, which lifted the bins under Nyquist, so every file read as full-band. With edge-safe smoothing, a content edge under 18 kHz behind a wall (codec or resampler) is still rejected. A gentle roll-off with no wall is now accepted with a **FLAG** for the listening gate: these are dark sources, not band-limited files.
 - Reject clipped runs above 1e‑5 of all samples.
 - For footsteps, reject an SNR proxy under 30 dB.
 
@@ -341,7 +341,7 @@ The page must be served over HTTP. With `file://`, Chrome blocks the `fetch()` t
 
 - **Clipped intermediate.** The first foley loudness target (−18 LUFS‑M) drove the peaks to +12.8 dBFS and clipped the 24-bit FLAC write. Replaced with loudness matching plus a pool TP ceiling, as described in 4b.
 - **Clipped alley write.** The alley convolution hit 0 dBFS before normalisation, also in a 24-bit write. It is now kept as float until the pool gain is applied.
-- **Useless spectral metric.** The first cutoff metric (−70 dB below 1–4 kHz) put every file at Nyquist, MP3s included. It was replaced by a brick-wall slope detector with a 20.5 kHz lossy threshold.
+- **Useless spectral metric.** The first cutoff metric (−70 dB below 1–4 kHz) put every file at Nyquist, MP3s included. It was replaced by a brick-wall slope detector with a 20.5 kHz lossy threshold. The content edge kept reading Nyquist for a second reason, found in the 2026-10-14 review: `np.convolve(mode="same")` zero-pads the dB spectrum. Fixed in [t4](../m1/v4/t4-audio-bandwidth.md).
 - **Contact-mic selection.** Yuval's contact-mic steps are 450–700 ms long, so the default selector found only 1 usable step. A "contact" profile was added.
 - **Non-reproducible encodes.** Opus outputs differed between rebuilds because of the random Ogg serial. Fixed with `+bitexact`.
 - **Crash on a non-audio record.** `analyse` crashed on the PLATEAU source record, which has no local path. Fixed by filtering.

@@ -41,11 +41,24 @@ LISTEN = {
         "Does round 2 still sound like a leather sole on a wet street, not a separate splash layer, a hand slap, or hiss?",
         "Walk over the bed: do wet steps stay clear of the rain? (The splash band, 1.5-6 kHz, is where the rain is too.)",
         "Is round 2 too loud or too bright next to the dry set (it is about 2-3 LU louder)?",
+        "Wet takes now start sample-aligned with their dry take (they were 10 ms late, the EQ's delay). Switching dry -> wet "
+        "should not move the step in time.",
     ],
     "alley": [
         "The spike-6 IR was re-baked since round 1 (tail to -60 dB now ~0.74 s, was ~1.05 s; same EDT/T20 within 5 %). Do the alley takes still sound right?",
+        "Alley footstep takes only (walk set 'alley dry' / 'alley wet'): the bake scales Steam Audio's reflections down 8.6 dB "
+        "(its calibration against a ground-plane run), which sets these takes' direct-to-reverb balance (DRR about -8 dB). "
+        "Is that right, or should the alley be wetter? This does not apply to the night bed: the bed normalises the IR "
+        "itself and sets each layer's reflections level on its own, so the calibration has no effect there.",
+    ],
+    "bandwidth": [
+        "These recordings are dark: by the pipeline's measure their content stops below the 18 kHz quality floor, but "
+        "with a natural roll-off and no codec or resampler wall (lossy or upsampled files are still rejected). On the "
+        "laptop speakers, does any of them sound dull, muffled or 'cheap' next to the others? If so, name it: it goes "
+        "back for a brighter replacement. The footstep one is the approved main pool.",
     ],
 }
+BANDWIDTH_FLAG = "bandwidth flag"   # marker in provenance status_reason (audiopipe.analyse.gate)
 
 
 def pool_png(files: list[Path], png: Path) -> None:
@@ -87,6 +100,25 @@ def main() -> None:
     recs = prov.load()
     analysis = {a["id"]: a for a in json.loads((BUILD / "analysis" / "summary.json").read_text())}
     used = sorted({l["id"] for l in bedj["layers"]} | {i for e in bedj["events"] for i in e["sources"]})
+    pool = json.loads((BUILD / "masters" / "foley" / POOL / "pool.json").read_text())
+    step_src = "freesound:" + pool["source"].split("-")[-1]
+    used_for: dict[str, list[str]] = {step_src: [f"footsteps ({POOL}, main pool)"]}
+    for l in bedj["layers"]:
+        used_for.setdefault(l["id"], []).append(f"bed layer {l['name']}")
+    for e in bedj["events"]:
+        for i in e["sources"]:
+            used_for.setdefault(i, []).append(f"bed event {e['name']}")
+    flagged = []
+    for r in sorted(used_for):
+        if BANDWIDTH_FLAG in recs[r].get("status_reason", ""):
+            s = analysis[r]["spectral"]
+            flagged.append({"id": r, "title": recs[r]["title"][:60], "author": recs[r]["author"], "used": ", ".join(used_for[r]),
+                            "edge_typ_khz": s["content_edge_median_hz"] / 1000, "edge_loud_khz": s["content_edge_mean_hz"] / 1000,
+                            "band_rel_db": f"{s['band_15_18k_rel_db']} / {s['band_15_18k_rel_db_loud']}", "png": analysis[r]["spectrogram"]})
+    flag_rows = "".join(
+        f"<tr><td><a href='{html.escape(recs[f['id']]['source_url'])}'>{html.escape(f['id'])}</a></td><td>{html.escape(f['title'])}</td>"
+        f"<td>{html.escape(f['used'])}</td><td>{f['edge_typ_khz']:.1f} / {f['edge_loud_khz']:.1f} kHz</td><td>{f['band_rel_db']} dB</td>"
+        f"<td><a href='{html.escape(f['png'])}'>png</a></td></tr>" for f in flagged) or "<tr><td colspan='6'>none</td></tr>"
 
     data = {
         "bed": web_bed, "base": "web/ambience-v2/",
@@ -119,7 +151,7 @@ def main() -> None:
     ir_note = ("<b class='rejected'>SYNTHETIC PLACEHOLDER IR</b>" if ir["synthetic_placeholder"] else
                f"spike-6 IR snapshot <code>{html.escape(ir['source_ir'])}</code> (sha256 {ir['source_ir_sha256'][:12]}…)")
     rep = {"__DATA__": json.dumps(data), "__SOURCES__": src_rows, "__LAYERS__": layer_rows, "__SPLASH__": splash_rows,
-           "__VOL__": vol_rows, "__IR__": ir_note, "__LISTEN__": json.dumps(LISTEN), "__VOLUMES__": html.escape(VOLUMES),
+           "__VOL__": vol_rows, "__IR__": ir_note, "__FLAGS__": flag_rows, "__LISTEN__": json.dumps(LISTEN), "__VOLUMES__": html.escape(VOLUMES),
            "__BA__": f"{summary['bus_gains_db']['ambience']:+.0f}", "__BF__": f"{summary['bus_gains_db']['foley']:+.0f}",
            "__PREVSTATS__": fmt_stats(prev["stats"])}
     page = PAGE
@@ -160,7 +192,14 @@ def main() -> None:
           "| volume | bed dBA | dry step peak dBA | wet step peak dBA | bed over room |", "|---|---|---|---|---|"] + [
           f"| {v} | {r['bed_dba']} | {r['steps_dba_peak']} | {r['wet_steps_dba_peak']} | {r['bed_over_room_db']:+} |"
           for v, r in spk["mix"]["volumes"].items()] + [
-          "", "## 5. Sources (all CC0 or CC-BY 4.0; credits in provenance/audio.jsonl)", "",
+          "", "## 5. Dark sources (below the 18 kHz bandwidth floor, flagged)", "",
+          "Page section 4. The floor measure was broken until 2026-10-14 (it always read Nyquist); fixed, it puts these "
+          "sources under 18 kHz. None shows a codec or resampler wall, so they are accepted with a flag instead of "
+          "rejected (bench/m1/v4/t4-audio-bandwidth.md).", ""] + [f"- [ ] {x}" for x in LISTEN["bandwidth"]] + [
+          "", "| ok | id | title | used for | content edge, typical / loud frames | 15-18 kHz vs 1-4 kHz, typical / loud |", "|---|---|---|---|---|---|"] + [
+          f"| [ ] | {f['id']} | {f['title']} | {f['used']} | {f['edge_typ_khz']:.1f} / {f['edge_loud_khz']:.1f} kHz | {f['band_rel_db']} dB |"
+          for f in flagged] + [
+          "", "## 6. Sources (all CC0 or CC-BY 4.0; credits in provenance/audio.jsonl)", "",
           "| id | title | author | licence | human check (VAD / tagger) |", "|---|---|---|---|---|"] + [
           f"| {r} | {recs[r]['title'][:60]} | {recs[r]['author']} | {recs[r]['licence']} | {human(r)} |" for r in used] + [
           "| synthesised | crossing signals (piyo / kakko) | project | CC-BY-4.0 (own work) | - |", ""]
@@ -228,7 +267,11 @@ Cadence <input id="cad" type="range" min="1.2" max="2.6" step="0.1" value="1.8">
 <h2>3. Mix at 25 % / 60 % (speaker model; rough)</h2>
 <div class="card scroll"><table><tr><th>volume</th><th>bed dBA</th><th>dry step peak dBA</th><th>wet step peak dBA</th><th>bed over a 30 dBA room</th></tr>__VOL__</table></div>
 
-<h2>4. Sources</h2>
+<h2>4. Dark sources (below the 18 kHz bandwidth floor, flagged)</h2>
+<div class="card"><ul id="bwListen"></ul>
+<div class="scroll"><table><tr><th>id</th><th>title</th><th>used for</th><th>content edge, typical / loud frames</th><th>15-18 kHz vs 1-4 kHz, typical / loud</th><th>spectrogram</th></tr>__FLAGS__</table></div></div>
+
+<h2>5. Sources</h2>
 <div class="card scroll"><table><tr><th>id</th><th>title</th><th>author</th><th>licence</th><th>human check</th><th>spectrogram</th></tr>
 __SOURCES__<tr><td>synthesised</td><td>crossing signals (piyo / kakko)</td><td>project</td><td>CC-BY-4.0</td><td>-</td><td></td></tr></table></div>
 </main>
@@ -241,7 +284,7 @@ const expo = m => -Math.log(1 - Math.random()) * m;
 async function load(url){ if(cache[url]) return cache[url];
   const r = await fetch(url); const b = await ac().decodeAudioData(await r.arrayBuffer()); cache[url] = b; return b; }
 const fill=(id,arr)=>{document.getElementById(id).innerHTML=arr.map(x=>'<li>'+x+'</li>').join('')};
-fill('bedListen', LISTEN.bed); fill('prevListen', LISTEN.preview); fill('wetListen', LISTEN.wet); fill('alleyListen', LISTEN.alley);
+fill('bedListen', LISTEN.bed); fill('prevListen', LISTEN.preview); fill('wetListen', LISTEN.wet); fill('alleyListen', LISTEN.alley); fill('bwListen', LISTEN.bandwidth);
 const log = m => { const el=document.getElementById('log'); el.textContent += m + '\n'; el.scrollTop = el.scrollHeight; };
 
 // Loops are Opus files wrap-padded by loop_start_s on both sides. A lossy decode of the loop's end

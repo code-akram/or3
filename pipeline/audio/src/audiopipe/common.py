@@ -160,6 +160,18 @@ def ffmpeg_version() -> str:
     return out.splitlines()[0].split()[2]
 
 
+def clear_outputs(directory: Path, pattern: str) -> int:
+    """Delete a stage's previous outputs (files matching `pattern` directly in `directory`) so a
+    rerun that builds fewer files leaves no stale ones behind for a later glob to pick up."""
+    n = 0
+    if directory.is_dir():
+        for f in directory.glob(pattern):
+            if f.is_file():
+                f.unlink()
+                n += 1
+    return n
+
+
 def file_sha256(path: Path) -> str:
     import hashlib
     h = hashlib.sha256()
