@@ -183,7 +183,7 @@ def measure(arm, body, eyes, emb=None):
             m["nose_length_mm"] = (nas.z - prn.z) * 1000
             m["nose_proj_ratio"] = m["nose_projection_mm"] / max(m["nose_length_mm"], 1e-6)
 
-        m.update(head_structure(body, co, eyes, eye_co, chin.z, ez, lm))
+        m.update(head_structure(body, co, eyes, eye_co, chin, ez, lm))
         m["interpupillary"] = (sum(p.x for p in eye_co if p.x > 0) / max(1, sum(1 for p in eye_co if p.x > 0))
                                - sum(p.x for p in eye_co if p.x < 0) / max(1, sum(1 for p in eye_co if p.x < 0)))
 
@@ -268,18 +268,60 @@ def _aperture(skin, eye_bvh, c, side, step=0.00025):
     return aperture, medial, lateral, top, bottom
 
 
-def gonial_angle(lm, side_x, ear_c):
-    """Soft-tissue gonial angle (photo-anthropometric) at the gonion landmark, in the sagittal
-    (y, z) projection: between the line to the menton (the mandibular border) and the line to the
-    condyle point (front of the ear at its mid height, the tragus proxy). lm: MediaPipe landmark
-    points on the measured mesh (head_sculpt embedding); gonion = 172 / 397 on the side whose x
-    sign matches side_x, averaged with its mirrored partner (the embedding is not symmetric)."""
-    x0 = lm[152][0]
-    a_, b_ = (lm[172], lm[397]) if np.sign(lm[172][0] - x0) == side_x else (lm[397], lm[172])
-    g = 0.5 * (a_ + np.array([2 * x0 - b_[0], b_[1], b_[2]]))
-    a = (lm[152] - g)[1:]
-    b = (ear_c - g)[1:]
-    return float(np.degrees(np.arccos(np.clip(a @ b / np.linalg.norm(a) / np.linalg.norm(b), -1, 1))))
+def _occluding_edge(skin, side, ray, scan, pivots, span=0.045, step=0.0005, jump=0.004, z_min=-np.inf):
+    """Occluding-contour points of the skin seen along `ray` (unit): for each pivot, a line of
+    parallel rays offset along `scan` (unit, perpendicular to ray); the edge is the last hit
+    before the first depth jump (or miss) when scanning toward +scan (the first overhang below
+    the cheek), among edges above z_min."""
+    out = []
+    r = Vector(ray)
+    for p0 in pivots:
+        hits = []
+        for u in np.arange(-span, span + 1e-9, step):
+            o = Vector(p0 + u * scan - 0.25 * ray)
+            loc, _, _, d = skin.ray_cast(o, r)
+            hits.append((d if loc is not None else np.inf, loc))
+        t = np.array([h[0] for h in hits])
+        k = None
+        for i in range(len(t) - 1):
+            if np.isfinite(t[i]) and hits[i][1].z > z_min and t[i + 1] - t[i] > jump:
+                k = i
+                break
+        if k is not None:
+            out.append(np.array(hits[k][1][:]))
+    return np.array(out).reshape(-1, 3)
+
+
+def jaw_border(skin, side, M, C, x_jaw):
+    """The mandible's lower border on the skin as an occluding contour: seen from above-lateral at
+    45 deg, the line where the surface normal turns from lateral to down (the jaw overhangs the
+    neck there). One point per 2 mm of depth from 20 mm behind the menton M to the condyle point C
+    (object coords); x_jaw is the jaw's lateral half-width (where the scan lines pivot)."""
+    s = float(side)
+    r1 = np.array([-s, 0.0, -1.0]) / np.sqrt(2)
+    u1 = np.array([s, 0.0, -1.0]) / np.sqrt(2)
+    ys = np.arange(M[1] + 0.02, C[1] + 0.002, 0.002)
+    return _occluding_edge(skin, side, r1, u1, [np.array([s * x_jaw, y, M[2] + 0.02]) for y in ys],
+                           z_min=M[2] - 0.005)
+
+
+def gonial_from_border(lower, M, C, ear_gap=0.008):
+    """Soft-tissue gonial angle in the sagittal (y, z) projection. Gonion: the lower-border point
+    farthest behind-below the menton-condyle chord (the jaw corner), among points at least
+    `ear_gap` in front of the condyle point. Mandibular line: from the menton, tangent to the
+    lower border (the flattest line through M with the border on or above it). Ramus line: gonion
+    to the condyle point (the tragus proxy). Returns (degrees, gonion, mandibular-line degrees
+    above horizontal) or None."""
+    lo = lower[((lower[:, 1] - M[1]) > 0.025) & (lower[:, 1] < C[1] - ear_gap)] if len(lower) else lower
+    if len(lo) < 3:
+        return None
+    ch = (C - M)[1:] / np.linalg.norm((C - M)[1:])
+    nrm = np.array([ch[1], -ch[0]])                       # behind-below the chord
+    g = lo[np.argmax((lo[:, 1:] - M[1:]) @ nrm)]
+    phi = np.arctan2(lo[:, 2] - M[2], lo[:, 1] - M[1]).min()
+    to_m = -np.array([np.cos(phi), np.sin(phi)])
+    to_c = (C - g)[1:] / np.linalg.norm((C - g)[1:])
+    return float(np.degrees(np.arccos(np.clip(to_m @ to_c, -1, 1)))), g, float(np.degrees(phi))
 
 
 def group_mask(body, name):
@@ -292,7 +334,7 @@ def group_mask(body, name):
     return out
 
 
-def head_structure(body, co, eyes, eye_co, chin_z, ez, lm=None):
+def head_structure(body, co, eyes, eye_co, chin, ez, lm=None):
     """T7 head-structure measures, mean of both sides (per side in *_lr):
 
     brow_overhang            supraorbital rim (most forward skin 6-25 mm above the eye centre on
@@ -302,15 +344,17 @@ def head_structure(body, co, eyes, eye_co, chin_z, ez, lm=None):
                              the most forward skin 8-14 mm below the eye centre), at apex height
     eye_aperture_mm          palpebral fissure height through the pupil, seen from the front
     canthal_tilt_deg         lateral canthus above the medial one (+ = up-tilted)
-    gonial_angle_deg         soft-tissue jaw angle (gonial_angle; needs the landmark embedding)
+    gonial_angle_deg         soft-tissue jaw angle (gonial_from_border on the jaw_border contour)
     globe_radius_mm          sphere fit of the fitted eye
+    infraorbital_*_mm        diagnostics: the infraorbital rim point ahead of the apex / below the eye centre
     """
     m = {}
     skin, helper, polys = _skin_bvh(body, co)
     E = [Vector(p) for p in eye_co]
     eye_bvh = BVHTree.FromPolygons(E, [tuple(p.vertices) for p in eyes.data.polygons])
     rows = {k: [] for k in ("brow_overhang", "forehead_behind_brow_mm", "orbit_recess_mm",
-                            "eye_aperture_mm", "canthal_tilt_deg", "globe_radius_mm")}
+                            "eye_aperture_mm", "canthal_tilt_deg", "globe_radius_mm",
+                            "infraorbital_ahead_mm", "infraorbital_below_mm")}
     for side, (c, r, apex) in _eye_spheres(eye_co).items():
         rows["globe_radius_mm"].append(r * 1000)
         zs, ys = _profile(skin, float(c[0]), c[2] - 0.03, c[2] + 0.065)
@@ -325,6 +369,8 @@ def head_structure(body, co, eyes, eye_co, chin_z, ez, lm=None):
             if f.any():
                 rows["forehead_behind_brow_mm"].append((ys[f].mean() - yS) * 1000)
             t = (apex[2] - zS) / (zI - zS)
+            rows["infraorbital_ahead_mm"].append((apex[1] - yI) * 1000)
+            rows["infraorbital_below_mm"].append((c[2] - zI) * 1000)
             rows["orbit_recess_mm"].append((apex[1] - (yS + t * (yI - yS))) * 1000)
         ap = _aperture(skin, eye_bvh, c, side)
         if ap:
@@ -338,16 +384,27 @@ def head_structure(body, co, eyes, eye_co, chin_z, ez, lm=None):
                 m[k + "_lr"] = [round(float(x), 2) for x in v]
     C = np.array([p[:] for p in co])
     ears = group_mask(body, "ears")
-    ang = []
-    if lm is not None:
-        for side in (1, -1):
-            e = ears & (C[:, 0] * side > 0)
-            if e.any():
-                E = C[e]
-                ang.append(gonial_angle(lm, side, np.array([0.0, E[:, 1].min(), E[:, 2].mean()])))
+    M = np.array(chin[:])
+    ang, gon, mp = [], [], []
+    for side in (1, -1):
+        e = ears & (C[:, 0] * side > 0)
+        if not e.any():
+            continue
+        E = C[e]
+        cond = np.array([side * np.abs(E[:, 0]).min(), E[:, 1].min(), E[:, 2].mean()])
+        x_jaw = 0.5 * m.get("bigonial", 0.12)
+        r = gonial_from_border(jaw_border(skin, side, M, cond, x_jaw), M, cond)
+        if r:
+            ang.append(r[0])
+            gon.append(r[1])
+            mp.append(r[2])
     if ang:
         m["gonial_angle_deg"] = float(np.mean(ang))
         m["gonial_angle_deg_lr"] = [round(x, 1) for x in ang]
+        m["gonion_y_mm"] = [round(float(g[1]) * 1000, 1) for g in gon]
+        m["gonion_below_eye_mm"] = [round(float(ez - g[2]) * 1000, 1) for g in gon]
+        m["mandibular_plane_deg"] = [round(x, 1) for x in mp]
+        m["menton_y_mm"] = round(float(M[1]) * 1000, 1)
     return m
 
 

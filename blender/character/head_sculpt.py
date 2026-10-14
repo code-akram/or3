@@ -24,6 +24,7 @@ of the head never moves. Fields (head.sculpt.fields, mm; negative = recess):
   zygoma         malar eminence and zygomatic arch back to the ear, lateral, crisp lower edge
   submalar       the plane under the arch, recessed: the cheek plane break
   mandible       lower border of the mandible, chin to gonion, out-and-down, crisp underside
+                 (drop_mm: how far below MediaPipe's frontal jaw contour the border runs at the corner)
   submandible    the recess under that border
   gonion         the jaw angle pushed out and back-down (squares it)
   ramus          posterior border of the ramus, gonion to the condyle in front of the tragus
@@ -53,17 +54,17 @@ DEFAULTS = {
     "embedding": "$DATA/build/identity/base_embedding.npz",
     "base_spacing_mm": 3.5,
     "fields": {
-        "brow": {"mm": 2.5, "neg_mm": 2.5, "pos_mm": 9.0, "depth_mm": 14.0},
-        "socket": {"mm": -1.0, "lower_mm": -2.5, "lower_r_mm": 16.0, "edge_mm": 2.0},
+        "brow": {"mm": 0.5, "neg_mm": 2.5, "pos_mm": 9.0, "depth_mm": 14.0},
+        "socket": {"mm": -1.0, "lower_mm": -4.0, "lower_r_mm": 16.0, "edge_mm": 2.0},
         "zygoma": {"mm": 2.5, "neg_mm": 3.0, "pos_mm": 6.0, "depth_mm": 14.0},
         "submalar": {"mm": -1.8, "neg_mm": 6.0, "pos_mm": 4.0, "depth_mm": 16.0},
-        "mandible": {"mm": 2.0, "neg_mm": 2.5, "pos_mm": 7.0, "depth_mm": 14.0},
+        "mandible": {"mm": 3.0, "neg_mm": 2.5, "pos_mm": 7.0, "depth_mm": 14.0, "drop_mm": 16.0},
         "submandible": {"mm": -1.2, "neg_mm": 4.0, "pos_mm": 2.5, "depth_mm": 14.0},
-        "gonion": {"mm": 5.0, "r_mm": 10.0},
+        "gonion": {"mm": 7.5, "r_mm": 12.0},
         "ramus": {"mm": 1.5, "neg_mm": 2.5, "pos_mm": 7.0, "depth_mm": 12.0},
         "retromandible": {"mm": -1.5, "neg_mm": 4.0, "pos_mm": 3.0, "depth_mm": 12.0},
         "nasal": {"mm": 0.5, "side_mm": -0.7},
-        "chin": {"mm": 1.2, "r_mm": 6.0, "drop_mm": 2.0},
+        "chin": {"mm": 1.2, "r_mm": 6.0, "drop_mm": 0.0},
         "temporal": {"mm": 0.5, "hollow_mm": -1.2},
     },
     "eyes": {"globe_mm": 12.0, "iris_mm": 5.9, "upper_over_iris_mm": 1.5, "aperture_mm": 10.0,
@@ -227,7 +228,7 @@ def fields(an, co, nrm, eyes_c, ears, fcfg, widen):
             ef, ez_mid, ez_low = ear_front(co, ears, side)
             back = np.array([ef[0] - lat[0] * 0.004, ef[1] - 0.008, ez_mid - 0.004])
             C = np.vstack([an.pts([116, 234], side), back])
-            D = unit(lat + 0.2 * fwd)
+            D = unit(0.6 * lat + 0.8 * fwd)     # cheekbone forward-lateral corner, not width
             out += ridge(co, nrm, C, D, up, m(f["mm"]), m(f["neg_mm"]), m(f["pos_mm"]), m(f["depth_mm"]),
                          widen, taper=0.1)
             g = fcfg.get("submalar")
@@ -236,9 +237,15 @@ def fields(an, co, nrm, eyes_c, ears, fcfg, widen):
                 out += ridge(co, nrm, C2, D, up, m(g["mm"]), m(g["neg_mm"]), m(g["pos_mm"]),
                              m(g["depth_mm"]), widen, taper=0.25)
         f = fcfg.get("mandible")
-        G = an.pts([172], side)[0]
+        # MediaPipe's jaw contour is the frontal outline, above and ahead of the mandible's lower
+        # border: the border runs drop_mm below it at the jaw corner (0 at the chin), and the
+        # corner (gonion) sits 12 mm behind landmark 172
+        drop = m(f.get("drop_mm", 0.0)) if f else 0.0
+        G = an.pts([172], side)[0] - fwd * 0.012 - up * (0.004 + drop)
         if f:
-            C = an.pts([148, 176, 149, 150, 136, 172], side)
+            J = an.pts([148, 176, 149, 150, 136, 172], side)
+            J = J - up * (drop * np.linspace(0.0, 1.0, len(J)) ** 1.5)[:, None]
+            C = np.vstack([J, G])
             D = unit(lat - 0.7 * up)
             out += ridge(co, nrm, C, D, up, m(f["mm"]), m(f["neg_mm"]), m(f["pos_mm"]), m(f["depth_mm"]),
                          widen, taper=0.1)
@@ -248,7 +255,7 @@ def fields(an, co, nrm, eyes_c, ears, fcfg, widen):
                              m(g["depth_mm"]), widen, taper=0.15)
         f = fcfg.get("gonion")
         if f:
-            out += blob(co, nrm, G, unit(0.5 * lat - 0.6 * up - 0.6 * fwd), m(f["mm"]), m(f["r_mm"]), widen)
+            out += blob(co, nrm, G, unit(0.2 * lat - 0.8 * up - 0.55 * fwd), m(f["mm"]), m(f["r_mm"]), widen)
         f = fcfg.get("ramus")
         if f:
             ef, ez_mid, ez_low = ear_front(co, ears, side)
@@ -310,11 +317,11 @@ def socket(co, nrm, an, eye, side, amp, amp_lo, r_lo, edge, widen):
     e = np.hypot(edge, widen) / 0.016
     inside = 1 - ss(1 - e, 1 + 0.3 * e, q)
     s = np.linalg.norm(co - c, axis=1) - R
-    lids = ss(0.003, 0.007, s)
+    lids = np.maximum(ss(0.003, 0.007, s), ss(0.006, 0.008, -dz))  # below the lower lid: infraorbital
     front = ss(0.0, 0.006, (c[1] - co[:, 1]))
     w = inside * lids * front * np.clip(nrm @ an.fwd, 0, 1)
     a = np.where(dz > 0, amp, amp_lo + (amp - amp_lo) * ss(-0.004, 0.0, dz))
-    return (a * w)[:, None] * (-an.fwd)[None, :]
+    return (a * w)[:, None] * an.fwd[None, :]          # negative amp: back into the orbit
 
 
 # --- eyes ------------------------------------------------------------------------------------

@@ -97,6 +97,13 @@ def ict_features(m, v):
     f["zyg_ipd"] = f["bizygomatic"] / f["ipd"]
     f["jaw_cheek"] = f["bigonial"] / f["bizygomatic"]
     f["eye_menton_zyg"] = (eye[2] - chin[2]) * 1000 / f["bizygomatic"]
+    # jaw corner: iBUG 3/13 (lower jaw contour near the gonion), sagittal projection
+    go = 0.5 * (L[3] + L[13])
+    f["gonion_drop"] = (eye[2] - go[2]) / (eye[2] - chin[2])
+    f["mand_plane_deg"] = float(np.degrees(np.arctan2(go[2] - chin[2], go[1] - chin[1])))
+    tr = 0.5 * (L[0] + L[16])
+    a, b = (chin - go)[1:], (tr - go)[1:]
+    f["gonial3_deg"] = float(np.degrees(np.arccos(a @ b / np.linalg.norm(a) / np.linalg.norm(b))))
     return f
 
 
