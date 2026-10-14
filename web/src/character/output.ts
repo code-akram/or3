@@ -29,6 +29,7 @@ function srgbEncode(c: N): N {
 
 export class Output {
   readonly samples: number;
+  lastScene = { drawCalls: 0, triangles: 0 };
   private sceneRT: THREE.RenderTarget;
   private readonly quad: THREE.QuadMesh;
   private readonly mat: THREE.NodeMaterial;
@@ -91,7 +92,11 @@ export class Output {
     this.ensure(w, h);
     const r = this.renderer;
     r.setRenderTarget(this.sceneRT);
+    const info = r.info.render;
+    const [d0, t0] = [info.drawCalls, info.triangles];
     r.render(scene, camera);
+    // scene pass only (incl. shadow passes), robust to the per-frame info reset
+    this.lastScene = info.drawCalls >= d0 ? { drawCalls: info.drawCalls - d0, triangles: info.triangles - t0 } : { drawCalls: info.drawCalls, triangles: info.triangles };
     r.setRenderTarget(target);
     this.quad.render(r);
     r.setRenderTarget(null);
@@ -101,8 +106,20 @@ export class Output {
   async capture(scene: THREE.Scene, camera: THREE.Camera, w: number, h: number): Promise<Uint8Array> {
     const out = new THREE.RenderTarget(w, h, { type: THREE.UnsignedByteType, depthBuffer: false });
     this.render(scene, camera, w, h, out);
-    const px = (await this.renderer.readRenderTargetPixelsAsync(out, 0, 0, w, h)) as Uint8Array;
+    const px = new Uint8Array((await this.renderer.readRenderTargetPixelsAsync(out, 0, 0, w, h)) as Uint8Array);
     out.dispose();
-    return new Uint8Array(px);
+    // WebGL2 readPixels returns bottom-up rows; WebGPU's buffer copy is top-down
+    if (!(this.renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend) {
+      const row = w * 4;
+      const tmp = new Uint8Array(row);
+      for (let y = 0; y < h >> 1; y++) {
+        const a = y * row;
+        const b = (h - 1 - y) * row;
+        tmp.set(px.subarray(a, a + row));
+        px.copyWithin(a, b, b + row);
+        px.set(tmp, b);
+      }
+    }
+    return px;
   }
 }

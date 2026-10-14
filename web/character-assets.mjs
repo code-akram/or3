@@ -6,6 +6,16 @@ import { execFileSync } from 'node:child_process';
 import { createReadStream, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 
+/** Build inputs: both pages, or only the character viewer (VIEWER_ONLY=1, into dist-viewer/, so
+ * bench/m1/engine_shots.sh needs neither the WASM core nor touches the spike page's dist/). */
+export function buildEntries(here) {
+  const viewerOnly = process.env.VIEWER_ONLY === '1';
+  return {
+    outDir: viewerOnly ? 'dist-viewer' : 'dist',
+    input: viewerOnly ? { character: here + 'character.html' } : { main: here + 'index.html', character: here + 'character.html' },
+  };
+}
+
 const MIME = { '.glb': 'model/gltf-binary', '.json': 'application/json', '.png': 'image/png', '.ktx2': 'image/ktx2' };
 
 /** @param {string} here  the web/ directory @param {Record<string,string>} headers */

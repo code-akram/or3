@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Engine frames for one look-dev run (track T5, bench/m1/v4/t5-viewer.md):
+#   1. blender/hero/export_rig.py  -> RUN/engine_stage.json (look-dev + hero cameras, lights, pose)
+#   2. bench/m1/engine_shots.mjs   -> RUN/game_<view>.png + RUN/game_shots.json (headless Chromium)
+#
+#   bench/m1/engine_shots.sh RUN_DIR
+#
+# Everything is read from and written to RUN_DIR only (a private fan run dir stays private).
+# Env: ENGINE_CPUS (taskset CPU list for the browser, default 0-3; the machine is shared),
+#      ENGINE_BACKEND (auto|webgpu|webgl2, default auto: WebGPU on SwiftShader, WebGL2 fallback),
+#      ENGINE_SIZE (look-dev views, default 1024), ENGINE_PORTRAIT (default 1920x1080),
+#      ENGINE_VIEWS (default front,three_quarter,profile,closeup,portrait).
+set -euo pipefail
+REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+RUN="$(realpath "${1:?usage: $0 RUN_DIR}")"
+[[ -s "$RUN/character.glb" ]] || { echo "no character.glb in $RUN" >&2; exit 2; }
+LOG="$RUN/engine_shots.log"
+: > "$LOG"
+
+blender -b -t 3 --factory-startup --python-exit-code 1 --python "$REPO/blender/hero/export_rig.py" -- \
+  --glb "$RUN/character.glb" --out "$RUN/engine_stage.json" >> "$LOG" 2>&1 \
+  || { echo "engine stage export failed: $LOG" >&2; exit 1; }
+
+# node deps of this checkout (fresh worktrees have none yet)
+[[ -d "$REPO/bench/node_modules/playwright" ]] || npm ci --prefix "$REPO/bench" --no-fund --no-audit >> "$LOG" 2>&1
+[[ -d "$REPO/web/node_modules/three" ]] || npm ci --prefix "$REPO/web" --no-fund --no-audit >> "$LOG" 2>&1
+# the viewer bundle is rebuilt every run (about a second) so it always matches the checkout
+npm run --prefix "$REPO/web" build:viewer --silent >> "$LOG" 2>&1 || { echo "viewer build failed: $LOG" >&2; exit 1; }
+
+PIN=()
+command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
+"${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$RUN" \
+  --backend "${ENGINE_BACKEND:-auto}" --size "${ENGINE_SIZE:-1024}" --portrait "${ENGINE_PORTRAIT:-1920x1080}" \
+  --views "${ENGINE_VIEWS:-front,three_quarter,profile,closeup,portrait}" >> "$LOG" 2>&1 \
+  || { echo "engine shots failed: $LOG" >&2; exit 1; }
+echo "-> $RUN/game_*.png ($(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['backend'])" "$RUN/game_shots.json"))"

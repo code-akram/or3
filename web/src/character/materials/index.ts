@@ -65,6 +65,8 @@ function copyStd(dst: THREE.MeshPhysicalNodeMaterial, src: Std): void {
   dst.aoMapIntensity = src.aoMapIntensity;
   dst.emissive.copy(src.emissive);
   dst.emissiveMap = src.emissiveMap;
+  // 8x anisotropic filtering: the suit's twill normal maps alias (moire) at grazing angles without it
+  for (const t of [src.map, src.normalMap, src.roughnessMap, src.aoMap]) if (t) t.anisotropy = 8;
   if (src.isMeshPhysicalMaterial) {
     dst.clearcoat = src.clearcoat ?? 0;
     dst.clearcoatRoughness = src.clearcoatRoughness ?? 0;
@@ -170,8 +172,8 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
       const t = T.add(N.mul(shift.add(j))).normalize();
       const th = t.dot(H);
       const sinTH = float(1).sub(th.mul(th)).max(0).sqrt();
-      // Kajiya-Kay lobe with a rough energy normalisation
-      return sinTH.pow(exp).mul(exp.add(2).div(2 * Math.PI));
+      // Kajiya-Kay lobe; strength is a plain multiplier (no energy normalisation, see params)
+      return sinTH.pow(exp);
     };
     const s1 = kk(P.u('hair.shift1'), P.u('hair.exponent1'));
     const s2 = kk(P.u('hair.shift2'), P.u('hair.exponent2'));
@@ -305,7 +307,9 @@ export class ClothMaterial extends THREE.MeshPhysicalNodeMaterial {
     if (src.normalMap) {
       // micro-twill: diagonal ridges added to the tangent-space normal before decoding
       const ph = uv().x.add(uv().y).mul(P.u('cloth.twillFreq'));
-      const slope = sin(ph).mul(P.u('cloth.twillStrength')).mul(0.5);
+      // fade out where a ridge is under ~3 px (no aliasing / moire: the procedural tile is unfiltered)
+      const fade = float(1).sub(fwidth(ph).mul(1 / 2.0)).clamp(0, 1);
+      const slope = sin(ph).mul(P.u('cloth.twillStrength')).mul(fade).mul(0.5);
       const nTex = texture(src.normalMap).rgb.add(vec3(slope, slope.negate(), 0));
       this.normalNode = normalMap(nTex, vec2(src.normalScale.x, src.normalScale.y));
     }

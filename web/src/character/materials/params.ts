@@ -19,7 +19,7 @@ export const DEFAULT_PARAMS = {
     albedoGain: 1.0,
     saturation: 1.0,
     /** Per-channel wrap (R, G, B): light bleeding past the terminator, the cheap SSS. */
-    wrap: [0.42, 0.16, 0.1],
+    wrap: [0.3, 0.12, 0.08],
     /** Screen-space curvature scales the wrap (thin, curved parts scatter more). */
     curvatureGain: 0.6,
     /** Per-channel normal blur toward the geometric normal for the diffuse (R, G, B). */
@@ -27,13 +27,13 @@ export const DEFAULT_PARAMS = {
     /** Terminator tint: the red band where light turns into shadow. */
     scatterColor: [0.9, 0.25, 0.12],
     scatterWidth: 0.35,
-    scatterStrength: 0.5,
+    scatterStrength: 0.25,
     /** Dual-lobe specular (Jimenez / Kelemen-Szirmay-Kalos style): roughness multipliers and mix. */
     specF0: 0.028,
-    lobe1Roughness: 0.75,
+    lobe1Roughness: 0.85,
     lobe2Roughness: 1.45,
     lobeMix: 0.2,
-    specGain: 1.0,
+    specGain: 0.6,
     roughnessScale: 1.0,
     roughnessBias: 0.0,
     normalScale: 1.0,
@@ -47,8 +47,8 @@ export const DEFAULT_PARAMS = {
     shiftJitter: 0.12,
     exponent1: 160,
     exponent2: 28,
-    spec1: 0.14,
-    spec2: 0.22,
+    spec1: 0.07,
+    spec2: 0.08,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,
@@ -58,13 +58,15 @@ export const DEFAULT_PARAMS = {
     alphaTest: 0.32,
   },
   facialHair: {
-    albedoGain: 1.0,
+    /** With the linear fix the shells read mid-brown; the Cycles strands read near-black
+     * (melanin 0.99), so the baseline darkens them until the beard_bake gains are retuned. */
+    albedoGain: 0.45,
     /** Beard / brow / lash atlases carry linear values in sRGB-tagged images (review §1.9 S2):
      * 1 = read them as linear (the fix), 0 = as tagged. */
     linearFix: 1,
-    spec1: 0.08,
-    spec2: 0.12,
-    alphaTest: 0.35,
+    spec1: 0.05,
+    spec2: 0.06,
+    alphaTest: 0.22,
   },
   eye: {
     albedoGain: 1.0,
@@ -80,9 +82,9 @@ export const DEFAULT_PARAMS = {
   cloth: {
     albedoGain: 1.0,
     fuzzColor: [0.32, 0.33, 0.38],
-    fuzzStrength: 0.35,
+    fuzzStrength: 0.15,
     fuzzPower: 3.0,
-    sheenScale: 1.0,
+    sheenScale: 0.6,
     twillStrength: 0.12,
     /** Twill period in UV units^-1 (diagonal ridges). */
     twillFreq: 900,

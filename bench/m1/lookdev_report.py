@@ -2,6 +2,11 @@
 
     python3 -I bench/m1/lookdev_report.py finalize RUN --label L [--process-s S]
     python3 -I bench/m1/lookdev_report.py compare A B --out DIR
+    python3 -I bench/m1/lookdev_report.py engine RUN [--cycles HERO_DIR] [--crop x,y,w,h]
+
+When RUN has game_<view>.png (bench/m1/engine_shots.sh), sheet.png gets an
+engine row under the EEVEE views; `engine` draws RUN/engine_sheet.png: EEVEE
+views, engine views, and the hero portrait Cycles target vs engine.
 
 finalize merges build stats (character.stats.json), glTF validation
 (glbstats.json) and render metrics (render_metrics.json) into RUN/metrics.json
@@ -169,12 +174,106 @@ def sheet(run, m):
     for i, v in enumerate(VIEWS):
         inputs += ["-i", os.path.join(run, f"{v}_mask.png")]
         chains.append(f"[{i + 4}]scale={TILE // 2}:{TILE // 2},pad={TILE}:{TILE // 2}:{TILE // 4}:0[m{i}]")
+    # Engine row (T5): the game frames (bench/m1/engine_shots.sh) under the EEVEE views, when present.
+    game = all(os.path.exists(os.path.join(run, f"game_{v}.png")) for v in VIEWS)
+    if game:
+        for i, v in enumerate(VIEWS):
+            inputs += ["-i", os.path.join(run, f"game_{v}.png")]
+            with open(os.path.join(run, f"sheet_game_{v}.txt"), "w") as f:
+                f.write(f"engine {v}")
+            chains.append(f"[{i + 8}]scale={TILE}:{TILE},{drawtext(os.path.join(run, f'sheet_game_{v}.txt'), 18)}[e{i}]")
+    rows = "[top][eng][bot]vstack=3[g]" if game else "[top][bot]vstack[g]"
     fc = ";".join(chains) + (
-        ";[b0][b1][b2][b3]hstack=4[top];[m0][m1][m2][m3]hstack=4[bot];[top][bot]vstack[g];"
+        ";[b0][b1][b2][b3]hstack=4[top];[m0][m1][m2][m3]hstack=4[bot];"
+        + ("[e0][e1][e2][e3]hstack=4[eng];" if game else "") + rows + ";"
         f"[g]pad=iw:ih+108:0:108,{drawtext(txt, 18, y='8')}")
     ffmpeg([*inputs, "-filter_complex", fc, os.path.join(run, "sheet.png")])
     for v in VIEWS:
         os.remove(os.path.join(run, f"sheet_{v}.txt"))
+        if game:
+            os.remove(os.path.join(run, f"sheet_game_{v}.txt"))
+
+
+def engine_sheet(a):
+    """RUN/engine_sheet.png: EEVEE views over engine views, then the hero portrait as Cycles target
+    vs engine (same camera, rig and pose by data: blender/hero/export_rig.py), whole frame and a
+    face crop at 100 %. Writes into RUN only."""
+    run = os.path.abspath(a.run)
+    gs = load(os.path.join(run, "game_shots.json"))
+    if not gs.get("ok"):
+        sys.exit(f"no successful game_shots.json in {run}")
+    rows, inputs, chains = [], [], []
+
+    def label(text, key):
+        p = os.path.join(run, f"esheet_{key}.txt")
+        with open(p, "w") as f:
+            f.write(text)
+        return p
+
+    labels = []
+    n = 0
+    for src, tag in (("{v}.png", "eevee"), ("game_{v}.png", "engine")):
+        names = []
+        for v in VIEWS:
+            path = os.path.join(run, src.format(v=v))
+            if not os.path.exists(path):
+                break
+            inputs += ["-i", path]
+            lp = label(f"{tag} {v}", f"{tag}_{v}")
+            labels.append(lp)
+            chains.append(f"[{n}]scale={TILE}:{TILE},{drawtext(lp, 18)}[t{n}]")
+            names.append(f"[t{n}]")
+            n += 1
+        if len(names) == len(VIEWS):
+            chains.append("".join(names) + f"hstack={len(VIEWS)}[r{len(rows)}]")
+            rows.append(f"[r{len(rows)}]")
+    W = TILE * len(VIEWS)
+    cyc = os.path.join(a.cycles, "portrait.png") if a.cycles else None
+    game_p = os.path.join(run, "game_portrait.png")
+    if os.path.exists(game_p):
+        pair = []
+        x, y, w, h = (int(c) for c in a.crop.split(","))
+        for path, tag in ((cyc, "cycles target"), (game_p, "engine")):
+            if not path or not os.path.exists(path):
+                continue
+            inputs += ["-i", path]
+            lp = label(f"{tag} portrait", f"p_{len(pair)}")
+            lc = label(f"{tag} face 100 %", f"c_{len(pair)}")
+            labels += [lp, lc]
+            chains.append(f"[{n}]scale=1920:1080,split[s{n}a][s{n}b]")
+            chains.append(f"[s{n}a]scale={W // 2}:-2,{drawtext(lp, 18)}[pf{n}]")
+            chains.append(f"[s{n}b]crop={w}:{h}:{x}:{y},scale={W // 2}:-2,{drawtext(lc, 18)}[pc{n}]")
+            pair.append(n)
+            n += 1
+        if len(pair) == 2:
+            chains.append(f"[pf{pair[0]}][pf{pair[1]}]hstack[r{len(rows)}]")
+            rows.append(f"[r{len(rows)}]")
+            chains.append(f"[pc{pair[0]}][pc{pair[1]}]hstack[r{len(rows)}]")
+            rows.append(f"[r{len(rows)}]")
+        elif pair:
+            chains.append(f"[pf{pair[0]}]pad={W}:ih[r{len(rows)}]")
+            rows.append(f"[r{len(rows)}]")
+    st = gs.get("stats", {})
+    ver = gs.get("verify", {})
+    head = (f"engine vs EEVEE vs Cycles   {os.path.basename(run)}   backend {gs.get('backend')} "
+            f"({(gs.get('adapter') or {}).get('description') or '-'})   {gs.get('browser', '')}\n"
+            f"load {gs.get('load', {}).get('load_ms')} ms ({gs.get('load', {}).get('glb_mb')} MB GLB)   "
+            f"tris {st.get('tris_model')}   draws {[s.get('draw_calls') for s in gs.get('shots', [])]}   "
+            f"textures {st.get('textures')} ~{st.get('texture_mb_est')} MB   "
+            f"rig.json vs Blender: corrective max diff {ver.get('corrective_max_abs_diff')}, "
+            f"helper max {ver.get('helper_max_angle_deg')} deg\n"
+            f"cycles: {a.cycles or '-'}")
+    ht = label(head, "header")
+    labels.append(ht)
+    fc = ";".join(chains) + ";" + "".join(rows) + f"vstack={len(rows)}[g];" \
+        + f"[g]pad=iw:ih+84:0:84,{drawtext(ht, 18, y='8')}"
+    if len(rows) == 1:
+        fc = fc.replace(f"{rows[0]}vstack=1[g]", f"{rows[0]}null[g]")
+    out = os.path.join(run, "engine_sheet.png")
+    ffmpeg([*inputs, "-filter_complex", fc, out])
+    for p in labels:
+        os.remove(p)
+    print(f"-> {out}")
 
 
 def summary(m):
@@ -253,8 +352,13 @@ def main():
     c.add_argument("a")
     c.add_argument("b")
     c.add_argument("--out", required=True)
+    e = sub.add_parser("engine", help="engine vs EEVEE vs Cycles sheet (RUN/engine_sheet.png)")
+    e.add_argument("run")
+    e.add_argument("--cycles", help="hero stage dir with portrait.png (the Cycles target)")
+    e.add_argument("--crop", default="720,90,600,600",
+                   help="face crop x,y,w,h in the 1920x1080 portrait (same camera in both)")
     a = ap.parse_args()
-    finalize(a) if a.cmd == "finalize" else compare(a)
+    {"finalize": finalize, "compare": compare, "engine": engine_sheet}[a.cmd](a)
 
 
 if __name__ == "__main__":

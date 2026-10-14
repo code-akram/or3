@@ -5,6 +5,7 @@
 //
 //   node bench/m1/engine_shots.mjs --build RUN_DIR [--views front,three_quarter,profile,closeup,portrait]
 //        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8791] [--timeout 600]
+//        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_]
 //
 // Containment: the server exposes only web/dist and RUN_DIR (under /asset/), bound to 127.0.0.1, and
 // every output file goes into RUN_DIR. For a fan build RUN_DIR is the private run dir, so nothing
@@ -38,15 +39,17 @@ const [pw, ph] = opt('portrait', '1920x1080').split('x').map(Number);
 const backendWanted = opt('backend', 'auto');
 const port = Number(opt('port', 8791));
 const timeoutS = Number(opt('timeout', 900));
-const dist = join(repo, 'web', 'dist');
+const extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/B only)
+const outPrefix = opt('prefix', 'game_');
+const dist = join(repo, 'web', opt('dist', 'dist-viewer'));
 
 if (!existsSync(join(build, 'character.glb'))) {
   console.error(`no character.glb in ${build}`);
   process.exit(2);
 }
 if (!existsSync(join(dist, 'character.html'))) {
-  console.error('[engine_shots] building web/dist (npm run build)');
-  const r = spawnSync('npm', ['run', 'build', '--silent'], { cwd: join(repo, 'web'), stdio: 'inherit' });
+  console.error('[engine_shots] building the viewer (npm run build:viewer)');
+  const r = spawnSync('npm', ['run', 'build:viewer', '--silent'], { cwd: join(repo, 'web'), stdio: 'inherit' });
   if (r.status !== 0) process.exit(1);
 }
 
@@ -140,6 +143,7 @@ const ARGS = [
   '--use-angle=swiftshader',
   '--use-webgpu-adapter=swiftshader',
   '--disable-vulkan-surface',
+  '--renderer-process-limit=1',
 ];
 
 async function run(backend) {
@@ -152,6 +156,7 @@ async function run(backend) {
     page.setDefaultTimeout(timeoutS * 1000);
     const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1' });
     if (backend === 'webgl2') q.set('gl', '1');
+    for (const [k, v] of new URLSearchParams(extraQuery)) q.set(k, v);
     const t0 = Date.now();
     await page.goto(`http://127.0.0.1:${port}/character.html?${q}`, { waitUntil: 'load' });
     await page.waitForFunction(() => window.__viewerState?.ready || window.__viewerState?.phase === 'error', null, { timeout: timeoutS * 1000, polling: 500 });
@@ -166,9 +171,9 @@ async function run(backend) {
       const r = await page.evaluate(([v, rig, w, h]) => window.__viewer.capture(v, rig, w, h), [v, rig, w, h]);
       const px = Buffer.from(r.b64, 'base64');
       if (px.length !== w * h * 4) throw new Error(`${v}: got ${px.length} bytes for ${w}x${h}`);
-      const file = join(build, `game_${v}.png`);
+      const file = join(build, `${outPrefix}${v}.png`);
       await writeFile(file, png(w, h, px));
-      shots.push({ view: v, rig, file: `game_${v}.png`, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights });
+      shots.push({ view: v, rig, file: `${outPrefix}${v}.png`, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights });
       console.error(`[engine_shots] ${backend} ${v} ${w}x${h}: ${Date.now() - t} ms`);
     }
     const stats = await page.evaluate(() => window.__viewer.stats());
@@ -199,6 +204,6 @@ for (const b of backendWanted === 'auto' ? ['webgpu', 'webgl2'] : [backendWanted
 }
 server.close();
 Object.assign(result, ok ?? { ok: false });
-await writeFile(join(build, 'game_shots.json'), JSON.stringify(result, null, 1));
+await writeFile(join(build, `${outPrefix}shots.json`), JSON.stringify(result, null, 1));
 console.log(JSON.stringify({ ok: result.ok, backend: result.backend, shots: (result.shots ?? []).map((s) => s.file), verify: result.verify }, null, 1));
 process.exit(result.ok ? 0 : 1);

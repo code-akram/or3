@@ -1,4 +1,5 @@
 node_modules/
 dist/
+dist-viewer/
 # wasm-bindgen output, rebuilt by ../core/build-web.sh
 src/core-wasm/

@@ -283,12 +283,11 @@ async function main(): Promise<void> {
   const fs = new FrameStats();
   let firstFrameMs = 0;
 
-  const info = () => renderer.info.render as unknown as { drawCalls?: number; calls?: number; triangles: number };
   const statsNow = () => ({
     backend: state.backend,
     tris_model: tris,
-    draw_calls: info().drawCalls ?? info().calls ?? 0,
-    triangles_rendered: info().triangles,
+    draw_calls: output.lastScene.drawCalls,
+    triangles_rendered: output.lastScene.triangles,
     textures: tex.count,
     texture_mb_est: +(tex.bytes / 1e6).toFixed(1),
     lights: stage.lightCount(),
