@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Engine frames for one look-dev run (track T5, bench/m1/v4/t5-viewer.md):
 #   1. blender/hero/export_rig.py  -> RUN/engine_stage.json (look-dev + hero cameras, lights, pose)
+#   1b. blender/hero/grade.py --lut  -> RUN/grade_lut.json (T16: the hero grade + AgX view as 3D LUTs)
 #   2. bench/m1/engine_shots.mjs   -> RUN/game_<view>.png + RUN/game_shots.json (headless Chromium)
 #
 #   bench/m1/engine_shots.sh RUN_DIR [--port N] [more engine_shots.mjs options, e.g. --turntable 2]
@@ -12,6 +13,7 @@
 #      ENGINE_BACKEND (auto|webgpu|webgl2, default auto: WebGPU on SwiftShader, WebGL2 fallback),
 #      ENGINE_SIZE (look-dev views, default 1024), ENGINE_PORTRAIT (default 1920x1080),
 #      ENGINE_VIEWS (default front,three_quarter,profile,closeup,portrait,closeup:hero),
+#      ENGINE_BOUNCE (T16: a set_bounce.json from blender/hero/refs.py --mode bounce, copied into RUN),
 #      ENGINE_PORT (loopback port of the asset server, default 8796, outside the review servers' 8790-8793; shared machines pick a free one).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -32,6 +34,14 @@ LOG="$RUN/engine_shots.log"
 blender -b -t 3 --factory-startup --python-exit-code 1 --python "$REPO/blender/hero/export_rig.py" -- \
   --glb "$RUN/character.glb" --out "$RUN/engine_stage.json" >> "$LOG" 2>&1 \
   || { echo "engine stage export failed: $LOG" >&2; exit 1; }
+
+# T16: the hero grade as data (AgX + the compositor grade baked through Blender into 33^3 LUTs and the
+# vignette map; the viewer applies them with Lut3DNode). The set bounce is a Cycles render of the set
+# without the character (blender/hero/refs.py --mode bounce), made once; ENGINE_BOUNCE copies it in.
+blender -b -t 4 --factory-startup --python-exit-code 1 --python "$REPO/blender/hero/grade.py" -- \
+  --lut "$RUN/grade_lut.json" >> "$LOG" 2>&1 \
+  || { echo "grade LUT bake failed: $LOG" >&2; exit 1; }
+if [[ -n "${ENGINE_BOUNCE:-}" ]]; then cp "$ENGINE_BOUNCE" "$RUN/set_bounce.json"; fi
 
 # node deps of this checkout (fresh worktrees have none yet)
 [[ -d "$REPO/bench/node_modules/playwright" ]] || npm ci --prefix "$REPO/bench" --no-fund --no-audit >> "$LOG" 2>&1

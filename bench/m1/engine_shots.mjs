@@ -7,7 +7,9 @@
 //        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8796] [--timeout 600]
 //        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_] [--pose arms_up]
 //        [--balls auto|on|off]  shader-ball parity frame (game_balls.png) when RUN_DIR has shader_balls.json
-//        [--turntable SECONDS] [--tt-view closeup:hero] [--tt-fps 24] [--tt-size 640]
+//        [--turntable SECONDS] [--tt-view closeup:hero] [--tt-fps 24] [--tt-size 640] [--tt-hz 48] [--tt-warmup 24]
+//        [--chart]  the grey chart (T16; RUN_DIR has chart.glb + chart.json): <prefix>chart.png (graded) and
+//                   <prefix>chart_linear.npy (scene-linear float32 H x W x 4)
 //
 // A view is `name` (its own rig: the hero rig for the portrait, the neutral look-dev rig otherwise) or
 // `name:hero` / `name:neutral` (T10): `closeup:hero` is the closeup camera under the hero rig re-placed
@@ -15,6 +17,11 @@
 // --turntable (T10): the view's frames while the model turns at the viewer's 20 deg/s for SECONDS, into
 // RUN_DIR/<prefix>turntable/ and <prefix>turntable.mp4, with a temporal-noise (shimmer) number per frame
 // in <prefix>shots.json (the mean |second temporal difference| of the luma, 0..255).
+// Temporal AA (T16, the viewer's default ?aa=traa; --query aa=msaa for the MSAA / alpha-to-coverage path):
+// stills accumulate aa.stillFrames jittered frames; the turntable runs at --tt-hz (default = --tt-fps,
+// must be a multiple of it) with the in-between frames rendered into the history but not written, after
+// --tt-warmup frames (default 24) of turning before the first written frame, so the history is in its
+// steady state as in the live viewer.
 //   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8796] [--selftest]
 //        Device capture (the M4 Air): serve only, no browser. Open the printed URL on the device (through
 //        `ssh -N -L 8796:127.0.0.1:8796 <this host>`); the page renders every view on its own GPU and POSTs
@@ -52,6 +59,9 @@ const ttSeconds = Number(opt('turntable', 0));
 const ttView = opt('tt-view', 'closeup:hero');
 const ttFps = Number(opt('tt-fps', 24));
 const ttSize = Number(opt('tt-size', 640));
+const ttHz = Number(opt('tt-hz', ttFps));
+const ttWarmup = Number(opt('tt-warmup', 24));
+const wantChart = argv.includes('--chart');
 const TT_DEG_PER_S = 20; // main.ts turntable speed
 /** 'closeup:hero' -> [view, rig, file stem] (the default rig: hero for the portrait, else neutral) */
 function viewSpec(v) {
@@ -101,7 +111,7 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png)$/;
+const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|grade_lut\.json|set_bounce\.json|chart\.(glb|json))$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');
@@ -212,6 +222,19 @@ function png(w, h, rgba) {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
 }
 
+/** A float32 .npy (little endian, C order) of raw bytes with this shape. */
+function npy(raw, shape) {
+  let head = `{'descr': '<f4', 'fortran_order': False, 'shape': (${shape.join(', ')}), }`;
+  const pad = 16 - ((10 + head.length + 1) % 16);
+  head += ' '.repeat(pad % 16) + '\n';
+  const pre = Buffer.alloc(10);
+  pre.write('\x93NUMPY', 0, 'latin1');
+  pre[6] = 1;
+  pre[7] = 0;
+  pre.writeUInt16LE(head.length, 8);
+  return Buffer.concat([pre, Buffer.from(head, 'latin1'), raw]);
+}
+
 // ------------------------------------------------------------------ browser
 const ARGS = [
   // bench/headless-check.mjs: WebGPU on SwiftShader needs Vulkan-on-SwiftShader and no Vulkan surface
@@ -277,6 +300,24 @@ async function run(backend) {
       balls = { file: `${outPrefix}balls.png`, res: [bw, bh], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, warnings: sb.warnings };
       console.error(`[engine_shots] ${backend} balls ${bw}x${bh}: ${Date.now() - t} ms`);
     }
+    let chart = null;
+    if (wantChart) {
+      const cj = JSON.parse(await readFile(join(build, 'chart.json'), 'utf8'));
+      const [cw, ch] = cj.res;
+      const qc = new URLSearchParams(q);
+      qc.set('scene', 'chart');
+      await page.goto(`http://127.0.0.1:${port}/character.html?${qc}`, { waitUntil: 'load' });
+      await page.waitForFunction(() => window.__viewerState?.ready || window.__viewerState?.phase === 'error', null, { timeout: timeoutS * 1000, polling: 500 });
+      const sc = await page.evaluate(() => window.__viewerState);
+      if (sc.phase === 'error') throw new Error(`chart viewer error: ${sc.error}`);
+      const t = Date.now();
+      const r = await page.evaluate(([w, h]) => window.__viewer.captureChart(w, h, false), [cw, ch]);
+      await writeFile(join(build, `${outPrefix}chart.png`), png(cw, ch, Buffer.from(r.b64, 'base64')));
+      const rl = await page.evaluate(([w, h]) => window.__viewer.captureChart(w, h, true), [cw, ch]);
+      await writeFile(join(build, `${outPrefix}chart_linear.npy`), npy(Buffer.from(rl.b64, 'base64'), [ch, cw, 4]));
+      chart = { file: `${outPrefix}chart.png`, linear: `${outPrefix}chart_linear.npy`, res: [cw, ch], render_ms: r.ms, frames: r.frames, grade: r.grade, lights: r.lights, wall_ms: Date.now() - t, warnings: sc.warnings };
+      console.error(`[engine_shots] ${backend} chart ${cw}x${ch}: ${Date.now() - t} ms`);
+    }
     const adapter = await page.evaluate(async () => {
       try {
         const a = await navigator.gpu?.requestAdapter();
@@ -285,7 +326,7 @@ async function run(backend) {
         return null;
       }
     });
-    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, turntable, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
+    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, turntable, balls, chart, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
   } finally {
     await browser.close();
   }
@@ -305,9 +346,24 @@ async function captureTurntable(page, backend) {
   const lumas = [];
   const frames = [];
   const t0 = Date.now();
+  // temporal AA: render at ttHz with a history (warm-up, in-between frames), write every (ttHz / ttFps)-th
+  const aaMode = (await page.evaluate(() => window.__viewer.stats().aa?.mode)) ?? 'msaa';
+  const temporal = aaMode !== 'msaa';
+  const sub = temporal ? Math.round(ttHz / ttFps) : 1;
+  if (temporal && Math.abs(sub * ttFps - ttHz) > 1e-6) throw new Error(`--tt-hz ${ttHz} must be a multiple of --tt-fps ${ttFps}`);
+  const stepDeg = TT_DEG_PER_S / (ttFps * sub);
+  if (temporal) {
+    const warm = Math.max(0, ttWarmup);
+    // the view, pose and a fresh history at the first warm-up angle, then turn into frame 0
+    await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a, { frames: 1 }), [v, rig, ttSize, ttSize, poseArg, -warm * stepDeg]);
+    for (let k = warm - 1; k >= 1; k--) await page.evaluate(([a, w]) => window.__viewer.advance(a, w, w), [-k * stepDeg, ttSize]);
+  }
   for (let i = 0; i < n; i++) {
     const deg = (i / ttFps) * TT_DEG_PER_S;
-    const r = await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a), [v, rig, ttSize, ttSize, poseArg, deg]);
+    if (temporal) for (let k = sub - 1; k >= 1; k--) await page.evaluate(([a, w]) => window.__viewer.advance(a, w, w), [deg - k * stepDeg, ttSize]);
+    const r = temporal
+      ? await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a, { keep: true, frames: 1 }), [v, rig, ttSize, ttSize, poseArg, deg])
+      : await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a), [v, rig, ttSize, ttSize, poseArg, deg]);
     const px = Buffer.from(r.b64, 'base64');
     const file = `frame_${String(i).padStart(3, '0')}.png`;
     await writeFile(join(dir, file), png(ttSize, ttSize, px));
@@ -328,7 +384,7 @@ async function captureTurntable(page, backend) {
   const ff = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-framerate', String(ttFps), '-i', join(dir, 'frame_%03d.png'), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '12', join(build, `${outPrefix}turntable.mp4`)]);
   if (ff.status === 0) video = `${outPrefix}turntable.mp4`;
   const mean = noise.reduce((x, y) => x + y, 0) / Math.max(1, noise.length);
-  return { view: v, rig, stem, seconds: ttSeconds, fps: ttFps, deg_per_s: TT_DEG_PER_S, res: [ttSize, ttSize], frames, dir: `${outPrefix}turntable`, video, temporal_noise: noise, temporal_noise_mean: +mean.toFixed(4), wall_ms: Date.now() - t0 };
+  return { view: v, rig, stem, seconds: ttSeconds, fps: ttFps, aa: aaMode, hz: temporal ? ttHz : ttFps, warmup: temporal ? ttWarmup : 0, deg_per_s: TT_DEG_PER_S, res: [ttSize, ttSize], frames, dir: `${outPrefix}turntable`, video, temporal_noise: noise, temporal_noise_mean: +mean.toFixed(4), wall_ms: Date.now() - t0 };
 }
 
 if (serveMode) {
