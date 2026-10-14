@@ -56,17 +56,40 @@ export const DEFAULT_PARAMS = {
     shift1: -0.08,
     shift2: 0.12,
     shiftJitter: 0.12,
+    /** T9b, lobe shift offsets that break a planar card's highlight into strands (materials HairMaterial):
+     * per card (hashed COLOR_0 value), and a wave tilt along each strand, amplitude waveTilt with
+     * waveCycles[0..1] waves root to tip (per strand, from the ID). idLodBias: mip bias for the ID / root-tip
+     * read that feeds the jitter (trilinear IDs of a minified card average to 0.5 and kill the jitter). */
+    cardJitter: 0.1,
+    waveTilt: 0.2,
+    waveCycles: [1.0, 2.5],
+    idLodBias: -2,
+    /** How much of the strand occlusion (root AO x baked AO x depth AO) reaches the lobes (0 = T9). */
+    specAO: 1.0,
+    /** Warm multiple-scattering body (T9b): a fully wrapped diffuse in the scatter tint, the albedo's
+     * chroma ^ scatterSat at luminance 1; the TRT lobe (spec2) takes the same tint. */
+    scatter: 0.004,
+    scatterSat: 0.5,
+    /** TT (T9b): backlit transmission in the scatter tint: gain x the R-like cone (ttExponent) x the
+     * forward-scattering azimuth term ((1 - Lp.Vp) / 2)^ttPow. */
+    tt: 0.15,
+    ttPow: 2.0,
+    ttExponent: 16,
     /** T9, calibrated on the closeup parity (bench/m1/hair_test.py --parts parity: hair-region mean
      * and median linear luminance vs the Cycles hero strands). The hero's Chiang roughness ~0.4 puts
      * a single fibre's R lobe at sin^p, p ~23 (TRT ~6); the cards need narrower lobes (60 / 12) for
      * the highlight tail (Cycles p90 / p99 0.76 / 1.6): the per-strand shift jitter and the flow map
      * already spread the highlight across a card the way the strand-to-strand variation does. */
     exponent1: 60,
-    exponent2: 12,
+    exponent2: 24,
     // T6 had 0.0175 / 0.02 (shader balls, exponents 160 / 28, a near-black atlas: hair region 0.24x Cycles).
-    // T9: 0.19 / 0.07 with the per-card layer scale (front locks 0.4, under 0.7): hair region 0.98x the hero.
-    spec1: 0.19,
-    spec2: 0.07,
+    // T9: 0.19 / 0.07 with the per-card layer scale (front locks 0.4, under 0.7): hair region 0.98x the hero,
+    // but per light (hair_test --parity-lights, viewer ?lights=) key 2.1x, fill 3.0x, rim 0.52x: ~80 % of the
+    // hero hair's closeup luminance is the rim's (TT / TRT through the fibres), the engine's was the key's
+    // white R. T9b, fitted per light with the TT lobe: R 0.05, TRT 0.01 (now in the unit-luminance scatter
+    // tint), TT 0.15, scatter 0.004 (hair region 1.10x, p50 / p90 / p99 and r/g close to Cycles).
+    spec1: 0.05,
+    spec2: 0.01,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
     tangentSign: 1,
@@ -94,7 +117,21 @@ export const DEFAULT_PARAMS = {
     // T9, closeup parity (beard-region linear luminance vs the hero strands): the lobes are the
     // hair's (exponents), the gains lower: a dense short beard self-shadows (the cards do not)
     spec1: 0.01,
-    spec2: 0.012,
+    // T9b: 0.002 in the unit-luminance scatter tint (T9's 0.012 x sqrt(albedo) was ~0.0002)
+    spec2: 0.002,
+    scatter: 0.0,
+    tt: 0.0,
+    alphaTest: 0.22,
+  },
+  /** Brow cards (T9b; were facialHair): the same lobes and maps, own gains, calibrated on the brow
+   * region of the closeup parity (bench/m1/hair_test.py --parts parity, hero brow strands). */
+  brows: {
+    albedoGain: 1.0,
+    spec1: 0.01,
+    spec2: 0.002,
+    // the brow body: T9 brow region p50 0.08 vs 0.16 (Cycles), near-black strokes over skin
+    scatter: 0.012,
+    tt: 0.0,
     alphaTest: 0.22,
   },
   eye: {
