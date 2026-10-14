@@ -32,3 +32,7 @@ Fan build (`data/build/lookdev/20261013T114304Z-hairB-v3jw2`):
 - Hero groom: 60,000 strands + 1,400 vellus, 1.45 M control points.
 - Game cards: 341 cards, 13,876 tris (≤ 25k), atlas unchanged. 30 cards dropped by the ear test.
 - LOD0: 119,910 tris. Validator: 0 errors.
+
+## Superseded defaults (m1 v4, track T8)
+
+Hair v4 (`bench/m1/v4/t8-hair.md`) changed the public groom defaults: 70k strands at 48 points, 4 clump levels, the direction-field comb, the cut, guided front falls, stray hairs, the noisy hairline and Chiang at melanin 0.82. The v3 keys above still work. `bench/m1/variants/hair_v3_groom.json` restores the v3 groom on top of the new defaults, and a fan overlay that relies on v3 values should pin the keys it lists.

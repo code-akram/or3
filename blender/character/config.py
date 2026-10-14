@@ -289,8 +289,16 @@ DEFAULTS = {
                      "grey_pow": 4,  # flat-topped zones (2: a plain bell)
                      "grey_extra": 0.05, "grey": [0.06, 0.0],  # silver, not yellow
                      "grey_radius": 1.25,  # grey hairs are coarser (hero radius scale): they read at a distance
-                     "swatches": [[0.2, "#948e86"], [0.9, "#6a4a32"], [0.98, "#3e2e23"],
-                                  [1.0, "#30241b"]],
+                     # swatches: the game atlas colour per melanin, calibrated to the hero
+                     # strands (T8, bench/m1/v4/t8-hair.md: beard-region mean linear
+                     # luminance, EEVEE game shells vs Cycles strands, same camera and
+                     # light). Before: #948e86 #6a4a32 #3e2e23 #30241b (EEVEE 1.44x Cycles
+                     # once the atlases were sRGB-encoded); now those x0.3 in linear
+                     # (x0.5: 1.30, x0.375: 1.255). Most of the shells' luminance is skin
+                     # through them and specular, not the atlas: at albedo 0 EEVEE is
+                     # still 1.11x Cycles (shell coverage, hair v4 step 6).
+                     "swatches": [[0.2, "#54504c"], [0.9, "#3b2719"], [0.98, "#201610"],
+                                  [1.0, "#18100b"]],
                      "value_sigma": 0.3},
             "hero": {"radius_m": [0.00005, 0.00008], "tip_radius": 0.22,
                      # soft specular; the ends fade to tip_alpha past tip_fade_from

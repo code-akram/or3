@@ -763,7 +763,7 @@ def bake_cap_texture(frame, g, E, ccfg, ccap):
     n, m = g["n"], g["m"]
     strands = [E[j] for j in range(n) if abs(surf.azimuth(E[j][1]) - az0) < span_deg * 0.5
                and surf.d_eff(E[j][1]) < cap["v_span_m"]]
-    vel = ev["pos"][n * m:].reshape(-1, 4, 3)
+    vel = ev["pos"][g.get("vellus_pt0", n * m):g.get("vellus_pt1", len(ev["pos"]))].reshape(-1, 4, 3)
     strands += [q for q in vel if abs(surf.azimuth(q[0]) - az0) < span_deg * 0.5]
     cov = np.zeros((Hh, W), dtype=bool)
     val = np.ones((Hh, W), dtype=np.float32)

@@ -1,0 +1,39 @@
+{
+ "$comment": "The v3 scalp groom (bench/m1/v2/hair.md, v3/hair.md) as an overlay over hair_groom.DEFAULTS (hair v4, bench/m1/v4/t8-hair.md). Deep-merge it over a variant, e.g. jq -s '.[0] * .[1]' bench/m1/variants/direction.json bench/m1/variants/hair_v3_groom.json > /tmp/direction_v3hair.json. Not bit-identical to v3 (per-feature RNG streams, the scalp shell and the GN graph differ in small ways), but the same construction and values.",
+ "head": {"refine": {"skin": {"head": {"scalp_dark": 0.0}}}},
+ "hair": {
+  "groom": {
+   "strands": 40000, "points": 24, "point_grade": 1.0,
+   "radius_m": [0.000045, 0.00002], "tip_taper_from": 0.0,
+   "comb": {"mode": "back"},
+   "hairline": {"recess_m": 0.009, "recess_side": null, "feather_m": 0.010, "feather_min": 0.08,
+                "noise": null, "density_noise": null, "edge": null},
+   "lift": {"side_m": 0.036, "back_m": 0.026, "jitter": 0.3},
+   "clump": {"edge_m": 0.0, "preserve_length": false, "noise_after_clumps": false,
+             "levels": [{"count": 36, "factor": 0.85, "shape": 0.3, "tip_spread_m": 0.0},
+                        {"count": 360, "factor": 0.8, "shape": 0.0}]},
+   "wave": {"amp_m": [0.004, 0.008], "period_m": [0.12, 0.18]},
+   "flyaways": {"mode": "noise", "share": 0.04, "distance_m": 0.010},
+   "trim": {"random": 0.05, "in_gn": true},
+   "cut": null, "perimeter": null,
+   "vellus": {"count": 1400, "length_m": [0.003, 0.006], "band_m": [-0.002, 0.006],
+              "radius_m": 0.000018, "melanin": 0.9},
+   "front_fall": [
+    {"side": -1, "count": 3, "az0_deg": 30, "az_step_deg": 6.0, "el_deg": 24,
+     "comb_side": 0.2, "comb_fwd": 0.3, "comb_down": 0.9, "fall_after_m": 0.025,
+     "tip_above_lips_m": 0.045, "tip_jitter_m": 0.015, "hug": 0.06, "clear_m": 0.005,
+     "flare_after_m": 0.1, "flare": 0.1, "max_len_m": 0.24, "strands": 360,
+     "factor": 0.75, "wave_m": 0.005},
+    {"side": 1, "count": 1, "az0_deg": 16, "az_step_deg": 0.0, "el_deg": 32,
+     "comb_side": 0.9, "comb_fwd": 0.5, "comb_down": 0.4, "fall_after_m": 0.04, "gravity": 0.55,
+     "tip_above_lips_m": 0.06, "tip_jitter_m": 0.0, "hug": 0.08, "clear_m": 0.007,
+     "flare_after_m": 0.07, "flare": 0.08, "max_len_m": 0.13, "strands": 260,
+     "factor": 0.75, "wave_m": 0.003}],
+   "shader": {"model": "HUANG", "melanin": 0.985, "roughness": [0.22, 0.30], "random_color": 0.08,
+              "offset_deg": null, "light_share": 0.10, "coat": null, "radial_roughness": null,
+              "root_dark": 0.0, "tip_light": 0.0, "grey_share": 0.0},
+   "scalp_tint": {"color": "#4a3a31", "fade_m": [0.008, 0.03], "alpha": 0.85},
+   "render": null
+  }
+ }
+}

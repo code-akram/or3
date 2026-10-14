@@ -6,6 +6,8 @@ from fixed coordinates, so the hair follows the head track's face edits and
 any change to the body macros. Rest pose, world space, character facing -Y.
 """
 
+import math
+
 import bpy
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
@@ -157,3 +159,61 @@ class HeadFrame:
                 "lips_min": r(self.lips_min), "lips_max": r(self.lips_max),
                 "ears_min": r(self.ears_min), "ears_max": r(self.ears_max),
                 "ear_ellipsoids": [[r(c), r(rad)] for c, rad in self.ears]}
+
+
+# ---------------------------------------------------------------- groom fields (hair v4)
+
+def fbm(p, octaves, seed=0):
+    """Sum of 3D noise octaves at world point p: octaves = [[amplitude, scale], ...]
+    (m). Deterministic: the seed shifts the sample point. Mean ~0."""
+    from mathutils import noise
+    q = Vector(p)
+    out = 0.0
+    for k, (amp, scale) in enumerate(octaves):
+        off = Vector((17.3 * (seed + 1) + 5.1 * k, -9.7 * (seed + 1) + 3.3 * k, 4.1 * k))
+        out += amp * noise.noise(q / scale + off, noise_basis="PERLIN_ORIGINAL")
+    return out
+
+
+class FlowField:
+    """Comb directions over the scalp for the groom guides (hair_groom, comb
+    mode "field"): the v2 back-comb turned by a crown whorl (hair leaves it
+    with a spiral turn), combed down behind and below it, and a coherent
+    angle noise round the scalp normal so neighbouring guides differ.
+
+    cfg: hair_groom DEFAULTS["field"]. Rest pose, world space, facing -Y."""
+
+    def __init__(self, frame, cfg):
+        self.frame, self.cfg = frame, cfg
+        w = cfg["whorl"]
+        el, az = math.radians(w["el_deg"]), math.radians(w["az_deg"])
+        c = frame.center
+        d = Vector((math.sin(az) * math.cos(el), math.cos(az) * math.cos(el), math.sin(el)))
+        hit, nrm, _, _ = frame.skin_bvh.ray_cast(c, d, 0.3)
+        self.whorl = hit if hit is not None else c + d * 0.09
+        self.whorl_n = (self.whorl - c).normalized()
+
+    def turn(self, comb, p, nrm):
+        """comb (Vector) turned by the field at root p (normal nrm)."""
+        cfg, w = self.cfg, self.cfg["whorl"]
+        p, n = Vector(p), Vector(nrm).normalized()
+        out = Vector(comb).normalized()
+        # Behind and below the whorl: combed down (the occiput, the nape).
+        c = self.frame.center
+        behind = max(0.0, min(1.0, (p.y - c.y) / 0.04))
+        below = max(0.0, min(1.0, (self.whorl.z - p.z) / 0.05))
+        down = Vector((0.0, 0.25, -1.0)).normalized()
+        k = cfg["down"] * behind * below
+        out = (out * (1 - k) + down * k).normalized()
+        # Whorl: the comb turns round the scalp normal near it (a spiral),
+        # by up to turn_deg at its centre, fading over radius_m. A turn, not
+        # a radial flow: hair combed forward or sideways off the crown leaves
+        # the curved skull in straight lines (the v3 "spider").
+        from mathutils import Quaternion
+        dist = (p - self.whorl).length
+        ang = math.radians(w["turn_deg"]) * math.exp(-(dist / w["radius_m"]) ** 2)
+        # Coherent angle noise round the normal.
+        if cfg.get("jitter_deg"):
+            ang += math.radians(cfg["jitter_deg"]) * 1.6 * fbm(p, [[1.0, cfg["jitter_scale_m"]]],
+                                                               cfg.get("seed", 0))
+        return Quaternion(n, ang) @ out

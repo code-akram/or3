@@ -391,6 +391,9 @@ def synth_head(m, c, cl, cr):
     tint(R["roof"] * c["socket_dark"], (0.88, 0.85, 0.88))       # under the brow shelf
     tint(R["temple"] * 0.6, (0.97, 0.97, 1.0))
     tint(R["scalp"] * 0.7, (0.94, 0.93, 0.95))
+    # hair v4: the scalp under the hair darker and cooler toward the interior
+    # (follicles and the hair's occlusion), none at the region edge
+    tint(smoothstep(c["scalp_dark_from"], 1.0, R["scalp"]) * c["scalp_dark"], c["scalp_dark_rgb"])
     tint(R["neck"] * 0.5, (0.98, 0.97, 0.97))
     # haemoglobin blotching (5-15 mm): acts on G and B only; strong on the
     # cheeks, nose, centre forehead and neck, faint elsewhere
@@ -599,6 +602,7 @@ DEFAULT_HEAD = {
     "beard_lip_rgb": (0.62, 0.58, 0.58),     # ... and its full-strength multiplier (linear)
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
+    "scalp_dark": 1.0, "scalp_dark_from": 0.6, "scalp_dark_rgb": (0.78, 0.77, 0.82),  # 0 = off (v3)
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
     "freckle_thr": 0.80, "freckles": 0.22, "blemish": 0.5,
     "mottle_low": 0.10, "mottle_mid": 0.06,
