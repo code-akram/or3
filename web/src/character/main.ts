@@ -77,7 +77,7 @@ async function main(): Promise<void> {
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // Output encodes sRGB itself
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // r186 WebGPU: PCF with per-light radius (PCFSoft is gone)
   const dpr = Number(q.get('dpr') ?? Math.min(devicePixelRatio, 2));
   renderer.setPixelRatio(dpr);
   const samples = 4;
@@ -155,7 +155,7 @@ async function main(): Promise<void> {
     } else {
       applyPreset(poser, rt, PRESETS[poseName] ? poseName : 'rest', amount);
     }
-    return rt.apply();
+    return rt.apply(q.get("correctives") !== "0"); // ?correctives=0: helpers only (A/B)
   };
 
   const setView = (v: ViewName, r: RigName): void => {

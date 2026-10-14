@@ -5,9 +5,9 @@
 //
 //   node bench/m1/engine_shots.mjs --build RUN_DIR [--views front,three_quarter,profile,closeup,portrait]
 //        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8791] [--timeout 600]
-//        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_]
+//        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_] [--pose arms_up]
 //
-// Containment: the server exposes only web/dist and RUN_DIR (under /asset/), bound to 127.0.0.1, and
+// Containment: the server exposes only web/dist-viewer and RUN_DIR (under /asset/), bound to 127.0.0.1, and
 // every output file goes into RUN_DIR. For a fan build RUN_DIR is the private run dir, so nothing
 // from it is served beside public data or written outside private/ (lookdev.sh passes it).
 // Run it under `taskset` on the shared machine (engine_shots.sh does).
@@ -41,6 +41,7 @@ const port = Number(opt('port', 8791));
 const timeoutS = Number(opt('timeout', 900));
 const extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/B only)
 const outPrefix = opt('prefix', 'game_');
+const poseArg = opt('pose', null); // debug preset for every view (e.g. arms_up), else the view's own
 const dist = join(repo, 'web', opt('dist', 'dist-viewer'));
 
 if (!existsSync(join(build, 'character.glb'))) {
@@ -168,12 +169,12 @@ async function run(backend) {
       const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
       const rig = v === 'portrait' ? 'hero' : 'neutral';
       const t = Date.now();
-      const r = await page.evaluate(([v, rig, w, h]) => window.__viewer.capture(v, rig, w, h), [v, rig, w, h]);
+      const r = await page.evaluate(([v, rig, w, h, p]) => window.__viewer.capture(v, rig, w, h, p ?? undefined), [v, rig, w, h, poseArg]);
       const px = Buffer.from(r.b64, 'base64');
       if (px.length !== w * h * 4) throw new Error(`${v}: got ${px.length} bytes for ${w}x${h}`);
       const file = join(build, `${outPrefix}${v}.png`);
       await writeFile(file, png(w, h, px));
-      shots.push({ view: v, rig, file: `${outPrefix}${v}.png`, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights });
+      shots.push({ view: v, rig, file: `${outPrefix}${v}.png`, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
       console.error(`[engine_shots] ${backend} ${v} ${w}x${h}: ${Date.now() - t} ms`);
     }
     const stats = await page.evaluate(() => window.__viewer.stats());
