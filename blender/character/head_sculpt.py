@@ -692,3 +692,416 @@ def refine(b, body, lab, eyes_obj):
     mag = np.linalg.norm(new - co, axis=1)
     return {"max_mm": round(float(mag.max()) * 1000, 2), "verts_over_0.1mm": int((mag > 1e-4).sum()),
             "eye_clearance_pushed": npush, "lid_lining_seated": nline}
+
+
+# --- hands and neck (m1 v4 T22) --------------------------------------------------------------
+#
+# The same idea as the head fields, on the dense hands and the neck after head_refine: analytic
+# fields of position and normal, anchored on the rest skeleton (head_refine.hand_frames, the neck
+# and clavicle bones) and on the ears, so a texel evaluates exactly what a vertex got.
+# hand_forms.apply displaces the hand vertices along their normals by hand_field(); neck() does the
+# neck. skin_tex then bakes the residual the mesh cannot hold between its vertices (the field at
+# each texel minus the field interpolated from the vertices, as for the crisp band), so tendon
+# edges and vein walls stay sharp in the normal map and the hero displacement.
+#
+# Hand fields (hands.sculpt.fields, mm along the normal; negative = recess):
+#   knuckle    the metacarpal heads (KNUCKLE_K per finger), crisp, on the knuckle line
+#   valley     the dips between the heads, and the intermetacarpal gutters behind them (gutter):
+#              with the heads, the knuckle planes (each head a facet, a groove between)
+#   tendon     the four extensor tendons, fanning from the wrist to each head and on over the
+#              proximal phalanx (the hood, hood_k of the amplitude)
+#   thumb      the long thumb extensor (EPL) to the IP joint and the short one (EPB) on the radial
+#              border; the anatomical snuffbox (snuff) between them at the wrist
+#   pip / dip  the dorsal knuckle pad of each finger joint
+#   joint      the joint wider at the sides than the shaft; shaft slims between the joints
+#   breadth    the ulnar border (5th metacarpal) and the radial side of the index head out: a
+#              broader, squarer palm (hand_width_ratio)
+#   wrist      flatter (dorsal and palmar faces in, the sides out), the ulnar head and the radial
+#              styloid, two palmar flexor cords (palmaris longus, flexor carpi radialis)
+#   vein       the dorsal venous network (paths in palm coordinates; hand_detail tints the same
+#              paths), vein_w_mm its Gaussian half-width, dipping under the skin along each path
+#   nail_fold  (geometry only, from the fingernails weights: nail_folds) the proximal and lateral
+#              nail folds raised round the plate, the bed a little sunk
+#
+# Neck fields (neck.fields, mm): scm (sternocleidomastoid, mastoid to the sternal head, a crisp
+# anterior border), carotid / posterior (the triangles either side, recessed), larynx (thyroid
+# prominence, midline). All fade to 0 on skin the shirt, jacket or tie (knot) covers and collar_gap_mm +
+# collar_margin_mm above it (collar_weight), so the surface the collar sits on does not move. The
+# clavicle heads are under the shirt, where the body is deleted: no field.
+
+FINGERS = ("index", "middle", "ring", "pinky")
+HAND_FIELDS = {
+    "knuckle_mm": 1.8, "knuckle_r_mm": 3.8, "valley_mm": -1.0, "gutter_mm": -0.6,
+    "tendon_mm": 1.8, "tendon_w_mm": 2.0, "hood_k": 0.45,
+    "thumb_mm": 0.9, "snuff_mm": -1.0,
+    "pip_mm": 0.6, "dip_mm": 0.4, "joint_mm": 0.5, "shaft_mm": -0.3,
+    "breadth_ulnar_mm": 1.6, "breadth_radial_mm": 0.7,
+    "wrist_flat_mm": -0.7, "wrist_side_mm": 0.35, "ulnar_mm": 1.4, "radial_mm": 0.7, "flexor_mm": 0.35,
+    "vein_mm": 1.6, "vein_w_mm": 1.8,
+    "nail_fold_mm": 0.3, "nail_bed_mm": -0.12,
+}
+KNUCKLE_K = {"index": 0.95, "middle": 1.0, "ring": 0.85, "pinky": 0.65}
+TENDON_K = {"index": 1.0, "middle": 1.0, "ring": 0.8, "pinky": 0.55}
+NECK_FIELDS = {
+    "scm_mm": 3.0, "scm_front_mm": 5.5, "scm_back_mm": 8.0, "scm_depth_mm": 18.0,
+    "carotid_mm": -1.2, "posterior_mm": -1.4, "larynx_mm": 2.5, "larynx_r_mm": 7.0,
+    "collar_margin_mm": 12.0, "collar_gap_mm": 3.0, "subdiv": 1,
+}
+
+
+def field_cfg(defaults, cfg):
+    c = dict(defaults)
+    c.update((cfg or {}).get("fields") or {})
+    return c
+
+
+def _g(x, s):
+    return np.exp(-0.5 * (x / s) ** 2)
+
+
+def _segd(p, a, b):
+    """Distance from points p (n, d) to the segment ab, and its parameter."""
+    ab = b - a
+    t = np.clip(((p - a) @ ab) / max(float(ab @ ab), 1e-12), 0.0, 1.0)
+    return np.linalg.norm(p - (a + t[:, None] * ab), axis=1), t
+
+
+def _chain(p, pts):
+    """Distance from p to the polyline pts and the arc parameter (0..1) of the nearest point."""
+    best = np.full(len(p), np.inf)
+    tb = np.zeros(len(p))
+    L = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    tot, acc = float(L.sum()), 0.0
+    for k in range(len(pts) - 1):
+        d, t = _segd(p, pts[k], pts[k + 1])
+        better = d < best
+        best = np.where(better, d, best)
+        tb = np.where(better, (acc + t * L[k]) / max(tot, 1e-12), tb)
+        acc += L[k]
+    return best, tb
+
+
+def _ortho(v, axis):
+    v = v - axis * float(v @ axis)
+    return v / max(float(np.linalg.norm(v)), 1e-12)
+
+
+def _chaikin(pts, n=2):
+    for _ in range(n):
+        q = [pts[0]]
+        for a, b in zip(pts[:-1], pts[1:]):
+            q += [0.75 * a + 0.25 * b, 0.25 * a + 0.75 * b]
+        pts = q + [pts[-1]]
+    return pts
+
+
+def vein_paths(hf):
+    """Per side: [(points (k, 2) in palm coordinates (u along, v across), amplitude, phase)]: the
+    dorsal network of hand_detail (Track G) with its per-side jitter, corner-rounded; deterministic."""
+    out = {}
+    for si, (side, _f) in enumerate(sorted(hf.items())):
+        rng = np.random.default_rng(301 + si)
+        jit = lambda p: [(a + 0.03 * (rng.random() - 0.5), b + 0.05 * (rng.random() - 0.5)) for a, b in p]  # noqa: E731
+        trunks = [
+            (jit([(-0.25, 1.05), (0.05, 0.95), (0.28, 0.80), (0.45, 0.62)]), 1.0),     # basilic side
+            (jit([(-0.25, -0.20), (0.05, -0.10), (0.25, 0.05), (0.42, 0.25)]), 0.9),   # cephalic side
+            (jit([(0.45, 0.62), (0.50, 0.42), (0.42, 0.25)]), 0.85),                   # arch
+            (jit([(0.45, 0.62), (0.62, 0.70), (0.80, 0.78)]), 0.7),                    # to the ring/middle web
+            (jit([(0.42, 0.25), (0.60, 0.30), (0.79, 0.35)]), 0.65),                   # to the middle/index web
+            (jit([(0.28, 0.80), (0.52, 0.98), (0.76, 1.08)]), 0.6),                    # to the ring/pinky web
+            (jit([(0.25, 0.05), (0.40, -0.18), (0.55, -0.35)]), 0.5),                  # toward the thumb web
+        ]
+        out[side] = [(np.array(_chaikin([np.array(q, float) for q in pts])), amp, 6.3 * rng.random())
+                     for pts, amp in trunks]
+    return out
+
+
+class PalmCoords:
+    """Palm coordinates of points p for one hand: a along the fingers from the wrist, b across
+    (index -> pinky), h toward the back; u = a / L (L: wrist to the middle MCP), v = 0 at the index
+    MCP and 1 at the pinky MCP (hand_detail.HandFrame's convention)."""
+
+    def __init__(self, f, p):
+        self.W, self.F, self.A, self.B = f["wrist"], f["fingers"], f["across"], f["back"]
+        d = p - self.W
+        self.a, self.b, self.h = d @ self.F, d @ self.A, d @ self.B
+        mm = f["mcp"]
+        self.L = float((mm["middle"] - self.W) @ self.F)
+        self.bi = float((mm["index"] - self.W) @ self.A)
+        self.bp = float((mm["pinky"] - self.W) @ self.A)
+        self.u = self.a / self.L
+        self.v = (self.b - self.bi) / (self.bp - self.bi)
+
+
+def vein_profile(p, f, paths, w):
+    """Vein mask (0..1) at points p of one hand: the max over the paths of a Gaussian of the
+    distance in metres (half-width w), dipping under the skin along each path (a deterministic
+    'sunk' term), faded at the path ends and toward the knuckles."""
+    pc = PalmCoords(f, p)
+    out = np.zeros(len(p))
+    scale = abs(pc.bp - pc.bi)
+    for pts, amp, ph in paths:
+        seg = np.c_[np.diff(pts[:, 0]) * pc.L, np.diff(pts[:, 1]) * scale]
+        Ls = np.linalg.norm(seg, axis=1)
+        tot, acc = float(Ls.sum()), 0.0
+        best = np.full(len(p), np.inf)
+        tb = np.zeros(len(p))
+        for k in range(len(seg)):
+            rx = (pc.u - pts[k, 0]) * pc.L
+            ry = (pc.v - pts[k, 1]) * scale
+            t = np.clip((rx * seg[k, 0] + ry * seg[k, 1]) / max(Ls[k] ** 2, 1e-12), 0, 1)
+            d = np.hypot(rx - t * seg[k, 0], ry - t * seg[k, 1])
+            better = d < best
+            best = np.where(better, d, best)
+            tb = np.where(better, (acc + t * Ls[k]) / max(tot, 1e-12), tb)
+            acc += Ls[k]
+        sunk = 0.65 + 0.35 * head_forms.smoothstep(-0.5, 0.5, np.sin(2 * np.pi * 1.1 * tb + ph))
+        ends = np.sin(np.pi * np.clip(0.08 + 0.84 * tb, 0, 1)) ** 0.3
+        out = np.maximum(out, amp * _g(best, w) * sunk * ends)
+    return out * head_forms.smoothstep(0.84, 0.70, pc.u)
+
+
+def hand_field(p, n, hf, c, paths=None):
+    """Scalar displacement along the normal (metres) of the hand fields at points p (unit normals
+    n), both hands. Positions and normals only (no vertex groups), so texels can evaluate it;
+    the nail folds are nail_folds()."""
+    mm = 0.001
+    ss_ = head_forms.smoothstep
+    out = np.zeros(len(p))
+    paths = paths if paths is not None else vein_paths(hf)
+    for side, f in hf.items():
+        W = f["wrist"]
+        near = np.linalg.norm(p - W, axis=1) < 0.24
+        if not near.any():
+            continue
+        q, nn = p[near], n[near]
+        pc = PalmCoords(f, q)
+        F, A, B = pc.F, pc.A, pc.B
+        ab = np.c_[pc.a, pc.b]
+        back = np.clip(nn @ B, 0, 1) ** 1.5
+        palm = np.clip(-(nn @ B), 0, 1) ** 1.5
+        d = np.zeros(len(q))
+        ak = {k: float((f["mcp"][k] - W) @ F) for k in FINGERS}
+        bk = {k: float((f["mcp"][k] - W) @ A) for k in FINGERS}
+        cen = 0.5 * (bk[FINGERS[0]] + bk[FINGERS[3]])
+        # metacarpal heads and the knuckle planes
+        r = c["knuckle_r_mm"] * mm
+        for i, k in enumerate(FINGERS):
+            d += c["knuckle_mm"] * mm * KNUCKLE_K[k] * _g(pc.a - (ak[k] - 0.0015), r) * _g(pc.b - bk[k], r * 1.1) * back
+            if i < 3:
+                k2 = FINGERS[i + 1]
+                am, bm = 0.5 * (ak[k] + ak[k2]), 0.5 * (bk[k] + bk[k2])
+                d += c["valley_mm"] * mm * _g(pc.a - (am - 0.002), 0.0045) * _g(pc.b - bm, 0.0026) * back
+                # gutter: from the valley toward the wrist, converging as the metacarpals do
+                g0 = np.array([am - 0.006, bm])
+                g1 = np.array([0.30 * pc.L, cen + (bm - cen) * 0.55])
+                dist, t = _segd(ab, g0, g1)
+                d += c["gutter_mm"] * mm * _g(dist, 0.0028) * np.sin(np.pi * np.clip(0.15 + 0.85 * t, 0, 1)) ** 0.6 * back
+        # extensor tendons: wrist (fanned in) -> head, then over the proximal phalanx (the hood)
+        tw = c["tendon_w_mm"] * mm
+        for k in FINGERS:
+            dist, t = _segd(ab, np.array([0.012, cen + (bk[k] - cen) * 0.35]), np.array([ak[k] - 0.003, bk[k]]))
+            fade = ss_(0.0, 0.25, t) * (1 - 0.35 * ss_(0.85, 1.0, t))
+            d += c["tendon_mm"] * mm * TENDON_K[k] * _g(dist, tw) * fade * back
+            j0, j1 = f["mcp"][k], f["pip"][k]
+            ln = float(np.linalg.norm(j1 - j0))
+            ax = (j1 - j0) / ln
+            Bs = _ortho(B, ax)
+            rel = q - j0
+            al = rel @ ax
+            hood = ss_(-0.007, -0.002, al) * ss_(ln * 1.05, ln * 0.7, al)
+            d += c["tendon_mm"] * c["hood_k"] * mm * TENDON_K[k] * _g(rel @ _ortho(A, ax), tw * 1.2) * hood \
+                * np.clip(nn @ Bs, 0, 1) ** 1.5 * (1 - ss_(0.013, 0.018, np.abs(rel @ Bs)))
+        # thumb: EPL (long, over the back) and EPB (radial border), the snuffbox between them
+        t1, t2, t3 = f["thumb"]
+        radial = -A
+        face = np.clip(nn @ unit(B + radial * 0.8), 0, 1) ** 1.2
+        for pts, amp, w_ in (([W + F * 0.006 + B * 0.009 + radial * 0.002, t1 + (t2 - t1) * 0.2 + B * 0.004, t2, t3], 1.0, 1.1),
+                             ([W + F * 0.002 + radial * 0.013, t1 + radial * 0.006, t1 + (t2 - t1) * 0.5], 0.75, 1.2)):
+            dist, t = _chain(q, np.array(pts))
+            # the curve runs at the bone, the cord on the skin ~7.5 mm out
+            d += c["thumb_mm"] * amp * mm * _g(dist - 0.0075, tw * w_) * np.sin(np.pi * np.clip(0.1 + 0.85 * t, 0, 1)) ** 0.5 * face
+        sb = W + F * 0.010 + radial * 0.013 + B * 0.004
+        d += c["snuff_mm"] * mm * np.exp(-0.5 * ((q - sb) ** 2).sum(1) / 0.0045 ** 2) * np.clip(nn @ unit(B + radial), 0, 1)
+        # finger joints: the dorsal knuckle pad, the sides wider than the shaft
+        for k in FINGERS:
+            J = [f["mcp"][k], f["pip"][k], f["dip"][k]]
+            chain = J + [J[2] + (J[2] - J[1]) * 0.85]
+            dist, _ = _chain(q, np.array(chain))
+            onf = 1 - ss_(0.009, 0.013, dist)
+            for ji, amp in ((1, c["pip_mm"]), (2, c["dip_mm"])):
+                ax = unit(chain[ji + 1] - chain[ji - 1])
+                al = (q - J[ji]) @ ax
+                d += amp * mm * _g(al - 0.0005, 0.0032) * np.clip(nn @ _ortho(B, ax), 0, 1) ** 1.5 * onf
+                d += c["joint_mm"] * (1.0 if ji == 1 else 0.7) * mm * _g(al, 0.0034) * np.abs(nn @ _ortho(A, ax)) ** 1.5 * onf
+            for a_, b_ in ((J[0], J[1]), (J[1], J[2])):
+                ln = float(np.linalg.norm(b_ - a_))
+                ax = (b_ - a_) / ln
+                al = (q - a_) @ ax
+                t = np.clip(al / ln, 0, 1)
+                d += c["shaft_mm"] * mm * np.sin(np.pi * t) ** 2 * (1 - np.clip(-(nn @ _ortho(B, ax)), 0, 1)) * onf \
+                    * ((al > 0) & (al < ln))
+        # a broader palm: the ulnar border and the radial side of the index head out
+        d += c["breadth_ulnar_mm"] * mm * np.clip(nn @ A, 0, 1) ** 2 * _g(pc.a - 0.65 * pc.L, 0.32 * pc.L) * ss_(cen - 0.006, cen + 0.006, pc.b) \
+            * (1 - ss_(ak["pinky"] + 0.004, ak["pinky"] + 0.014, pc.a))
+        d += c["breadth_radial_mm"] * mm * np.clip(-(nn @ A), 0, 1) ** 2 * _g(pc.a - (ak["index"] - 0.006), 0.012) * ss_(cen + 0.006, cen - 0.006, pc.b)
+        # wrist: flatter, the ulnar head and the radial styloid, the palmar flexor cords
+        band = _g(pc.a + 0.012, 0.016)
+        d += c["wrist_flat_mm"] * mm * band * np.abs(nn @ B) ** 2
+        d += c["wrist_side_mm"] * mm * band * np.abs(nn @ A) ** 2
+        uh = W + A * (pc.bp * 0.95) + B * 0.009 - F * 0.014
+        d += c["ulnar_mm"] * mm * np.exp(-0.5 * ((q - uh) ** 2).sum(1) / 0.005 ** 2) * np.clip(nn @ unit(B + A), 0, 1)
+        rs = W + A * (pc.bi * 0.9) - B * 0.001 - F * 0.006
+        d += c["radial_mm"] * mm * np.exp(-0.5 * ((q - rs) ** 2).sum(1) / 0.0055 ** 2) * np.clip(nn @ unit(-A + 0.3 * B), 0, 1)
+        for bo in (0.42, 0.62):
+            bb = pc.bi + (pc.bp - pc.bi) * (1 - bo) - 0.004
+            dist, t = _segd(ab, np.array([-0.045, bb]), np.array([0.004, bb + 0.002]))
+            d += c["flexor_mm"] * mm * _g(dist, 0.0016) * np.sin(np.pi * t) ** 0.5 * palm
+        # dorsal veins
+        d += c["vein_mm"] * mm * vein_profile(q, f, paths[side], c["vein_w_mm"] * mm) * back
+        out[near] += d
+    return out
+
+
+def nail_folds(nails, p, hf, c):
+    """Geometry-only nail folds (metres along the normal) from the fingernails weights (0..1 per
+    vertex): a raised band just outside the plate on its proximal and lateral sides (none at the
+    free edge), the bed a little sunk."""
+    ss_ = head_forms.smoothstep
+    fold = _g(nails - 0.18, 0.11) * (nails < 0.5)
+    distal = np.zeros(len(p))
+    for f in hf.values():
+        tips = [(f["dip"][k], f["dip"][k] + (f["dip"][k] - f["pip"][k]) * 0.85) for k in FINGERS]
+        tips.append((f["thumb"][2], f["thumb"][2] + (f["thumb"][2] - f["thumb"][1]) * 0.9))
+        for a_, b_ in tips:
+            ln = float(np.linalg.norm(b_ - a_))
+            al = (p - a_) @ ((b_ - a_) / ln)
+            close = np.linalg.norm(p - (a_ + b_) * 0.5, axis=1) < 0.022
+            distal = np.maximum(distal, close * ss_(0.55, 0.8, al / ln))
+    return (c["nail_fold_mm"] * fold * (1 - distal) + c["nail_bed_mm"] * ss_(0.5, 0.9, nails)) * MM
+
+
+def neck_anchors(co, ears, arm, skin):
+    """Mastoid (behind, medial of and a little below the ear lobe) and the SCM's sternal head
+    (above the clavicle head, on the front of the neck) per x side, and the larynx point (midline
+    front surface 10 mm below the neck joint). World space (the staged body is unparented)."""
+    out = {}
+    mw = arm.matrix_world
+    for side in (1.0, -1.0):
+        e = ears & ((co[:, 0] > 0) == (side > 0))
+        lobe = co[e][np.argmin(co[e][:, 2])]
+        lat = np.array([side, 0.0, 0.0])
+        mast = lobe + np.array([0.0, 0.013, -0.004]) - lat * 0.010
+        cl = np.array((mw @ arm.data.bones["clavicle_" + ("l" if side > 0 else "r")].head_local)[:])
+        z = cl[2] + 0.034
+        m_ = skin & (np.abs(co[:, 2] - z) < 0.006) & (np.abs(co[:, 0] - side * 0.016) < 0.008)
+        y = co[m_][:, 1].min() if m_.any() else cl[1] - 0.06
+        out[side] = {"mastoid": mast, "sternal": np.array([side * 0.016, y + 0.004, z]), "lobe": lobe}
+    nk = np.array((mw @ arm.data.bones["neck_01"].head_local)[:])
+    z = nk[2] - 0.010
+    m_ = skin & (np.abs(co[:, 0]) < 0.006) & (np.abs(co[:, 2] - z) < 0.006)
+    y = co[m_][:, 1].min() if m_.any() else nk[1] - 0.08
+    out["larynx"] = np.array([0.0, y, z])
+    return out
+
+
+def neck_field(p, n, an, c):
+    """Scalar displacement along the normal (metres) of the neck fields at points p."""
+    fwd = np.array([0.0, -1.0, 0.0])
+    out = np.zeros(len(p))
+    m = lambda v: float(v) * MM  # noqa: E731
+    for side in (1.0, -1.0):
+        a = an[side]
+        lat = np.array([side, 0.0, 0.0])
+        M, S = a["mastoid"], a["sternal"]
+        C = np.array([M, 0.5 * (M + S) + lat * 0.010 + fwd * 0.004, S])
+        D = unit(0.85 * lat + 0.5 * fwd)
+        sel = head_forms.smoothstep(0.0, 0.008, p[:, 0] * side)
+        for curve, amp, front, back_ in ((C, c["scm_mm"], c["scm_front_mm"], c["scm_back_mm"]),
+                                         (C + fwd * 0.016, c["carotid_mm"], 5.0, 5.0),
+                                         (C - fwd * 0.022 + lat * 0.004, c["posterior_mm"], 6.0, 6.0)):
+            v = ridge(p, n, curve, D, fwd, m(amp), m(back_), m(front), m(c["scm_depth_mm"]), taper=0.12)
+            out += (v @ D) * sel
+    L = an["larynx"]
+    r = m(c["larynx_r_mm"])
+    w = np.exp(-0.5 * ((p[:, 1:] - L[1:]) ** 2).sum(1) / r ** 2)
+    # a V seen from the front: narrower below the prominence
+    w *= _g(p[:, 0] / (1.0 + 0.5 * np.clip((p[:, 2] - L[2]) / 0.008, -1, 1)), r * 0.8)
+    return out + m(c["larynx_mm"]) * w * np.clip(n @ fwd, 0, 1)
+
+
+def collar_weight(co, nrm, garments, c):
+    """Per vertex: 0 on skin a garment covers (a ray along the skin normal meets it within 4 cm,
+    deform_test's rule) and up to collar_gap_mm from it, rising to 1 over collar_margin_mm. The
+    surface the collar is fitted to stays put. Returns (weight, covered)."""
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+    from mathutils.kdtree import KDTree
+    cov = np.zeros(len(co), bool)
+    for g in garments:
+        mwg = np.array(g.matrix_world)
+        gco = np.array([v.co[:] for v in g.data.vertices]) @ mwg[:3, :3].T + mwg[:3, 3]
+        bvh = BVHTree.FromPolygons([tuple(x) for x in gco], [tuple(pl.vertices) for pl in g.data.polygons])
+        for i in np.nonzero(~cov)[0]:
+            dv = Vector(nrm[i])
+            if bvh.ray_cast(Vector(co[i]) + dv * 0.0003, dv, 0.04)[0] is not None:
+                cov[i] = True
+    if not cov.any():
+        return np.ones(len(co)), cov
+    kd = KDTree(int(cov.sum()))
+    for j, x in enumerate(co[cov]):
+        kd.insert(x, j)
+    kd.balance()
+    dist = np.array([kd.find(x)[2] for x in co])
+    gap, mar = m_(c["collar_gap_mm"]), m_(c["collar_margin_mm"])
+    return head_forms.smoothstep(gap, gap + mar, dist) * ~cov, cov
+
+
+def m_(v):
+    return float(v) * MM
+
+
+def neck(b):
+    """head.refine hook, after the hand forms and before the skin bake: the neck fields on the
+    (subdivided) neck, faded out under the collar. Stores what skin_tex needs for the residual."""
+    if "neck" in b.cfg and b.cfg["neck"] is None:
+        return None
+    from . import head_refine as hr
+    c = field_cfg(NECK_FIELDS, b.cfg.get("neck"))
+    body = hr.staged_body(b)
+    arm = b.armature()
+    garments = [o for o in b.meshes() if any(k in o.name for k in ("suit_shirt", "suit_jacket", "suit_tie"))]
+    out = {}
+
+    def region():
+        lab_, _ = hr.classify(body, arm)
+        co_ = hr.coords(body)
+        ears_ = hr.group_weights(body, "ears") > 0
+        an_ = neck_anchors(co_, ears_, arm, ~(hr.group_weights(body, "HelperGeometry") > 0))
+        lobe_z = max(an_[1.0]["lobe"][2], an_[-1.0]["lobe"][2])
+        box_ = (co_[:, 2] < lobe_z + 0.006) & (co_[:, 2] > an_[1.0]["sternal"][2] - 0.03) & (np.abs(co_[:, 0]) < 0.10) \
+            & np.isin(lab_, ["neck", "face", "head"]) & ~ears_ & ~(hr.group_weights(body, "lips") > 0)
+        return lab_, co_, hr.normals(body), an_, box_
+
+    lab, co, nrm, an, box = region()
+    if c.get("subdiv", 1):
+        # the MPFB neck is ~12 mm apart: one grid subdivision where the neck shows (not under the
+        # collar; the face is dense already). UVs and weights interpolate.
+        w0, cov0 = collar_weight(co[box], nrm[box], garments, c)
+        sel = np.zeros(len(co), bool)
+        sel[np.nonzero(box)[0][~cov0]] = True
+        sel &= np.isin(lab, ["neck", "head"])
+        before, after = hr.subdivide(body, sel, 0.5)
+        out["subdiv"] = {"verts_selected": int(sel.sum()), "faces_before": before, "faces_after": after}
+        lab, co, nrm, an, box = region()
+    b.refine_labels = lab
+    w, cov = collar_weight(co[box], nrm[box], garments, c)
+    s = np.zeros(len(co))
+    s[box] = neck_field(co[box], nrm[box], an, c) * w
+    hr.set_coords(body, co + nrm * s[:, None])
+    b.t22_neck = {"anchors": an, "cfg": c, "verts": np.nonzero(box)[0], "w": w}
+    out.update({"verts_moved": int((np.abs(s) > 1e-5).sum()), "max_out_mm": round(float(s.max()) * 1000, 2),
+                "max_in_mm": round(float(-s.min()) * 1000, 2), "covered_verts": int(cov.sum()),
+                "larynx_weight": round(float(w[np.argmin(np.linalg.norm(co[box] - an["larynx"], axis=1))]), 3)})
+    b.notes["neck"] = out
+    return out

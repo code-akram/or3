@@ -218,7 +218,8 @@ def sheet(run, m):
 def engine_sheet(a):
     """RUN/engine_sheet.png: EEVEE views over engine views, then the hero portrait as Cycles target
     vs engine (same camera, rig and pose by data: blender/hero/export_rig.py), whole frame and a
-    face crop at 100 %. Writes into RUN only."""
+    face crop at 100 %. Writes into RUN only (hero.sh gives it its own staging dir, never the source
+    look-dev run). `--build` is the data/build root of the regression strip's fixed stages."""
     run = os.path.abspath(a.run)
     gs = load(os.path.join(run, "game_shots.json"))
     if not gs.get("ok"):
@@ -297,7 +298,7 @@ def engine_sheet(a):
     parity_rows(a, run, out, W)
     print(f"-> {out}")
     if a.cycles:
-        regression_strip(run, a.cycles)
+        regression_strip(run, a.cycles, build=getattr(a, "build", None))
 
 
 # ---------------------------------------------------------------- engine parity (T6)
@@ -929,10 +930,11 @@ def _strip_register(cyc, eng, w, h, x, y, reach=128):
     return best[1], best[2]
 
 
-def regression_strip(run, cycles, out=None, crop=STRIP_CROP):
+def regression_strip(run, cycles, out=None, crop=STRIP_CROP, build=None):
     """RUN/regression_strip.png (or `out`): main9, int1 and RUN (with the Cycles hero `cycles`),
-    one row each: Cycles crop | engine crop. Rows whose inputs are missing are skipped."""
-    build = os.path.dirname(os.path.dirname(os.path.abspath(run)))
+    one row each: Cycles crop | engine crop. Rows whose inputs are missing are skipped.
+    `build` is the data/build root holding the fixed stages (default: two levels above RUN)."""
+    build = build or os.path.dirname(os.path.dirname(os.path.abspath(run)))
     stages = [(n, os.path.join(build, l), os.path.join(build, h)) for n, l, h in STRIP_FIXED]
     stages.append(("latest " + os.path.basename(os.path.abspath(run)), os.path.abspath(run),
                    os.path.abspath(cycles) if cycles else ""))
@@ -975,7 +977,7 @@ def regression_strip(run, cycles, out=None, crop=STRIP_CROP):
 
 
 def strip_cmd(a):
-    regression_strip(os.path.abspath(a.run), a.cycles, a.out, a.crop)
+    regression_strip(os.path.abspath(a.run), a.cycles, a.out, a.crop, getattr(a, "build", None))
 
 
 # ---------------------------------------------------------------- grey chart (T16)
@@ -1302,6 +1304,7 @@ def main():
     e = sub.add_parser("engine", help="engine vs EEVEE vs Cycles sheet (RUN/engine_sheet.png)")
     e.add_argument("run")
     e.add_argument("--cycles", help="hero stage dir with portrait.png (the Cycles target)")
+    e.add_argument("--build", help="data/build root for the regression strip's fixed stages (default: two levels above RUN)")
     e.add_argument("--crop", default="720,90,600,600",
                    help="face crop x,y,w,h in the 1920x1080 portrait (same camera in both)")
     pa = sub.add_parser("parity", help="engine parity numbers (RUN/engine_parity.json)")
@@ -1322,6 +1325,7 @@ def main():
     rs.add_argument("run")
     rs.add_argument("--cycles", help="hero stage dir of RUN (portrait_crop.png)")
     rs.add_argument("--crop", default=STRIP_CROP, help="w,h,x,y of the Cycles crop in the 1920x1080 portrait")
+    rs.add_argument("--build", help="data/build root of the fixed stages (default: two levels above RUN)")
     rs.add_argument("--out", help="output PNG (default RUN/regression_strip.png)")
     ch = sub.add_parser("chart", help="grey-chart row: engine vs Cycles after the grade, +-3/255 (T16)")
     ch.add_argument("--chart", required=True, help="chart.json (blender/hero/refs.py --mode chart)")

@@ -123,20 +123,47 @@ def _chaikin(pts, n=2):
     return pts
 
 
-def synth(m, c, hf, fingers, cfg=None):
-    """Track A's hand synthesis (crease terms handed over) plus this layer."""
+# T22 (head_sculpt.hand_field carries the veins as geometry plus the baked residual): the
+# folds a little deeper, the cuticle a little rounder; the vein height here is dropped and the
+# tint follows the same analytic paths, so colour and relief line up.
+T22_DETAIL = {"fold_pip_mm": 0.42, "fold_dip_mm": 0.28, "fold_mcp_mm": 0.2, "fold_thumb_mm": 0.32,
+              "cuticle_mm": 0.12}
+
+
+def synth(m, c, hf, fingers, cfg=None, t22=None):
+    """Track A's hand synthesis (crease terms handed over) plus this layer. t22: the T22 hand
+    field state (hand_forms.apply's b.t22_hands) or None."""
     d = dict(DETAIL)
+    if t22 is not None:
+        d.update(T22_DETAIL)
     d.update(cfg or {})
     if not d.get("enabled", True):
         return ss.synth_hands(m, c, hf, fingers)
     ca = dict(c)
     ca.update(HANDOVER)
     out = ss.synth_hands(m, ca, hf, fingers)
-    layer(m, out, hf, fingers, d)
+    layer(m, out, hf, fingers, d, t22)
     return out
 
 
-def layer(m, out, hf, fingers, d):
+def t22_veins(m, t22):
+    """The T22 vein mask (0..1) per texel, from head_sculpt.vein_profile on the same paths as
+    the geometry; the back-facing weight as head_sculpt.hand_field's."""
+    from . import head_sculpt as hs
+    P = m.P.reshape(-1, 3).astype(np.float64)
+    N = m.N.reshape(-1, 3).astype(np.float64)
+    v = np.zeros(len(P))
+    ok = m.valid.reshape(-1)
+    w = t22["cfg"]["vein_w_mm"] * MM
+    for side, f in t22["hf"].items():
+        near = ok & (np.linalg.norm(P - f["wrist"], axis=1) < 0.24)
+        if near.any():
+            back = np.clip(N[near] @ f["back"], 0, 1) ** 1.5
+            v[near] = np.maximum(v[near], hs.vein_profile(P[near], f, t22["paths"][side], w) * back)
+    return v.reshape(m.P.shape[:2]).astype(np.float32)
+
+
+def layer(m, out, hf, fingers, d, t22=None):
     P = m.P
     nails = np.clip(m.nails, 0, 1)
     skin = 1 - smoothstep(0.25, 0.6, nails)
@@ -255,13 +282,16 @@ def layer(m, out, hf, fingers, d):
         ]
         vw = d["vein_w_mm"] * MM
         sunk = smoothstep(0.35, 0.6, m.vein_var)          # where a vein dives under
-        for pts, amp in trunks:
+        for pts, amp in (trunks if t22 is None else []):
             dist, tt = polyline(H.u + 0.010 * (m.mot_low - 0.5), H.v + 0.02 * (m.broad - 0.5), _chaikin(pts))
             dm = dist * H.L
             prof = gauss(dm, vw) * (0.45 + 0.55 * sunk) * np.sin(np.pi * np.clip(0.08 + 0.84 * tt, 0, 1)) ** 0.3
             vein = np.maximum(vein, amp * prof * H.back * smoothstep(0.84, 0.70, H.u))
+    if t22 is not None:
+        vein = t22_veins(m, t22)      # relief: geometry + skin_tex's T22 residual; here the tint only
     vein *= skin
-    h += (d["vein_mm"] * MM * vein).astype(np.float32)
+    if t22 is None:
+        h += (d["vein_mm"] * MM * vein).astype(np.float32)
     h += (d["cuticle_mm"] * MM * cut * skin).astype(np.float32)
     h *= (0.3 + 0.7 * skin)
 
