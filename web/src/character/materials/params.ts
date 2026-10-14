@@ -205,6 +205,46 @@ export const DEFAULT_PARAMS = {
   shirt: {
     fuzzStrength: 0.12,
   },
+  /** T16 temporal AA (output.ts, temporal.ts; ?aa=traa|taau|msaa at load). */
+  aa: {
+    /** hashed card coverage: 0 = the alpha-to-coverage step at alphaTest (parity with the MSAA path),
+     * 1 = the map alpha (fractional strand coverage, as Cycles' transparent cards). T16 measured both
+     * (bench/m1/v4/t16-aa-post.md): 1 is closer to Cycles on the closeup hair / beard / brows (1.00 / 0.94 /
+     * 1.07 vs 1.04 / 0.90 / 0.78) and shimmers less on the turntable (3.47 vs 3.63; MSAA 6.08) */
+    hairCoverage: 1,
+    /** current-frame weight floor (stock TRAA 0.05) and on hair pixels */
+    minWeight: 0.05,
+    hairMinWeight: 0.05,
+    /** variance-clip gamma on hair pixels: still, and moving (screen motion >> motionPx px / frame) */
+    hairGamma: 1.25,
+    hairGammaMoving: 0.75,
+    hairMotionPx: 1,
+    /** frames accumulated per still capture (progressive, then the EMA floor) */
+    stillFrames: 24,
+    /** taau render scale (?scale= at load overrides) */
+    scale: 0.75,
+  },
+  /** T16 thin-lens depth of field (dof.ts; beauty views of a camera with an f-stop). */
+  dof: {
+    on: 1,
+    /** CoC radius (px at the output height) that maps to 1 in the CoC texture */
+    maxPx: 64,
+    /** correction of the measured bokeh radius against the thin-lens formula (1 = the formula). At 1 the
+     * engine's fitted disc at the ear was 3.45 / 3.24 px (helix / whole-ear ROI; the formula says 3.39),
+     * Cycles' 2.87 / 2.71 px on the same fit (lookdev_report.py bokeh): Cycles' 7-blade f/2 blur reads
+     * ~0.84 of the thin-lens disc. At 0.835 the engine fits 3.04 / 2.89 px (+6 % / +7 % of Cycles; the
+     * half-res gather and the 0.5-1.5 px composite fade keep it from scaling linearly). */
+    radiusScale: 0.835,
+    /** near-field 16-tap max pass radius (fraction of the gather radius) */
+    maxPassScale: 1,
+    /** 1 = the gathers at full resolution */
+    fullRes: 0,
+  },
+  /** T16 set bounce: set_bounce.json (Cycles, the alley without the character) as the environment of the
+   * hero rig; gain 1 = Cycles' radiance as rendered. */
+  bounce: {
+    gain: 1,
+  },
 };
 
 export type Params = typeof DEFAULT_PARAMS;

@@ -7,6 +7,11 @@
 //      &area=none|rims|all&post=0&gaze=0&scene=balls&view_transform=standard
 //      &hairshadow=0 (T9b binary shadow on the hair) &fillshadow=0 (unshadowed fill / wrap) &gtao=0 (the
 //      baked direct-AO stand-in instead of GTAO) &aoview=1 (show the AO) &lights=key,rim (debug)
+//      &aa=traa|taau|msaa (T16: temporal AA with hashed hair cards, default; TAAU at &scale=0.75; msaa = the
+//      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty; dof=only: the DoF
+//      with the rest of the post off) &lut=0 (analytic grade + three's AgX instead of Blender's baked LUTs)
+//      &bounce=0 (no set-bounce environment) &scene=chart (T16 grey chart under the hero rig: chart.glb next
+//      to engine_stage.json) &passcheck=1 (self-test of Output's pass hook, passcheck.ts)
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
@@ -19,7 +24,10 @@ import { Poser, PRESETS, applyPreset } from './poses';
 import { ParamStore } from './materials/params';
 import { addHairDepthPrepass, assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
 import { skinLUT } from './materials/sss';
-import { Output } from './output';
+import { Output, type AAMode } from './output';
+import { bounceTexture, type BounceJson } from './bounce';
+import { installPassCheck } from './passcheck';
+import type { GradeLutJson } from './grade';
 import { SceneAO } from './ao';
 import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
 import { FrameStats, textureBytes } from './hud';
@@ -111,6 +119,29 @@ async function loadTexture(url: string): Promise<THREE.Texture | null> {
 function areaMode(fallback: 'none' | 'all' = 'none'): 'none' | 'rims' | 'all' {
   const a = q.get('area');
   return a === 'none' || a === 'rims' || a === 'all' ? a : fallback;
+}
+
+/** ?aa= (T16): temporal (TRAA, hashed cards) by default; msaa for the parity stills. */
+function aaMode(): AAMode {
+  const a = q.get('aa');
+  return a === 'msaa' || a === 'taau' ? a : 'traa';
+}
+
+/** The temporal / DoF tuning uniforms from the params (live: __viewer.setParam('aa.hairGamma', 1.5)). */
+function outputOptions(P: ParamStore, aa: AAMode) {
+  return {
+    aa,
+    scale: Number(q.get('scale') ?? P.get('aa.scale')),
+    temporal: {
+      minWeight: P.u('aa.minWeight'),
+      hairMinWeight: P.u('aa.hairMinWeight'),
+      hairGamma: P.u('aa.hairGamma'),
+      hairGammaMoving: P.u('aa.hairGammaMoving'),
+      hairMotionPx: P.u('aa.hairMotionPx'),
+    },
+    lens: { maxPx: P.u('dof.maxPx'), radiusScale: P.u('dof.radiusScale'), maxPassScale: P.u('dof.maxPassScale') },
+    dofFullRes: !!(P.get('dof.fullRes') as number),
+  };
 }
 
 /** Which hair / facial-hair materials carry the GLB strand maps (export.pack_hair_maps, T9 builds). */
@@ -345,8 +376,75 @@ async function mainBalls(): Promise<void> {
   panel.style.display = 'none';
 }
 
+/** ?scene=chart (T16): the grey chart (18 / 50 / 90 % patches and an 18 % ball; blender/hero/refs.py
+ * chart -> chart.glb + chart.json) under the hero portrait rig and camera, graded as the hero frame, so
+ * the engine's grade + lighting can be checked against Cycles' (lookdev_report.py chart). */
+async function mainChart(): Promise<void> {
+  const base = assetBase();
+  const aa = aaMode();
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL: q.get('gl') === '1', powerPreference: 'high-performance' });
+  await renderer.init();
+  state.backend = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
+  renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+  renderer.toneMapping = THREE.NoToneMapping;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.setPixelRatio(1);
+  state.phase = 'loading';
+  const [gltf, stageData, paramJson, lutJson] = await Promise.all([
+    new GLTFLoader().loadAsync(base + 'chart.glb'),
+    fetchJson<EngineStage>(base + 'engine_stage.json'),
+    fetchJson<unknown>(base + 'material_params.json'),
+    q.get('lut') === '0' ? null : fetchJson<GradeLutJson>(base + 'grade_lut.json'),
+  ]);
+  if (!stageData) fatal('no engine_stage.json');
+  const P = new ParamStore(q.get('params') ? JSON.parse(q.get('params')!) : paramJson);
+  const output = new Output(renderer, aa === 'msaa' ? 4 : 1, outputOptions(P, aa));
+  if (lutJson) output.lut.load(lutJson);
+  else state.warnings.push('no grade_lut.json: analytic grade + three AgX');
+  const scene = new THREE.Scene();
+  scene.add(gltf.scene);
+  const mats = assignMaterials(gltf.scene, P, {}, aa === 'msaa');
+  const stage = new Stage(stageData!, scene, mats.byName, P);
+  stage.areaMode = areaMode();
+  stage.shadowFill = q.get('fillshadow') !== '0';
+  if (q.get('lights')) stage.only = q.get('lights')!.split(',');
+  const vs = stage.setup('portrait', 'hero');
+  output.setGrade(true, vs.exposure, stageData!.hero.grade);
+  output.viewAgX.value = q.get('view_transform') === 'standard' ? 0 : 1;
+  output.setPost(false);
+  const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 200);
+  const api = {
+    state,
+    params: P,
+    setParam: (path: string, v: number | number[]) => P.set(path, v),
+    lights: () => stage.describeLights(),
+    stats: () => ({ scene: 'chart', backend: state.backend, aa: { mode: output.aa }, grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)' }),
+    /** the chart frame (RGBA8, or scene-linear float32 with linear) at w x h, base64, top row first */
+    captureChart: async (w: number, h: number, linear = false, frames?: number) => {
+      applyCamera(camera, vs.camera, w, h);
+      output.resetHistory();
+      const n = frames ?? (output.temporal ? (P.get('aa.stillFrames') as number) : 1);
+      const t = performance.now();
+      const px = linear ? await output.captureLinear(scene, camera, w, h, n) : await output.capture(scene, camera, w, h, n);
+      const u8 = new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
+      let s = '';
+      for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+      return { b64: s ? btoa(s) : '', ms: Math.round(performance.now() - t), frames: n, grade: output.lut.info ?? 'analytic', lights: stage.describeLights() };
+    },
+  };
+  (window as unknown as { __viewer: typeof api }).__viewer = api;
+  applyCamera(camera, vs.camera, 64, 36);
+  output.render(scene, camera, 64, 36, null);
+  state.phase = 'running';
+  state.ready = true;
+  hud.textContent = 'grey chart';
+  panel.style.display = 'none';
+}
+
 async function main(): Promise<void> {
   if (q.get('scene') === 'balls') return mainBalls();
+  if (q.get('scene') === 'chart') return mainChart();
   const t0 = performance.now();
   const base = assetBase();
   const forceWebGL = q.get('gl') === '1';
@@ -361,8 +459,8 @@ async function main(): Promise<void> {
   renderer.shadowMap.type = THREE.PCFShadowMap; // r186 WebGPU: PCF with per-light radius (PCFSoft is gone)
   const dpr = Number(q.get('dpr') ?? Math.min(devicePixelRatio, 2));
   renderer.setPixelRatio(dpr);
-  const samples = 4;
-  const output = new Output(renderer, samples);
+  const aa = aaMode();
+  const samples = aa === 'msaa' ? 4 : 1;
   const tInit = performance.now();
 
   // ------------------------------------------------------------------ load
@@ -379,7 +477,7 @@ async function main(): Promise<void> {
     progress.total = e.total;
     hud.textContent = `loading character.glb ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;
   });
-  const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands] = await Promise.all([
+  const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands, lutJson, bounceJson] = await Promise.all([
     glbP,
     fetchJson<RigRules>(base + 'character.rig.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
@@ -387,6 +485,8 @@ async function main(): Promise<void> {
     loadWeave(base),
     loadTexture(base + 'skin_head_curvature.png'),
     loadTexture(base + 'skin_hands_curvature.png'),
+    q.get('lut') === '0' ? null : fetchJson<GradeLutJson>(base + 'grade_lut.json'),
+    q.get('bounce') === '0' ? null : fetchJson<BounceJson>(base + 'set_bounce.json'),
   ]);
   const tLoaded = performance.now();
   let overrides: unknown = paramJson;
@@ -398,12 +498,23 @@ async function main(): Promise<void> {
     }
   }
   const P = new ParamStore(overrides);
+  const output = new Output(renderer, samples, outputOptions(P, aa));
+  if (lutJson) output.lut.load(lutJson);
+  else state.warnings.push('no grade_lut.json: analytic grade + three AgX (blender/hero/grade.py --lut)');
+  output.dofOn = q.get('dof') !== '0' && !!(P.get('dof.on') as number);
+  output.dofAlways = q.get('dof') === 'only';
+  output.dofDebug = q.get('dofview') ?? '';
+  if (q.get('passcheck') === '1') installPassCheck(output); // self-test of the pass hook (passcheck.ts)
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
 
   const scene = new THREE.Scene();
   const model = gltf.scene;
   scene.add(model);
+  // T16 set bounce: the environment of the hero beauty frame (bounce.ts), on the character's materials
+  // only (as envMap: scene.environment also lit the stage floor, a teal plane behind the head that the
+  // Cycles beauty does not have); intensity 0 outside the beauty frame
+  const bounceTex = bounceJson && q.get('bounce') !== '0' ? bounceTexture(bounceJson) : null;
 
   // bind pose from the inverse bind matrices (the node rest transforms should agree)
   let skinned: THREE.SkinnedMesh | null = null;
@@ -421,12 +532,20 @@ async function main(): Promise<void> {
   output.ao = sceneAO;
   if (sceneAO && q.get('aoview') === '1') output.setDebugAO(sceneAO.texture);
   if (sceneAO && q.get('aoview') === 'normal') output.setDebugAO(sceneAO.normalTexture, true);
+  const aaview = q.get('aaview');
+  if (aaview === 'raw' || aaview === 'velocity' || aaview === 'hair') output.setDebugTemporal(aaview);
   const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands), screenAO: sceneAO?.texture ?? null };
   if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
-  const mats = assignMaterials(model, P, side, samples > 1);
+  const mats = assignMaterials(model, P, side, aa === 'msaa');
   state.hairMaps = hairMaps(mats.byName, mats.roles);
   state.hairPrepass = addHairDepthPrepass(model, P);
+  if (bounceTex) {
+    for (const m of mats.byName.values()) {
+      m.envMap = bounceTex;
+      m.envMapIntensity = 0;
+    }
+  }
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName, P);
   stage.areaMode = areaMode();
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
@@ -461,10 +580,23 @@ async function main(): Promise<void> {
     return rt.apply(q.get("correctives") !== "0"); // ?correctives=0: helpers only (A/B)
   };
 
+  /** The beauty frame (T16): post + DoF + the set-bounce environment of the alley; the parity frames are
+   * on the void set, so no bounce and the world hemisphere as Cycles' --parity world. */
+  const hemi = (stage as unknown as { hemi: THREE.HemisphereLight }).hemi;
+  let hemiBase = hemi.intensity;
+  const setBeauty = (on: boolean): void => {
+    output.setPost(on);
+    const bounce = on && rigName === 'hero' && !!bounceTex;
+    for (const m of mats.byName.values()) m.envMapIntensity = bounce ? (P.get('bounce.gain') as number) : 0;
+    // the cube already holds the world where the set does not cover it
+    hemi.intensity = bounce ? 0 : hemiBase;
+  };
+
   const setView = (v: ViewName, r: RigName): void => {
     viewName = v;
     rigName = r;
     const vs = stage.setup(v, r);
+    hemiBase = hemi.intensity;
     // the hero shot turns the eyes to the camera (wet.gaze); the look-dev views keep the rest gaze
     const g = vs.shot ? (stage.data.hero.shots[vs.shot]?.gaze ?? null) : null;
     if (q.get('gaze') !== '0') gaze.apply(g);
@@ -473,8 +605,10 @@ async function main(): Promise<void> {
     // ?view_transform=standard: clamp + sRGB instead of AgX, so a capture decodes back to scene-linear
     // (hair / beard tone parity against Cycles EXRs, bench/m1/hair_parity.py)
     output.viewAgX.value = q.get('view_transform') === 'standard' ? 0 : 1;
-    // beauty post (bloom, halation, grain) on the interactive hero frames; ?post=0 for parity
-    output.setPost(r === 'hero' && q.get('post') !== '0');
+    // beauty post (bloom, halation, grain, DoF, set bounce) on the interactive hero frames; ?post=0 for parity
+    output.setLens(vs.camera);
+    setBeauty(r === 'hero' && q.get('post') !== '0');
+    output.resetHistory();
     userOrbit = false;
     controls.target.fromArray(vs.camera.target);
     resize();
@@ -606,11 +740,17 @@ async function main(): Promise<void> {
     shadow_maps: stage.shadowMapCount(),
     gtao: sceneAO ? { half_res: true, last_ms: Math.round(sceneAO.lastMs) } : null,
     hair_shadow: stage.deepHair ? 'deep (hair twins)' : 'binary',
+    aa: output.aa === 'msaa' ? { mode: 'msaa', samples: output.samples, hair: 'alpha to coverage' } : { mode: output.aa, scale: output.aa === 'taau' ? output.scale : 1, hair: `hashed (coverage ${P.get('aa.hairCoverage')})`, still_frames: P.get('aa.stillFrames') },
+    dof: output.dofOn ? { thin_lens: true, full_res: !!(P.get('dof.fullRes') as number), radius_scale: P.get('dof.radiusScale') } : null,
+    grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)',
+    bounce: bounceTex ? { gain: P.get('bounce.gain'), irradiance: bounceJson?.irradiance ?? null } : null,
+    passes: output.passList.map((p) => `${p.stage}:${p.name}`),
     fill_shadow: stage.shadowFill,
     frame: fs.summary(),
     first_frame_ms: Math.round(firstFrameMs),
   });
 
+  let advanceRT: THREE.RenderTarget | null = null;
   const api = {
     state,
     params: P,
@@ -628,25 +768,46 @@ async function main(): Promise<void> {
     weights: () => rt.lastWeights,
     lights: () => stage.describeLights(),
     stats: statsNow,
-    /** Render view (stage camera, rig) at w x h; returns base64 RGBA8 rows, top row first. */
-    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false, angleDeg = 0) => {
-      setView(view, rig);
-      output.setPost(post);
-      poseName = pose ?? (view === 'portrait' ? 'stand' : 'rest');
-      amount = 1;
-      applyPose();
+    /** Render view (stage camera, rig) at w x h; returns base64 RGBA8 rows, top row first.
+     * Temporal AA: a still accumulates `frames` jittered frames (default aa.stillFrames) from a fresh
+     * history; keep = true continues the current history instead (same view / pose / size, the model
+     * turned to angleDeg; frames default 1): the turntable (engine_shots --turntable). linear = true
+     * returns scene-linear float32 RGBA (no grade / exposure / view) as base64 instead. */
+    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false, angleDeg = 0, opts: { frames?: number; keep?: boolean; linear?: boolean } = {}) => {
+      if (!opts.keep) {
+        setView(view, rig);
+        poseName = pose ?? (view === 'portrait' ? 'stand' : 'rest');
+        amount = 1;
+        applyPose();
+      }
+      setBeauty(post);
       // turntable frames (engine_shots --turntable): the model turns in the fixed rig, as the viewer's turntable
       model.rotation.y = (angleDeg * Math.PI) / 180;
       model.updateMatrixWorld(true);
       applyCamera(camera, stage.view!.camera, w, h);
+      const frames = opts.frames ?? (output.temporal && !opts.keep ? (P.get('aa.stillFrames') as number) : 1);
       const t = performance.now();
-      const px = await output.capture(scene, camera, w, h);
+      const px = opts.linear ? await output.captureLinear(scene, camera, w, h, frames) : await output.capture(scene, camera, w, h, frames);
       const ms = performance.now() - t;
       const st = statsNow();
-      resize();
+      if (!opts.keep) resize();
+      const u8 = new Uint8Array(px.buffer, px.byteOffset, px.byteLength);
       let s = '';
-      for (let i = 0; i < px.length; i += 0x8000) s += String.fromCharCode(...px.subarray(i, i + 0x8000));
-      return { b64: btoa(s), ms: Math.round(ms), draw_calls: st.draw_calls, triangles: st.triangles_rendered, lights: stage.describeLights(), weights: rt.lastWeights };
+      for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+      return { b64: btoa(s), ms: Math.round(ms), frames, draw_calls: st.draw_calls, triangles: st.triangles_rendered, lights: stage.describeLights(), weights: rt.lastWeights };
+    },
+    /** One more frame of the current view into the temporal history (no readback): the in-between
+     * frames of a turntable at the display rate (engine_shots --tt-hz). */
+    advance: (angleDeg: number, w: number, h: number) => {
+      model.rotation.y = (angleDeg * Math.PI) / 180;
+      model.updateMatrixWorld(true);
+      applyCamera(camera, stage.view!.camera, w, h);
+      if (!advanceRT || advanceRT.width !== w || advanceRT.height !== h) {
+        advanceRT?.dispose();
+        advanceRT = new THREE.RenderTarget(w, h, { type: THREE.UnsignedByteType, depthBuffer: false });
+      }
+      output.render(scene, camera, w, h, advanceRT);
+      return true;
     },
   };
   (window as unknown as { __viewer: typeof api }).__viewer = api;
@@ -675,7 +836,7 @@ async function main(): Promise<void> {
         .map(([k, v]) => `${k} ${v.toFixed(2)}`)
         .join('  ');
       hud.textContent = [
-        `${state.backend}  ${w}x${h}  dpr ${dpr}  MSAA ${samples}x`,
+        `${state.backend}  ${w}x${h}  dpr ${dpr}  ${output.aa === 'msaa' ? `MSAA ${samples}x` : output.aa === 'taau' ? `TAAU x${output.scale}` : 'TRAA'}${output.dofOn ? '  DoF' : ''}${output.lut.info ? '  LUT grade' : ''}`,
         `frame p50 ${st.frame.p50.toFixed(1)} ms  p95 ${st.frame.p95.toFixed(1)} ms  (${st.frame.fps.toFixed(0)} fps)`,
         `draws ${st.draw_calls}  tris ${(st.triangles_rendered / 1000).toFixed(1)}k (model ${(tris / 1000).toFixed(1)}k)  lights ${st.lights}`,
         `textures ${tex.count}  ~${st.texture_mb_est} MB uncompressed RGBA8+mips`,
