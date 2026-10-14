@@ -14,8 +14,10 @@ Layers (one mesh, two materials: `hair` the scalp cap, `hair_cards` the rest):
             follows the groom's root density (soft hairline, no hard edge)
   under     the volume / core: wide cards per half level-1 lock, set in
             toward the skull, from 20 % of the lock on (dense cells)
-  mid, top  one card per level-2 clump (inner half mid, outer half top)
-  front     one lock card per front fall
+  mid, top  one card per level-2 clump (inner half mid, outer half top);
+            top cards ride the clump's outer strands (`top_lift`) for volume
+  front     one lock card per front fall, on cells baked from the front
+            falls' own strands (`front_cells`)
   hairline  short cards along the hairline built from the edge strands'
             first few centimetres (forward-pointing single hairs)
   fly       thin strips along the groom's stray hairs
@@ -32,7 +34,8 @@ Card geometry: the clump's evaluated centreline (mean of its strands per
 point), width from the strands' spread, 3 vertices wide with a rounded
 profile; every card vertex is pushed out of the skin and suit after the
 Geometry Nodes (the groom's push_out runs on the guides, before them).
-COLOR_0 "lock": layer shade x per-card value. Smooth-proxy normals from a
+COLOR_0 "lock": layer shade x per-card value; UV1 u: the layer's specular
+scale (`layer_spec`, read by the viewer's HairMaterial). Smooth-proxy normals from a
 volume blob of the groom; spring chains (hair_springs) from hang distance.
 
 Defects of the v3 baker fixed here (fable_review §5.3): temple-bay streaks and
