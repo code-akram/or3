@@ -85,7 +85,15 @@
   "refine": {
    "replanarise": 1.0,
    "skin": {
-    "base": "#b8927b"
+    "base": "#b8927b",
+    "head": {
+     "lip_seam": 0.5,
+     "lip_seam_mm": 0.7,
+     "lip_soft_mm": 0.6,
+     "ao_in_albedo": 0.0,
+     "socket_dark": 1.6,
+     "lid_dark": 1.3
+    }
    },
    "plane_sharp": 3.0,
    "eyes": {

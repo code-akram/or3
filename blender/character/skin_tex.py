@@ -254,7 +254,8 @@ def set_attr(me, name, values):
 class Maps:
     """Everything the synthesis needs for one texture (head or hands)."""
 
-    def __init__(self, size, P, N, T, cover, attrs1, attrs2, nA, nB, nC, nD, ao, nE=None, nF=None, nG=None):
+    def __init__(self, size, P, N, T, cover, attrs1, attrs2, nA, nB, nC, nD, ao, nE=None, nF=None, nG=None, nH=None,
+                 crisp=None):
         self.size = size
         self.P, self.N, self.T = P, N, T
         self.cover = cover[..., 0] > 0.5
@@ -271,6 +272,10 @@ class Maps:
         self.peel, self.nose_f1, self.lipbump = nF[..., 0], nF[..., 1], nF[..., 2]
         nG = nG if nG is not None else np.full_like(nD, 0.5)
         self.hb_f1, self.hb_f2 = nG[..., 0], nG[..., 1]
+        nH = nH if nH is not None else np.full_like(nD, 0.5)
+        self.mid_f, self.mid_ff, self.fine_h = nH[..., 0], nH[..., 1], nH[..., 2]
+        # sub-mesh residual of the sculpt layer's crisp band (metres along the normal), 0 without one
+        self.crisp = crisp if crisp is not None else np.zeros(P.shape[:2], np.float32)
         self.ao = ao[..., 0]
         # derivatives of P along the image axes (metres per texel)
         self.Pu = np.zeros_like(P)
@@ -311,6 +316,88 @@ class Maps:
         lap[1:-1, 1:-1] = (h[1:-1, 2:] + h[1:-1, :-2] + h[2:, 1:-1] + h[:-2, 1:-1] - 4 * h[1:-1, 1:-1])
         lap /= self.tex_m ** 2       # curvature-ish, 1/m
         return lap
+
+
+# --- sculpt crisp band (T12) ------------------------------------------------------------------
+
+# The sculpt layer's crisp band (head_sculpt.refine: sharp - soft of the bony fields) is applied
+# per vertex on the dense face (~2-2.5 mm spacing); what the mesh cannot hold between its vertices
+# is the analytic field at each texel minus the field interpolated from the vertices. That residual
+# goes into the skin height (game normal map and hero displacement). The vertex values are baked
+# through an attribute (offset-encoded, CRISP_ENC metres per unit) so the interpolation is exactly
+# the rasteriser's.
+CRISP_ENC = 0.02
+
+
+def _crisp_fields(st, co, nrm, ears_co):
+    """(sharp - soft) . n of the sculpt fields at points co (object space), metres. The ear points
+    are prepended so ear_front (zygoma, ramus) finds the same ear as on the mesh."""
+    from . import head_sculpt as hs
+    c = st["cfg"]
+    w = c["base_spacing_mm"] * hs.MM
+    P = np.concatenate([ears_co, co])
+    Nn = np.concatenate([np.zeros_like(ears_co), nrm])
+    E = np.zeros(len(P), bool)
+    E[:len(ears_co)] = True
+    d = hs.fields(st["anchors"], P, Nn, st["eye_c"], E, c["fields"], 0.0, st.get("vault")) \
+        - hs.fields(st["anchors"], P, Nn, st["eye_c"], E, c["fields"], w, st.get("vault"))
+    return (d[len(ears_co):] * nrm).sum(1)
+
+
+def crisp_vertex(b, body, lab):
+    """Per-vertex attribute values (encoded field, selection weight), or None without a sculpt
+    state. Selection as head_sculpt.refine: face and head labels, no lips."""
+    st = getattr(b, "sculpt_state", None)
+    if not st or lab is None:
+        return None
+    co = head_refine.coords(body)
+    nrm = head_refine.normals(body)
+    ears = head_refine.group_weights(body, "ears") > 0
+    sel = ((lab == "face") | (lab == "head")) & ~(head_refine.group_weights(body, "lips") > 0)
+    s = _crisp_fields(st, co, nrm, co[ears]) * sel
+    b._crisp_ctx = {"st": st, "ears_co": co[ears], "mw_inv": np.array(body.matrix_world.inverted(), np.float64)}
+    return (0.5 + s / CRISP_ENC).astype(np.float32), sel.astype(np.float32)
+
+
+def crisp_texels(b, m, a3, chunk=1_000_000):
+    """Residual height (s, s) in metres: the analytic crisp band at each texel, weighted by the
+    interpolated selection, minus the vertex interpolation."""
+    ctx = getattr(b, "_crisp_ctx", None)
+    out = np.zeros(m.P.shape[:2], np.float32)
+    if ctx is None:
+        return out, None
+    t = time.perf_counter()
+    s_v = (a3[..., 0] - 0.5) * CRISP_ENC
+    w = np.clip(a3[..., 1], 0, 1)
+    where = m.valid & (w > 1e-3)
+    mi = ctx["mw_inv"]
+    P = m.P[where].astype(np.float64) @ mi[:3, :3].T + mi[:3, 3]
+    N = m.N[where].astype(np.float64) @ mi[:3, :3].T
+    N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
+    a = np.empty(len(P), np.float64)
+    for i in range(0, len(P), chunk):
+        a[i:i + chunk] = _crisp_fields(ctx["st"], P[i:i + chunk], N[i:i + chunk], ctx["ears_co"])
+    out[where] = (w[where] * a - s_v[where]).astype(np.float32)
+    r = out[where]
+    stats = {"texels": int(where.sum()), "seconds": round(time.perf_counter() - t, 1),
+             "p1_mm": round(float(np.percentile(r, 1)) * 1000, 4), "p99_mm": round(float(np.percentile(r, 99)) * 1000, 4),
+             "min_mm": round(float(r.min()) * 1000, 4), "max_mm": round(float(r.max()) * 1000, 4)}
+    print(f"[skin] crisp band residual: {stats}", flush=True)
+    return out, stats
+
+
+def save_cache(path, m, extra):
+    """Dev cache of the head bake inputs (env SKIN_BAKE_CACHE): skin_synth re-runs on it outside Blender."""
+    def f16(*a):
+        return np.stack(a, -1).astype(np.float16) if len(a) > 1 else np.asarray(a[0], np.float16)
+    np.savez(path, P=m.P.astype(np.float32), N=m.N.astype(np.float32), T=m.T.astype(np.float32),
+             cover=m.cover, valid=m.valid, attrs1=f16(m.lips, m.nails, m.ears),
+             attrs2=np.stack([m.scalp, m.region, m.beard_in], -1).astype(np.float32),
+             nA=f16(m.pores), nB=f16(m.mot_mid, m.mot_low, m.broad), nC=f16(m.aniso_v, m.aniso_h, m.grain),
+             nD=f16(m.speck, m.edge, m.vein_var), nE=f16(m.hb, m.mel, m.lump), nF=f16(m.peel, m.nose_f1, m.lipbump),
+             nG=f16(m.hb_f1, m.hb_f2, m.hb_f2), nH=f16(m.mid_f, m.mid_ff, m.fine_h), ao=f16(m.ao),
+             crisp=m.crisp.astype(np.float32), extra=np.array(repr(extra)))
+    print(f"[skin] bake cache -> {path}", flush=True)
 
 
 # --- curvature (engine pre-integrated SSS, T6) -------------------------------------------------
@@ -541,6 +628,10 @@ def build(b):
     set_attr(me, "sk_region", region)
     bd = beard_depth(b, body)
     set_attr(me, "sk_beard", bd if bd is not None else np.full(len(me.vertices), -1.0, np.float32))
+    cv = crisp_vertex(b, body, lab) if c.get("crisp", True) else None
+    if cv is not None:
+        set_attr(me, "sk_crisp", cv[0])
+        set_attr(me, "sk_crisp_w", cv[1])
     # The rest position the bakes see: the hero shader evaluates the same
     # procedural pores on it (pose-stable, and aligned with the game normal map).
     rest = _eval_world_coords(body)
@@ -569,20 +660,30 @@ def build(b):
         nE = bk.run("noiseE", _noises(ns["noiseE"]))
         nF = bk.run("noiseF", _noises(ns["noiseF"]))
         nG = bk.run("noiseG", _noises(ns["noiseG"]))
+        nH = bk.run("noiseH", _noises(ns["noiseH"]))
+        a3 = bk.run("attr3", _attrs(("sk_crisp", "sk_crisp_w", None))) if cv is not None else None
         ao = bk.run("ao", None, samples=int(c.get("ao_samples", 16)), bake_type="AO", down=int(c.get("ao_down", 2)))
     finally:
         bk.finish()
         for o in hidden:
             o.hide_render = False
-    for n in ("sk_lips", "sk_nails", "sk_ears", "sk_scalp", "sk_region"):
-        me.attributes.remove(me.attributes[n])
+    for n in ("sk_lips", "sk_nails", "sk_ears", "sk_scalp", "sk_region", "sk_crisp", "sk_crisp_w"):
+        if me.attributes.get(n) is not None:
+            me.attributes.remove(me.attributes[n])
 
-    maps = [Maps(bake_px[i], P[i], N[i], T[i], cover[i], a1[i], a2[i], nA[i], nB[i], nC[i], nD[i], ao[i], nE[i], nF[i], nG[i]) for i in range(2)]
+    maps = [Maps(bake_px[i], P[i], N[i], T[i], cover[i], a1[i], a2[i], nA[i], nB[i], nC[i], nD[i], ao[i], nE[i], nF[i], nG[i],
+                 nH[i]) for i in range(2)]
+    crisp_stats = None
+    if a3 is not None:
+        maps[0].crisp, crisp_stats = crisp_texels(b, maps[0], a3[0])
     cl, cr = head_refine.eye_centres(eyes) if eyes is not None else (np.array([0.03, -0.13, 1.72]), np.array([-0.03, -0.13, 1.72]))
     hc = dict(skin_synth.DEFAULT_HEAD)
     hc.update(c.get("head") or {})
     hc["base"] = c.get("base", hc["base"])
     hc.setdefault("corners", mouth_corners(body))
+    if os.environ.get("SKIN_BAKE_CACHE"):
+        save_cache(os.environ["SKIN_BAKE_CACHE"], maps[0],
+                   {"cl": [float(x) for x in cl], "cr": [float(x) for x in cr], "hc": hc})
     head = skin_synth.synth_head(maps[0], hc, cl, cr)
     hh = dict(skin_synth.DEFAULT_HANDS)
     hh.update(c.get("hands") or {})
@@ -628,7 +729,8 @@ def build(b):
              "hero_albedo_face_mean_srgb": _mean_srgb(head["albedo_hero"], face),
              "roughness_mean": round(float(head["rough"][maps[0].cover].mean()), 3),
              "roughness_face_mean": round(float(head["rough"][face].mean()), 3) if face.any() else None,
-             "hero_rest": rest is not None, "curvature": curv}
+             "roughness_face_std": round(float(head["rough"][face].std()), 4) if face.any() else None,
+             "crisp": crisp_stats, "hero_rest": rest is not None, "curvature": curv}
     b.notes["skin"] = stats
     print(f"[skin] done in {stats['seconds']} s", flush=True)
     return stats
