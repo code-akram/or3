@@ -67,7 +67,7 @@ DEFAULTS = {
         "chin": {"mm": 1.2, "r_mm": 6.0, "drop_mm": 0.0},
         "temporal": {"mm": 0.5, "hollow_mm": -1.2},
     },
-    "eyes": {"globe_mm": 12.0, "iris_mm": 5.9, "upper_over_iris_mm": 1.5, "aperture_mm": 9.8,
+    "eyes": {"globe_mm": 12.0, "forward_mm": 0.6, "iris_mm": 5.9, "upper_over_iris_mm": 1.5, "aperture_mm": 10.0,
              "canthal_tilt_deg": 3.0, "core_mm": 1.5, "fade_mm": 6.0},
 }
 
@@ -340,7 +340,7 @@ def eye_block(obj, co, ecfg, notes):
         c, R = head_forms.fit_sphere(co[W[g]])
         Rn = float(ecfg["globe_mm"]) * MM
         fwd = np.array([0.0, -1.0, 0.0])
-        cn = c + fwd * (R - Rn)
+        cn = c + fwd * (R - Rn + float(ecfg.get("forward_mm", 0.0)) * MM)   # cornea apex kept, then moved forward
         out[W[g]] = cn + (co[W[g]] - c) * (Rn / R)
         lash = W[f"helper-{key}-eyelashes-1"] | W[f"helper-{key}-eyelashes-2"]
         movable = (skin | lash) & ((co[:, 0] > fr.origin[0]) == (side > 0))
