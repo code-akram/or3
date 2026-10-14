@@ -3,10 +3,18 @@
 // on loopback, drives headless Chromium (Playwright; WebGPU on SwiftShader, WebGL2 fallback) and
 // writes game_<view>.png + game_shots.json into that build dir.
 //
-//   node bench/m1/engine_shots.mjs --build RUN_DIR [--views front,three_quarter,profile,closeup,portrait]
+//   node bench/m1/engine_shots.mjs --build RUN_DIR [--views front,three_quarter,profile,closeup,portrait,closeup:hero]
 //        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8796] [--timeout 600]
 //        [--query 'k=v&...' (extra viewer URL params, URL-encoded; A/B only)] [--prefix game_] [--pose arms_up]
 //        [--balls auto|on|off]  shader-ball parity frame (game_balls.png) when RUN_DIR has shader_balls.json
+//        [--turntable SECONDS] [--tt-view closeup:hero] [--tt-fps 24] [--tt-size 640]
+//
+// A view is `name` (its own rig: the hero rig for the portrait, the neutral look-dev rig otherwise) or
+// `name:hero` / `name:neutral` (T10): `closeup:hero` is the closeup camera under the hero rig re-placed
+// around the head (rig._around), the standard head / hair / beard gate frame -> game_closeup_hero.png.
+// --turntable (T10): the view's frames while the model turns at the viewer's 20 deg/s for SECONDS, into
+// RUN_DIR/<prefix>turntable/ and <prefix>turntable.mp4, with a temporal-noise (shimmer) number per frame
+// in <prefix>shots.json (the mean |second temporal difference| of the luma, 0..255).
 //   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8796] [--selftest]
 //        Device capture (the M4 Air): serve only, no browser. Open the printed URL on the device (through
 //        `ssh -N -L 8796:127.0.0.1:8796 <this host>`); the page renders every view on its own GPU and POSTs
@@ -19,7 +27,7 @@
 // Run it under `taskset` on the shared machine (engine_shots.sh does).
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +47,19 @@ if (!buildArg) {
   process.exit(2);
 }
 const build = await realpath(resolve(buildArg));
-const views = opt('views', 'front,three_quarter,profile,closeup,portrait').split(',').filter(Boolean);
+const views = opt('views', 'front,three_quarter,profile,closeup,portrait,closeup:hero').split(',').filter(Boolean);
+const ttSeconds = Number(opt('turntable', 0));
+const ttView = opt('tt-view', 'closeup:hero');
+const ttFps = Number(opt('tt-fps', 24));
+const ttSize = Number(opt('tt-size', 640));
+const TT_DEG_PER_S = 20; // main.ts turntable speed
+/** 'closeup:hero' -> [view, rig, file stem] (the default rig: hero for the portrait, else neutral) */
+function viewSpec(v) {
+  const [name, r] = v.split(':');
+  const rig = r === 'hero' || r === 'neutral' ? r : name === 'portrait' ? 'hero' : 'neutral';
+  const stem = r && rig !== (name === 'portrait' ? 'hero' : 'neutral') ? `${name}_${rig}` : name;
+  return [name, rig, stem];
+}
 const size = Number(opt('size', 1024));
 const [pw, ph] = opt('portrait', '1920x1080').split('x').map(Number);
 const backendWanted = opt('backend', 'auto');
@@ -116,7 +136,7 @@ function send(res, code) {
 }
 // ------------------------------------------------------------------ device upload (--serve)
 const serveMode = argv.includes('--serve');
-const UPLOAD_OK = /^game_(front|three_quarter|profile|closeup|portrait|portrait_beauty)\.png$|^game_shots\.json$/;
+const UPLOAD_OK = /^game_(front|three_quarter|profile|closeup|closeup_hero|portrait|portrait_beauty)\.png$|^game_shots\.json$/;
 const MAX_UPLOAD = 4096 * 4096 * 4;
 let uploadDone = null;
 const uploadFinished = new Promise((r) => (uploadDone = r));
@@ -226,10 +246,10 @@ async function run(backend) {
     // the portrait twice: game_portrait.png without post (the parity frame, compared with
     // hero.sh --parity) and game_portrait_beauty.png with bloom, halation and grain
     const jobs = views.flatMap((v) => (v === 'portrait' && beauty ? [[v, false], [v, true]] : [[v, false]]));
-    for (const [v, post] of jobs) {
+    for (const [spec, post] of jobs) {
+      const [v, rig, stem] = viewSpec(spec);
       const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
-      const rig = v === 'portrait' ? 'hero' : 'neutral';
-      const name = `${outPrefix}${v}${post ? '_beauty' : ''}.png`;
+      const name = `${outPrefix}${stem}${post ? '_beauty' : ''}.png`;
       const t = Date.now();
       const r = await page.evaluate(([v, rig, w, h, p, post]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, post), [v, rig, w, h, poseArg, post]);
       const px = Buffer.from(r.b64, 'base64');
@@ -238,6 +258,7 @@ async function run(backend) {
       shots.push({ view: v, rig, post, file: name, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
       console.error(`[engine_shots] ${backend} ${name} ${w}x${h}: ${Date.now() - t} ms`);
     }
+    const turntable = ttSeconds > 0 ? await captureTurntable(page, backend) : null;
     const stats = await page.evaluate(() => window.__viewer.stats());
     let balls = null;
     if (wantBalls) {
@@ -264,10 +285,50 @@ async function run(backend) {
         return null;
       }
     });
-    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
+    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, turntable, balls, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
   } finally {
     await browser.close();
   }
+}
+
+// ------------------------------------------------------------------ turntable (T10)
+/** The --tt-view frames while the model turns (TT_DEG_PER_S, --tt-fps) for --turntable seconds: PNGs in
+ * RUN/<prefix>turntable/, an H.264 <prefix>turntable.mp4 (ffmpeg, when present), and per frame the
+ * temporal noise: mean |L(t-1) - 2 L(t) + L(t+1)| of the luma (0..255). A second difference cancels
+ * the smooth turn to first order, so what stays is frame-to-frame flicker: shimmer, crawling
+ * highlights, alpha-to-coverage and PCF noise. */
+async function captureTurntable(page, backend) {
+  const [v, rig, stem] = viewSpec(ttView);
+  const n = Math.max(3, Math.round(ttSeconds * ttFps));
+  const dir = join(build, `${outPrefix}turntable`);
+  await mkdir(dir, { recursive: true });
+  const lumas = [];
+  const frames = [];
+  const t0 = Date.now();
+  for (let i = 0; i < n; i++) {
+    const deg = (i / ttFps) * TT_DEG_PER_S;
+    const r = await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a), [v, rig, ttSize, ttSize, poseArg, deg]);
+    const px = Buffer.from(r.b64, 'base64');
+    const file = `frame_${String(i).padStart(3, '0')}.png`;
+    await writeFile(join(dir, file), png(ttSize, ttSize, px));
+    const L = new Float32Array(ttSize * ttSize);
+    for (let k = 0; k < L.length; k++) L[k] = 0.2126 * px[k * 4] + 0.7152 * px[k * 4 + 1] + 0.0722 * px[k * 4 + 2];
+    lumas.push(L);
+    frames.push({ file, deg: +deg.toFixed(3), render_ms: r.ms });
+    console.error(`[engine_shots] ${backend} turntable ${i + 1}/${n} ${deg.toFixed(2)} deg: ${r.ms} ms`);
+  }
+  const noise = [];
+  for (let i = 1; i + 1 < n; i++) {
+    const [a, b, c] = [lumas[i - 1], lumas[i], lumas[i + 1]];
+    let s = 0;
+    for (let k = 0; k < b.length; k++) s += Math.abs(a[k] - 2 * b[k] + c[k]);
+    noise.push(+(s / b.length).toFixed(4));
+  }
+  let video = null;
+  const ff = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-framerate', String(ttFps), '-i', join(dir, 'frame_%03d.png'), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '12', join(build, `${outPrefix}turntable.mp4`)]);
+  if (ff.status === 0) video = `${outPrefix}turntable.mp4`;
+  const mean = noise.reduce((x, y) => x + y, 0) / Math.max(1, noise.length);
+  return { view: v, rig, stem, seconds: ttSeconds, fps: ttFps, deg_per_s: TT_DEG_PER_S, res: [ttSize, ttSize], frames, dir: `${outPrefix}turntable`, video, temporal_noise: noise, temporal_noise_mean: +mean.toFixed(4), wall_ms: Date.now() - t0 };
 }
 
 if (serveMode) {

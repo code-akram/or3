@@ -18,7 +18,7 @@ import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { BRDF_GGX, BRDF_Lambert, LTC_Evaluate, exp, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -34,9 +34,11 @@ type Std = THREE.MeshStandardMaterial & Partial<THREE.MeshPhysicalMaterial>;
 interface DirectInput {
   lightDirection: N;
   lightColor: N;
+  lightNode?: { light?: THREE.Light };
   reflectedLight: { directDiffuse: N; directSpecular: N };
 }
 interface RectInput {
+  lightNode?: { light?: THREE.Light };
   lightColor: N;
   lightPosition: N;
   halfWidth: N;
@@ -129,6 +131,25 @@ function directAO(ao: N | null, k: N): N {
   return ao ? mix(float(1), ao, k) : float(1);
 }
 
+/** The screen-space AO (ao.ts, GTAO at half resolution) at this fragment, or null when off. */
+function screenAONode(tex: THREE.Texture | null | undefined): N | null {
+  return tex ? texture(tex, screenUV).r : null;
+}
+
+/** Occlusion of one light's direct diffuse (T10). With the screen AO: GTAO weighted by the light's
+ * aoWeight (stage.ts: its size over distance, floored by ao.lightWeightMin) x ao.strength, times a
+ * little of the baked AO (ao.bakedMix, the folds GTAO at half res misses). Without it: the T6
+ * stand-in, mix(1, baked AO, bakedKey). */
+function directOcclusion(P: ParamStore, baked: N | null, bakedKey: string | null, screen: N | null, light: THREE.Light | undefined): N {
+  if (screen) {
+    const w = float((light?.userData?.aoWeight as number | undefined) ?? 1).max(P.u('ao.lightWeightMin')).min(1);
+    let o: N = mix(float(1), screen, w.mul(P.u('ao.strength')));
+    if (baked) o = o.mul(mix(float(1), baked, P.u('ao.bakedMix')));
+    return o;
+  }
+  return baked && bakedKey ? directAO(baked, P.u(bakedKey)) : float(1);
+}
+
 interface SkinSSS {
   lut: THREE.Texture;
   curvature: N; // encoded curvature at this fragment (skin_tex.curvature)
@@ -139,12 +160,13 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     private readonly P: ParamStore,
     private readonly ao: N | null,
     private readonly sss: SkinSSS | null,
+    private readonly screen: N | null = null,
   ) {
     super();
   }
 
   override direct(input: unknown): void {
-    const { lightDirection: L, lightColor, reflectedLight } = input as DirectInput;
+    const { lightDirection: L, lightColor, reflectedLight, lightNode } = input as DirectInput;
     const P = this.P;
     const blur = P.u('skin.normalBlur');
     const nl = (b: N) => mix(normalView, geometryNormal, b).normalize().dot(L);
@@ -157,7 +179,7 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     // terminator scatter band (centred on N.L = 0 of the blurred green normal)
     const band = smoothstep(P.u('skin.scatterWidth'), float(0), nl3.y.abs()).mul(P.u('skin.scatterStrength'));
     const tint = vec3(1).add(P.u('skin.scatterColor').mul(band));
-    const occ = directAO(this.ao, P.u('skin.directAO'));
+    const occ = directOcclusion(P, this.ao, 'skin.directAO', this.screen, lightNode?.light);
     let d: N = diff.mul(tint);
     if (this.sss) {
       // pre-integrated SSS: per channel D(N.L of that channel's blurred normal, curvature)
@@ -184,15 +206,16 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     i.reflectedLight.directSpecular.addAssign(spec.mul(this.P.u('skin.specGain')));
     // pre-integrated SSS / wrap diffuse from the point equivalent (its punctual specular dropped)
     const pt = rectAsPoint(i);
-    this.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: { directDiffuse: i.reflectedLight.directDiffuse, directSpecular: vec3(0).toVar() } });
+    this.direct({ lightDirection: pt.L, lightColor: pt.color, lightNode: i.lightNode, reflectedLight: { directDiffuse: i.reflectedLight.directDiffuse, directSpecular: vec3(0).toVar() } });
   }
 }
 
 export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
   private aoTex: N | null = null;
   private sss: SkinSSS | null = null;
+  private readonly screen: N | null;
 
-  constructor(src: Std, private readonly P: ParamStore, sss?: { lut: THREE.Texture; curvature: THREE.Texture } | null) {
+  constructor(src: Std, private readonly P: ParamStore, sss?: { lut: THREE.Texture; curvature: THREE.Texture } | null, screenAO?: THREE.Texture | null) {
     super();
     copyStd(this, src);
     const c = mapRGBA(src);
@@ -207,10 +230,11 @@ export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
       this.aoNode = mix(float(1), this.aoTex, P.u('skin.aoIntensity'));
     }
     if (sss) this.sss = { lut: sss.lut, curvature: texture(sss.curvature).r };
+    this.screen = screenAONode(screenAO);
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new SkinLightingModel(this.P, this.aoTex, this.sss);
+    return new SkinLightingModel(this.P, this.aoTex, this.sss, this.screen);
   }
 }
 
@@ -222,6 +246,7 @@ interface HairNodes {
   rough: N; // per-strand roughness (ORM G): scales the lobe exponents around hair.roughRef
   specScale: N; // per-card specular scale (UV1 u: the baker's layer_spec) x the occlusion on the lobes
   tint: N; // warm scatter colour: the albedo's chroma, saturated (luminance 1)
+  screen: N | null; // screen-space AO (ao.ts) or null
 }
 
 class HairLightingModel extends THREE.PhysicalLightingModel {
@@ -234,21 +259,31 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
   }
 
   override direct(input: unknown): void {
-    const { lightDirection: L, lightColor, reflectedLight } = input as DirectInput;
+    const { lightDirection: L, lightColor: lightIn, reflectedLight, lightNode } = input as DirectInput;
     const P = this.P;
     const pre = this.prefix;
+    // T10: screen-space AO on the diffuse and the scatter body (the jaw under the beard, the neck under
+    // the hair); the fibre lobes keep the strand occlusion (specScale) only
+    const occ = directOcclusion(P, null, null, this.h.screen, lightNode?.light);
     const N = normalView;
+    // T10, scalp hair only: the light's path through the hair layer above the fibres the camera sees.
+    // A card is one surface, but what the camera sees of a hair mass lies about an optical depth below
+    // its outer fibres; light reaching that depth at a grazing angle crosses surfaceDepth / |N.L| of
+    // hair (N: the mass's proxy normal). Beer-Lambert in that optical depth darkens the side of the mass
+    // a rim grazes, and keeps backlit thin locks (light through the card, |N.L| large) glowing. The deep
+    // shadow (hairshadow.ts) has the hair above the outer layer.
+    const lightColor = pre === 'hair' ? lightIn.mul(exp(P.u('hair.surfaceDepth').negate().div(N.dot(L).abs().max(0.05)))) : lightIn;
     const V = positionViewDirection;
     const T = this.h.tangent;
     const w = P.u('hair.diffuseWrap');
     const nl = N.dot(L);
     const diff = diffuseRamp(P, nl.add(w).div(w.add(1)).max(0));
-    reflectedLight.directDiffuse.addAssign(lightColor.mul(diff).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(diff).mul(occ).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
     // T9b: the multiple-scattering body (the warm mid-brown of the Chiang hero along the lengths): a
     // fully wrapped, albedo-chroma tinted diffuse. Dark hair is lit mostly by light that went through
     // other fibres, which comes out with the fibre's transmittance colour, not white.
     const msWrap = nl.add(1).mul(0.5).max(0);
-    reflectedLight.directDiffuse.addAssign(lightColor.mul(diffuseRamp(P, msWrap)).mul(this.h.tint).mul(P.u(`${pre}.scatter`)).mul(1 / Math.PI));
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(diffuseRamp(P, msWrap)).mul(this.h.tint).mul(P.u(`${pre}.scatter`)).mul(occ).mul(1 / Math.PI));
     const H = L.add(V).normalize();
     // per-strand roughness: a rougher strand has a broader lobe (exponent ~ 1 / variance)
     const er = P.u('hair.roughRef').div(this.h.rough.max(0.05)).pow(2);
@@ -284,7 +319,7 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     // the anisotropic fibre lobes have no LTC form: the whole term from the rect's point equivalent
     const i = input as RectInput;
     const pt = rectAsPoint(i);
-    this.direct({ lightDirection: pt.L, lightColor: pt.color, reflectedLight: i.reflectedLight });
+    this.direct({ lightDirection: pt.L, lightColor: pt.color, lightNode: i.lightNode, reflectedLight: i.reflectedLight });
   }
 }
 
@@ -294,6 +329,8 @@ export interface Sidecars {
   /** skin material name -> curvature map (skin_<part>_curvature.png) */
   curvature?: Record<string, THREE.Texture | null>;
   sssLUT?: THREE.Texture | null;
+  /** T10: the screen-space AO texture (ao.ts SceneAO.texture); null = the baked direct-AO stand-in */
+  screenAO?: THREE.Texture | null;
 }
 
 /**
@@ -311,7 +348,7 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
   /** KHR_materials_anisotropy texture (flow, depth), for the depth prepass */
   readonly anisoMap: THREE.Texture | null;
 
-  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair' | 'brows'; msaa: boolean }) {
+  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair' | 'brows'; msaa: boolean; screenAO?: THREE.Texture | null | undefined }) {
     super();
     copyStd(this, src);
     this.prefix = opts.prefix;
@@ -372,7 +409,7 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     // scatter tint: the albedo's chroma raised to scatterSat, normalised to luminance 1
     const sat = col.max(1e-4).pow(P.u('hair.scatterSat'));
     const tint = sat.div(sat.dot(vec3(0.2126, 0.7152, 0.0722)).max(1e-5)).min(4);
-    this.nodes = { tangent: T, shiftOff, rough, specScale, tint };
+    this.nodes = { tangent: T, shiftOff, rough, specScale, tint, screen: screenAONode(opts.screenAO) };
     this.normalNode = null; // shade the card as a fibre bundle: the smooth proxy normal from the GLB
     this.roughnessNode = rough;
     this.metalnessNode = float(0);
@@ -437,14 +474,19 @@ export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number
 // --------------------------------------------------------------------------------------- eye
 
 class EyeLightingModel extends THREE.PhysicalLightingModel {
-  constructor(private readonly P: ParamStore) {
+  constructor(
+    private readonly P: ParamStore,
+    private readonly screen: N | null = null,
+  ) {
     super(true);
   }
 
   override direct(input: unknown, builder?: unknown): void {
-    const { lightDirection: L, lightColor, reflectedLight } = input as DirectInput;
-    // iris / sclera: plain physical
-    super.direct(input as never, builder as never);
+    const { lightDirection: L, lightColor, reflectedLight, lightNode } = input as DirectInput;
+    // iris / sclera: plain physical, the diffuse under the screen AO (T10: the lid contact shadow)
+    const diffuse = vec3(0).toVar();
+    super.direct({ ...(input as object), reflectedLight: { ...reflectedLight, directDiffuse: diffuse } } as never, builder as never);
+    reflectedLight.directDiffuse.addAssign(diffuse.mul(directOcclusion(this.P, null, null, this.screen, lightNode?.light)));
     // cornea: a sharp GGX lobe on the geometric (eyeball) normal
     const Ng = geometryNormal;
     const r = float(this.P.u('eye.corneaRoughness')).clamp(0.02, 1);
@@ -472,7 +514,9 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
 }
 
 export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
-  constructor(src: Std, private readonly P: ParamStore) {
+  private readonly screen: N | null;
+
+  constructor(src: Std, private readonly P: ParamStore, screenAO?: THREE.Texture | null) {
     super();
     copyStd(this, src);
     const vt = vec3(positionViewDirection.dot(tangentView), positionViewDirection.dot(bitangentView), positionViewDirection.dot(normalView).max(0.2));
@@ -487,10 +531,11 @@ export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
     if (src.roughnessMap) this.roughnessNode = texture(src.roughnessMap, st).g;
     this.metalnessNode = float(0);
     this.clearcoat = 0; // the cornea lobe lives in EyeLightingModel
+    this.screen = screenAONode(screenAO);
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new EyeLightingModel(this.P);
+    return new EyeLightingModel(this.P, this.screen);
   }
 }
 
@@ -502,16 +547,17 @@ class ClothLightingModel extends THREE.PhysicalLightingModel {
     private readonly fuzzKey: string,
     sheen: boolean,
     private readonly ao: N | null,
+    private readonly screen: N | null = null,
   ) {
     super(false, sheen);
   }
 
   override direct(input: unknown, builder?: unknown): void {
-    const { lightDirection: L, lightColor, reflectedLight } = input as DirectInput;
+    const { lightDirection: L, lightColor, reflectedLight, lightNode } = input as DirectInput;
     // the physical direct term into a scratch diffuse accumulator, so only the diffuse is occluded
     const diffuse = vec3(0).toVar();
     super.direct({ ...(input as object), reflectedLight: { ...reflectedLight, directDiffuse: diffuse } } as never, builder as never);
-    reflectedLight.directDiffuse.addAssign(diffuse.mul(directAO(this.ao, this.P.u('cloth.directAO'))));
+    reflectedLight.directDiffuse.addAssign(diffuse.mul(directOcclusion(this.P, this.ao, 'cloth.directAO', this.screen, lightNode?.light)));
     const nv = normalView.dot(positionViewDirection).clamp();
     const rim = float(1).sub(nv).pow(this.P.u('cloth.fuzzPower'));
     const wrapNL = normalView.dot(L).mul(0.5).add(0.5).clamp();
@@ -525,7 +571,7 @@ class ClothLightingModel extends THREE.PhysicalLightingModel {
     // LTC diffuse + specular, the diffuse occluded like direct()
     const diffuse = vec3(0).toVar();
     super.directRectArea({ ...(i as object), reflectedLight: { ...i.reflectedLight, directDiffuse: diffuse } } as never, builder as never);
-    i.reflectedLight.directDiffuse.addAssign(diffuse.mul(directAO(this.ao, this.P.u('cloth.directAO'))));
+    i.reflectedLight.directDiffuse.addAssign(diffuse.mul(directOcclusion(this.P, this.ao, 'cloth.directAO', this.screen, i.lightNode?.light)));
     // sheen (accumulated by the physical direct()) and the fuzz rim from the point equivalent; the
     // punctual diffuse / specular of that call are discarded (the LTC has them)
     const pt = rectAsPoint(i);
@@ -555,12 +601,14 @@ const WEAVE_TILE_PERIODS = 8;
 
 export class ClothMaterial extends THREE.MeshPhysicalNodeMaterial {
   private aoTex: N | null = null;
+  private readonly screen: N | null;
 
   constructor(
     src: Std,
     private readonly P: ParamStore,
     private readonly fuzzKey: 'cloth.fuzzStrength' | 'shirt.fuzzStrength',
     weave?: WeaveSidecar | null,
+    screenAO?: THREE.Texture | null,
   ) {
     super();
     copyStd(this, src);
@@ -599,20 +647,49 @@ export class ClothMaterial extends THREE.MeshPhysicalNodeMaterial {
       this.aoNode = this.aoTex;
     }
     if (this.sheen > 0) this.sheenNode = vec3(this.sheenColor.r, this.sheenColor.g, this.sheenColor.b).mul(P.u('cloth.sheenScale'));
+    this.screen = screenAONode(screenAO);
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new ClothLightingModel(this.P, this.fuzzKey, this.useSheen, this.aoTex);
+    return new ClothLightingModel(this.P, this.fuzzKey, this.useSheen, this.aoTex, this.screen);
   }
 }
 
 // --------------------------------------------------------------------------------------- generic
 
+/** glTF PBR as exported; T10: the direct diffuse under the screen AO (teeth, tongue, nails, leather). */
+class GenericLightingModel extends THREE.PhysicalLightingModel {
+  constructor(
+    private readonly P: ParamStore,
+    private readonly screen: N,
+  ) {
+    super();
+  }
+
+  override direct(input: unknown, builder?: unknown): void {
+    const { reflectedLight, lightNode } = input as DirectInput;
+    const diffuse = vec3(0).toVar();
+    super.direct({ ...(input as object), reflectedLight: { ...reflectedLight, directDiffuse: diffuse } } as never, builder as never);
+    reflectedLight.directDiffuse.addAssign(diffuse.mul(directOcclusion(this.P, null, null, this.screen, lightNode?.light)));
+  }
+}
+
 export class GenericMaterial extends THREE.MeshPhysicalNodeMaterial {
-  constructor(src: Std) {
+  private readonly screen: N | null;
+
+  constructor(
+    src: Std,
+    private readonly P: ParamStore | null = null,
+    screenAO?: THREE.Texture | null,
+  ) {
     super();
     copyStd(this, src);
     this.alphaTest = src.alphaTest;
+    this.screen = P ? screenAONode(screenAO) : null;
+  }
+
+  override setupLightingModel(): THREE.PhysicalLightingModel {
+    return this.screen && this.P ? new GenericLightingModel(this.P, this.screen) : super.setupLightingModel();
   }
 }
 
@@ -633,22 +710,22 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
     switch (role) {
       case 'skin': {
         const cm = side.curvature?.[src.name];
-        return new SkinMaterial(src, P, cm && side.sssLUT ? { lut: side.sssLUT, curvature: cm } : null);
+        return new SkinMaterial(src, P, cm && side.sssLUT ? { lut: side.sssLUT, curvature: cm } : null, side.screenAO);
       }
       case 'hair':
-        return new HairMaterial(src, P, { prefix: 'hair', msaa });
+        return new HairMaterial(src, P, { prefix: 'hair', msaa, screenAO: side.screenAO });
       case 'facial':
       case 'lash':
         // brows: their own gains (T9b: the brow region is calibrated apart from the beard)
-        return new HairMaterial(src, P, { prefix: src.name.startsWith('brows') ? 'brows' : 'facialHair', msaa });
+        return new HairMaterial(src, P, { prefix: src.name.startsWith('brows') ? 'brows' : 'facialHair', msaa, screenAO: side.screenAO });
       case 'eye':
-        return new EyeMaterial(src, P);
+        return new EyeMaterial(src, P, side.screenAO);
       case 'cloth':
-        return new ClothMaterial(src, P, 'cloth.fuzzStrength', side.weave);
+        return new ClothMaterial(src, P, 'cloth.fuzzStrength', side.weave, side.screenAO);
       case 'shirt':
-        return new ClothMaterial(src, P, 'shirt.fuzzStrength', side.weave);
+        return new ClothMaterial(src, P, 'shirt.fuzzStrength', side.weave, side.screenAO);
       default:
-        return new GenericMaterial(src);
+        return new GenericMaterial(src, P, side.screenAO);
     }
   };
   root.traverse((o) => {

@@ -3,17 +3,28 @@
 #   1. blender/hero/export_rig.py  -> RUN/engine_stage.json (look-dev + hero cameras, lights, pose)
 #   2. bench/m1/engine_shots.mjs   -> RUN/game_<view>.png + RUN/game_shots.json (headless Chromium)
 #
-#   bench/m1/engine_shots.sh RUN_DIR
+#   bench/m1/engine_shots.sh RUN_DIR [--port N] [more engine_shots.mjs options, e.g. --turntable 2]
+#
+# --port and any further options pass through to engine_shots.mjs (--port wins over ENGINE_PORT).
 #
 # Everything is read from and written to RUN_DIR only (a private fan run dir stays private).
 # Env: ENGINE_CPUS (taskset CPU list for the browser, default 0-3; the machine is shared),
 #      ENGINE_BACKEND (auto|webgpu|webgl2, default auto: WebGPU on SwiftShader, WebGL2 fallback),
 #      ENGINE_SIZE (look-dev views, default 1024), ENGINE_PORTRAIT (default 1920x1080),
-#      ENGINE_VIEWS (default front,three_quarter,profile,closeup,portrait),
+#      ENGINE_VIEWS (default front,three_quarter,profile,closeup,portrait,closeup:hero),
 #      ENGINE_PORT (loopback port of the asset server, default 8796, outside the review servers' 8790-8793; shared machines pick a free one).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-RUN="$(realpath "${1:?usage: $0 RUN_DIR}")"
+RUN="$(realpath "${1:?usage: $0 RUN_DIR [--port N] [engine_shots.mjs options]}")"
+shift
+PORT="${ENGINE_PORT:-8796}"
+PASS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --port) PORT="${2:?--port N}"; shift 2 ;;
+    *) PASS+=("$1"); shift ;;
+  esac
+done
 [[ -s "$RUN/character.glb" ]] || { echo "no character.glb in $RUN" >&2; exit 2; }
 LOG="$RUN/engine_shots.log"
 : > "$LOG"
@@ -32,6 +43,6 @@ PIN=()
 command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
 "${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$RUN" \
   --backend "${ENGINE_BACKEND:-auto}" --size "${ENGINE_SIZE:-1024}" --portrait "${ENGINE_PORTRAIT:-1920x1080}" \
-  --views "${ENGINE_VIEWS:-front,three_quarter,profile,closeup,portrait}" --port "${ENGINE_PORT:-8796}" >> "$LOG" 2>&1 \
+  --views "${ENGINE_VIEWS:-front,three_quarter,profile,closeup,portrait,closeup:hero}" --port "$PORT" ${PASS[@]+"${PASS[@]}"} >> "$LOG" 2>&1 \
   || { echo "engine shots failed: $LOG" >&2; exit 1; }
 echo "-> $RUN/game_*.png ($(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['backend'])" "$RUN/game_shots.json"))"
