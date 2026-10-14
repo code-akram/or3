@@ -45,6 +45,7 @@ const outPrefix = opt('prefix', 'game_');
 const poseArg = opt('pose', null); // debug preset for every view (e.g. arms_up), else the view's own
 const dist = join(repo, 'web', opt('dist', 'dist-viewer'));
 const ballsArg = opt('balls', 'auto');
+const beauty = opt('beauty', 'on') !== 'off'; // --beauty off: no game_portrait_beauty.png
 const wantBalls = ballsArg === 'on' || (ballsArg === 'auto' && existsSync(join(build, 'shader_balls.json')));
 
 if (!existsSync(join(build, 'character.glb'))) {
@@ -74,7 +75,7 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|hair_atlas_(flow|data)\.png)$/;
+const ASSET_OK = /^(character\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|hair_atlas_(flow|data)\.png)$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');
@@ -168,17 +169,20 @@ async function run(backend) {
     if (st.phase === 'error') throw new Error(`viewer error: ${st.error}`);
     const bootMs = Date.now() - t0;
     const shots = [];
-    for (const v of views) {
+    // the portrait twice: game_portrait.png without post (the parity frame, compared with
+    // hero.sh --parity) and game_portrait_beauty.png with bloom, halation and grain
+    const jobs = views.flatMap((v) => (v === 'portrait' && beauty ? [[v, false], [v, true]] : [[v, false]]));
+    for (const [v, post] of jobs) {
       const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
       const rig = v === 'portrait' ? 'hero' : 'neutral';
+      const name = `${outPrefix}${v}${post ? '_beauty' : ''}.png`;
       const t = Date.now();
-      const r = await page.evaluate(([v, rig, w, h, p]) => window.__viewer.capture(v, rig, w, h, p ?? undefined), [v, rig, w, h, poseArg]);
+      const r = await page.evaluate(([v, rig, w, h, p, post]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, post), [v, rig, w, h, poseArg, post]);
       const px = Buffer.from(r.b64, 'base64');
       if (px.length !== w * h * 4) throw new Error(`${v}: got ${px.length} bytes for ${w}x${h}`);
-      const file = join(build, `${outPrefix}${v}.png`);
-      await writeFile(file, png(w, h, px));
-      shots.push({ view: v, rig, file: `${outPrefix}${v}.png`, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
-      console.error(`[engine_shots] ${backend} ${v} ${w}x${h}: ${Date.now() - t} ms`);
+      await writeFile(join(build, name), png(w, h, px));
+      shots.push({ view: v, rig, post, file: name, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
+      console.error(`[engine_shots] ${backend} ${name} ${w}x${h}: ${Date.now() - t} ms`);
     }
     const stats = await page.evaluate(() => window.__viewer.stats());
     let balls = null;

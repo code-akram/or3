@@ -11,6 +11,7 @@ import { DeformRuntime, type RigRules } from './deform';
 import { Poser, PRESETS, applyPreset } from './poses';
 import { ParamStore } from './materials/params';
 import { assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
+import { skinLUT } from './materials/sss';
 import { Output } from './output';
 import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
 import { FrameStats, textureBytes } from './hud';
@@ -30,6 +31,7 @@ interface ViewerState {
   stats?: Record<string, unknown>;
   verify?: Record<string, unknown>;
   facialAtlas?: string;
+  sssLutMs?: number;
   gaze?: unknown;
   warnings: string[];
 }
@@ -56,6 +58,16 @@ async function fetchJson<T>(url: string): Promise<T | null> {
   return (await r.json()) as T;
 }
 
+/** Curvature maps + the pre-integrated SSS LUT (built here, ~0.2 s; sss.ts). */
+function skinSidecars(P: ParamStore, head: THREE.Texture | null, hands: THREE.Texture | null): Pick<Sidecars, 'curvature' | 'sssLUT'> {
+  if (!head && !hands) return {};
+  for (const t of [head, hands]) if (t) t.anisotropy = 4;
+  const t0 = performance.now();
+  const lut = skinLUT(undefined, P.get('skin.sssRadiusScale') as number);
+  state.sssLutMs = Math.round(performance.now() - t0);
+  return { curvature: { skin_head: head, skin_hands: hands }, sssLUT: lut };
+}
+
 /** suit_detail.json + its tile: the weave as a tiled, mipmapped detail normal (T6). */
 async function loadWeave(base: string): Promise<WeaveSidecar | null> {
   const j = await fetchJson<{ materials: WeaveSidecar['materials'] }>(base + 'suit_detail.json');
@@ -80,6 +92,11 @@ async function loadTexture(url: string): Promise<THREE.Texture | null> {
   } catch {
     return null;
   }
+}
+
+function areaMode(): 'none' | 'rims' | 'all' {
+  const a = q.get('area');
+  return a === 'none' || a === 'all' ? a : 'rims';
 }
 
 interface BuildStats {
@@ -190,7 +207,7 @@ async function mainBalls(): Promise<void> {
   renderer.setPixelRatio(1);
   const output = new Output(renderer, 4);
   state.phase = 'loading';
-  const [gltf, balls, stageData, flow, data, paramJson, buildStats, weave] = await Promise.all([
+  const [gltf, balls, stageData, flow, data, paramJson, buildStats, weave, curvHead, curvHands] = await Promise.all([
     new GLTFLoader().loadAsync(base + 'shader_balls.glb'),
     fetchJson<BallsJson>(base + 'shader_balls.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
@@ -199,6 +216,8 @@ async function mainBalls(): Promise<void> {
     fetchJson<unknown>(base + 'material_params.json'),
     fetchJson<BuildStats>(base + 'character.stats.json'),
     loadWeave(base),
+    loadTexture(base + 'skin_head_curvature.png'),
+    loadTexture(base + 'skin_hands_curvature.png'),
   ]);
   if (!balls) fatal('no shader_balls.json (blender/lookdev_render.py --shader-balls)');
   if (!stageData) fatal('no engine_stage.json');
@@ -208,8 +227,9 @@ async function mainBalls(): Promise<void> {
   resolveFacialAtlas(P, buildStats);
   const scene = new THREE.Scene();
   scene.add(gltf.scene);
-  const mats = assignMaterials(gltf.scene, P, { flow, data, weave }, true);
+  const mats = assignMaterials(gltf.scene, P, { flow, data, weave, ...skinSidecars(P, curvHead, curvHands) }, true);
   const stage = new Stage(stageData!, scene, mats.byName);
+  stage.areaMode = areaMode();
   stage.setup('front', 'neutral');
   output.setGrade(false, balls!.exposure);
   output.viewAgX.value = balls!.view_transform === 'AgX' ? 1 : 0;
@@ -265,7 +285,7 @@ async function main(): Promise<void> {
     progress.total = e.total;
     hud.textContent = `loading character.glb ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;
   });
-  const [gltf, rules, stageData, flow, data, paramJson, buildStats, weave] = await Promise.all([
+  const [gltf, rules, stageData, flow, data, paramJson, buildStats, weave, curvHead, curvHands] = await Promise.all([
     glbP,
     fetchJson<RigRules>(base + 'character.rig.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
@@ -274,6 +294,8 @@ async function main(): Promise<void> {
     fetchJson<unknown>(base + 'material_params.json'),
     fetchJson<BuildStats>(base + 'character.stats.json'),
     loadWeave(base),
+    loadTexture(base + 'skin_head_curvature.png'),
+    loadTexture(base + 'skin_hands_curvature.png'),
   ]);
   const tLoaded = performance.now();
   let overrides: unknown = paramJson;
@@ -304,10 +326,12 @@ async function main(): Promise<void> {
 
   const rt = new DeformRuntime(model, rules ?? { version: 1 });
   const poser = new Poser(rt);
-  const side: Sidecars = { flow, data, weave };
+  const side: Sidecars = { flow, data, weave, ...skinSidecars(P, curvHead, curvHands) };
+  if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, samples > 1);
   const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName);
+  stage.areaMode = areaMode();
   const gaze = new EyeGaze(model, (m) => {
     const mm = Array.isArray(m.material) ? m.material[0] : m.material;
     return mats.roles.get(mm?.name ?? '') === 'eye';
@@ -346,6 +370,8 @@ async function main(): Promise<void> {
     if (q.get('gaze') !== '0') gaze.apply(g);
     state.gaze = g ? { deg: g.deg, meshes: gaze.count } : null;
     output.setGrade(r === 'hero', vs.exposure, stage.data.hero.grade);
+    // beauty post (bloom, halation, grain) on the interactive hero frames; ?post=0 for parity
+    output.setPost(r === 'hero' && q.get('post') !== '0');
     userOrbit = false;
     controls.target.fromArray(vs.camera.target);
     resize();
@@ -496,8 +522,9 @@ async function main(): Promise<void> {
     lights: () => stage.describeLights(),
     stats: statsNow,
     /** Render view (stage camera, rig) at w x h; returns base64 RGBA8 rows, top row first. */
-    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string) => {
+    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false) => {
       setView(view, rig);
+      output.setPost(post);
       poseName = pose ?? (view === 'portrait' ? 'stand' : 'rest');
       amount = 1;
       applyPose();

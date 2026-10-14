@@ -96,10 +96,16 @@ function directAO(ao: N | null, k: N): N {
   return ao ? mix(float(1), ao, k) : float(1);
 }
 
+interface SkinSSS {
+  lut: THREE.Texture;
+  curvature: N; // encoded curvature at this fragment (skin_tex.curvature)
+}
+
 class SkinLightingModel extends THREE.PhysicalLightingModel {
   constructor(
     private readonly P: ParamStore,
     private readonly ao: N | null,
+    private readonly sss: SkinSSS | null,
   ) {
     super();
   }
@@ -119,7 +125,15 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     const band = smoothstep(P.u('skin.scatterWidth'), float(0), nl3.y.abs()).mul(P.u('skin.scatterStrength'));
     const tint = vec3(1).add(P.u('skin.scatterColor').mul(band));
     const occ = directAO(this.ao, P.u('skin.directAO'));
-    reflectedLight.directDiffuse.addAssign(lightColor.mul(diff).mul(tint).mul(occ).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
+    let d: N = diff.mul(tint);
+    if (this.sss) {
+      // pre-integrated SSS: per channel D(N.L of that channel's blurred normal, curvature)
+      const cv = this.sss.curvature.mul(P.u('skin.sssCurvatureGain')).clamp(0.002, 1);
+      const at = (x: N) => texture(this.sss!.lut, vec2(x.mul(0.5).add(0.5).clamp(0, 1), cv));
+      const pre = vec3(at(nl3.x).r, at(nl3.y).g, at(nl3.z).b);
+      d = mix(d, diffuseRamp(P, pre), P.u('skin.sss'));
+    }
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(d).mul(occ).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
     // dual-lobe specular
     const r = roughness.clamp(0.08, 1);
     const f0 = vec3(P.u('skin.specF0'));
@@ -132,8 +146,9 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
 
 export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
   private aoTex: N | null = null;
+  private sss: SkinSSS | null = null;
 
-  constructor(src: Std, private readonly P: ParamStore) {
+  constructor(src: Std, private readonly P: ParamStore, sss?: { lut: THREE.Texture; curvature: THREE.Texture } | null) {
     super();
     copyStd(this, src);
     const c = mapRGBA(src);
@@ -147,10 +162,11 @@ export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
       this.aoTex = texture(src.aoMap).r;
       this.aoNode = mix(float(1), this.aoTex, P.u('skin.aoIntensity'));
     }
+    if (sss) this.sss = { lut: sss.lut, curvature: texture(sss.curvature).r };
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new SkinLightingModel(this.P, this.aoTex);
+    return new SkinLightingModel(this.P, this.aoTex, this.sss);
   }
 }
 
@@ -206,6 +222,9 @@ export interface HairSidecars {
 /** Runtime inputs next to the GLB that glTF has no slot for (blender/character/export.write_sidecars). */
 export interface Sidecars extends HairSidecars {
   weave?: WeaveSidecar | null;
+  /** skin material name -> curvature map (skin_<part>_curvature.png) */
+  curvature?: Record<string, THREE.Texture | null>;
+  sssLUT?: THREE.Texture | null;
 }
 
 export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
@@ -420,8 +439,10 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
       }
     }
     switch (role) {
-      case 'skin':
-        return new SkinMaterial(src, P);
+      case 'skin': {
+        const cm = side.curvature?.[src.name];
+        return new SkinMaterial(src, P, cm && side.sssLUT ? { lut: side.sssLUT, curvature: cm } : null);
+      }
       case 'hair':
         return new HairMaterial(src, P, { prefix: 'hair', side: src.name === 'hair_cards' ? { flow: side.flow ?? null, data: side.data ?? null } : {}, msaa });
       case 'facial':

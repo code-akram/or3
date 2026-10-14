@@ -38,6 +38,14 @@ export const DEFAULT_PARAMS = {
     roughnessBias: 0.0,
     normalScale: 1.0,
     aoIntensity: 1.0,
+    /** Pre-integrated SSS (sss.ts): 1 = the curvature x N.L LUT replaces wrap, terminator tint and the
+     * per-channel normal blur's N.L (the blur stays for small-scale bump); 0 = the T5 wrap model.
+     * Needs skin_<part>_curvature.png (builds since T6); without it the wrap model is used. */
+    sss: 1,
+    /** Scales the profile radii (hero Cycles radii 3.4 / 0.75 / 0.34 mm) when the LUT is built (load). */
+    sssRadiusScale: 1.0,
+    /** Gain on the baked curvature before the LUT lookup. */
+    sssCurvatureGain: 1.0,
     /** Baked AO into the DIRECT diffuse (three's aoMap only touches indirect light, and the hero
      * world is 0.003, so without this the AO channel does nothing). Until GTAO lands. */
     directAO: 0.5,
