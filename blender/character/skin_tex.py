@@ -403,9 +403,19 @@ def crisp_texels(b, m, a3, chunk=1_000_000):
 # residual the crisp band uses was tried first (t22-a1): against smooth-shaded geometry it bakes
 # the triangles' piecewise-linear error into the normal map, a zigzag along every vein and
 # tendon. Hands: the hands map; neck: the head map. The attribute pair (encoded vertex field,
-# weight) carries the collar weight to the texels.
+# weight) carries the collar weight to the texels; it is piecewise linear there, so it is blurred
+# (T22_W_BLUR_M) before it scales the field, or the triangles show as facets (t22-a2, the neck).
+# On the hands only the terms finer than the mesh go to the map (T22_HAND_MAP_TERMS: the veins
+# and the palmar flexor cords); the high-pass of the broad terms (knuckles, tendons) sharpened
+# geometry that already holds them into hard creases (t22-a2).
 T22_MAX = 0.0010
-T22_BLUR_M = {"hands": 0.0012, "head": 0.004}
+T22_BLUR_M = {"hands": 0.003, "head": 0.004}
+T22_MAP_K = {"hands": 0.6, "head": 1.0}   # the veins: half in the mesh already (t22-a3 read as beads at 1.0)
+T22_W_BLUR_M = {"hands": 0.002, "head": 0.004}
+T22_HAND_MAP_TERMS = ("vein_mm", "flexor_mm")
+T22_HAND_AMPS = ("knuckle_mm", "valley_mm", "gutter_mm", "tendon_mm", "thumb_mm", "snuff_mm", "pip_mm", "dip_mm",
+                 "joint_mm", "shaft_mm", "breadth_ulnar_mm", "breadth_radial_mm", "wrist_flat_mm", "wrist_side_mm",
+                 "ulnar_mm", "radial_mm", "flexor_mm", "vein_mm")
 
 
 def t22_vertex(b, body):
@@ -452,18 +462,20 @@ def t22_texels(b, m, a4, key, chunk=500_000):
     N = m.N[where].astype(np.float64) @ mi[:3, :3].T
     N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-9)
     a = np.empty(len(P), np.float64)
+    hcfg = {k: (v if (k not in T22_HAND_AMPS or k in T22_HAND_MAP_TERMS) else 0.0) for k, v in st["cfg"].items()}
     for i in range(0, len(P), chunk):
         sl = slice(i, i + chunk)
         if key == "hands":
-            a[sl] = hs.hand_field(P[sl], N[sl], st["hf"], st["cfg"], st["paths"])
+            a[sl] = hs.hand_field(P[sl], N[sl], st["hf"], hcfg, st["paths"])
         else:
             a[sl] = hs.neck_field(P[sl], N[sl], st["anchors"], st["cfg"])
-    g = np.zeros(m.P.shape[:2], np.float64)
-    g[where] = w[where] * a
     texel = float(np.median(m.tex_m[where])) if where.any() else 1e-3
+    ws, _ = _masked_blur(np.where(m.valid, w, 0.0).astype(np.float64), m.valid, T22_W_BLUR_M[key] / max(texel, 1e-6))
+    g = np.zeros(m.P.shape[:2], np.float64)
+    g[where] = np.clip(ws[where], 0, 1) * a
     low, _ = _masked_blur(g, m.valid, T22_BLUR_M[key] / max(texel, 1e-6))
     r = (g - low)[where]
-    out[where] = np.clip(r, -T22_MAX, T22_MAX).astype(np.float32)
+    out[where] = np.clip(r * T22_MAP_K[key], -T22_MAX, T22_MAX).astype(np.float32)
     rr = out[where]
     stats = {"texels": int(where.sum()), "seconds": round(time.perf_counter() - t, 1), "texel_mm": round(texel * 1000, 4),
              "vertex_rms_mm": round(float(np.sqrt(np.mean(s_v[where] ** 2))) * 1000, 4) if where.any() else 0.0,

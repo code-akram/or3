@@ -72,22 +72,24 @@ SPECS = [
      "start": 0.45, "drive_pose": "FIST", "knuckles": True},
     # T22: the wrist in flexion and extension (skin only: the cuffs are T13's), delta mush
     # keeps the tendons, the ulnar head and the flat wrist (head_sculpt.hand_field) instead of
-    # LBS's collapsed tube; the shrug (clavicle abduct) keeps the neck side (SCM) and the
-    # trapezius slope, and the collar and shoulders over them
+    # LBS's collapsed tube.
     # inverse: the hand bone carries pronation (twist) too; the forearm's direction seen from
     # the hand ignores it, so a pronated wrist that flexes still drives these
     {"name": "corr_wrist_flex", "bone": "hand", "ops": [["flex", 60]], "ref": "lowerarm",
      "region": ("hand", 0.075), "meshes": ["body"], "inverse": True},
     {"name": "corr_wrist_ext", "bone": "hand", "ops": [["flex", -55]], "ref": "lowerarm",
      "region": ("hand", 0.075), "meshes": ["body"], "inverse": True},
-    {"name": "corr_shrug", "bone": "clavicle", "ops": [["abduct", 16]], "ref": "spine_03",
-     "region": ("clavicle", 0.16)},
+    # No clavicle (shrug) corrective: t22-a1..a3 baked one (clavicle abduct 16, all meshes); the
+    # neck forms held under LBS anyway (the exposed neck is above the clavicle's reach) and it
+    # moved the jacket (415 verts, 5 mm) and the shirt collar into a jagged edge in arm_raise.
 ]
 # corr_fist's knuckle term (T22): in a fist LBS rounds the outer corner of each flexed joint
 # off; the skin is pushed back out to the bone head (the rest skin height over the joint) plus
 # extra_mm, in the bisector of the two bones, and the dips between the metacarpal heads deepen.
-FIST_KNUCKLES = {"mcp": {"extra_mm": 0.5, "sigma_mm": 4.5, "max_mm": 2.0},
-                 "pip": {"extra_mm": 0.3, "sigma_mm": 3.5, "max_mm": 1.5},
+# Baked at FIST_TIGHT and shown at FIST, about half of the push survives (t22-a1: max 2.0 mm
+# restored MCP 4.6 -> 5.6 mm of a 6.3-7.2 mm rest height), hence the extra and the caps.
+FIST_KNUCKLES = {"mcp": {"extra_mm": 1.0, "sigma_mm": 4.5, "max_mm": 3.5},
+                 "pip": {"extra_mm": 0.6, "sigma_mm": 3.5, "max_mm": 3.0},
                  "valley_mm": -0.5}
 # skin parts of a hand for self_collide: part -> bone prefixes (side added)
 HAND_PARTS = {"palm": ("hand", "thumb_01"), "thumb": ("thumb_02", "thumb_03"),

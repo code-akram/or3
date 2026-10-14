@@ -732,18 +732,18 @@ def refine(b, body, lab, eyes_obj):
 FINGERS = ("index", "middle", "ring", "pinky")
 HAND_FIELDS = {
     "knuckle_mm": 1.8, "knuckle_r_mm": 3.8, "valley_mm": -1.0, "gutter_mm": -0.6,
-    "tendon_mm": 1.3, "tendon_w_mm": 1.4, "hood_k": 0.45,
+    "tendon_mm": 1.8, "tendon_w_mm": 2.0, "hood_k": 0.45,
     "thumb_mm": 0.9, "snuff_mm": -1.0,
     "pip_mm": 0.6, "dip_mm": 0.4, "joint_mm": 0.5, "shaft_mm": -0.3,
     "breadth_ulnar_mm": 1.6, "breadth_radial_mm": 0.7,
     "wrist_flat_mm": -0.7, "wrist_side_mm": 0.35, "ulnar_mm": 1.4, "radial_mm": 0.7, "flexor_mm": 0.35,
-    "vein_mm": 1.0, "vein_w_mm": 1.6,
+    "vein_mm": 1.6, "vein_w_mm": 1.8,
     "nail_fold_mm": 0.3, "nail_bed_mm": -0.12,
 }
 KNUCKLE_K = {"index": 0.95, "middle": 1.0, "ring": 0.85, "pinky": 0.65}
 TENDON_K = {"index": 1.0, "middle": 1.0, "ring": 0.8, "pinky": 0.55}
 NECK_FIELDS = {
-    "scm_mm": 3.0, "scm_front_mm": 4.0, "scm_back_mm": 8.0, "scm_depth_mm": 18.0,
+    "scm_mm": 3.0, "scm_front_mm": 5.5, "scm_back_mm": 8.0, "scm_depth_mm": 18.0,
     "carotid_mm": -1.2, "posterior_mm": -1.4, "larynx_mm": 2.5, "larynx_r_mm": 7.0,
     "collar_margin_mm": 12.0, "collar_gap_mm": 3.0, "subdiv": 1,
 }
@@ -855,7 +855,7 @@ def vein_profile(p, f, paths, w):
             best = np.where(better, d, best)
             tb = np.where(better, (acc + t * Ls[k]) / max(tot, 1e-12), tb)
             acc += Ls[k]
-        sunk = 0.45 + 0.55 * head_forms.smoothstep(-0.35, 0.35, np.sin(2 * np.pi * 1.6 * tb + ph))
+        sunk = 0.65 + 0.35 * head_forms.smoothstep(-0.5, 0.5, np.sin(2 * np.pi * 1.1 * tb + ph))
         ends = np.sin(np.pi * np.clip(0.08 + 0.84 * tb, 0, 1)) ** 0.3
         out = np.maximum(out, amp * _g(best, w) * sunk * ends)
     return out * head_forms.smoothstep(0.84, 0.70, pc.u)
@@ -909,9 +909,9 @@ def hand_field(p, n, hf, c, paths=None):
             Bs = _ortho(B, ax)
             rel = q - j0
             al = rel @ ax
-            hood = (al > -0.004) * ss_(ln * 1.05, ln * 0.7, al)
+            hood = ss_(-0.007, -0.002, al) * ss_(ln * 1.05, ln * 0.7, al)
             d += c["tendon_mm"] * c["hood_k"] * mm * TENDON_K[k] * _g(rel @ _ortho(A, ax), tw * 1.2) * hood \
-                * np.clip(nn @ Bs, 0, 1) ** 1.5 * (np.abs(rel @ Bs) < 0.016)
+                * np.clip(nn @ Bs, 0, 1) ** 1.5 * (1 - ss_(0.013, 0.018, np.abs(rel @ Bs)))
         # thumb: EPL (long, over the back) and EPB (radial border), the snuffbox between them
         t1, t2, t3 = f["thumb"]
         radial = -A
@@ -942,9 +942,9 @@ def hand_field(p, n, hf, c, paths=None):
                 d += c["shaft_mm"] * mm * np.sin(np.pi * t) ** 2 * (1 - np.clip(-(nn @ _ortho(B, ax)), 0, 1)) * onf \
                     * ((al > 0) & (al < ln))
         # a broader palm: the ulnar border and the radial side of the index head out
-        d += c["breadth_ulnar_mm"] * mm * np.clip(nn @ A, 0, 1) ** 2 * _g(pc.a - 0.65 * pc.L, 0.32 * pc.L) * (pc.b > cen) \
+        d += c["breadth_ulnar_mm"] * mm * np.clip(nn @ A, 0, 1) ** 2 * _g(pc.a - 0.65 * pc.L, 0.32 * pc.L) * ss_(cen - 0.006, cen + 0.006, pc.b) \
             * (1 - ss_(ak["pinky"] + 0.004, ak["pinky"] + 0.014, pc.a))
-        d += c["breadth_radial_mm"] * mm * np.clip(-(nn @ A), 0, 1) ** 2 * _g(pc.a - (ak["index"] - 0.006), 0.012) * (pc.b < cen)
+        d += c["breadth_radial_mm"] * mm * np.clip(-(nn @ A), 0, 1) ** 2 * _g(pc.a - (ak["index"] - 0.006), 0.012) * ss_(cen + 0.006, cen - 0.006, pc.b)
         # wrist: flatter, the ulnar head and the radial styloid, the palmar flexor cords
         band = _g(pc.a + 0.012, 0.016)
         d += c["wrist_flat_mm"] * mm * band * np.abs(nn @ B) ** 2
@@ -1016,7 +1016,7 @@ def neck_field(p, n, an, c):
         M, S = a["mastoid"], a["sternal"]
         C = np.array([M, 0.5 * (M + S) + lat * 0.010 + fwd * 0.004, S])
         D = unit(0.85 * lat + 0.5 * fwd)
-        sel = p[:, 0] * side > 0.004
+        sel = head_forms.smoothstep(0.0, 0.008, p[:, 0] * side)
         for curve, amp, front, back_ in ((C, c["scm_mm"], c["scm_front_mm"], c["scm_back_mm"]),
                                          (C + fwd * 0.016, c["carotid_mm"], 5.0, 5.0),
                                          (C - fwd * 0.022 + lat * 0.004, c["posterior_mm"], 6.0, 6.0)):
