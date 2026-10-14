@@ -439,7 +439,7 @@ DEFAULTS = {
                            # T9b: finer strands, longer tip fade (the cards read as spiky strokes);
                            # T11: 0.42 -> 0.36 px (`alpha` < 1: semi-transparent strands; dithers under A2C)
                            "strand_px": 0.36, "tip_px": 0.18, "tip_fade": 0.5, "tip_alpha": 0.05,
-                           "body": "#2b211b",  # T11: a dark-brown floor (brows.py)
+                           "body": "#2a1e18",  # T11: a dark-brown floor (brows.py)
                            "flow_jitter_deg": 6,
                            "albedo": {"radial_roughness": 0.55, "path": 0.68, "gain": 1.0,
                                       "random_color": 0.0, "value_sigma": 0.12},
@@ -450,9 +450,9 @@ DEFAULTS = {
                            # T9b: a soft under-layer in the game skin (hair_beard.paint_underlayer):
                            # the hero brow is a soft band, the cards alone a set of strokes
                            "underlayer": {"radius_m": 0.002, "full_per_cm2": 300, "stubble_weight": 1.0,
-                                          # T11: strength 0.4 -> 0.8 (it did not show), a dark
+                                          # T11: strength 0.4 -> 0.88 (it did not show), a dark
                                           # neutral brown, not the strands' near-black red
-                                          "blur_px": 12, "gamma": 1.0, "strength": 0.8, "colour_gain": 1.0,
+                                          "blur_px": 12, "gamma": 1.0, "strength": 0.88, "colour_gain": 1.0,
                                           "colour": "#262220"}},
             # shells: enabled False since T9 (kept for comparison)
             "shells": {"enabled": False, "layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
