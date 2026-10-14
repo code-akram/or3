@@ -5,8 +5,10 @@ Each shot: camera spec (a rig.CAMERAS name or a custom spec string), pose,
 resolution at 100 %, beads (water drops per shoulder), gaze (eyes to camera,
 deg off it; None = the pose's own), neon (sign-tube brightness, 1 = the set's;
 dimmer behind faces so the bokeh doesn't compete), light overrides on rig.HERO_LIGHTS (name -> tuple, or
-None to drop a light), extra desaturated twins of the rim / kicker (twin: {"cloth" | "skin":
-(saturation fraction, energy factor)}; see rig.PROP_SAT), haze density, rain streak count, a horizontal frame
+None to drop a light), extra light-linked desaturated twins of the saturated lights (twin:
+{group: (saturation fraction, energy factor)} for every saturated hero light, or
+{group: {light: (fraction, factor)}} per light, "practicals" naming the set's sign spill;
+groups hair, beard, props, cloth, skin; see rig.twin_plan),haze density, rain streak count, a horizontal frame
 shift (rule of thirds; + moves the subject left), exposure offset (EV), and
 the grade's painterly strength. Shifts are fractions of the frame
 height (vertical sensor fit): shift_y -0.16 puts the aim point at the upper third. Light tuples: (colour or K, ratio, (w, h) m,
@@ -24,8 +26,9 @@ RIMS = {"rim": (NEON["magenta"], 2.2, (0.3, 1.5), -125.0, 20.0, 1.5),
 POSTER = (1152, 2048)
 # The suit under the RIMS (bust, back, walk): a cloth twin of the rim and
 # kicker at 30 % saturation, 0.75 energy, so the black jacket's rim side
-# reads black, not plum, and the kicker leaves no cyan glint (rig.PROP_SAT).
-CLOTH_TWIN = {"cloth": (0.3, 0.75)}
+# reads black, not plum, and the kicker leaves no cyan glint (rig.twin_plan).
+# Per light, so the flagged cool fill keeps lighting the suit as it did.
+CLOTH_TWIN = {"cloth": {"rim": (0.3, 0.75), "kicker": (0.3, 0.75)}}
 
 SHOTS = {
     # 1. Rain portrait: 85 mm head and shoulders, 3/4, f/2 on the near eye.
@@ -42,7 +45,7 @@ SHOTS = {
                          "fill": (2000, 0.3, (0.6, 0.6), 160.0, 40.0, 3.0),
                          "rim": (NEON["magenta"], 0.9, (0.3, 1.5), -125.0, 20.0, 1.5),
                          "wrap": None},
-                 ev=0.5),
+                 twin={"cloth": (0.3, 0.75)}, ev=0.5),
     # 3. Profile, teal: 100 mm bust profile; teal rim 0.9 from behind the
     # face, amber key 0.3. The silhouette shot. The rim sits at az 160 (20 deg
     # off the back axis, not 40): at 140 it reached the forward-facing cheek
@@ -55,7 +58,8 @@ SHOTS = {
                     lights={"key": (KEY_K, 0.3, (0.3, 0.3), 40.0, 25.0, 1.5), "wrap": None,
                             "rim": (NEON["teal"], 2.5, (0.3, 1.5), 160.0, 15.0, 1.4),
                             "kicker": (NEON["magenta"], 0.35, (0.3, 1.2), -135.0, 20.0, 1.6)},
-                    twin={"skin": (0.7, 0.8)}, ev=0.4),
+                    twin={"skin": {"rim": (0.7, 0.8), "kicker": (0.7, 0.8)},
+                          "beard": {"rim": (0.4, 1.0), "kicker": (0.4, 1.0)}}, ev=0.4),
     # 4. The draw: 35 mm full body, camera at 1.2 m, az 20 (Track H: at az 5
     # the muzzle points down the lens and the gun reads as a dark square);
     # bladed high-ready holding the pistol two-handed (poses.HOLD); a hard
