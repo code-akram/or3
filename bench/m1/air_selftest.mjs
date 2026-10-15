@@ -7,6 +7,7 @@
 //
 //   node bench/m1/air_selftest.mjs --url 'http://127.0.0.1:8797/character.html?...&capture=1&upload=1' [--timeout 3600]
 //        [--viewport 640x360]
+//   node bench/m1/air_selftest.mjs --live 60 --url '...character.html?...&perf=1': the overlay runs S seconds, then "save"
 // Run it under taskset on the shared machine.
 import { chromium } from 'playwright';
 
@@ -21,6 +22,7 @@ if (!url || !/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
   process.exit(2);
 }
 const timeoutS = Number(opt('timeout', 3600));
+const liveS = Number(opt('live', 0)); // --live S: the ?perf=1 overlay instead of a capture
 const [vw, vh] = opt('viewport', '640x360').split('x').map(Number);
 const ARGS = ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-angle=swiftshader', '--use-webgpu-adapter=swiftshader', '--disable-vulkan-surface', '--renderer-process-limit=1'];
 const browser = await chromium.launch({ headless: true, channel: 'chromium', args: ARGS });
@@ -39,7 +41,20 @@ try {
   const t0 = Date.now();
   await page.goto(url, { waitUntil: 'load' });
   let st = null;
-  while (Date.now() - t0 < timeoutS * 1000) {
+  if (liveS > 0) {
+    // the ?perf=1 overlay: run, then "save" (POST /upload/live_perf.json) and wait for its answer
+    await page.waitForFunction(() => window.__viewerState?.ready || window.__viewerState?.phase === 'error', null, { timeout: timeoutS * 1000, polling: 1000 });
+    await new Promise((r) => setTimeout(r, liveS * 1000));
+    await page.getByRole('button', { name: 'save' }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /^(saved|downloaded)/.test(b.textContent ?? '')), null, { timeout: timeoutS * 1000, polling: 1000 });
+    const out = await page.evaluate(() => ({
+      phase: window.__viewerState.phase,
+      button: [...document.querySelectorAll('button')].map((b) => b.textContent).find((t) => /^(saved|downloaded)/.test(t ?? '')),
+      overlay: [...document.querySelectorAll('div')].map((d) => d.textContent ?? '').find((t) => t.includes('per pass')) ?? null,
+    }));
+    result = { ok: /^saved/.test(out.button ?? '') && errors.length === 0, live_s: liveS, ...out, seconds: Math.round((Date.now() - t0) / 1000), console_errors: errors };
+  }
+  while (!liveS && Date.now() - t0 < timeoutS * 1000) {
     await new Promise((r) => setTimeout(r, 2000));
     try {
       st = await page.evaluate(() => {
@@ -51,7 +66,7 @@ try {
     }
     if (st && (st.phase === 'uploaded' || st.phase === 'error')) break;
   }
-  result = { ok: st?.phase === 'uploaded' && errors.length === 0, phase: st?.phase ?? null, error: st?.error ?? null, hud: st?.hud ?? null, warnings: st?.warnings ?? [], seconds: Math.round((Date.now() - t0) / 1000), pages, console_errors: errors };
+  if (!liveS) result = { ok: st?.phase === 'uploaded' && errors.length === 0, phase: st?.phase ?? null, error: st?.error ?? null, hud: st?.hud ?? null, warnings: st?.warnings ?? [], seconds: Math.round((Date.now() - t0) / 1000), pages, console_errors: errors };
 } finally {
   await browser.close();
 }
