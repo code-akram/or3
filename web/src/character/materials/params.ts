@@ -214,6 +214,8 @@ export const DEFAULT_PARAMS = {
     scatter: 0.0,
     tt: 0.0,
     alphaTest: 0.22,
+    /** T21: the diffuse wrap (as hair.diffuseWrap; a strand volume lit from grazing angles) */
+    diffuseWrap: 0.5,
     /** T21: Fresnel on the R lobe (as hair.fresnel, T20): the cuticle reflection rises ~4x toward grazing,
      * which is where the hero rig's kicker and rim meet the beard; 0 = off (T9-T20). */
     fresnel: 0,
@@ -241,6 +243,7 @@ export const DEFAULT_PARAMS = {
     scatter: 0.004,
     tt: 0.0,
     alphaTest: 0.22,
+    diffuseWrap: 0.5,
     /** T21: as facialHair.fresnel / fibreTint (the brows share the beard's light twins and their filter) */
     fresnel: 0,
     fibreTint: 0,

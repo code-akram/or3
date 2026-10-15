@@ -451,7 +451,9 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     }
     const V = positionViewDirection;
     const T = this.h.tangent;
-    const w = P.u('hair.diffuseWrap');
+    // T21: the beard / brows have their own wrap (a beard is a volume of strands lit from any side the light
+    // reaches, not one surface: the hero kicker grazes the jaw and lights its outer strands in Cycles)
+    const w = P.u(`${pre}.diffuseWrap`);
     const nl = N.dot(L);
     const diff = diffuseRamp(P, nl.add(w).div(w.add(1)).max(0));
     reflectedLight.directDiffuse.addAssign(lightColor.mul(diff).mul(occ).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));

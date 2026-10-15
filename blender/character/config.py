@@ -513,10 +513,10 @@ DEFAULTS = {
                                           # T21: blur 12 -> 4 px (a soft smudge at 100 %), the strands
                                           # drawn over it (hair_beard.paint_strands: whole brow hairs lie
                                           # on the skin) so the brow reads as hairs, not a band
-                                          "blur_px": 4, "gamma": 1.0, "strength": 0.7, "colour_gain": 1.0,
+                                          "blur_px": 4, "gamma": 1.0, "strength": 0.6, "colour_gain": 1.0,
                                           "colour": "#262220",
                                           "strands": {"colour": "#1d1916", "width_mm": 0.07, "min_px": 0.45,
-                                                      "strength": 0.9, "max_len_mm": 14.0, "max_dist_m": 0.003,
+                                                      "strength": 0.75, "max_len_mm": 14.0, "max_dist_m": 0.003,
                                                       "keep": 1.0}}},
             # shells: enabled False since T9 (kept for comparison)
             "shells": {"enabled": False, "layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
