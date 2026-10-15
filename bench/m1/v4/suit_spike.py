@@ -5229,10 +5229,13 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 ok_ = lat_ < lm
                 if kf is not None:
                     ok_ &= kf
-                sel = set(np.nonzero((s_ < trig) & ok_)[0].tolist()) | act_ix.get((src, k), set())
+                ax_ = act_ix.get((src, k), set())
+                sel = set(np.nonzero((s_ < trig) & ok_)[0].tolist()) | ax_
                 for a in sel:
-                    if ok_[a]:
-                        out[(src, k, int(a))] = (outer, u, an, int(a), n_[a], max(0.0, mg - float(s_[a])), sup, free)
+                    # an active pair stays even when the push slid it past lat_max (else the next
+                    # refit, without its row, puts the vertex back through)
+                    if ok_[a] or a in ax_:
+                        out[(src, k, int(a))] = (outer, u, an, int(a), n_[a], mg - float(s_[a]), sup, free)
         src = ("body", "jacket")
         for k in range(K):
             Yj = rt_Y["jacket"][k]
@@ -5244,10 +5247,11 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 nor = np.array(nor)
                 s = float((Yj[i] - np.array(loc)) @ nor)
                 if (trig > s > -C["body_depth_max_m"]) or i in ax:
-                    out[(src, k, i)] = ("jacket", "body", None, i, nor, max(0.0, mgb - s), None, None)
+                    out[(src, k, i)] = ("jacket", "body", None, i, nor, mgb - s, None, None)
         return out
 
     S0 = {k_: S[k_].copy() for k_ in G}
+    capped = {k_: set() for k_ in G}
     for r in range(C["rounds"] + 1):
         pairs = read()
         short, gate = {}, {}
@@ -5276,16 +5280,19 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 continue
             i = int(an.idx[a])
             if sup is None:                  # the skinned trousers: the outer goes out
-                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + defi, w))
+                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + defi, wb))
                 continue
             key_u, sup_f = sup
             dv = sorted({int(x) for j in an.T[an.fi[a]] if free[j] for x in sup_f[j]})
-            push_outer = not dv or act[key_] >= C["outer_after"]
-            share = 0.5 if (push_outer and dv) else 1.0
+            capped_ = any(d in capped[key_u] for d in dv)
+            push_outer = not dv or capped_ or act[key_] >= C["outer_after"]
+            share = 0.5 if (push_outer and dv and not capped_) else 1.0
+            # a pair still short gets a heavier row each round (a penalty that tightens), up to wb
+            we = min(w * C.get("escalate", 2.0) ** max(act[key_] - 1, 0), wb)
             for d in dv:
-                rows[key_u].setdefault(d, []).append((k, -n, float(-n @ rt_Y[key_u][k][d]) + share * defi, w))
+                rows[key_u].setdefault(d, []).append((k, -n, float(-n @ rt_Y[key_u][k][d]) + share * defi, we))
             if push_outer:
-                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + share * defi, w))
+                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + share * defi, wb if not dv else we))
         for key, rv in rows.items():
             if not rv:
                 continue
@@ -5302,22 +5309,40 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 for i3 in range(3):
                     Ad[i3::3, i3::3] = Am
                 bd = Dres[key][:, v].reshape(-1)
-                cr, cb = [], []
+                cr, cb, cw = [], [], []
                 for (k, n, b, wr) in rv[v]:
                     R_, t_ = Mv[j, k, :3, :3], Mv[j, k, :3, 3]
                     nr = n @ R_
                     row = np.zeros(Cn * 3)
                     for i3 in range(3):
                         row[i3::3] = nr[i3] * Am[k]
-                    cr.append(wr * row)
-                    cb.append(wr * (b - float(n @ (R_ @ X0[v] + t_))))
-                sol = np.linalg.lstsq(np.vstack([Ad, Ar, np.array(cr)]), np.concatenate([bd, br, np.array(cb)]),
-                                      rcond=None)[0].reshape(Cn, 3) * m[:, None]
+                    cr.append(row)
+                    cb.append(b - float(n @ (R_ @ X0[v] + t_)))
+                    cw.append(wr)
+                cr, cb, cw = np.array(cr), np.array(cb), np.array(cw)
+                s_cur = S[key][:, v].reshape(-1)
+                on = cr @ s_cur < cb - 1e-6                    # violated now
+                sol = s_cur.copy()
+                for _ in range(6):
+                    if not on.any():
+                        break
+                    sol = np.linalg.lstsq(np.vstack([Ad, Ar, cr[on] * cw[on, None]]),
+                                          np.concatenate([bd, br, cb[on] * cw[on]]), rcond=None)[0]
+                    viol = (cr @ sol < cb - 1e-5) & ~on
+                    if not viol.any():
+                        break
+                    on |= viol
+                if C.get("debug_v") == [key, int(v)]:
+                    print("[constrain-debug]", key, int(v), "rows", len(cb), "on", int(on.sum()), "need",
+                          np.round((cb - cr @ s_cur) * 1000, 2).tolist(), "after", np.round((cb - cr @ sol) * 1000, 2).tolist(),
+                          "w", np.round(cw, 1).tolist(), flush=True)
+                sol = sol.reshape(Cn, 3) * m[:, None]
                 dS = sol - S0[key][:, v]              # the change from the plain fit, capped in total
                 dmax = float(np.linalg.norm(np.einsum("kc,ci->ki", Acone, dS), axis=1).max())
                 cap = C["move_max_m"][key] if isinstance(C["move_max_m"], dict) else C["move_max_m"]
                 if dmax > cap:
                     dS *= cap / dmax
+                    capped[key].add(int(v))      # its pairs' pushes go to the outer layer from now on
                 S[key][:, v] = S0[key][:, v] + dS
             for k in range(K):
                 rt_Y[key][k][idx] = sr.skin(X0[idx] + sr.apply_shapes(S[key][:, idx], Acone[k]), W[idx], Ms[k])
