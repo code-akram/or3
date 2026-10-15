@@ -6182,16 +6182,19 @@ def main_posed(O):
         tos = [mesh_object(f"p_{pname}_{nm}", sr.skin(p["V0"], p["W"], Ms[k]), p["F"]) for nm, p in tparts.items()
                if not nm.endswith("collider")]
         extra = [base[x].name for x in ("shoes", "tie") if x in base and not (x == "tie" and tie_nm)]
-        tags = [("sim", Y), ("rt", rt_Y)]
-        if pname in lbs_set:
+        tags = [t_ for t_ in (("sim", Y), ("rt", rt_Y)) if t_[0] in O.get("render_tags", ("sim", "rt", "lbs"))]
+        if pname in lbs_set and "lbs" in O.get("render_tags", ("sim", "rt", "lbs")):
             tags.append(("lbs", {key: {k: sr.skin(G[key]["X0"], G[key]["W"], Ms[k])} for key in G}))
         for tag, src in tags:
             obs_ = []
             for nm, p in parts.items():
                 if nm.endswith("collider"):
                     continue
-                obs_.append(mesh_object(f"p_{pname}_{tag}_{nm}", place(nm, src[p["key"]][k], Ms[k]),
-                                        p["F"]))
+                # the runtime as it ships: the culled faces dropped
+                F_r = p["F"]
+                if tag == "rt" and nm in keep_faces:
+                    F_r = [f_ for f_, k_ in zip(p["F"], keep_faces[nm]) if k_]
+                obs_.append(mesh_object(f"p_{pname}_{tag}_{nm}", place(nm, src[p["key"]][k], Ms[k]), F_r))
             for o_ in obs_ + tos:
                 if "jacket" not in o_.name:
                     MADE_SLOTS[o_.name] = []
