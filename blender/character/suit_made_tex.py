@@ -36,6 +36,7 @@ DEFAULTS = {
                "sheen_tint": [0.8, 0.85, 1.0], "spec": 0.45},
     # roughness offsets per (object key, tag label): the pressed lapel facings and top collar
     "panel_rough": {("rever", "lapel"): -0.10, ("rever", "lapel_r"): -0.10, ("rever", "collar"): -0.05},
+    "name": "t13",               # material and image name prefix (the trousers bake "t13t")
 }
 
 
@@ -129,19 +130,20 @@ def bake(objs, marks, tags, suit_o, opts=None):
             for t, lst in d.items():
                 flat[(objs[k].name, t)] = lst
     st.draw_marks(H, layout, flat, side)
-    img = H.normal_image("t13_wool_normal", slope=o["slope"])
+    nm = o["name"]
+    img = H.normal_image(f"{nm}_wool_normal", slope=o["slope"])
     spec = suit_o["materials"]["wool"]
-    wool = st.material("t13_wool", **spec)
+    wool = st.material(f"{nm}_wool", **spec)
     st.attach_normal_map(wool, img, strength=1.0)
     wool["suit_atlas_side_m"] = side
     detail = st.detail_record(wool, side, st.WEAVE["wool"])
     S = dict(suit_o["surface"])
     S["panel_rough"] = {f"{objs[k].name}:{t}": v for (k, lab), v in o["panel_rough"].items() if k in objs
                         for t, l2 in tags.get(k, {}).items() if l2 == lab}
-    ai, oi, surf = st.surface_maps(H, layout, side, spec, S, "t13_wool")
+    ai, oi, surf = st.surface_maps(H, layout, side, spec, S, f"{nm}_wool")
     st.attach_surface(wool, ai, oi)
-    lining = st.material("t13_lining", **o["lining"])
-    button = st.material("t13_button", **suit_o["materials"]["button"])
+    lining = st.material(f"{nm}_lining", **o["lining"])
+    button = st.material(f"{nm}_button", **suit_o["materials"]["button"])
     for m in (wool, lining, button):
         m.use_fake_user = True                # the clay renders take the slots for a while
     _, gmax = st.twill_tile(slope=o["slope"])
