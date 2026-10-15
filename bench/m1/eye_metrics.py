@@ -21,6 +21,7 @@ Per eye (near = the key side, image left; far = image right), around the iris ce
   sclera     median over two 8 x 7 boxes beside the iris (their inner edge 4 px past the limbus, 2 px below
              the centre); nasal and temporal also reported apart
   ratio      sclera / iris
+  ratio2     the mean of the nasal and temporal box medians / iris (T18b: robust; see sclera2 in eye_measure)
   catchlight pixels of the iris disc at >= 0.5 x the disc's peak and >= 2 x the iris median, as a share of
              the disc's area; the peak (0..255 display luma) as well
   sat        median HSV saturation (display sRGB, 8 bit) over the iris annulus
@@ -190,6 +191,10 @@ def eye_measure(fr, name, centre, r=IRIS_R):
     # image left is temporal for the near eye (the subject's right eye, on image left) and nasal for the far
     nasal, temporal = (boxes["right"], boxes["left"]) if name == "near" else (boxes["left"], boxes["right"])
     sclera = float(np.median(np.concatenate([nasal, temporal])))
+    # T18b: the mean of the two boxes' medians. One box is lit and one shaded (2-12x apart), so the median of
+    # their union falls in the gap between the two populations and flips with a few pixels (bench/m1/v4/
+    # t18b-eyes.md); this one does not
+    sclera2 = 0.5 * (float(np.median(nasal)) + float(np.median(temporal)))
     disc = d <= r
     Ld = fr.L[disc]
     peak = Ld.max()
@@ -209,6 +214,7 @@ def eye_measure(fr, name, centre, r=IRIS_R):
         "iris": round(iris, 5), "sclera": round(sclera, 5),
         "sclera_nasal": round(float(np.median(nasal)), 5), "sclera_temporal": round(float(np.median(temporal)), 5),
         "ratio": round(sclera / max(iris, 1e-9), 3),
+        "sclera2": round(sclera2, 5), "ratio2": round(sclera2 / max(iris, 1e-9), 3),
         "catchlight_share": round(float(cl.sum()) / (math.pi * r * r), 5),
         "catchlight_px": int(cl.sum()),
         "catchlight_peak_disp": round(float(fr.D[disc].max()), 1),
@@ -224,7 +230,7 @@ def measure(path, offset=None, blur=0.0, overlay=None):
         centre, r = find_iris(fr, box)
         out[name] = eye_measure(fr, name, centre, r)
         out[name]["radius_px"] = r
-    out["both"] = {k: round((out["near"][k] + out["far"][k]) / 2, 5) for k in ("ratio", "catchlight_share", "sat")}
+    out["both"] = {k: round((out["near"][k] + out["far"][k]) / 2, 5) for k in ("ratio", "ratio2", "catchlight_share", "sat")}
     if overlay:
         draw_overlay(fr, out, overlay)
     return out
@@ -262,10 +268,10 @@ def compare(a):
     rel = {}
     for eye in ("near", "far"):
         rel[eye] = {k: round(e[eye][k] / max(c[eye][k], 1e-9), 3)
-                    for k in ("ratio", "iris", "sclera", "sclera_nasal", "sclera_temporal", "catchlight_share", "sat")}
+                    for k in ("ratio", "ratio2", "iris", "sclera", "sclera2", "sclera_nasal", "sclera_temporal", "catchlight_share", "sat")}
         for k in ("bag", "cheek"):
             rel[eye][f"under_{k}"] = round(e[eye]["under"][k]["lum"] / max(c[eye]["under"][k]["lum"], 1e-9), 3)
-    rel["both"] = {k: round(e["both"][k] / max(c["both"][k], 1e-9), 3) for k in ("ratio", "catchlight_share", "sat")}
+    rel["both"] = {k: round(e["both"][k] / max(c["both"][k], 1e-9), 3) for k in ("ratio", "ratio2", "catchlight_share", "sat")}
     out = {"engine": e, "cycles": c, "engine_over_cycles": rel}
     return out
 

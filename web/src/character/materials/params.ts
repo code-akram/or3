@@ -221,7 +221,10 @@ export const DEFAULT_PARAMS = {
   },
   eye: {
     albedoGain: 1.0,
-    corneaRoughness: 0.18, // T18: 0.04 -> 0.18 with the LTC catchlight: the tear film plus the Cycles pixel filter / OIDN spread (portrait parity: catchlight 6 px vs Cycles 9-10; 0.08 left a hard 2x2 dot and a hard-edged square of the wrap)
+    // T18: 0.04 -> 0.18 with the LTC catchlight, standing in for the Cycles pixel filter / OIDN spread on the
+    // game mesh's tighter cornea. T18b: Cycles' own value (eyes_hq.HERO cornea_rough 0.02) now that the cornea
+    // is the hero's: the catchlight's area equals Cycles' --parity frame (near 3 / 3 px, far 6 / 6 px)
+    corneaRoughness: 0.02,
     // shader-ball calibrated (T6): 1.0 put the area-light catchlight peak at 1.35x Cycles (coat f0 ~0.025 vs 0.04)
     corneaStrength: 0.7,
     /** Eye UV is a polar map: v from the back (0) to the cornea pole (1). Limbus and pupil rows. */
@@ -251,7 +254,9 @@ export const DEFAULT_PARAMS = {
     normalStrength: 1.0,
     /** The caustic on the iris side away from the light. */
     causticGain: 0.25,
-    scleraWrap: 0.15,
+    /** T18b: 0 (was 0.15): the hero eyeball's subsurface (0.3 x 1.5 mm) does not carry light past the terminator
+     * of a 12 mm globe; the wrap left the far eye's temporal sclera at 2.4x Cycles' */
+    scleraWrap: 0,
     /** The hero rig's camera catchlight lights the eye's diffuse at this share (punctual path only; the
      * LTC rect path is full). T19: 1, as Cycles renders it: Blender's diffuse_factor 0.3 on that light is
      * EEVEE-only (the per-light grey chart: full diffuse = 1.02x Cycles' eye-only chart). */
@@ -312,6 +317,8 @@ export const DEFAULT_PARAMS = {
     specMinWeight: 0.1,
     specGamma: 1.5,
     specLinear: 1,
+    /** 0 = no specular-aware resolve (the eye resolves as stock TRAA; A/B) */
+    specAware: 1,
     /** frames accumulated per still capture (progressive, then the EMA floor) */
     stillFrames: 24,
     /** taau render scale (?scale= at load overrides) */

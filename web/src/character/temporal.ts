@@ -83,6 +83,8 @@ export interface TemporalParams {
   specMinWeight: N;
   specGamma: N;
   specLinear: N;
+  /** 0 = treat the flagged pixels as stock (the A/B of bench/m1/v4/t18b-eyes.md) */
+  specAware: N;
 }
 
 const quad = new THREE.QuadMesh(null as unknown as THREE.NodeMaterial);
@@ -192,7 +194,7 @@ export class HairTRAA extends (TRAANode as unknown as new (...a: any[]) => any) 
         specN = max(specN, hn.g.sub(hn.r));
       }
       const isHair = hairN.greaterThan(0.5);
-      const isSpec = specN.greaterThan(0.5).and(isHair.not());
+      const isSpec = specN.mul(p.specAware).greaterThan(0.5).and(isHair.not());
       const validUV = histUV.greaterThanEqual(0).all().and(histUV.lessThanEqual(1).all());
       const isEdge = farthest.sub(closest).greaterThan(this.edgeDepthDiff);
       const disocc = closest.sub(prevDepth).greaterThan(this.depthThreshold);

@@ -80,14 +80,14 @@ const ttCrop = parseCrop(opt('tt-crop', null));
 // default below), a fresh page load renders one frame with the texture audit on (main.ts textureAudit,
 // texbudget.ts) -> <prefix>texcheck.json; exits 1 when any pipeline binds more than 16 sampled textures in a stage
 const texcheckArg = argv.includes('--texcheck') ? (argv[argv.indexOf('--texcheck') + 1] ?? '') : null;
-// T18b: --sweep 'a=eye.lidShadow:0;b=eye.lidShadow:1,eye.scleraWrap:0' captures every still once per entry
+// T18b: --sweep 'a=eye.lidShadow:0;b=eye.lidShadow:1|skin.wrap:[0.6,0.3,0.2]' captures every still once per entry
 // in the same page (live __viewer.setParam between entries: uniforms only), as <prefix><name>_<stem>.png;
 // each entry's sets apply on top of the previous entries'
 const sweep = (opt('sweep', '') || '=')
   .split(';')
   .map((e) => {
     const [name, sets] = e.split('=');
-    return { name, sets: (sets ?? '').split(',').filter(Boolean).map((kv) => [kv.split(':')[0], JSON.parse(kv.split(':')[1])]) };
+    return { name, sets: (sets ?? '').split('|').filter(Boolean).map((kv) => [kv.split(':')[0], JSON.parse(kv.split(':')[1])]) };
   });
 const TEXCHECK_VARIANTS = ['', 'ltc=0', 'sharemaps=0', 'pcss=0', 'contact=0', 'tier=gameplay', 'hairshadow=0'];
 const TT_DEG_PER_S = 20; // main.ts turntable speed

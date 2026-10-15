@@ -53,8 +53,9 @@ DEFAULTS = {
     "pupil_deg": 9.0, "iris_deg": 30.0, "limbus_deg": 2.5,
     # T18: the iris -30 % saturation (HSV, sRGB) and -15 % value: was #4a2e1a / #20120a / #2e1d10 /
     # #8e5e33, which read amber in both renderers (checkpoint 3 §2.4); fibre gain 0.95 -> 0.75
-    # T18b: a further -6 % (the engine sat at -29 % on the far eye against T12)
-    "iris": "#3f2f24", "iris_inner": "#1b130f", "iris_outer": "#271e16", "collarette": "#795e46",
+    # T18b: a further -32 % (HSV S x 0.68: Cycles rendered T18's at -17 % against T12, the engine at -30 %;
+    # both now at or past -30 %, see bench/m1/v4/t18b-eyes.md)
+    "iris": "#3f342b", "iris_inner": "#1b1512", "iris_outer": "#27201b", "collarette": "#796554",
     "fibre_gain": 0.75,
     "outer_mix": 0.6, "limbus_frac": 0.12, "limbal_dark": 0.55,
     "sclera": "#bdab9d", "sclera_back": "#86675f", "vein": "#a2423a", "vein_amount": 0.8,

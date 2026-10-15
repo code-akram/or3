@@ -311,6 +311,7 @@ function outputOptions(P: ParamStore, aa: AAMode) {
       specMinWeight: P.u('aa.specMinWeight'),
       specGamma: P.u('aa.specGamma'),
       specLinear: P.u('aa.specLinear'),
+      specAware: P.u('aa.specAware'),
     },
     lens: { maxPx: P.u('dof.maxPx'), radiusScale: P.u('dof.radiusScale'), maxPassScale: P.u('dof.maxPassScale') },
     dofFullRes: !!(P.get('dof.fullRes') as number),

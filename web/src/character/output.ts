@@ -284,6 +284,7 @@ export class Output {
       specMinWeight: tp.specMinWeight ?? uniform(0.1),
       specGamma: tp.specGamma ?? uniform(1.5),
       specLinear: tp.specLinear ?? uniform(1),
+      specAware: tp.specAware ?? uniform(1),
     };
     let node: N;
     if (this.aa === 'traa') {
