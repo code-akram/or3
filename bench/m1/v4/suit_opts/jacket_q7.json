@@ -1,0 +1,94 @@
+{
+ "h_cm": 1.2,
+ "gap_m": 0.022,
+ "min_clear_m": 0.012,
+ "sleeve_gap_m": 0.002,
+ "seam_smooth": 6,
+ "elbow_fillet_m": 0.08,
+ "overlap_m": 0.006,
+ "fold_lift_m": 0.006,
+ "rest_fold_deg": 168.0,
+ "tps_reg": 0.5,
+ "pad_r_m": 0.085,
+ "pad_cm": 1.5,
+ "col_outer_m": 0.004,
+ "friction": 5.0,
+ "quality": 8,
+ "collision_quality": 3,
+ "cloth_dist_m": 0.004,
+ "self_collision": true,
+ "self_dist_m": 0.003,
+ "fabric": {
+  "mass": 0.3,
+  "tension": 40.0,
+  "compression": 40.0,
+  "shear": 30.0,
+  "bending": 12.0,
+  "bending_canvas": 60.0,
+  "air": 2.0,
+  "sewing_max": 0.0
+ },
+ "sew_frames": 30,
+ "gravity_ramp": 10,
+ "settle_frames": 35,
+ "bent": null,
+ "colliders": [
+  "shirt",
+  "waistcoat",
+  "trousers"
+ ],
+ "canvas": {
+  "hem_drop": 0.6,
+  "neck_band_cm": 5.0
+ },
+ "details": true,
+ "lods": [
+  0.4,
+  0.15
+ ],
+ "textures": true,
+ "v2": true,
+ "draft": {
+  "split_lapel": true,
+  "neck_scale": 1.0,
+  "waist_min_frac": 0.82,
+  "length_frac": 0.44,
+  "hem_flare_cm": 0.0,
+  "pad_cm": 1.5,
+  "shoulder_drop_deg": 1.0,
+  "suppression": {
+   "cb": 0.22,
+   "back_side": 0.4,
+   "side_front": 0.25,
+   "front_dart": 0.13
+  },
+  "ease": {
+   "cuff": 11.0
+  },
+  "sleeve": {
+   "end_above_wrist_cm": 3.5,
+   "elbow_extra_cm": 0.0
+  }
+ },
+ "canvas_bands": {
+  "hem_cm": 4.0,
+  "cuff_cm": 0.0
+ },
+ "rest_smooth": {
+  "rings": 2,
+  "iters": 6
+ },
+ "pin_neck": 0.0,
+ "hull": {
+  "alpha_back": 0.55,
+  "z_lo_below_hem_m": 0.05,
+  "z_hi_m": null
+ },
+ "push": {
+  "clear_m": 0.0015,
+  "smooth_iters": 3
+ },
+ "rever": {},
+ "crease_deg": 20.0,
+ "engine": "xpbd"
+}

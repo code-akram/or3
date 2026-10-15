@@ -8,8 +8,8 @@ The suit is being rebuilt as real tailoring: drafted panels, sewn and draped (nu
 | 2 | UVs from panels (grain), port the `suit_textures.py` marks | **done** |
 | 2b | item-1 review points 1–4 (back collar roll, vents visible, front quarters cutaway, pressed lapel edge) | **done** (point 5, the back skirt, done with item 3: the jacket over the made trousers) |
 | 3 | trousers, plus review point 5 (the jacket re-draped over them) | **done** |
-| 4 | waistcoat | **done** (open: the back neck stands off in profile, the shoulder-seam end points) |
-| 5 | shirt (collar band and fall to the `suit_neck.py` frame) | |
+| 4 | waistcoat | **done** (the back neck fixed in item 5; open: the shoulder-seam end points) |
+| 5 | shirt (collar band and fall to the `suit_neck.py` frame), the jacket re-draped over the made layers | **done** |
 | 6 | rigging (weights, Dem Bones, correctives); re-measure the armpit/cuff hinges | |
 | 7 | per-pose wrinkle maps | |
 | 8 | integration behind a config switch, with guards and caching by body hash | |
@@ -483,3 +483,131 @@ Gate pictures are in `data/build/t13/gate/phaseB/item4/`:
 - The back strap and buckle (they show only with the jacket off).
 - The welt's slight bend at the dart.
 - The jacket re-draped over the made waistcoat (and the made trousers): it goes with item 5, once the shirt is made, so the jacket drapes over the final layers once.
+
+## Item 5: the shirt, and the jacket over the made layers
+
+Runs (under `data/build/suit_spike/`, lookdev base `20261014T205840Z-t15-a5`):
+
+| run | what |
+|---|---|
+| `20261015T042335Z-t13s-s6` (twin `…043909Z-t13s-s6det`) | the shirt over d5's made trousers; its cuff placed from the p5c jacket's sleeve end |
+| `20261015T051002Z-t13w-b7` (twin `…052711Z-t13w-b7det`) | the waistcoat re-draped over the made shirt (pressed) and trousers; the rendered shirt pressed under it |
+| `20261015T051851Z-t13c-q7` (twin `…052416Z-t13c-q7det`) | the jacket re-draped once over the final layers: shirt, waistcoat and trousers as b7 left them |
+
+Gate sheets are in `data/build/t13/gate/phaseB/item5/`: `shirt_sheet.png`, `shirt_close_sheet.png`, `shirt_lod_sheet.png`, `waistcoat_sheet.png`, `stack_sheet.png` and `lofted_vs_made.png`.
+
+### What I see (frames at 100 %, before the numbers)
+
+**The shirt alone** (s6, over the made trousers):
+
+- It reads as a white dress shirt tucked into the trousers.
+- **Collar.** A spread collar: the band stands round the neck and the fall turns over it, with the points spread under the knot. The front closure sits under the tie.
+- **Back.** A yoke seam across the back, and the two back darts shaping the waist. The tuck is smooth at the band.
+- **Sleeves.** A clean sleeve head. The sleeve blouses a little over a barrel cuff, and the cuff has a lapped closure with a button and a topstitch row.
+- **Front.** A placket with buttons and an edge stitch. At the elbow the sleeve is pressed close to the arm (see below), so it reads slimmer than a shirt worn alone would.
+- Faults:
+  - At the back sides, the fall's lower edge steps slightly where it ends: a small tab at each side.
+  - The lofted tie stops at z ≈ 1.25. It was built only down to where the jacket covers it, so in shirt-only frames it ends mid-chest.
+
+**The waistcoat over the made shirt** (b7):
+
+- The back neck now lies on the shirt. In profile the upper back no longer bridges from the blades to the collar.
+- The back is clean, the armholes are clean, and the shirt shows only through the armholes and above the V.
+- One small white sliver shows at the front edge between the third and fourth buttons. That is the shirt placket in the lap (button lap 2.6 mm there).
+
+**The full stack** (q7, Cycles):
+
+- It reads as a three-piece suit.
+- A white band of shirt collar shows above the jacket collar all round the back neck, and the shirt cuff shows past the sleeve at the front of the wrist.
+- The crook of the arm folds softly, with no shirt coming through.
+- The back is smooth under the collar. The drag line of p5c is gone.
+- The cuff shows less at the back of the wrist. The jacket's hem hangs slanted along the forearm: 23.7 cm from the elbow at the front, 28.4 at the back.
+- The lofted jacket in `lofted_vs_made.png` is a different case: it was fitted to the lofted shirt, so the made shirt comes through it. That frame only compares the two jackets; it is not a guard.
+
+### What was built
+
+**`blender/character/suit_shirt_pattern.py`** (new): the shirt drafted from the jacket block.
+- Panels: yoke, back with two fisheye darts, front with a buttoned placket, and a one-piece sleeve.
+  - The sleeve has a 1 cm head ease, 7 cm bicep ease, two 1.5 cm pleats and a 2 cm blouse.
+  - The sleeve is bent 30° in the cut: part of the A-pose elbow taken out of the crook.
+- A barrel cuff placed so it shows 1.3 cm past the reference jacket's sleeve end.
+- The neckline is sized to the band base of the collar frame (25.3 cm per half).
+
+**`blender/character/suit_shirt_detail.py`** (new): the made shirt.
+- The shell has a 0.45 mm solid, with felled seams as a groove and a topstitch.
+- The placket is lifted, with edge stitching and buttonholes.
+- The collar is the band and fall from `suit_neck.build_shirt_collar` on the same frame the lofted path uses, thickened, with topstitching.
+- Each cuff is fitted to the wrist section: it is offset to its round and hangs on the wrist with a 1.5 mm gap at the top.
+- Front and cuff buttons. A cotton atlas through `suit_made_tex` (`cloth: "shirt"`).
+
+**`bench/m1/v4/suit_spike.py`**:
+- `--shirt` (`main_shirt`), with these hooks:
+  - holds the collar band's ring;
+  - holds the cuff on its frame;
+  - a tuck hook below the trousers' band;
+  - a tie hook that keeps the front behind the tie;
+  - an elbow press (`zone_hook`, 5 mm off the arm within 6 cm of the elbow, fading out by 14 cm).
+- `--shirt-from` and `--waistcoat-from`, beside `--trousers-from` (`use_layers`):
+  - The made garment replaces the lofted one.
+  - The drape collides with a hidden join of its made parts, outer faces only. The made parts are solids, and the field reads a garment shell by its nearest face. The inner face looks at the body, so a point under the shirt but nearer its inner face read as outside. In b1 the waistcoat settled inside the shirt in four places.
+- The waistcoat's back-neck cling: within 3 mm of the layer under it, from the back neck down 4 cm, fading out by 12 cm.
+- `press_under`:
+  - A made under-garment that comes through the garment draped over it is pressed in behind that garment's surface, together with its neighbours within 15 mm.
+  - The clearance is 3 mm under the waistcoat and 4.5 mm under the jacket.
+  - The pressed objects are saved in the run's `spike.blend`, and the next layer loads them from there.
+- The waistcoat drapes over a pressed collider of the shirt, capped 6 mm off the body with a quarter of the excess kept.
+- The made under-garments get their own clay tint in the clay frames.
+
+**`bench/m1/v4/suit_beauty.py`**: `--garment shirt`, the shirt close-ups, and the stack close-ups (`close_stack_neck`, `close_stack_neck_s`, `close_stack_cuff`).
+
+**`suit_waistcoat_pattern.py`**: the armhole is 7 cm under the armpit (it was 5). At 5 cm the made shirt's underarm caught the armhole's lower edge.
+
+The jacket keeps k5's draft and options (`bench/m1/v4/suit_opts/jacket_q7.json`, passed with `--opts @…`), except two:
+- the sleeve ends 3.5 cm above the wrist (it was 2.0), because over the made layers it hung 1.7 cm lower;
+- the rever's stand stays at the default 2.1 cm.
+
+### Fixes made on the way (each found in a frame)
+
+| run | what I saw | cause | fix |
+|---|---|---|---|
+| s2–s4 | a 30 cm waist blouse, hard walls beside the tie, a flap at the crook | ease, the tie limit, a straight-cut sleeve | waist ease 16 with darts; a soft tie field; the sleeve bent in the cut |
+| b1 | a keyhole of shirt through the waistcoat at the CB, and blobs at the sides | the inner faces of the made solids in the collider | outer faces only |
+| b2–b6 | the waistcoat's armholes torn open to the waist, strain p99 39–50 % | a 6 cm-ease waistcoat round a rigid shirt's bulk | a pressed shirt collider, then the shirt pressed under the waistcoat (b7: p99 15 %) |
+| q1 | the shirt sleeve through the jacket's under sleeve, jacket strain p99 39 % | the shirt sleeve stood as far off the arm as the jacket's (p90 38 mm at the elbow, against 32) | a fitted sleeve: bicep ease 10 → 7, elbow extra 2 → 0, blouse 3 → 2 |
+| q2, q3 | the shirt's crook fold through the jacket's crook | the two crook folds in the same place | the elbow press on the shirt (p90 at the elbow 29 → 17 mm), plus `press_under` |
+| q4 | the shirt cuff hidden (−0.5 cm) | the jacket sleeve hung 1.7 cm lower over the made layers | jacket sleeve end 2.0 → 3.5 cm above the wrist |
+| q2–q6 | the shirt showing 7.8 / 10.6 / 19.6 mm at the CB | the jacket collar's height follows the layers under it | the stand back to 2.1 cm over the final layers: 14.9 mm |
+
+### Numbers
+
+| | shirt s6 | waistcoat b7 | jacket q7 |
+|---|---|---|---|
+| stage-1 seam gap (mean / p95 / max mm) | 0.27 / 1.06 / 2.01 | 0.68 / 2.59 / 4.89 | 0.49 / 1.50 / 5.25 |
+| inside after push (nearest face / both rules) | 0 / – | 0 / 0 | 0 / 0 (rever 0) |
+| strain vs flat (mean / p99) | 3.4 % / 21.6 % | 2.4 % / 15.0 % | 3.0 % / 17.5 % (p5c: 2.6 / 14.9) |
+| seam hinges over 20° | 66 (armhole underarm and the CB yoke fold) | 4 | 21 (p5c: 29) |
+| tris LOD0 / LOD1 / LOD2 | 53,922 / 21,568 / 8,088 | 22,380 / 8,952 / 3,356 | 60,802 / 24,319 / 9,061 |
+| determinism (X1, Xw, X2) | `3b907334 a88f7f80 b10d6dd0` (= twin) | `354c1384 f0f44c14 87187f7d` (= twin) | `bae1b10e 04ab9fa8 efb93760` (= twin, and = q6) |
+
+- **Collar seating against T22's neck** (`neck_check`, the hero mesh from the lookdev blend against the frame's body):
+  - under the band: hero minus frame at most 0.9 mm (p99 0.79);
+  - above the band: 1.62 mm;
+  - the collar's inner face to the hero: min 3.4 mm, median 10.1, none inside.
+- **Shirt collar above the jacket collar at the CB:** 14.9 mm (target 10–15).
+- **Shirt cuff past the jacket sleeve** (left arm, median over 12 sectors round the forearm): 1.15 cm (target 1–1.5). It is 1.5 cm at the front of the wrist, and the jacket covers it at the back.
+- **Tuck:** the shirt is at most 0.59 mm behind the trousers' band surface. 64 of 1,698 vertices are inside the trousers (the tuck), and none stand outside mid-band.
+- **Front through the tie:** 0.
+- **Pressing:**
+  - under the waistcoat: 2,383 shirt shell vertices, at most 21.2 mm (the bulk under the arms); the collar 117 vertices at 2.9 mm;
+  - under the jacket: 1,912 shirt vertices at most 13.1 mm, the cuffs 640 at 1.6 mm, the waistcoat 857 at 2.2 mm.
+- **Shirt atlas:** 4,096 px, 0.34 mm/px, 72 marks. The shell's UV area ratio is median 1.00, p05–p95 0.91–1.14.
+- **Checks:** `npm run build` ok; containment 73/73; provenance audit 0 errors, 0 warnings.
+
+### What is left in item 5's scope
+
+- **Triangle budget.** The made shirt is 54k triangles at LOD0, and it is mostly hidden. In item 8 the stack has to come down to the character budget (LOD0 ≤ 170k for the whole character): the shirt's LOD1 (21.6k) should be its LOD0 under the jacket.
+- **Strain.** The shirt's p99 strain (21.6 %) is at the underarm, where the armhole hinges are.
+- **Layering order.** The pressing is a stand-in for real two-way contact. Each layer is draped over the ones under it, which are taken as rigid, and the under layers are then pressed in. Posed states (item 6) need the same order.
+- **Fall ends.** The collar fall's end tabs at the back sides.
+- **Tie.** The tie is the lofted one (cut at z ≈ 1.25).
+- **Cuff at the back.** The jacket's slanted sleeve hem covers the cuff at the back of the wrist.
