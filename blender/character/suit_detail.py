@@ -37,7 +37,8 @@ DEFAULTS = {
     "flap": {"thick_mm": 2.6, "lift_mm": 0.6, "corner_r_cm": 1.0, "h_cm": 0.5, "gap_cm": 0.08},
     "jet": {"thick_mm": 1.6, "lift_mm": 0.4},
     "welt": {"thick_mm": 2.8, "lift_mm": 0.5, "h_cm": 0.5},
-    "vent": {"height_cm": 22.0, "sleeve_cm": 10.5, "step_mm": 3.5, "band_cm": 1.2, "fade_cm": 3.0},
+    "vent": {"height_cm": 22.0, "sleeve_cm": 10.5, "step_mm": 3.5, "band_cm": 1.2, "fade_cm": 3.0,
+             "lip_in_cm": 0.15, "lip_mm": 0.8, "lip_w_mm": 2.4},     # the lap's pressed edge (atlas)
     "button": {"front_diam_cm": 2.0, "front_thick_mm": 3.6, "cuff_thick_mm": 3.0, "stand_mm": 1.5,
                "seg": 32, "hole_r_frac": 0.05, "hole_at_frac": 0.12, "hole_depth_mm": 1.2},
     "buttonhole": {"cord_r_mm": 0.9, "eye_r_mm": 1.6, "gap_mm": 0.8,
@@ -156,7 +157,8 @@ def solid(X, T, N, t, rings, loops=None, keep=None, FU=None):
     ends outside it gets no rim. FU: per-corner UVs of the sheet (m, 3, 2), or None.
     Returns V, F (list of tuples), part (per face: 0 outside, 1 inside, 2 rim), UV: None
     without FU, else {"uv": a (k, 2) array per face aligned with F, "src": the sheet face each
-    face came from}: the outside and the inside take the sheet's UVs, the rim continues them
+    face came from, "kind": 0 outside / 1 inside / 2 rim (for split normals: the parts are
+    re-tagged later)}: the outside and the inside take the sheet's UVs, the rim continues them
     across the edge (rim_uv)."""
     X = np.asarray(X, float)
     n = len(X)
@@ -176,6 +178,7 @@ def solid(X, T, N, t, rings, loops=None, keep=None, FU=None):
         FU = np.asarray(FU, float)
         UV = [fu for fu in FU] + [fu[::-1] for fu in FU]
         SRC = list(range(len(T))) * 2
+        KIND = [0] * len(T) + [1] * len(T)
         EU = boundary_edge_uv(T, FU)
     base = 2 * n
     inward = np.zeros((n, 3))
@@ -209,8 +212,9 @@ def solid(X, T, N, t, rings, loops=None, keep=None, FU=None):
                 if UV is not None:
                     UV.append(RU[k][m] if RU[k] is not None else np.zeros((4, 2)))
                     SRC.append(int(RS[k]))
+                    KIND.append(2)
     if UV is not None:
-        UV = {"uv": UV, "src": np.array(SRC, int)}
+        UV = {"uv": UV, "src": np.array(SRC, int), "kind": np.array(KIND, int)}
     return np.vstack(V), F, np.array(part, int), UV
 
 
@@ -623,6 +627,21 @@ def _inset(poly, outline, d):
     return poly + nrm * d
 
 
+def _split_from(poly, end_poly, d):
+    """Split a polyline d (cm, arc length) from the end that meets end_poly: (that part, the rest),
+    both ordered as poly."""
+    from .suit_rever import _dist_polyline
+    poly = np.asarray(poly, float)
+    e = np.asarray(end_poly, float)
+    rev = _dist_polyline(poly[:1], e)[0] > _dist_polyline(poly[-1:], e)[0]
+    P = poly[::-1] if rev else poly
+    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
+    k = int(np.searchsorted(s, d))
+    cut = P[k - 1] + (P[k] - P[k - 1]) * (d - s[k - 1]) / max(s[k] - s[k - 1], 1e-9) if 0 < k < len(P) else P[min(k, len(P) - 1)]
+    a, b = np.vstack([P[:k], cut]), np.vstack([cut, P[k:]])
+    return (a[::-1], b[::-1]) if rev else (a, b)
+
+
 def shell_uv(C, wm, Tw, pm, stats=None):
     """Per-corner UVs and panel tags of the welded drape's faces: each face's corners at their
     pattern coordinates (the unwelded triangle it came from), so a seam vertex has one UV per
@@ -674,12 +693,24 @@ def shell_marks(C, D, pm, o):
                 sewn.add((D.geom(pn).name, e))
     hidden = {"neck", "gorge", "roll"}
     pk = o["pick"]
+    vo = o["vent"]
+    # the vents' lapping panels: on the vent the seam is the lap's pressed edge (a lip), not a
+    # groove; the under panel keeps its groove there, the shadow line under the lap
+    laps = {"back": ("side", "hem", vo["height_cm"]), "top_sleeve": ("hind", "cuff", vo["sleeve_cm"])}
     out = {}
     for k, name in enumerate(C["names"]):
         P = D.geom(name)
         L = []
         for e, poly in P.edges:
             if (P.name, e) in sewn and e not in hidden:
+                lap = laps.get(P.name)
+                if lap and lap[0] == e and lap[2] > 0:
+                    lo, hi = _split_from(poly, P.edge(lap[1]), lap[2])
+                    L.append(("seam", [tuple(q) for q in pm.uv(name, hi)], {"stitch": False}))
+                    lip = _inset(lo, P.outline(), vo["lip_in_cm"])
+                    L.append(("ridge", [tuple(q) for q in pm.uv(name, lip)],
+                              {"height": vo["lip_mm"] / 1000, "width_m": vo["lip_w_mm"] / 1000}))
+                    continue
                 L.append(("seam", [tuple(q) for q in pm.uv(name, poly)], {"stitch": False}))
         for e, poly in P.inner.items():
             L.append(("seam", [tuple(q) for q in pm.uv(name, poly)], {"stitch": False}))
@@ -691,9 +722,10 @@ def shell_marks(C, D, pm, o):
 
 
 def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
-    """The made jacket on the drape (X, Tw welded). Returns {name: (V, F, part, UV, tag)}:
+    """The made jacket on the drape (X, Tw welded). Returns {name: (V, F, part, UV, tag, kind)}:
     UV a (k, 2) array per face (m; None for the buttons), tag the face's panel tag (the UV
-    rectangles suit_textures packs), plus "_uv": {"marks": {name: {tag: marks}},
+    rectangles suit_textures packs), kind 0 outside / 1 inside / 2 turned edge (None: one
+    smooth group), plus "_uv": {"marks": {name: {tag: marks}},
     "tags": {name: {tag: label}}}."""
     o = sp.merge(DEFAULTS, opts or {})
     stats = {} if stats is None else stats
@@ -726,12 +758,12 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
         f = F[i]
         if wool_in[np.array(f) - n].mean() > 0.5:
             part[i] = WOOL
-    out["shell"] = (V, F, part, U["uv"], ftag[U["src"]])
+    out["shell"] = (V, F, part, U["uv"], ftag[U["src"]], U["kind"])
     stats["shell"] = {"verts": int(len(V)), "tris": int(sum(len(f) - 2 for f in F)),
                       "lining_faces": int((part == LINING).sum())}
     # --- pockets
     fl, jt, wl = o["flap"], o["jet"], o["welt"]
-    pv, pf, pp, pu, pt = [], [], [], [], []
+    pv, pf, pp, pu, pt, pk_ = [], [], [], [], [], []
 
     def add(V_, F_, part_, U_, label):
         b = sum(len(v) for v in pv)
@@ -739,6 +771,7 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
         pf.extend(tuple(int(i) + b for i in f) for f in F_)
         pp.extend(list(part_))
         pu.extend(U_["uv"])
+        pk_.extend(list(U_["kind"]))
         tg = len(tags["pockets"]) + 1         # each patch its own rectangle in the atlas
         tags["pockets"][tg] = label
         pt.extend([tg] * len(F_))
@@ -761,7 +794,7 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
         welt = np.array([(x0, y0), (x1, y1), (x1, y1 - hgt), (x0, y0 - hgt)])
         add(*patch3d(pm, "front", welt, wl["h_cm"], wl["lift_mm"] / 1000, wl["thick_mm"] / 1000, rings),
             "welt_front")
-    out["pockets"] = (np.vstack(pv), pf, np.array(pp, int), pu, np.array(pt, int)) if pv else None
+    out["pockets"] = (np.vstack(pv), pf, np.array(pp, int), pu, np.array(pt, int), np.array(pk_, int)) if pv else None
     # --- buttons
     bo = o["button"]
     bv, bf = [], []
@@ -784,7 +817,7 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
                 Xp, Np, ux, uy = pm.frame(nm, [xy])
                 addb(*button(Xp[0], Np[0], ux[0] + uy[0], cb["diam_cm"] / 100 * 0.97,
                              bo["cuff_thick_mm"] / 1000, bo))
-    out["buttons"] = (np.vstack(bv), bf, np.full(len(bf), BUTTON), None, None) if bv else None
+    out["buttons"] = (np.vstack(bv), bf, np.full(len(bf), BUTTON), None, None, None) if bv else None
     # --- the keyhole buttonhole (left front): a corded lip round the slit and the eye
     if "buttonhole" in front.notches:
         bo2 = o["buttonhole"]
@@ -801,7 +834,7 @@ def build(C, D, wm, X, Tw, opts=None, stats=None, rings=None, under=None):
         Xp, Np, _, _ = pm.frame("front", loop2)
         bu = bo2["uv_scale"]
         V_, F_, U_ = tube(Xp + Np * cr, Np, cr, seg=6, uv_scale=bu)
-        out["buttonhole"] = (V_, F_, np.full(len(F_), EDGE), U_, np.ones(len(F_), int))
+        out["buttonhole"] = (V_, F_, np.full(len(F_), EDGE), U_, np.ones(len(F_), int), None)
         tags["buttonhole"][1] = "cord"
         # the purl: buttonhole twist wrapped round the cord, a ridge across it every pitch
         Lc = max(float(np.max(uv[:, 0])) for uv in U_)

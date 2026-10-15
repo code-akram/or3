@@ -42,16 +42,18 @@ DEFAULTS = {
     "dv_cm": 0.4,                # column walk step
     "edge_smooth_cm": 1.5,       # E(s) and its frames: Gaussian along s
     "corner_smooth_cm": 3.0,     # wider round the gorge corner (s_R)
-    "stand_cm": 3.0,             # at the centre back
+    "stand_cm": 2.1,             # at the centre back (3.0 stood up like a band, the shirt collar
+                                 # 4 mm above it; a tailor wants 1-1.5 cm: 2.1 gives 11 mm)
     "stand_np_frac": 0.85,       # the stand starts to fall off at this x the neck-point arc
-    "fall_below_cm": 1.2,        # the collar fall reaches this far below the neckline at CB
+    "fall_below_cm": 1.7,        # the collar fall reaches this far below the neckline at CB
     "end_width_cm": 4.0,         # collar end, perpendicular to the gorge
-    "r_collar_cm": 0.3,
+    "r_collar_cm": 0.45,         # a soft roll over the stand (0.3 read as a fold)
     "r_lapel_top_cm": 0.55,
     "r_break_cm": 0.22,
     "lean_deg": 10.0,            # the stand leans onto the neck by this much off the jacket surface
     "shirt_gap_cm": 0.25,        # stand clear of the shirt collar
-    "h_lay_cm": 0.42,            # fall height over its base where it lies down
+    "h_lay_cm": 0.34,            # fall height over its base where it lies down (0.42 put the lapel
+                                 # edge 4.5 mm over the front; a pressed lapel: 3-4 mm, now 3.9)
     "h_break_cm": 0.27,          # ... falling to this (the rever's own thickness) at the break
     "break_taper_cm": 4.0,
     "lay_len_collar_cm": 1.2,
@@ -61,7 +63,7 @@ DEFAULTS = {
     "relax_iters": 12,
     "lift_spread_cm": 2.0,       # spread each clearing lift into a smooth swell of this radius
     "pick": {"in_cm": 0.6, "pitch_cm": 0.6},   # pick stitching in from the free edge
-    "clear_cm": 0.15,            # final: every vertex this far outside the jacket and the under-garments
+    "clear_cm": 0.08,            # final: every vertex this far outside the jacket and the under-garments
 }
 
 
@@ -599,6 +601,7 @@ def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc, rings=5, FU=None):
         FU = np.asarray(FU, float)
         UV = [fu for fu in FU] + [fu[::-1] for fu in FU]
         SRC = list(range(len(T))) * 2
+        KIND = [0] * len(T) + [1] * len(T)
         RU, RS = rim_uv(boundary_edge_uv(T, FU), b, r[:, 0], rings)
     # rim: the boundary loop, skipping the attachment edge; rows top sheet -> rings -> inner sheet
     for k in range(nb):
@@ -612,8 +615,9 @@ def thicken(X, T, Nout, bids, attach, t_cm, taper_q, Vc, rings=5, FU=None):
             if UV is not None:
                 UV.append(RU[k][m] if RU[k] is not None else np.zeros((4, 2)))
                 SRC.append(int(RS[k]))
+                KIND.append(2)
     if UV is not None:
-        UV = {"uv": UV, "src": np.array(SRC, int)}
+        UV = {"uv": UV, "src": np.array(SRC, int), "kind": np.array(KIND, int)}
     return V, F, UV
 
 
@@ -711,12 +715,19 @@ def build(X, T, chains, D, under_bvhs=(), opts=None, stats=None):
         Tc = Tc[:, ::-1]
     FU, ftag, marks, tags, orient = chart_uv(Vc, Tc, bids, G, o)
     V, F, U = thicken(Xr, Tc, Nm, bids, attach, o["thick_cm"], 0.6, Vc, FU=FU)
+    bb = np.asarray(bids, int)
+    sb = np.abs(Vc[bb, 0])
+    lap_edge = bb[(sb > G["s_R"] + 4.0) & (sb < G["s_B"] - o["break_taper_cm"]) & (Vc[bb, 1] > 1.0)]
+    hts = [float(np.dot(Xr[i] - surf.nearest(Xr[i])[0], surf.nearest(Xr[i])[1])) for i in lap_edge]
     if stats is not None:
         stats.update({"chart": {k: round(v, 2) for k, v in G.items() if isinstance(v, float)},
                       "collar_point_sq": [round(float(c), 2) for c in CP],
                       "verts": int(len(V)), "faces": int(len(F)), "pushed_out": int(moved),
-                      "uv_orient": orient})
+                      "uv_orient": orient,
+                      "lapel_edge_mm": {"median": round(1000 * float(np.median(hts)), 2) if hts else None,
+                                        "p95": round(1000 * float(np.percentile(hts, 95)), 2) if hts else None,
+                                        "n": len(hts)}})
     dbg = {"col_s": C.s, "col_E": C.E, "col_D": C.D, "col_N": C.N, "col_T": C.T, "col_lean": C.lean,
            "col_W": C.W, "X_map": X_map, "clear_log": np.array(clog, float).reshape(-1, 4), "X_relax": X_relax}
     return V, F, {"chart_V": Vc, "chart_T": Tc, "sheet_X": Xr, "gorge_ids": gl, "attach": attach, "debug": dbg,
-                  "uv": U["uv"], "tag": ftag[U["src"]], "marks": marks, "tags": tags}
+                  "uv": U["uv"], "tag": ftag[U["src"]], "kind": U["kind"], "marks": marks, "tags": tags}

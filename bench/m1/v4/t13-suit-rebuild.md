@@ -6,9 +6,9 @@ The suit is being rebuilt as real tailoring: drafted panels, sewn and draped (nu
 |---|---|---|
 | 1 | jacket detail, plus the phase A review fixes | **done**, accepted (open points below, to be fixed before item 6) |
 | 2 | UVs from panels (grain), port the `suit_textures.py` marks | **done** |
-| 2b | item-1 review points 1–3 (back collar roll, vents visible, front quarters cutaway) | next, before item 6 |
-| 3 | trousers | |
-| 4 | waistcoat | |
+| 2b | item-1 review points 1–4 (back collar roll, vents visible, front quarters cutaway, pressed lapel edge) | **done** (point 5, the back skirt, done with item 3: the jacket over the made trousers) |
+| 3 | trousers, plus review point 5 (the jacket re-draped over them) | **done** |
+| 4 | waistcoat | **done** (open: the back neck stands off in profile, the shoulder-seam end points) |
 | 5 | shirt (collar band and fall to the `suit_neck.py` frame) | |
 | 6 | rigging (weights, Dem Bones, correctives); re-measure the armpit/cuff hinges | |
 | 7 | per-pose wrinkle maps | |
@@ -240,3 +240,246 @@ Gate pictures are in `data/build/t13/gate/phaseB/item2/`:
 - **The rever chart's roll** is 21 % short along q. A UV relax toward the 3D lengths would even out the twill there.
 - **The sheen patch** on the lapel roll (above).
 - **The trousers, waistcoat and shirt** get the same treatment in items 3–5. `shell_uv` and `solid` are panel-generic.
+
+## Item 2b: the item-1 review points 1–4
+
+Runs (base `20261014T205840Z-t15-a5`, all full drapes):
+
+- `20261015T005546Z-t13c-k5` is the final run: clay, made jacket, LODs, textures and Cycles frames.
+- `20261015T011946Z-t13c-k5det` is its determinism twin. X1, Xw and X2 hash the same: `fdaf39b6`, `ccc4b096`, `bdc05b8c`.
+- `t13c-k1`…`k4` were the way there. `t13c-e2` is k4's drape with the lapel changes only.
+
+Gate pictures are in `data/build/t13/gate/phaseB/item2b/`:
+
+- `cmp_u6_k5_sheet.png`: item 2 against now, for the back collar, front, back and profile.
+- `cmp_button_k4_k5.png` and `cmp_lapel_k4_k5.png`.
+- `beauty_pattern_*.png`: the closes, including `close_front_hem`, `close_vent` and `close_collar_side`.
+- `beauty_sheet.png`, `grain_sheet.png`, `ab_sheet.png`, `closeup_sheet.png`.
+- The clay `pattern_*.png`.
+
+### What I see (frames at 100 %, before the numbers)
+
+- **Back collar.** The fall now covers the stand and rolls over at the top. The shirt collar shows a clean white band above it all round the back neck. The pick stitching runs along the fall's edge.
+  - One fault: a soft horizontal drag line about 2 cm under the collar seam at the centre back. The back neck pulls slightly, which a tailor would fix with a touch more back-neck length.
+- **Vents.** In `close_vent` and the back view, each back panel's lap reads as a pressed edge with a lip, running from the hem 22 cm up. The vents are closed and overlapped at rest, and the lap edge catches the light. At full body they are still subtle, as closed vents on a dark cloth are.
+- **Front quarters.** Below the button the front edges run straight about 6 cm and then round away to the hem at about 50°. The opening between them shows the trousers, as a lounge jacket's does. The pick stitching follows the curve. This is in `close_front_hem` and the front and ¾ views.
+- **Lapel edge.**
+  - It now reads as a pressed edge: a fine highlight line along the edge with a crease where it meets the lapel face, instead of a broad rounded band (`cmp_lapel_k4_k5.png`).
+  - The edge stands 3.8 mm off the front, from 4.5 mm.
+  - The jacket's other turned edges (fronts, hem, cuffs, vents) get the same crease.
+- **Below the button** (found in k4's frames, now fixed). The left front's edge showed a stepped jag where it rounds away below the button (`cmp_button_k4_k5.png`, left). Three of its edge vertices had gone 2.3 mm behind the right front.
+
+### What was done
+
+- **Point 1: back collar** (commit `bfb2d0d`). Rever stand 3.0 → 2.1 cm, fall below the seam 1.2 → 1.7 cm, and collar roll radius 0.3 → 0.45 cm.
+- **Point 2: vents** (`bfb2d0d`). The lap's pressed edge is a lip in the atlas, a ridge mark 0.8 mm high and 2.4 mm wide, 1.5 mm in from the lap edge. The under panel keeps its groove there, which is the shadow line under the lap.
+- **Point 3: cutaway** (`bfb2d0d`).
+  - The draft's front edge below the button is a Bézier: straight for 6 cm (`cutaway.straight_cm`), then meeting the hem at 50° (`hem_angle_deg`). The hem corner is 6 cm inside the centre front (`front_hem_in_cm`).
+  - Self-contact went 10 → 12 mm. With the fronts cut away, the right sleeve's inner elbow folded through itself (a 117–120° fore-seam hinge in k1 and k2), and 12 mm holds it.
+- **Point 4: lapel edge** (`c4f6dcb`).
+  - The fall lies lower: `h_lay_cm` 0.42 → 0.34, and the rever's final clearance 0.15 → 0.08 cm.
+  - New `suit_made_tex.crisp_normals`: per-corner normals are smoothed only within each face kind (outside, inside, turned edge). Every half-round edge now meets its sheets in a crease.
+  - New stat: `rever.lapel_edge_mm`, the lapel edge's height over the jacket front.
+- **The layer fix** (`c4f6dcb`).
+  - **Cause.** The lofted waistcoat's front edge has faces that look inward (its turned edge's inner rim). In the drape's distance field and in `push_out`, a point in front of them read as "inside the waistcoat".
+  - **Effect.** The cut-away left front, which now crosses that edge, was pushed 2 cm forward in the drape. `push_out` then sent three of its vertices back through the right front.
+  - **Fix.** A garment face now means "inside" only if a ray away from the body hits a garment (`garment_covers`, the rule the inside count already used).
+
+### Numbers (k5)
+
+| | value |
+|---|---|
+| shirt collar above the jacket collar at CB | **11.7 mm** (target 10–15; item 1: 3.8) |
+| lapel edge over the front | median **3.84 mm**, p95 5.66 (target 3–4; was 4.49 / 6.19) |
+| fronts below the button | the left front is 3.0–8.4 mm in front of the right (k4: −2.4 mm, through) |
+| buttons over the drape | min **+1.07 mm**, 0 below (k4: −1.29, 17 below) |
+| inside the body or under-garments | 0 by both rules; 1 vertex pushed (k4: 7); rever inside 0 (k4: 59) |
+| seams | stage-1 gap p95 1.13 mm; strain mean 2.5 %, p99 14.9 % |
+| hinges over 20° | 30: armhole 23 (16 at the underarm), side/front 3, hind 4. The A-pose underarm, as agreed; re-measured after item 6 |
+| texel density | shell 0.91 / 1.00 / 1.10, pockets 0.96 / 1.00 / 1.12, rever 0.82 / 0.98 / 2.16; LOD1 0.80 / 1.02 / 1.44, LOD2 0.69 / 1.01 / 1.46 |
+| tris | LOD0 **61,074**, LOD1 24,428, LOD2 9,102 |
+| determinism | k5 and k5det: X1, Xw and X2 hashes equal |
+| checks | `npm run build` ok; containment 73/73; provenance audit 0 errors, 0 warnings |
+
+### Left from the review
+
+- **Point 5** (the back skirt onto the seat) goes with item 3: the jacket is re-draped over the made trousers.
+  - In k5 the jacket's back is 15–37 mm off the body over the small of the back (z 1.06–1.12) and 6 mm at the seat's fullest point.
+  - The hull's lumbar bridge (`alpha_back` 0.55) and the centre-back suppression are the levers.
+- **The back-neck drag line** under the collar (above).
+
+
+## Item 3: the trousers
+
+Runs (base `20261014T205840Z-t15-a5`, all full drapes):
+
+- `20261015T013450Z-t13t-d5` is the final run: draft, drape, the made trousers, LODs, textures, and the Cycles beauty, grain and LOD frames.
+- `20261015T013733Z-t13t-d5det` is its determinism twin. X1, Xw and X2 hash the same: `cc740430`, `f0a3d0ae`, `1efb597c`.
+- `t13t-d1`…`d4` were the way there. In d4 the left back hem buckled into a fold (see below).
+- `20261015T014000Z-t13c-p5b` (and `-p5c`, the same with the trousers' materials kept) is the jacket re-draped over d5's made trousers, for review point 5.
+
+Gate pictures are in `data/build/t13/gate/phaseB/item3/`:
+
+- `beauty_sheet.png`: lofted | pattern, front, ¾, profile and back.
+- `closeup_sheet.png`: hem, hem from the side, knee, seat, fly, band. The single frames are `beauty_pattern_close_*.png`.
+- `grain_sheet.png` and `beauty_grain_close_{seat,knee}.png`: the pinstripe check.
+- `beauty_lod{1,2}_*.png`; clay `pattern_*.png`; `pattern.png` (the draft); `atlas_normal_1k.png`.
+- `cmp_hem_d4_d5.png`: the back hem before and after the placement fix.
+- `p5_*.png`: the jacket over the made trousers (point 5).
+
+### What I see (frames at 100 %, before the numbers)
+
+- **Overall.** Against the lofted trousers, which are skin-tight and stop above the shoe, these hang as cloth. The legs fall straight from the seat and the knee with a gentle taper. They rest on the shoe with a slight break at the front, and the hem slopes down toward the heel. The rise is high, as a three-piece suit's is, with the band at the natural waist under the waistcoat.
+- **Front.** A pressed crease runs from the band to the hem on each leg. The fly reads as a lip on the left front (wearer's left over right) with the J-stitch pick-stitched beside it, curving in at the bottom. The slant side pockets show as a lip with pick stitching in from it.
+- **Back.** The two back darts run from the band toward the jetted pockets. Each pocket is two jets with a button under it. The centre-back seam runs into the band's own CB seam. The seat is smooth with no drag lines, and the back crease starts below the seat.
+- **Grain.** The warp runs straight down each leg, front and back. On the seat the stripes meet the CB seam in a chevron, as they do on real trousers, because the back's seat seam is cut on the bias.
+- **Hem.**
+  - In d4 the left leg's back hem had a crumpled fold near the outseam (`cmp_hem_d4_d5.png`, left): a 178° fold, already there after stage 1, on one leg only.
+  - In d5 both hems are clean. They sit on the heel counter at the back and break softly over the vamp at the front.
+- **LODs.** LOD1 reads the same as LOD0 at full body. LOD2 shows a few dark and light specks on the lower legs at 100 %, where the inside layer of the decimated 1.2 mm shell comes through. They are sub-pixel at the distance LOD2 is used.
+- **The clay profile frame.** The dark patch on the thigh is the hand's shadow in EEVEE. It is not in the geometry and not in the Cycles frames.
+
+### What was built
+
+- **`blender/character/suit_trouser_pattern.py`** (new): the trouser draft. It is a standard block, front and back built off the crease line, from the body's measurements (`measure_legs`): waist, seat, crotch depth, knee, calf and ankle.
+  - Front: waist, fly, crotch, inseam, hem and side; the crease line; notches for the J-stitch, the slant pocket and the fly's end.
+  - Back: seat angle 10°, back rise 3.5 cm, a 1.5 × 10 cm dart, the fork S/8 dropped 0.8 cm; the crease 1 cm in from the front's and starting 8 cm below the fork; the back-pocket notch.
+  - Band: 4 cm, split at CB and CF.
+  - Knee 42 cm and hem 38 cm round. The hem is 8.5 cm above the floor at the front, 7.0 at the side and 5.5 at the back.
+  - Seams: outseam, inseam, front rise, seat, band, band CB and CF, and the back dart.
+- **The drape** (`suit_spike.py --trousers`):
+  - Same two-stage XPBD as the jacket: sew without gravity, weld, then drape with gravity, the band top held.
+  - Placement: above the fork, rows wrap a half-section ring of the trunk; the crotch extensions follow the body's midline profile; below the fork, rows wrap the leg rings.
+  - The shoes collide as convex hulls (`shoe_hulls`), so the hem can't fall into the throat; the shirt collides too.
+  - Placement fix (d5): the lower leg is compressed over 40 cm (`hem_place.span_m`) so the hem starts 3 cm above the shoe. In d4 the last few centimetres were squashed 4:1, and the back hem buckled into the d4 fold as stage 1 released it.
+- **`blender/character/suit_trouser_detail.py`** (new): the made trousers.
+  - Shell: 1.2 mm cloth, 3 mm band, half-round turned edges.
+  - Creases: geometry raised 1.2 mm with a 7 mm falloff, plus a pressed ridge in the atlas.
+  - Back pockets: two jets, 5 mm each, and a 17 mm button under each.
+  - Atlas marks: pressed-open seams, the fly lip and J-stitch, the slant pocket's lip and pick stitching, the crease ridge.
+  - Its own wool atlas (`t13t_*` materials, `suit_made_tex` with a `name` option).
+- **The jacket over the made trousers** (`--trousers-from RUN`): the made trousers replace the lofted ones as collider, hull and render layer. `suit_beauty.py --garment trousers` makes the trousers' Cycles frames; in jacket mode it uses a run's made trousers when present.
+
+### Numbers (d5)
+
+| | value |
+|---|---|
+| measurements | waist 81.3 cm, seat 94.1, crotch at z 0.910 m; draft S 100.1, W 83.3; outseam 105.8 / 105.5 cm (front / back), inseam 82.6 / 82.5 |
+| seams after stage 1 | gap mean 0.18 mm, p95 0.67, max 1.72 |
+| strain against the flat pattern | mean 1.85 %, p99 12.4 % |
+| inside the body, shirt or shoes | 0 before push-out, 0 after (d4: 1) |
+| hinges over 20° | 32, all at the fork or the break. Front rise 6 (124° max) and seat 10 (98°) at z 0.86, where four panels meet at the fork. Outseam 10 (44°) at z 0.19–0.20 and inseam 6 (33°) at z 0.13–0.24, where the leg folds onto the shoe |
+| sharpest folds below the fork | 79° at the front break (z 0.12); the d4 back-hem fold (178°) is gone |
+| hem | z 0.036–0.098 m |
+| texel density | shell 0.91 / 1.00 / 1.04 (p05 / median / p95); pockets 0.94 / 1.07 / 1.53; LOD1 0.82 / 1.00 / 1.18; LOD2 0.69 / 0.99 / 1.25 |
+| atlas | 4096 px over 1.45 m (0.355 mm/px), 10 rects, 41 marks |
+| tris | LOD0 **29,812** (shell 24,856, pockets 3,296, buttons 1,660); LOD1 11,924; LOD2 4,470 |
+| determinism | d5 and d5det: X1, Xw and X2 hashes equal |
+| checks | `npm run build` ok; containment 73/73; provenance audit 0 errors, 0 warnings |
+
+### Review point 5: the back skirt onto the seat (the jacket over the made trousers)
+
+Run `20261015T015643Z-t13c-p5c`: the jacket's k5 draft and options, re-draped with d5's made trousers as the collider. Its drape hashes equal its twin `t13c-p5b`'s (X1 `da99755e`, Xw `58a2cdb9`, X2 `fbbd6b49`). The frames are the `p5_*.png` in the gate.
+
+- **What I see.** In the profile and back frames the jacket hangs from the shoulder blades, comes in a little over the small of the back, and lies on the seat at its fullest point. Below that the skirt hangs plumb past the seat's undercurve, as a jacket's skirt does. The vent laps lie closed on the seat (`p5_beauty_close_vent.png`). The front quarters open onto the made trousers. Jacket and trousers read as one cloth.
+- **Measured** (back surface, jacket minus the trousers under it, 15 mm either side of x = 0.075 m):
+
+  | z (m) | 0.89 (hem) | 0.95 | 0.98 | 1.01 (seat) | 1.04 | 1.07 | 1.10 | 1.13 | 1.16 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | gap (mm) | 22.8 | 8.6 | 5.4 | **3.9** | 9.7 | 15.3 | 21.8 | 24.3 | 30.2 |
+
+  - At the centre back it is 8–10 mm over the seat (z 0.98–1.04).
+  - Over the lumbar hollow the jacket stands 20–37 mm off the body at z 1.10–1.19. That includes the shirt and the waistcoat, and it is the cloth bridging from the blades to the seat.
+- **Tried and not taken** (`t13c-p5a`): the hull's lumbar bridge `alpha_back` 0.55 → 0.30 and the CB suppression 0.22 → 0.30. It moved the lumbar gap by 5 mm at most, and lifted the skirt 3–4 mm further off the seat. The k5 draft stays.
+- Guards on p5c (over the made trousers):
+  - inside 0 by both rules, 3 vertices pushed;
+  - hinges 29: armhole 22 (16 at the underarm), side/front 3, hind 4;
+  - buttons clearance +1.07 mm;
+  - LOD0 61,074 tris.
+- **A fix on the way.** The made trousers came into the jacket run without their materials: the clay renders took their slots, and the `t13t_*` materials were then dropped at save. `load_made` now keeps them (fake user), and the spike and `suit_beauty.py` give them back their slots.
+
+### What is left in item 3's scope
+
+- **Side adjusters and the band's closure** (the extension and hook) are not built. In a three-piece suit the waistcoat covers the band, so they are left until the waistcoat (item 4) shows whether anything of the band is visible.
+- **LOD2 specks** (above) go to item 8: a single-sided outer sheet for LOD2, or decimation that keeps the shell's two layers apart.
+- **The final layering** (shirt, then trousers, then waistcoat, then jacket) is settled in items 4–5. The jacket is re-draped once more over the made waistcoat.
+
+## Item 4: the waistcoat
+
+Runs (base `20261014T205840Z-t15-a5`, over d5's made trousers via `--trousers-from`):
+
+- `20261015T023852Z-t13w-a8` is the final drape: clay frames, LODs.
+- `20261015T024450Z-t13w-a8det` is its determinism twin. X1, Xw and X2 hash the same: `495a1524`, `a52ad6fb`, `1361f041`.
+- `20261015T025525Z-t13w-a8b` is a8's drape made up again with the matte lining (`--from-run`). Its `beauty_*.png` are the Cycles frames.
+- `t13w-a1`…`a7` and `a9` were the way there (below).
+
+Gate pictures are in `data/build/t13/gate/phaseB/item4/`:
+
+- `beauty_sheet.png`: lofted | pattern.
+- `beauty_pattern_close_{v,point,wwelt,breast,wback,wside}.png`.
+- `grain_sheet.png` and `beauty_grain_close_{v,point}.png`.
+- `beauty_lod{1,2}_*.png`; the clay `pattern_*.png`; `pattern.png`.
+- `clay_back_neck.png` and `clay_profile_neck.png`: the open point below.
+
+### What I see (frames at 100 %, before the numbers)
+
+- **Front.** A single-breasted waistcoat with a V to 17 cm above the jacket's button. Four buttons are done up and the fifth left undone: its buttonhole shows as a corded slit on the left front, with no button showing. Below the last button the fronts cut away to two points with an inverted V between them, and the hem rises from the points to the side seams.
+  - Lower welts on both sides and a breast welt on the left.
+  - Pick stitching 6 mm in from the front edge, the V and the hem.
+  - A front dart from under the breast welt through the lower welt to just above the hem.
+  - The V's edge sits inside the lapels' line, over the shirt and tie.
+- **Back.** The back is lining (Cycles: a dark satin), cut from the block's back with a CB seam. It covers the trousers' band all round: the side and back hem are about 2.5 cm below the band top. The back neck is scooped and sits under the shirt collar, which shows above it all round.
+- **Grain.** The warp runs straight down each front, parallel to the button edge.
+- **Faults I can see:**
+  - **The back neck in profile** (`clay_profile_neck.png`). The back neck stands about 2 cm off the shirt collar behind the nape: the upper back bridges from the blades to the collar instead of lying in. The jacket's collar covers it once the jacket is on, but the jacket must go over it (item 8's layering). Tried: a closer neck point (`np_out` 1.0, run a9), which made no visible difference.
+  - **Small points at the shoulder seam's two ends**, a few millimetres each (`close_wback`, top corners): the 33° hinge in the numbers.
+  - **The lower welt bends slightly** where the dart runs under it. It is laid out with the dart closed, but the drape has a soft crease along the sewn dart.
+  - **The back lining follows the body closely** and shows the blades and spine. A real waistcoat back hangs a little freer; a back strap would also show. The strap is not built.
+
+### What was built
+
+- **`blender/character/suit_waistcoat_pattern.py`** (new): the waistcoat drafted from the jacket's block (`suit_pattern.draft`) with waistcoat options.
+  - Block options: chest ease 6 cm, waist 5 cm; the armhole 5 cm under the armpit; the shoulder ending 2.5 cm inside the acromion with no pad; the neck point 1.8 cm out.
+  - Suppression: CB 0.28, back/side 0.50, front dart 0.22, none at the side front.
+  - The block's side body and front become one front panel, so the waistcoat has the classic two pieces: a front with a fisheye dart, and a lining back.
+  - Points, V and buttons are placed from the trousers' band top (`band_top_z`) and the jacket's button.
+  - Notches: buttons, buttonholes, welts.
+  - Because the front and back come from the jacket's block, the jacket's `Placer` and `build_cloth` place and sew them unchanged.
+- **The drape** (`suit_spike.py --waistcoat`, `main_waistcoat`):
+  - `drape_xpbd` now takes a list of button pairs (`C["buttons"]`); the jacket keeps its one.
+  - Colliders: shirt, tie, and the made trousers.
+  - **Holds.** Stage 1 holds the shoulder seams and the hem where they were placed; stage 2 holds the shoulders only, lightly. Without holds, stage 1 slid the whole waistcoat 5 cm up (a2). Holding the back neck rippled it (a6, 83° at the CB) or pinched it (a5, 69°).
+  - **The draft's fixes.**
+    - The hem is cut 2.5 cm lower than the block's straight drop (`hang_comp_cm`): the sewn waistcoat hangs that much higher, measured in a3–a5.
+    - The back neck is scooped 3 cm at the CB: level with the neck point, it rode 4.6 cm up the shirt collar (a7).
+- **`blender/character/suit_waistcoat_detail.py`** (new): the made waistcoat.
+  - Shell: the fronts 2.0 mm thick (wool, canvas, lining), the back 0.8 mm of lining, with half-round turned edges everywhere.
+  - Welts: laid out with the dart closed (`_dart_warp`); patched straight over the dart, a1's welt broke in two at it.
+  - Buttons: four 15 mm buttons on the left front.
+  - Marks: seams and dart, pick stitching, the buttonholes' corded lips.
+  - Its own atlas (`t13w_*`), with a twill lining (rough 0.55) in place of the jacket's satin, which read as black chrome across the back.
+- `suit_beauty.py --garment waistcoat` gives the waistcoat's Cycles frames over the made trousers.
+
+### Numbers (a8 / a8b)
+
+| | value |
+|---|---|
+| draft | half chest 55.2 cm, half waist 41.4; side hem drafted at z 1.104, points 1.044, top button 1.329 m; CB 47.6 cm; side seam 28.6 / 28.6; shoulder 12.8 / 12.2 (back eased) |
+| where it hangs | hem z 1.065 (points) to 1.134 (back); the band top is at 1.159. Top button 1.33 |
+| seams after stage 1 | gap mean 0.51 mm, p95 1.73, max 4.15. The hem hold slows the sewing; it reaches the 40 extra frames allowed |
+| strain against the flat pattern | mean 1.6 %, p99 11.4 % |
+| inside the body, shirt, tie or trousers | 0; 0 vertices pushed |
+| left front over the right at the buttons | 3.8–4.9 mm |
+| buttons and welts over the drape | buttons min +1.32 mm, welts +0.38, 0 below |
+| hinges over 20° | 12: shoulder 6 (34° max, at the neck end), CB 4 (30°, the back neck), side 2 (23°, the underarm) |
+| texel density | shell 0.94 / 0.99 / 1.04 (p05 / median / p95); welts 0.94 / 0.98 / 1.14; LOD1 0.84 / 1.00 / 1.24; LOD2 0.78 / 0.99 / 1.29; atlas 0.28 mm/px |
+| tris | LOD0 **22,456** (shell 16,128, welts 3,024, buttons 3,304); LOD1 8,982; LOD2 3,368 |
+| determinism | a8 and a8det: X1, Xw and X2 hashes equal |
+| checks | `npm run build` ok; containment 73/73; provenance audit 0 errors, 0 warnings |
+
+### What is left in item 4's scope
+
+- The back neck's stand-off in profile, and the shoulder seam's end points.
+- The back strap and buckle (they show only with the jacket off).
+- The welt's slight bend at the dart.
+- The jacket re-draped over the made waistcoat (and the made trousers): it goes with item 5, once the shirt is made, so the jacket drapes over the final layers once.

@@ -36,6 +36,7 @@ DEFAULTS = {
                "sheen_tint": [0.8, 0.85, 1.0], "spec": 0.45},
     # roughness offsets per (object key, tag label): the pressed lapel facings and top collar
     "panel_rough": {("rever", "lapel"): -0.10, ("rever", "lapel_r"): -0.10, ("rever", "collar"): -0.05},
+    "name": "t13",               # material and image name prefix (the trousers bake "t13t")
 }
 
 
@@ -50,6 +51,34 @@ def set_uv(ob, UV, tag):
     lay.data.foreach_set("uv", flat.astype(np.float32).ravel())
     a = me.attributes.get("panel") or me.attributes.new("panel", "INT", "FACE")
     a.data.foreach_set("value", [int(t) for t in tag])
+
+
+def crisp_normals(ob, kind):
+    """Per-loop normals smoothed only within each face kind (0 outside, 1 inside, 2 turned
+    edge): the half-round edge meets the sheets in a crease, as a pressed edge does, instead
+    of shading round over the sheet's first row of faces (6 mm on the rever, 12 mm on the
+    shell). Needs smooth-shaded polygons."""
+    me = ob.data
+    kind = np.asarray(kind, int)
+    nl, npl = len(me.loops), len(me.polygons)
+    lv = np.zeros(nl, np.int32)
+    me.loops.foreach_get("vertex_index", lv)
+    fn = np.zeros(npl * 3, np.float32)
+    me.polygons.foreach_get("normal", fn)
+    ar = np.zeros(npl, np.float32)
+    me.polygons.foreach_get("area", ar)
+    lt = np.zeros(npl, np.int32)
+    me.polygons.foreach_get("loop_total", lt)
+    pol = np.repeat(np.arange(npl), lt)
+    w = (fn.reshape(-1, 3) * ar[:, None])[pol]
+    kl = kind[pol]
+    acc = np.zeros((int(kind.max()) + 1, len(me.vertices), 3))
+    for g in range(acc.shape[0]):
+        m = kl == g
+        np.add.at(acc[g], lv[m], w[m])
+    N = acc[kl, lv]
+    N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+    me.normals_split_custom_set([tuple(n) for n in N])
 
 
 def uv_stats(ob, side=1.0):
@@ -101,19 +130,20 @@ def bake(objs, marks, tags, suit_o, opts=None):
             for t, lst in d.items():
                 flat[(objs[k].name, t)] = lst
     st.draw_marks(H, layout, flat, side)
-    img = H.normal_image("t13_wool_normal", slope=o["slope"])
+    nm = o["name"]
+    img = H.normal_image(f"{nm}_wool_normal", slope=o["slope"])
     spec = suit_o["materials"]["wool"]
-    wool = st.material("t13_wool", **spec)
+    wool = st.material(f"{nm}_wool", **spec)
     st.attach_normal_map(wool, img, strength=1.0)
     wool["suit_atlas_side_m"] = side
     detail = st.detail_record(wool, side, st.WEAVE["wool"])
     S = dict(suit_o["surface"])
     S["panel_rough"] = {f"{objs[k].name}:{t}": v for (k, lab), v in o["panel_rough"].items() if k in objs
                         for t, l2 in tags.get(k, {}).items() if l2 == lab}
-    ai, oi, surf = st.surface_maps(H, layout, side, spec, S, "t13_wool")
+    ai, oi, surf = st.surface_maps(H, layout, side, spec, S, f"{nm}_wool")
     st.attach_surface(wool, ai, oi)
-    lining = st.material("t13_lining", **o["lining"])
-    button = st.material("t13_button", **suit_o["materials"]["button"])
+    lining = st.material(f"{nm}_lining", **o["lining"])
+    button = st.material(f"{nm}_button", **suit_o["materials"]["button"])
     for m in (wool, lining, button):
         m.use_fake_user = True                # the clay renders take the slots for a while
     _, gmax = st.twill_tile(slope=o["slope"])
