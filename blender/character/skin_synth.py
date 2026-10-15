@@ -203,6 +203,17 @@ def dist_to(P, seeds, where, n_seed=3000, chunk=4096):
     return out
 
 
+def soft(a, valid, sigma_px):
+    """Gaussian blur (FFT, periodic) of a over the valid texels only, renormalised by the blurred mask."""
+    n0, n1 = a.shape
+    f0, f1 = np.fft.fftfreq(n0)[:, None], np.fft.rfftfreq(n1)[None, :]
+    k = np.exp(-2.0 * (np.pi * sigma_px) ** 2 * (f0 ** 2 + f1 ** 2))
+    w = valid.astype(np.float32)
+    num = np.fft.irfft2(np.fft.rfft2(a * w) * k, s=a.shape)
+    den = np.fft.irfft2(np.fft.rfft2(w) * k, s=a.shape)
+    return np.where(valid, num / np.maximum(den, 1e-3), a).astype(np.float32)
+
+
 def lip_seam(m, lips, ao, width_m):
     """Closeness (0..1, a gauss of width_m) of each lip texel to where the lips
     meet. The inner lips pressed together bake to zero occlusion inside the lips
@@ -498,9 +509,18 @@ def synth_head(m, c, cl, cr):
         skin_w = (1 - lips) * (1 - 0.7 * under) * (1 - 0.8 * smoothstep(0.3, 0.8, R["beard"])) \
             * (1 - 0.8 * R["scalp"])
         if c["hb_patch"] > 0:
-            zh = np.clip(zscore(0.45 * m.hb_f1 + 0.30 * m.hb + 0.25 * m.lump), -2.5, 2.5)
+            zh = zscore(0.45 * m.hb_f1 + 0.30 * m.hb + 0.25 * m.lump)
+            if c["hb_soft_mm"] > 0:
+                # blotches, not speckle: the noise's ~2 mm octaves read as flecks (a rash, v2 skin18);
+                # soften below hb_soft_mm, then back to unit std (the 5-12 mm patches keep their swing)
+                zh = zscore(soft(zh, sk, c["hb_soft_mm"] * MM / max(float(np.median(m.tex_m[sk])), 1e-6)))
+            zh = np.clip(zh, -2.5, 2.5)
             wh = (c["hb_patch"] * pw + c["hb_patch_weak"] * (1 - pw)) * skin_w
-            alb *= np.clip(1 + (zh * wh)[..., None] * np.array(c["hb_patch_rgb"], np.float32), 0.5, 1.5)
+            # one-sided in colour: above the mean along the absorption axis (redder), below it paler
+            # (G and B up, R barely: blood-poor skin reads lighter and a little yellower, not green)
+            up = (np.maximum(zh, 0) * wh)[..., None] * np.array(c["hb_patch_rgb"], np.float32)
+            dn = (np.maximum(-zh, 0) * wh * c["hb_pale"])[..., None] * np.array(c["hb_pale_rgb"], np.float32)
+            alb *= np.clip(1 + up + dn, 0.5, 1.5)
         if c["mel_patch"] > 0:
             zm = np.clip(zscore(0.5 * m.mot_low + 0.3 * m.mel + 0.2 * m.hb_f2), -2.5, 2.5)
             wm = c["mel_patch"] * (0.6 + 0.4 * pw) * skin_w
@@ -747,6 +767,7 @@ DEFAULT_HEAD = {
     # T17 (checkpoint-3 §2.2): haemoglobin / melanin layers (amount at the strong regions, weak elsewhere;
     # the RGB swing per unit std), roughness structure, lip wetness, the specular cavity (ORM blue)
     "hb_patch": 0.0, "hb_patch_weak": 0.0, "hb_patch_rgb": (0.25, -0.45, -0.40),
+    "hb_pale": 1.0, "hb_pale_rgb": (-0.25, 0.45, 0.40), "hb_soft_mm": 0.0,
     "mel_patch": 0.0, "mel_patch_rgb": (-0.45, -0.60, -0.95),
     "rough_density": 0.0, "rough_pore": 0.0, "rough_patch2": 0.0,
     "lip_wet": 0.0, "lip_wet_mm": 1.6, "lip_wet_rough": 0.22, "lip_wet_coat": 0.0,

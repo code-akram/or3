@@ -66,7 +66,8 @@ DEFAULTS = {
             # lip wetness (skin_synth.DEFAULT_HEAD has them off).
             "skin": {"bake_px": 4096, "ao_samples": 16, "ao_down": 2, "margin_px": 16, "sss": 0.0,
                      "save_maps": True, "base": "#c4a996", "detail": True,
-                     "head": {"hb_patch": 0.16, "hb_patch_weak": 0.06, "mel_patch": 0.06,
+                     "head": {"hb_patch": 0.26, "hb_patch_weak": 0.08, "hb_soft_mm": 2.0,
+                              "hb_pale_rgb": (-0.12, 0.35, 0.30), "mel_patch": 0.06,
                               "rough_patch": 0.08, "rough_mid": 0.05,
                               "rough_density": 0.075, "rough_pore": 0.12, "rough_patch2": 0.09,
                               "rough_lips": 0.36, "lip_wet": 1.0, "lip_wet_rough": 0.22, "lip_wet_coat": 0.6},

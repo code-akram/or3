@@ -627,6 +627,7 @@ DETAIL = {
     "pore_region_gain": (1.0, 0.85, 0.6),
     # thickness: inside-AO distance (mm): t = D sqrt(AO) for a slab thinner than D
     "thick_dist_mm": 10.0, "thick_samples": 24,
+    "lid_mm": (5.0, 9.0),      # skin within 5 (fully) to 9 mm of an eye sphere: no transmission (the eyeball)
     "detail_px": {"head": 1024, "hands": 512},
 }
 
@@ -1102,6 +1103,13 @@ def build(b):
             texel = float(np.median(m.tex_m[m.valid])) if m.valid.any() else 1e-3
             ta, _ = _masked_blur(np.where(m.valid, ta, 1.0).astype(np.float64), m.valid, 0.0015 / max(texel, 1e-6))
             ta = np.where(m.valid, ta, 1.0).astype(np.float32)
+            if key == "head":
+                # the lids lie on the eyeball (another object, so not in the inside AO): no light reaches
+                # them from behind; within lid_mm of an eye sphere the part counts as thick
+                for c_, r_ in hc.get("eye_spheres") or ():
+                    dd = np.linalg.norm(m.P - np.asarray(c_, np.float32), axis=-1) - float(r_)
+                    lid = np.clip((DETAIL["lid_mm"][1] * MM_ - dd) / ((DETAIL["lid_mm"][1] - DETAIL["lid_mm"][0]) * MM_), 0, 1)
+                    ta = (ta + (1.0 - ta) * lid).astype(np.float32)
             details[key] = detail_map(syn, ta, key, DETAIL["detail_px"][key])
             tmm = DETAIL["thick_dist_mm"] * np.sqrt(np.clip(ta[m.valid & m.cover], 0, 1))
             thick_st[key] = {"p5_mm": round(float(np.percentile(tmm, 5)), 2),
