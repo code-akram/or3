@@ -10,7 +10,7 @@ The suit is being rebuilt as real tailoring: drafted panels, sewn and draped (nu
 | 3 | trousers, plus review point 5 (the jacket re-draped over them) | **done** |
 | 4 | waistcoat | **done** (the back neck fixed in item 5; open: the shoulder-seam end points) |
 | 5 | shirt (collar band and fall to the `suit_neck.py` frame), the jacket re-draped over the made layers | **done** |
-| 6 | rigging (weights, Dem Bones, correctives); re-measure the armpit/cuff hinges | |
+| 6 | rigging (weights, Dem Bones, correctives); re-measure the armpit/cuff hinges | **in progress** (posed sims, weights, fit and checks done; the drive needs a wider pose set; export) |
 | 7 | per-pose wrinkle maps | |
 | 8 | integration behind a config switch, with guards and caching by body hash | |
 
@@ -611,3 +611,85 @@ The jacket keeps k5's draft and options (`bench/m1/v4/suit_opts/jacket_q7.json`,
 - **Fall ends.** The collar fall's end tabs at the back sides.
 - **Tie.** The tie is the lofted one (cut at z ≈ 1.25).
 - **Cuff at the back.** The jacket's slanted sleeve hem covers the cuff at the back of the wrist.
+
+## Item 6: rigging (in progress)
+
+Run `20261015T061555Z-t13r-a2` (twin `…062046Z-t13r-a2det`: the posed drapes, the weights and the bone transforms are bit-identical). It is the jacket q7 rigged and simulated over the pose set, with the made shirt, waistcoat and trousers skinned under it.
+
+Gate sheet: `data/build/t13/gate/phaseB/item6/posed_sheet.png`. Each row is one pose (arm raise, knee up, walk, fist), shown three ways: plain skinning (LBS with the weights taken from the body), simulated, and LBS plus the Dem Bones jacket bones. The frames are clay; the cool grey is the under-layers.
+
+### What I see
+
+- **Knee up.**
+  - Plain skinning: the raised thigh cuts through the jacket's front skirt.
+  - Simulated: the skirt rides up over the thigh and drapes from it.
+  - The fit with the jacket bones lifts the skirt most of the way.
+- **Walk and fist (arms down).** The simulated jacket hangs cleanly: the front stays closed at the button, the collar sits, and the sleeves fall to the cuffs.
+- **Arm raise.**
+  - The simulated jacket opens and rides up with the arm, as a real one does.
+  - Plain skinning collapses the shoulder.
+  - The fit leaves the shirt and waistcoat showing through in patches. The error left there is large (below), so the sleeves and shoulders need their correctives.
+- **Rever.** Its roll edge is a little ragged in the posed frames. The rever follows its nearest body vertex, both through the skinning and through what the simulation adds on top of it. It needs its own weights, smoothed along the roll.
+
+### What was built
+
+- **`blender/character/suit_rig.py`** (new, numpy only):
+  - `transfer`: the body's weights at the nearest body point, barycentric, smoothed over the garment's mesh, top 4 kept.
+  - `skin`: linear blend skinning.
+  - `fit_bones`: Dem Bones (SSDR) with the body's bones fixed. It alternates weighted Kabsch transforms per bone and pose with per-vertex non-negative, sum-to-one weights over the vertex's body bones and its three nearest jacket bones.
+  - `drive`: ridge regression of each jacket bone's transform, relative to its parent and taken about its centre, on its drivers' local rotations.
+  - `correctives`: what is left, un-skinned to rest space, as `deform_correctives` stores it.
+- **`suit_spike.py --posed <jacket run>`** (`main_posed`):
+  - It loads the run's made layers (from its `*_from` records) and transfers the weights.
+  - Per pose:
+    1. `deform_poses.apply_pose`, with the lookdev rig's helper rules when the rig file is present.
+    2. The posed body and the skinned under-layer colliders form a distance field.
+    3. XPBD runs 40 frames from the skinned rest drape. Its rest lengths come from the flat pattern; the button pair and the neckline are held at their skinned positions.
+    4. `push_out`, then the checks.
+  - Then the Dem Bones fit, the drive, the correctives, `rig.npz`, and the frames.
+- **The eight jacket bones**, by design: skirt front and back, chest front, and the side body under the arm, each side.
+  - Placed from the data instead (k-means on the vertices worst served by plain skinning, run `t13r-a1`), six of the eight went to the sleeves, and none could be driven from the skeleton.
+  - The sleeves stay on the arm's bones and their correctives.
+
+### Numbers (a2)
+
+| pose | jacket inside (after push) | seam hinges > 20° (p99) | strain p99 | LBS vs sim RMS / p99 mm | LBS + jacket bones RMS / p99 mm | shirt collar above jacket collar at CB (mm, neck frame) | shirt cuffs / collar inside the body |
+|---|---|---|---|---|---|---|---|
+| rest | 0 | 53 (51°) | 17.0 % | – | – | 14.9 | 0 / 0 |
+| relaxed | 6 | 90 (118°) | 25.2 % | 9.3 / 19.9 | 7.4 / 19.8 | 17.0 | 0 / 0 |
+| arm raise | 0 | 65 (162°) | 27.7 % | 71.6 / 128.7 | 52.7 / 127.5 | 11.3 | 0 / 0 |
+| knee up | 8 | 102 (156°) | 29.5 % | 17.6 / 53.7 | 10.1 / 32.0 | 14.7 | 0 / 0 |
+| walk | 1 | 86 (163°) | 27.0 % | 19.8 / 57.5 | 11.5 / 27.3 | 14.7 | 0 / 0 |
+| high ready | 7 | 114 (129°) | 36.0 % | 20.6 / 46.1 | 15.9 / 38.6 | 16.5 | 10 / 0 |
+| twist | 5 | 90 (70°) | 26.5 % | 24.0 / 52.4 | 20.1 / 51.6 | 14.6 | 6 / 0 |
+| fist | 4 | 99 (154°) | 28.0 % | 11.9 / 25.7 | 9.5 / 22.1 | 14.7 | 0 / 0 |
+
+- **Collar and cuffs in the arms-up and fist poses.**
+  - The shirt collar stays 11–17 mm above the jacket collar at the CB in every pose. The rever never enters the neck, and the collar never enters the body.
+  - In the fist the cuffs are clear of the hand.
+  - In the high-ready and twist poses, 10 and 6 sampled vertices of the (skinned, not simulated) shirt cuffs are inside the wrist.
+- **Seam hinges in posed states.**
+  - Over 20°, they rise from 53 at rest to 65–114.
+  - The p99 of 154–163° in the arm raise, knee up, walk and fist poses means some seams fold right over. I have not yet looked at where.
+- **Drive** (about each bone's centre, leave-one-out over the 8 poses):
+  - It fits the training poses (front_r 2°/5 mm, side 5°/13 mm), but the leave-one-out error is close to each bone's whole range (front_l 10° of 8°; side_l 15° of 15°).
+  - skirt_front_l reads 117° in the knee-up pose. That is a fold the rigid fit cannot follow.
+  - With 8 poses, a linear map from the skeleton does not generalise. The pose set has to grow before the jacket bones can be driven.
+- **Correctives left after the fit** (max / p95 mm): relaxed 30 / 14, arm raise 155 / 126, knee up 68 / 21, walk 33 / 22, high ready 50 / 34, twist 59 / 48, fist 30 / 18.
+- **Cost:** 27–35 s of simulation per pose. The weights take 1.3 s and the fit 8 s.
+
+### What is left in item 6 (where the next agent picks up)
+
+1. **A wider pose set.**
+   - About 30 poses: thigh flexion and abduction ramps, arm abduction and flexion ramps at 30/60/90/120°, spine twist and bend ramps, plus the library poses.
+   - `--poses` takes the list; add ramp specs beside `POSED`.
+   - Refit, check the drive's leave-one-out error, and keep only drivable bones (a bone whose leave-one-out error stays near its range should become a corrective instead).
+2. **The arm raise.**
+   - Plain skinning is off by 72 mm RMS there. Check that the helper rules applied (deltoid helper, twist): `character.rig.json` beside the base blend. Then run the shoulder as correctives.
+   - Look at what sits behind the 154–163° hinge p99, by rendering the hinge positions.
+3. **The rever.** Give it its own weights (smoothed along the roll) instead of following the nearest body vertex.
+4. **Export.**
+   - The jacket bones go into the armature as children of pelvis or spine_03 at their centres, with `deform_runtime` rules from the drive coefficients.
+   - The correctives go out as shape keys with cone drivers. `deform_correctives` already does this for the lofted suit, and finds garments by name.
+   - This joins item 8's integration.
+5. **The shirt and waistcoat.** Simulate them per pose too (they are skinned only here), in the same order as at rest: shirt, then waistcoat, then jacket, each pressed under the next.

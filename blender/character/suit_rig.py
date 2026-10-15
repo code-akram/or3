@@ -122,11 +122,12 @@ def _nnls_sum1(A, y, iters=12):
     return w / s if s > 0 else w
 
 
-def fit_bones(X0, Ys, W0, Ms, nj=8, iters=4, k=4, seed=0, init_frac=0.35, groups=None):
+def fit_bones(X0, Ys, W0, Ms, nj=8, iters=4, k=4, seed=0, init_frac=0.35, groups=None, allow=None):
     """X0 (n, 3) rest; Ys (K, n, 3) simulated poses; W0 (n, B) body weights; Ms (K, B, 4, 4)
     body skinning matrices. Returns dict: W (n, B + nj) weights, T (K, nj, 4, 4) jacket-bone
     transforms, centres (nj, 3) rest centres, err {lbs, fit} RMS mm per pose.
-    groups: optional (n,) int labels (0..nj-1, -1 = none) to start from instead of k-means."""
+    groups: optional (n,) int labels (0..nj-1, -1 = none) to start from instead of k-means.
+    allow: optional (n,) bool, the vertices that may take a jacket bone (the rest stay on the body's)."""
     K, n, B = len(Ys), len(X0), W0.shape[1]
     lbs = np.stack([skin(X0, W0, Ms[i]) for i in range(K)])
     res = np.linalg.norm(Ys - lbs, axis=2)                 # (K, n)
@@ -160,7 +161,9 @@ def fit_bones(X0, Ys, W0, Ms, nj=8, iters=4, k=4, seed=0, init_frac=0.35, groups
         P = np.einsum("kbij,nj->knbi", Mall[:, :, :3, :], Xh)  # (K, n, B + nj, 3)
         Wn = np.zeros_like(W)
         for v in range(n):
-            cand = np.concatenate([np.nonzero(W0[v] > 0)[0], B + near[v]])
+            cand = np.nonzero(W0[v] > 0)[0]
+            if allow is None or allow[v]:
+                cand = np.concatenate([cand, B + near[v]])
             A = P[:, v, cand, :].transpose(0, 2, 1).reshape(-1, len(cand))
             y = Ys[:, v, :].reshape(-1)
             Wn[v, cand] = _nnls_sum1(A, y)
@@ -189,14 +192,19 @@ def rotvec(R):
     return v / (2 * np.sin(a)) * a
 
 
-def drive(T, parent_M, feats, lam=1e-2):
+def drive(T, parent_M, feats, lam=1e-2, centre=None):
     """T (K, 4, 4) a jacket bone's world transforms; parent_M (K, 4, 4) its parent body bone's
     skinning matrices; feats (K, F) the drivers' local rotations. Fits the bone's transform
     relative to its parent (rotation vector and translation, 6 numbers) as ridge-regressed
-    linear in feats. Returns (coef (F + 1, 6), rel (K, 6), pred (K, 6))."""
+    linear in feats. centre: the bone's rest centre; the transform is taken about it (about the
+    world origin a 10 deg swing of a skirt bone 1 m up reads as 170 mm of translation).
+    Returns (coef (F + 1, 6), rel (K, 6), pred (K, 6))."""
+    Cm, Ci = np.eye(4), np.eye(4)
+    if centre is not None:
+        Cm[:3, 3], Ci[:3, 3] = centre, -np.asarray(centre)
     rel = []
     for i in range(len(T)):
-        Rl = np.linalg.inv(parent_M[i]) @ T[i]
+        Rl = Ci @ np.linalg.inv(parent_M[i]) @ T[i] @ Cm
         rel.append(np.concatenate([rotvec(Rl[:3, :3]), Rl[:3, 3]]))
     rel = np.array(rel)
     F = np.concatenate([feats, np.ones((len(feats), 1))], 1)

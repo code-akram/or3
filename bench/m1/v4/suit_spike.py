@@ -3901,11 +3901,13 @@ POSED = {
     # the simulated pose set: the deform_poses library plus a fist (the cuff check)
     "poses": ["rest", "relaxed", "arm_raise", "knee_up", "walk", "high_ready", "twist", "fist"],
     "frames": 40,                # settle frames per pose (from the skinned rest drape)
-    "jacket_bones": 8,           # the bone plan's jacket bones
+    "jacket_bones": 8,           # the bone plan's jacket bones (main_posed: jnames)
     "fit_iters": 4,
     "rules": True,               # the lookdev rig's helper rules (twist, deltoid, hip) when posing
     "renders": ["arm_raise", "knee_up", "walk", "fist"],
     "push": {"clear_m": 0.0015, "smooth_iters": 3},
+    "waist_z": 1.03,             # the skirt bones below this, the chest and side ones above
+    "drive_lam": 0.1,
 }
 
 
@@ -4107,11 +4109,14 @@ def main_posed(O):
                                                        np.array(real.body_bvh.find_nearest(Vector(p))[1])) < 0))}
         sh = [s_ for s_ in under if s_[0] == "shirt"]
         if sh:
-            Psh = shells[[s_[0] for s_ in under].index("shirt")][0]
+            # in the neck's frame (the high_ready's turned torso moved the CB out of |x| < 1 cm)
+            Mn = np.linalg.inv(M[bones.index("neck_01")] if "neck_01" in bones else np.eye(4))
+            Psh = shells[[s_[0] for s_ in under].index("shirt")][0] @ Mn[:3, :3].T + Mn[:3, 3]
+            Vrp_n = Vrp @ Mn[:3, :3].T + Mn[:3, 3]
             ms = (np.abs(Psh[:, 0]) < 0.01) & (Psh[:, 1] > 0.0) & (Psh[:, 2] > 1.5)
-            mr = (np.abs(Vrp[:, 0]) < 0.01) & (Vrp[:, 1] > 0.0)
+            mr = (np.abs(Vrp_n[:, 0]) < 0.01) & (Vrp_n[:, 1] > 0.0)
             if ms.any() and mr.any():
-                rec["shirt_shows_cb_mm"] = round(float(Psh[ms, 2].max() - Vrp[mr, 2].max()) * 1000, 1)
+                rec["shirt_shows_cb_mm"] = round(float(Psh[ms, 2].max() - Vrp_n[mr, 2].max()) * 1000, 1)
         # the made cuffs and collar (rendered objects, skinned): inside the posed body
         for o_ in made:
             if o_.name.startswith("spike_shirt_") and o_.name.endswith(("cuffs", "collar")):
@@ -4133,24 +4138,50 @@ def main_posed(O):
     # Dem Bones: the jacket's bones over the pose set
     t = time.perf_counter()
     Ys, Ms, feats = np.array(Ys), np.array(Ms), np.array(feats)
-    fit = sr.fit_bones(X0, Ys, Wj, Ms, nj=O["jacket_bones"], iters=O["fit_iters"])
+    # the bone plan's eight, by design (drivable from the skeleton): the skirt front and back and
+    # the chest front each side, and the side body under each arm; the sleeves stay on the arm's
+    # bones (twist and helpers) and their correctives. Data-placed (k-means on the worst
+    # vertices) they went to the sleeves, six of eight, undrivable (t13r-a1)
+    pk = np.asarray(pnames)[pid]
+    kind_w = np.full(nw, "", dtype=object)
+    kind_w[wm] = pk
+    zw = float(O["waist_z"])
+    lab = np.full(nw, -1)
+    xl = X0[:, 0] >= 0
+    isf = np.isin(kind_w, ["front", "front_r"])
+    iss = np.isin(kind_w, ["side", "side_r"])
+    isb = np.isin(kind_w, ["back", "back_r"])
+    low = X0[:, 2] < zw
+    for j, m in enumerate([low & (isf | (iss & (X0[:, 1] < 0))) & xl, low & (isf | (iss & (X0[:, 1] < 0))) & ~xl,
+                           low & (isb | (iss & (X0[:, 1] >= 0))) & xl, low & (isb | (iss & (X0[:, 1] >= 0))) & ~xl,
+                           ~low & isf & xl, ~low & isf & ~xl, ~low & iss & xl, ~low & iss & ~xl]):
+        lab[m] = j
+    jnames = ["skirt_front_l", "skirt_front_r", "skirt_back_l", "skirt_back_r", "front_l", "front_r", "side_l", "side_r"]
+    allow = ~np.isin(kind_w, ["top_sleeve", "top_sleeve_r", "under_sleeve", "under_sleeve_r"])
+    fit = sr.fit_bones(X0, Ys, Wj, Ms, nj=O["jacket_bones"], iters=O["fit_iters"], groups=lab, allow=allow)
     tick("dem_bones", t)
     stats["dem_bones"] = {"err": fit["err"], "s": round(time.perf_counter() - t, 1),
                           "centres": [[round(float(c), 3) for c in c_] for c_ in fit["centres"]],
                           "verts_on_jacket_bones": int((fit["W"][:, len(bones):].sum(1) > 0.05).sum())}
     # the drive: each jacket bone relative to its parent (pelvis below the waist, spine_03 above)
     drv = {}
-    zw = 1.05
+    dcols = {n_: [3 * i_ + c for c in range(3)] for i_, n_ in enumerate([n_ for n_ in drivers if n_ in arm.pose.bones])}
     for j in range(O["jacket_bones"]):
-        par = "pelvis" if fit["centres"][j][2] < zw else "spine_03"
+        jn = jnames[j]
+        sd = jn[-1]
+        par = "pelvis" if jn.startswith("skirt") else "spine_03"
+        src = {"skirt": [f"thigh_{sd}", "pelvis"], "front": [f"upperarm_{sd}", f"clavicle_{sd}", "spine_03"],
+               "side": [f"upperarm_{sd}", f"clavicle_{sd}"]}[jn.split("_")[0]]
+        fc = feats[:, sum((dcols[n_] for n_ in src if n_ in dcols), [])]
         pi = bones.index(par) if par in bones else 0
-        coef, rel, pred = sr.drive(fit["T"][:, j], Ms[:, pi], feats)
+        cj = fit["centres"][j]
+        coef, rel, pred = sr.drive(fit["T"][:, j], Ms[:, pi], fc, lam=O["drive_lam"], centre=cj)
         loo = []
         for i in range(len(Ys)):
             m = np.arange(len(Ys)) != i
-            c_, _, _ = sr.drive(fit["T"][m, j], Ms[m, pi], feats[m])
-            loo.append(np.concatenate([feats[i], [1.0]]) @ c_ - rel[i])
-        drv[f"jacket_{j}"] = {"parent": par, "fit_rot_deg": round(float(np.degrees(np.abs(pred - rel)[:, :3].max())), 2),
+            c_, _, _ = sr.drive(fit["T"][m, j], Ms[m, pi], fc[m], lam=O["drive_lam"], centre=cj)
+            loo.append(np.concatenate([fc[i], [1.0]]) @ c_ - rel[i])
+        drv[jn] = {"parent": par, "drivers": src, "coef": np.round(coef, 5).tolist(), "fit_rot_deg": round(float(np.degrees(np.abs(pred - rel)[:, :3].max())), 2),
                               "fit_move_mm": round(float(np.abs(pred - rel)[:, 3:].max()) * 1000, 2),
                               "loo_rot_deg": round(float(np.degrees(np.abs(np.array(loo))[:, :3].max())), 1),
                               "loo_move_mm": round(float(np.abs(np.array(loo))[:, 3:].max()) * 1000, 1),
