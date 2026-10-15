@@ -212,6 +212,10 @@ async function run(backend) {
     const page = await browser.newPage({ viewport: { width: 256, height: 256 } });
     page.on('console', (m) => log.push(`${m.type()}: ${m.text()}`.slice(0, 300)));
     page.on('pageerror', (e) => log.push(`pageerror: ${e.message}`.slice(0, 300)));
+    // name the URL behind a bare "Failed to load resource" console error
+    page.on('response', (r) => {
+      if (r.status() >= 400) log.push(`http ${r.status()}: ${r.url().replace(/^http:\/\/127\.0\.0\.1:\d+/, '')}`.slice(0, 300));
+    });
     page.setDefaultTimeout(timeoutS * 1000);
     const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1' });
     if (backend === 'webgl2') q.set('gl', '1');

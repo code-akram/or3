@@ -35,6 +35,9 @@ try {
     if (m.type() === 'error') errors.push(`console: ${m.text()}`.slice(0, 300));
   });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`.slice(0, 300)));
+  page.on('response', (r) => {
+    if (r.status() >= 400) errors.push(`http ${r.status()}: ${r.url().replace(/^http:\/\/127\.0\.0\.1:\d+/, '')}`.slice(0, 300));
+  });
   page.on('framenavigated', (f) => {
     if (f === page.mainFrame()) pages.push(f.url().replace(/^http:\/\/127\.0\.0\.1:\d+/, ''));
   });
