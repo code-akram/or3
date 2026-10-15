@@ -106,7 +106,8 @@ def guards(rec, h, limits=LIMITS):
         worst = {}
         for p, r in st.get("poses", {}).items():
             for tag in ("inside_sim", "inside_rt"):
-                for k, v in r.get(tag, {}).items():
+                src = r.get("inside_rt_visible", r.get(tag, {})) if tag == "inside_rt" else r.get(tag, {})
+                for k, v in src.items():
                     worst[f"{tag}.{k}"] = max(worst.get(f"{tag}.{k}", 0), v)
         rep["posed"] = {"inside_max": worst}
         if any(v > limits["inside"] for v in worst.values()):
@@ -159,13 +160,98 @@ def join(objs, name):
     return ob
 
 
-def swap(b, part_fmt, lofted, rec, arm):
+def load_lod(run, garment, k):
+    """The garment run's collapse-decimated LOD k (spike_<garment>_lod<k>), or None."""
+    import bpy
+    nm = f"spike_{garment}_lod{k}"
+    with bpy.data.libraries.load(os.path.join(run, "spike.blend"), link=False) as (src, dst):
+        dst.objects = [n for n in src.objects if n == nm]
+    o = dst.objects[0] if dst.objects else None
+    if o is not None:
+        bpy.context.scene.collection.objects.link(o)
+    return o
+
+
+def lod_from(src, lod):
+    """Skin the decimated `lod` from the skinned full-resolution `src` (one joined object): each LOD
+    vertex goes to its nearest point on the source's rest surface (the LODs were cut before the
+    layers were pressed under the jacket) and takes that point's barycentric weights and shape-key
+    deltas."""
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+    me = src.data
+    me.calc_loop_triangles()
+    nv = len(me.vertices)
+    V = np.empty(nv * 3)
+    me.vertices.foreach_get("co", V)
+    V = V.reshape(-1, 3)
+    T = np.empty(len(me.loop_triangles) * 3, np.int64)
+    me.loop_triangles.foreach_get("vertices", T)
+    T = T.reshape(-1, 3)
+    bvh = BVHTree.FromPolygons([tuple(map(float, v)) for v in V], [tuple(map(int, t)) for t in T])
+    gi = {g.index: g.name for g in src.vertex_groups}
+    Wt = np.zeros((nv, len(gi)))
+    for v in me.vertices:
+        for ge in v.groups:
+            Wt[v.index, ge.group] = ge.weight
+    keys = []
+    if me.shape_keys:
+        for kb in me.shape_keys.key_blocks[1:]:
+            d = np.empty(nv * 3)
+            kb.data.foreach_get("co", d)
+            keys.append((kb.name, d.reshape(-1, 3) - V))
+    lm = lod.data
+    P = np.empty(len(lm.vertices) * 3)
+    lm.vertices.foreach_get("co", P)
+    P = P.reshape(-1, 3)
+    Q = np.zeros_like(P)
+    WL = np.zeros((len(P), Wt.shape[1]))
+    DL = [np.zeros_like(P) for _ in keys]
+    for i, p in enumerate(P):
+        loc, _, fi, _ = bvh.find_nearest(Vector(p))
+        a, b_, c = V[T[fi]]
+        q = np.array(loc)
+        v0, v1, v2 = b_ - a, c - a, q - a
+        d00, d01, d11 = v0 @ v0, v0 @ v1, v1 @ v1
+        d20, d21 = v2 @ v0, v2 @ v1
+        den = d00 * d11 - d01 * d01
+        if abs(den) < 1e-18:
+            bc = np.array([1.0, 0.0, 0.0])
+        else:
+            y = (d11 * d20 - d01 * d21) / den
+            z = (d00 * d21 - d01 * d20) / den
+            bc = np.clip(np.array([1 - y - z, y, z]), 0, 1)
+            bc /= bc.sum()
+        Q[i] = q
+        WL[i] = bc @ Wt[T[fi]]
+        for j, (_, D) in enumerate(keys):
+            DL[j][i] = bc @ D[T[fi]]
+    lm.vertices.foreach_set("co", Q.ravel())
+    lm.update()
+    lod.vertex_groups.clear()
+    for j in range(Wt.shape[1]):
+        g = lod.vertex_groups.new(name=gi[j])
+        for i in np.nonzero(WL[:, j] > 1e-4)[0]:
+            g.add([int(i)], float(WL[i, j]), "REPLACE")
+    if lm.shape_keys:
+        lod.shape_key_clear()
+    if keys:
+        lod.shape_key_add(name="Basis")
+        for (nm, _), D in zip(keys, DL):
+            kb = lod.shape_key_add(name=nm, from_mix=False)
+            kb.data.foreach_set("co", (Q + D).astype(np.float32).ravel())
+    return {"verts": len(P), "keys": len(keys)}
+
+
+def swap(b, part_fmt, lofted, rec, arm, lods=None):
     """Replace the lofted garments (dict key -> object, 'buttons' a list) with the made ones from the
-    cache record. Returns {key: made object}."""
+    cache record; lods {garment: k} skins each garment's LOD k from its full-resolution part instead
+    (lod_from). Returns ({key: made object}, info)."""
     import bpy
     from . import suit_ops
     parts = load_parts(rec["runs"]["posed"])
     made = {}
+    info = {}
     stray = set()
     for g, objs in parts.items():
         for o in objs:                  # the rig run's armature modifiers (its own armature) go
@@ -185,6 +271,26 @@ def swap(b, part_fmt, lofted, rec, arm):
                     c.objects.link(ob)
             if ob.name in bpy.context.scene.collection.objects and bpy.context.scene.collection not in like.users_collection:
                 bpy.context.scene.collection.objects.unlink(ob)
+        k = (lods or {}).get(g, 0)
+        if k:
+            lo = load_lod(rec["runs"][g], g, k)
+            if lo is not None:
+                info[g] = {"lod": k, **lod_from(ob, lo)}
+                lo.parent = ob.parent
+                lo.matrix_parent_inverse = ob.matrix_parent_inverse.copy()
+                for c in ob.users_collection:
+                    if lo.name not in c.objects:
+                        c.objects.link(lo)
+                for c in list(lo.users_collection):
+                    if c not in ob.users_collection:
+                        c.objects.unlink(lo)
+                me0 = ob.data
+                bpy.data.objects.remove(ob, do_unlink=True)
+                bpy.data.meshes.remove(me0)
+                ob = lo
+                ob.name = ob.data.name = part_fmt.format(g) + "_made"
+        info.setdefault(g, {"lod": 0})
+        info[g]["tris"] = sum(len(p.vertices) - 2 for p in ob.data.polygons)
         mod = ob.modifiers.new("Armature", "ARMATURE")
         mod.object = arm
         ob["made_suit"] = 1
@@ -201,10 +307,26 @@ def swap(b, part_fmt, lofted, rec, arm):
         ob.name = ob.data.name = part_fmt.format(g)
         if hasattr(b, "export_objs"):
             b.export_objs.append(ob)
+    copy_wrinkles(rec["runs"]["posed"], getattr(b, "out_dir", None))
     for a in stray:                     # appended along with the parts as a modifier target
         if a.name in bpy.data.objects and not a.users_collection:
             bpy.data.objects.remove(a, do_unlink=True)
-    return made
+    return made, info
+
+
+def copy_wrinkles(posed_run, out_dir):
+    """The rig run's wrinkle maps (suit_wrinkle.json and its layers) next to the GLB (cloth.ts)."""
+    import shutil
+    src = os.path.join(posed_run, "suit_wrinkle.json")
+    if not out_dir or not os.path.exists(src):
+        return []
+    os.makedirs(out_dir, exist_ok=True)
+    with open(src) as f:
+        j = json.load(f)
+    files = ["suit_wrinkle.json"] + [x for fs in j["materials"].values() for x in fs]
+    for x in files:
+        shutil.copyfile(os.path.join(posed_run, x), os.path.join(out_dir, x))
+    return files
 
 
 def rules(posed_run):

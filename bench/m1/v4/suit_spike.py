@@ -3928,11 +3928,22 @@ POSED = {
     # cuffs (both modelled, skinned), the tuck below the trousers' band (pulled to its skinned
     # place a share per substep); the waistcoat's shoulder seams
     "hold": {"shirt_k": 40.0, "tuck_pull": 0.2, "waistcoat_k": 20.0, "jacket_neck_k": None},
-    "lam": 1e-4,                 # ridge of the corrective fit
+    # ridge of the corrective fit: 1e-4 left the 34 cones over 35 poses overfitted (leave-one-out
+    # p90 118 mm on the jacket, 798 mm for a cone only one pose drives); 0.03 keeps the training fit
+    # under 14 mm and brings the leave-one-out p90 to 24 mm (scan over 1e-4..0.3, c1)
+    "lam": 0.03,
+    "cone_masks": False,         # the spatial masks cost the fit 7-10 mm (high ready 20 mm) for little
+    # the layer order at runtime: each layer's fit misses by several mm, more than the gaps between
+    # layers, so the under-layers' covered vertices (hidden under the next layer out at rest) sink
+    # along their normal, feathered to nothing over margin_m from the visible ones (deform_rig.tuck)
+    "tuck": {"on": True, "reach_m": 0.05, "margin_m": 0.03, "depth_m": {"shirt": 0.012, "waistcoat": 0.007}},
     "gain_fit": True,            # refit the skirt bones' follow gains to the simulated skirt
     "dem_bones_diag": True,      # T13b's eight free jacket bones: refit and leave-one-out on this set
     "jacket_bones": 8, "fit_iters": 4, "waist_z": 1.03, "drive_lam": 0.1,
     "render_res": 420,
+    "wrinkle": True,             # item 7: per-pose wrinkle maps (suit_wrinkle) from the sim vs the runtime
+    "wrinkle_px": {"t13_wool": 1024, "default": 512},
+    "wrinkle_lam": 0.02,
     "lbs_renders": ["relaxed", "arm_raise", "knee_up", "walk", "fist"],
     "hinge_deg": 150.0,
 }
@@ -4281,6 +4292,49 @@ def rig_copy(nm):
     return o
 
 
+def tuck_layers(G, T):
+    """Sink each under-layer's covered vertices (deform_rig.tuck on the drapes): covered = a ray along
+    the vertex normal, either way, meets a layer further out within reach_m. The sink is depth_m
+    along the side the cover is on, feathered to 0 over margin_m from the nearest visible vertex.
+    Changes G[key]["X0"] in place; returns ({key: feather f}, stats)."""
+    from mathutils import Vector
+    from mathutils.bvhtree import BVHTree
+    from mathutils.kdtree import KDTree
+    from character import suit_wrinkle as swk
+    outers = {"shirt": ("waistcoat", "jacket"), "waistcoat": ("jacket",)}
+    F, st = {}, {}
+    for key, outs in outers.items():
+        X = G[key]["X0"]
+        V = np.concatenate([G[o]["X0"] for o in outs])
+        off = np.cumsum([0] + [len(G[o]["X0"]) for o in outs])
+        Tt = np.concatenate([G[o]["Tw"] + off[i] for i, o in enumerate(outs)])
+        bvh = BVHTree.FromPolygons([tuple(map(float, v)) for v in V], [tuple(map(int, t)) for t in Tt])
+        N = swk.vertex_normals(X, G[key]["Tw"])
+        cov = np.zeros(len(X), bool)
+        sgn = np.zeros(len(X))
+        for i, (p, n) in enumerate(zip(X, N)):
+            for sg in (1.0, -1.0):
+                d = Vector(n * sg)
+                if bvh.ray_cast(Vector(p) + d * 1e-4, d, T["reach_m"])[0] is not None:
+                    cov[i], sgn[i] = True, sg
+                    break
+        vis = np.nonzero(~cov)[0]
+        f = np.zeros(len(X))
+        if len(vis) and cov.any():
+            kd = KDTree(len(vis))
+            for j, i in enumerate(vis):
+                kd.insert(X[i], j)
+            kd.balance()
+            dv = np.array([kd.find(X[i])[2] if cov[i] else 0.0 for i in range(len(X))])
+            t = np.clip((dv - 0.4 * T["margin_m"]) / (0.6 * T["margin_m"]), 0, 1)
+            f = t * t * (3 - 2 * t) * cov
+        X -= (N * sgn[:, None]) * (f * T["depth_m"][key])[:, None]
+        F[key] = f
+        st[key] = {"covered": int(cov.sum()), "sunk_full": int((f > 0.99).sum()), "verts": len(X),
+                   "depth_mm": T["depth_m"][key] * 1000}
+    return F, st
+
+
 def main_posed(O):
     """T13 item 6: the made suit (the jacket run A.posed and the layers it was draped over) rigged:
     the shipped weight pipeline on every layer; per pose, the shirt, the waistcoat and the jacket
@@ -4603,7 +4657,7 @@ def main_posed(O):
         Gx = G[key]
         X0 = Gx["X0"]
         D = np.stack([sr.unskin(Gx["W"], Ms[k], Y[key][k], X0) for k in range(K)])
-        mask = cone_masks(cones, X0, arm)
+        mask = cone_masks(cones, X0, arm) if O["cone_masks"] else np.ones((len(X0), len(cones)))
         S[key] = sr.fit_shapes(D, Acone, mask, lam=O["lam"])
         Dres[key] = D
         rt_Y[key] = np.stack([sr.skin(X0 + sr.apply_shapes(S[key], Acone[k]), Gx["W"], Ms[k]) for k in range(K)])
@@ -4620,6 +4674,14 @@ def main_posed(O):
         loo_rms[key] = lo_
     stats["correctives_s"] = round(time.perf_counter() - t, 1)
     print(f"[spike] correctives: {stats['correctives_s']} s", flush=True)
+    fit_Y = {k_: v_ for k_, v_ in rt_Y.items()}      # the fit as fitted (before the tuck)
+    tuckf = {}
+    if O["tuck"]["on"]:
+        tuckf, stats["tuck"] = tuck_layers(G, O["tuck"])
+        for key in tuckf:
+            Gx = G[key]
+            rt_Y[key] = np.stack([sr.skin(Gx["X0"] + sr.apply_shapes(S[key], Acone[k]), Gx["W"], Ms[k]) for k in range(K)])
+        print(f"[spike] tuck: {stats['tuck']}", flush=True)
     # --- the runtime per pose: fit, penetration, collar, shoulder line, hinges
     Bn = arm.data.bones
     shoulders = [np.array(Bn[f"upperarm_{s}"].head_local) for s in ("l", "r")]
@@ -4637,7 +4699,7 @@ def main_posed(O):
         tcol = [(Mt[nm], tris_of(p["F"])) for nm, p in tparts.items() if nm.endswith("collider")]
         r = {}
         for key in ("shirt", "waistcoat", "jacket"):
-            e = np.linalg.norm(rt_Y[key][k] - Y[key][k], axis=1)
+            e = np.linalg.norm(fit_Y[key][k] - Y[key][k], axis=1)
             lbs = np.linalg.norm(sr.skin(G[key]["X0"], G[key]["W"], Ms[k]) - Y[key][k], axis=1)
             r[key] = {"lbs_rms_mm": round(float(np.sqrt((lbs ** 2).mean())) * 1000, 1),
                       "fit_rms_mm": round(float(np.sqrt((e ** 2).mean())) * 1000, 1),
@@ -4653,6 +4715,12 @@ def main_posed(O):
             Lw_ = Layers(cop, tris, tcol + [sh_c])
             r[f"inside_{tag}"] = {"jacket": inside_count(src["jacket"][k], Lj),
                                   "waistcoat": inside_count(src["waistcoat"][k], Lw_)}
+            if tag == "rt" and "waistcoat" in tuckf:
+                # the waistcoat where it shows (not sunk): its covered part goes under the shirt and
+                # the body on purpose, hidden under the jacket (and the body there hidden by hide_body)
+                vis = tuckf["waistcoat"] < 0.5
+                r["inside_rt_visible"] = {"jacket": r["inside_rt"]["jacket"],
+                                          "waistcoat": inside_count(src["waistcoat"][k][vis], Lw_)}
             # the collar: the shirt collar's top above the rever's at the CB, in the neck's frame
             Mn = np.linalg.inv(Ms[k][jn.index("neck_01")])
             pc = parts.get("spike_shirt_collar")
@@ -4689,6 +4757,10 @@ def main_posed(O):
     # LBS + morphs reproduce the drape-level runtime; the trousers skinned only
     t = time.perf_counter()
     exp = {}
+    from character import suit_wrinkle as swk
+    Gw = swk.group_weights(cones, Acone)
+    wr_acc = {}                       # material -> ([UVc], [vals]) over every part using it
+    wr_stats = {}
     for nm, p in parts.items():
         if nm.endswith("collider"):
             continue
@@ -4697,11 +4769,15 @@ def main_posed(O):
         Wm = p["W"] if "W" in p else drig.prune(sr.wrap_weights(p["bind"], Gx["W"], Gx["Tw"]), 4)
         V0 = p["V0"]
         D = np.stack([sr.unskin(Wm, Ms[k], sr.wrap_apply(p["bind"], Y[key][k], Gx["Tw"]), V0) for k in range(K)])
-        Sm = sr.fit_shapes(D, Acone, cone_masks(cones, V0, arm), lam=O["lam"])
-        dev = [float(np.linalg.norm(sr.skin(V0 + sr.apply_shapes(Sm, Acone[k]), Wm, Ms[k])
+        Sm = sr.fit_shapes(D, Acone, cone_masks(cones, V0, arm) if O["cone_masks"] else np.ones((len(V0), len(cones))),
+                           lam=O["lam"])
+        # the base: the part on its (tucked) rest drape; the shapes as fitted on the untucked part
+        Vb = sr.wrap_apply(p["bind"], Gx["X0"], Gx["Tw"]) if key in tuckf else V0
+        dev = [float(np.linalg.norm(sr.skin(Vb + sr.apply_shapes(Sm, Acone[k]), Wm, Ms[k])
                                     - sr.wrap_apply(p["bind"], rt_Y[key][k], Gx["Tw"]), axis=1).max()) for k in range(K)]
         o_ = rig_copy(nm)
         drig.write(o_, Wm, names_all)
+        o_.data.vertices.foreach_set("co", Vb.astype(np.float32).ravel())
         o_.shape_key_add(name="Basis")
         kept_ = 0
         for c, Sc in zip(cones, Sm):
@@ -4709,10 +4785,42 @@ def main_posed(O):
             if mx < 2e-4:
                 continue
             kb = o_.shape_key_add(name=c["name"], from_mix=False)
-            kb.data.foreach_set("co", (V0 + Sc).astype(np.float32).ravel())
+            kb.data.foreach_set("co", (Vb + Sc).astype(np.float32).ravel())
             kept_ += 1
         o_.hide_render = True
         exp[nm] = {"verts": len(V0), "shape_keys": kept_, "max_dev_vs_drape_runtime_mm": round(max(dev) * 1000, 2)}
+        if O["wrinkle"] and o_.data.uv_layers.active is not None:
+            # the fold the shapes average away: sim normal minus runtime normal, in rest space
+            me_ = o_.data
+            me_.calc_loop_triangles()
+            nt_ = len(me_.loop_triangles)
+            lt_ = np.empty(nt_ * 3, np.int64)
+            vt_ = np.empty(nt_ * 3, np.int64)
+            mi_ = np.empty(nt_, np.int64)
+            me_.loop_triangles.foreach_get("loops", lt_)
+            me_.loop_triangles.foreach_get("vertices", vt_)
+            me_.loop_triangles.foreach_get("material_index", mi_)
+            uv_ = np.empty(len(me_.loops) * 2)
+            me_.uv_layers.active.data.foreach_get("uv", uv_)
+            UVc_ = uv_.reshape(-1, 2)[lt_].reshape(-1, 3, 2)
+            Ft_ = vt_.reshape(-1, 3)
+            Ysim_ = [sr.wrap_apply(p["bind"], Y[key][k], Gx["Tw"]) for k in range(K)]
+            Yrt_ = [sr.skin(V0 + sr.apply_shapes(Sm, Acone[k]), Wm, Ms[k]) for k in range(K)]
+            dN_ = swk.part_deltas(V0, Ft_, Wm, [Ms[k] for k in range(K)], Ysim_, Yrt_)
+            G3_ = swk.fit_groups(dN_, Gw, swk.side_mix(V0[:, 0]), O["wrinkle_lam"])
+            vals_ = swk.corner_values(G3_, V0, Ft_, UVc_)
+            mag_ = np.linalg.norm(dN_, axis=2)
+            wr_stats[nm] = {"dN_p95": round(float(np.percentile(mag_, 95)), 3),
+                            "dN_p99": round(float(np.percentile(mag_, 99)), 3),
+                            "G_p99": round(float(np.percentile(np.abs(vals_), 99)), 3),
+                            "clipped_frac": round(float((np.abs(vals_) > swk.RANGE).mean()), 4)}
+            for j_ in np.unique(mi_):
+                mt_ = me_.materials[int(j_)] if j_ < len(me_.materials) else None
+                if mt_ is None:
+                    continue
+                acc_ = wr_acc.setdefault(mt_.name, ([], []))
+                acc_[0].append(UVc_[mi_ == j_])
+                acc_[1].append(vals_[mi_ == j_])
     for nm, p in tparts.items():
         if nm.endswith("collider"):
             continue
@@ -4720,6 +4828,22 @@ def main_posed(O):
         drig.write(o_, p["W"], names_all)
         o_.hide_render = True
         exp[nm] = {"verts": len(p["V0"]), "shape_keys": 0}
+    if wr_acc:
+        side_ = {"range": swk.RANGE, "groups": list(swk.GROUPS), "materials": {}, "poses": list(poses)}
+        for mt, (uvs_, vs_) in sorted(wr_acc.items()):
+            px_ = O["wrinkle_px"].get(mt, O["wrinkle_px"]["default"])
+            layers_, cov_ = swk.bake_material(np.concatenate(uvs_), np.concatenate(vs_), px_)
+            files_ = []
+            for i_, L_ in enumerate(layers_):
+                fn_ = f"suit_wrinkle_{mt}_{i_}.png"
+                swk.write_png(os.path.join(A.out_dir, fn_), L_)
+                files_.append(fn_)
+            side_["materials"][mt] = files_
+            wr_stats[mt] = {"px": px_, "coverage": round(cov_, 3)}
+        with open(os.path.join(A.out_dir, "suit_wrinkle.json"), "w") as f:
+            json.dump(side_, f, indent=1)
+        stats["wrinkle"] = wr_stats
+        print(f"[spike] wrinkle: {wr_stats}", flush=True)
     stats["export"] = {"parts": exp, "s": round(time.perf_counter() - t, 1)}
     print(f"[spike] export: {stats['export']}", flush=True)
     with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:

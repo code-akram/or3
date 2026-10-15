@@ -14,8 +14,9 @@ normal delta and blended back by pose in the engine:
   vertex takes its own side's (the centre line blends over +-4 cm);
 * per vertex: dN_k(v) ~ sum_j a_kj(v) G_j(v), least squares over the pose set (ridge), so each
   group's map holds the fold that group's poses share;
-* the G_j are rasterised into the part's atlas (pad-dilated), two groups per RGBA texture
-  (RG, BA), encoded 0.5 + dN / (2 * RANGE).
+* the G_j are projected per triangle on its own tangent frame (t along +u, b along +v; mirrored
+  islands keep their handedness), rasterised into the material's atlas (pad-dilated) and stored as
+  three RGB layers of eight channels, encoded 0.5 + dN / (2 * RANGE).
 
 The engine (web/src/character/cloth.ts) adds sum_j w_j G_j to the tangent-space normal's XY
 before the normal map's own detail, w_j from the same cone weights (DeformRuntime) and the
@@ -221,15 +222,16 @@ def corner_values(G3, V0, Ft, UVc):
 
 
 def bake_material(UVc, vals, px, pad=6):
-    """Per-corner values (m, 3, 8) of every triangle using one material -> two RGBA uint8 maps
-    (groups 0 / 1 and 2 / 3), PNG row order (row 0 = v 1), and the island coverage."""
+    """Per-corner values (m, 3, 8) of every triangle using one material -> three RGB uint8 layers
+    (the eight channels g0.x g0.y g1.x | g1.y g2.x g2.y | g3.x g3.y -, cloth.ts loads them as one
+    array texture), PNG row order (row 0 = v 1), and the island coverage."""
     img, cov = raster(UVc, None, vals, px, pad)
     img = img[::-1]
     cov = cov[::-1]
-    maps = []
-    for i in range(0, img.shape[2], 4):
-        q = img[..., i:i + 4]
-        if q.shape[2] < 4:
-            q = np.concatenate([q, np.zeros(q.shape[:2] + (4 - q.shape[2],), q.dtype)], 2)
-        maps.append(np.clip(np.round((0.5 + q / (2 * RANGE)) * 255), 0, 255).astype(np.uint8))
-    return maps, float(cov.mean())
+    c = img.shape[2]
+    pad_c = (-c) % 3
+    if pad_c:
+        img = np.concatenate([img, np.zeros(img.shape[:2] + (pad_c,), img.dtype)], 2)
+    layers = [np.clip(np.round((0.5 + img[..., i:i + 3] / (2 * RANGE)) * 255), 0, 255).astype(np.uint8)
+              for i in range(0, img.shape[2], 3)]
+    return layers, float(cov.mean())

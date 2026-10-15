@@ -521,6 +521,14 @@ DEFAULTS = {
     },
     "suit": {
         "clothes": ["toigo_male_suit_tie_and_jacket.mhclo", "shoes04.mhclo"],
+        # T13 item 8: the made suit (pattern-drafted, sewn, draped, rigged; suit_made.py) in place of
+        # the lofted one, looked up by the body hash in data/build/suit_cache (bench/m1/v4/
+        # suit_made_cache.py); kept lofted when the record is missing or a guard fails (notes
+        # suit.made). force: swap even with failing guards (A/B only). lod: per garment the made
+        # run's LOD skinned from the full mesh (suit_made.lod_from); the shirt and the waistcoat
+        # under the jacket take their LOD1 (the character's LOD0 budget)
+        "made": {"enabled": False, "cache_dir": None, "force": False,
+                 "lod": {"jacket": 0, "shirt": 1, "waistcoat": 1, "trousers": 1}},
     },
     "rig": {
         "builtin": "game_engine",

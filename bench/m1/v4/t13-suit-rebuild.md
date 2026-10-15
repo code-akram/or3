@@ -693,3 +693,172 @@ Gate sheet: `data/build/t13/gate/phaseB/item6/posed_sheet.png`. Each row is one 
    - The correctives go out as shape keys with cone drivers. `deform_correctives` already does this for the lofted suit, and finds garments by name.
    - This joins item 8's integration.
 5. **The shirt and waistcoat.** Simulate them per pose too (they are skinned only here), in the same order as at rest: shirt, then waistcoat, then jacket, each pressed under the next.
+
+## Item 6, continued (T13c): 35 poses, every layer simulated, correctives, layer tuck
+
+Runs:
+- sims `20261015T064307Z-t13r-c1`: 35 poses; shirt, then waistcoat, then jacket, each over the posed body and the layers under it;
+- refit `20261015T073655Z-t13r-c1f`: `--posed-cache c1` with λ 0.03, no cone masks, the layer tuck, the wrinkle bake and the export;
+- determinism twin `20261015T073153Z-t13r-c1det`: the same sims from scratch, compared in pickup item 4.
+
+Gate sheets, in `data/build/t13/gate/phaseB/item6c/`:
+- `posed_sheet_{0..5}.png`: rows are the poses, in the order listed in `posed_sheet.txt`; columns are sim front, sim ¾, runtime front, runtime ¾.
+- `lbs_sheet_0.png`: relaxed, arm raise, knee up, walk and fist, each shown as sim | runtime | plain LBS.
+
+### What I see (frames at 100 %, before the numbers)
+
+- **Shoulders.**
+  - Plain LBS still puts a square ridge on both shoulders in relaxed, knee up, walk and fist.
+  - The runtime (LBS + skirt bones + correctives) removes it. Its shoulder line stays within a few mm of the sim.
+- **The runtime matches the sim** in every library pose. What is wrong in the runtime is already wrong in the sim:
+  - Walk: a hole in the left jacket sleeve at the back of the upper arm shows the shirt sleeve.
+  - Relaxed, knee up, fist and high ready: below the button, the two fronts meet in a ragged vertical tear where the overlap interpenetrates.
+  - Arm raise, high ready and fist: the shirt cuffs crumple into spikes round the fist.
+- **Arm raise.**
+  - The jacket rides up with the arm and the shoulder stays smooth.
+  - No shirt shows through the jacket body any more. T13b's fit error here was 52.7 mm; it is now 8.1 mm.
+
+### What was built
+
+- **`suit_spike.py` `POSED`:**
+  - 35 poses:
+    - the library 8;
+    - arm abduction and flexion at 30/60/90/120°;
+    - elbow at 45/90/120°;
+    - thigh flexion, abduction and extension ramps;
+    - spine turn, bend, back and tilt.
+  - Each layer is simulated per pose in rest order.
+  - 34 suit cones over arm, elbow, thigh and spine. The `_h` twins give a piecewise response.
+  - Also: the skirt follow-gain fit, and a Dem Bones diagnostic with a leave-one-out drive.
+- **Correctives:** pose-space shapes per layer.
+  - I scanned λ (numpy on `rig.npz`).
+    - At λ 1e-4 the fit overfitted. The jacket's leave-one-out p90 was 118 mm, and 798 mm for a cone that only one pose drives.
+    - At λ 0.03 the training fit stays ≤ 13.8 mm and the leave-one-out p90 drops to 24 mm.
+  - The spatial cone masks cost 7–10 mm of fit, so they are off.
+- **Layer tuck (`tuck_layers`):**
+  - An under-layer vertex counts as covered when a ray along its normal meets a layer further out within 5 cm. Covered vertices sink along their normal: the shirt by 12 mm, the waistcoat by 7 mm.
+  - The sink is feathered over 3 cm from the visible vertices.
+  - Covered: 7309 of 7561 shirt vertices and 3312 of 3577 waistcoat vertices.
+- **Rever:** its own weights (the wrap weights, then smoothed spatially at 3 cm, three times).
+- **Export:**
+  - Every made part goes out as `rig_<part>`, with the shipped weights and one shape key per cone. The keys are fitted on the part itself, on the tucked rest.
+  - `suit_rules.json` holds the cone rules and the fitted skirt gains.
+
+### Numbers (c1f)
+
+| Check | Gate | Result | Met |
+|---|---|---|---|
+| Fit RMS per pose (runtime vs sim, worst layer) | ≤ 15 mm | ≤ 13.8 mm in all 35 poses | yes |
+| Runtime penetration, jacket | 0 | 16–460 per pose | no |
+| Collar band at CB (runtime) | 10–17 mm | in band in 19 of 35 poses | no |
+
+- **Fit RMS** by pose: high ready 13.8, bend20 10.3, turnr20 9.3, arm raise 8.1 mm. The leave-one-out p90 is about 25 mm; the worst poses are high ready (37.5) and flex120 (34.7).
+- **Shoulder rise over the sim:** the runtime is ≤ 10 mm in every pose; plain LBS is 13–56 mm.
+- **Penetration:**
+  - Runtime: 16–460 jacket vertices per pose sit inside the layers under it (relaxed 148, arm raise 129, walk 151, turnr20 460). Where the waistcoat shows, at most 64 of its vertices are inside.
+  - Sim, after the push: jacket ≤ 13, waistcoat ≤ 2.
+  - Root cause: each layer's corrective fit misses by 1–14 mm RMS, independently of the others. That is more than the 2–7 mm gap between layers.
+  - The tuck cut the jacket count by about half (relaxed 287 → 148).
+  - Next step: bind the covered under-layer regions to the outer layer's runtime instead of fitting them separately.
+- **Collar band** (shirt collar above the jacket collar at the CB, runtime):
+  - Out of band: high ready −12, twist −13, the elbow and flexion ramps 1–8, flex90 23, back15 19 mm.
+  - The sim misses in the same poses (high ready −18, twist −23). With the arms forward, the jacket's neck rides up past the shirt collar; the neck hold is too weak there.
+- **Seam hinges** (runtime: count over 20°, p99, max):
+
+  | pose | > 20° | p99 | max |
+  |---|---|---|---|
+  | arm raise | 69 | 103° | 163° |
+  | knee up | 102 | 160° | 177° |
+  | walk | 112 | 169° | 178° |
+  | fist | 83 | 160° | 179° |
+
+  The folds sit on the under-sleeve seams, against the side and front panels: the armpit seam folds over.
+- **Jacket bones:**
+  - Of the eight designed bones, only `front_l` can be driven: leave-one-out 5.2° over a 10.6° range.
+  - The skirt bones' leave-one-out is close to their whole range (front 18–19° of 25–28°).
+  - The skirt keeps the follow bones, with fitted gains; skirt RMS went from 48.2 to 44.6 mm.
+  - The chest and side are left to the correctives. No bones were added to the armature.
+- **Determinism:** c1's posed hashes are shirt `dc4d2b86`, waistcoat `ed9d8562`, jacket `203a6b81`.
+- **Export deviation** (made-part shapes vs the drape runtime, worst pose):
+  - jacket body 5.3 mm, waistcoat 2.5 mm, shirt shell 20 mm;
+  - shirt collar 71 mm and cuffs 115 mm. This is the wrap of a thick ring through a bent wrist.
+
+## Item 7: wrinkle maps and the suit cloth path
+
+### Cloth path (`web/src/character/cloth.ts`, `suitCloth.*` in `params.ts`)
+
+- **`SuitClothMaterial`** is now the material for every suit cloth: the lofted `suit_*` and the made `t13*`. Setting `suitCloth.on` to 0 restores T6.
+  - Each kind (wool, silk, lining, shirt) has a sheen scale, a fuzz term on the interpolated geometric normal, and a falloff of the base specular at grazing angles: `1 − specGraze·(1 − N·V)^specGrazePower`.
+- **Fit on T19's shader balls.**
+  - Each kind is fitted per light, net of the world, against Cycles (`bench/m1/v4/cloth_balls.py fit`; the output is `data/build/t13/balls/cloth_fit.json`).
+  - The fit was then checked with fresh renders (`v_*`). Engine/Cycles ratios:
+
+    | ball | key | fill | rim | T19 (key / fill / rim) |
+    |---|---|---|---|---|
+    | wool | 0.989 | 1.012 | 1.034 | 1.02 / 1.04 / 0.67 |
+    | silk | 0.995 | 1.010 | 1.002 | 1.06 / 1.09 / 2.20 |
+
+  - Fitted values:
+    - wool: sheen 0.01, fuzz 0.37, graze 0.08 at power 3;
+    - silk: sheen 0.16, fuzz 0, graze 0.8 at power 1.5.
+  - The silk's excess under the rim came from its GGX lobe at grazing angles: 2.0× Cycles with no sheen and no fuzz at all.
+- **Terminator specks on the wool ball** (seen at 100 %): 4–8 single bright pixels along the key light's terminator.
+  - Cause: the wrapped fuzz reaches past N·L = 0 and meets shadow-map acne. T6's path had the same specks at strength 0.15.
+  - `fuzzWrap` 0 removes them but drops the rim to 0.40, so the wrap stays.
+  - The fix belongs in the shadow terms. TRAA hides the specks in motion.
+- **Texture budget:** the wrinkle maps are one three-layer array texture per material, which is a single binding. The cloth stays within WebGPU's limit of 16 sampled textures.
+
+### Wrinkle maps (`blender/character/suit_wrinkle.py`, baked in the posed export)
+
+- **Bake steps:**
+  1. Per made part and pose, take the sim normal minus the runtime normal (LBS + shapes). Both are taken back to rest by the blended skinning rotation.
+  2. Fit the deltas per vertex over four groups (arms up, arms down / crook, hip, torso), per side. The centre line is blended over ±4 cm.
+  3. Project per triangle onto that triangle's own tangent frame.
+  4. Rasterise into the material atlas with 6 px dilation.
+- **Output:** `suit_wrinkle.json` and `suit_wrinkle_<material>_{0,1,2}.png`, in the posed run. `suit_made.swap` copies them next to the GLB.
+- **c1f numbers:**
+  - normal deltas p95 0.13–0.30 (the cuffs are the worst);
+  - group maps p99 0.03–0.29;
+  - under 0.2 % of texels clipped.
+- **Engine:** `cloth.ts` blends the groups by the same cone weights the correctives use (`DeformRuntime.morphWeights`) and adds them to the tangent normal.
+- No engine frame of the made suit yet. The A/B build that will give one is still running.
+
+## Item 8 (started): integration
+
+- **`blender/character/suit_made.py`:**
+  - Body hash: a sha of the captured rest body. It is `f7053e02ea3b` for the current build.
+  - Cache record at `data/build/suit_cache/<hash>.json`, written by `bench/m1/v4/suit_made_cache.py`.
+  - Guards: seam gap, strain, penetration at rest and in the poses, and the determinism twins.
+  - `swap`:
+    - joins the made parts per garment and names them as the lofted ones, with `made_suit` = 1;
+    - skins the LODs from the full part (`lod_from`);
+    - copies the wrinkle maps beside the GLB.
+  - `apply_rules` writes the suit cones and skirt gains into `character.rig.json`.
+- **Build wiring:**
+  - `suit.post` swaps in the made suit after the lofted build when `suit.made.enabled` is set (`config.py`; off by default) and the guards pass. `force` swaps anyway, for A/B builds.
+  - The skirt pivots are taken from the lofted jacket before the swap, so the made suit's fitted gains still apply.
+  - `deform_rig` (weights, tuck) and `deform_correctives` skip `made_suit` objects. `rig.post` appends the suit cones.
+- **Guards today:** they fail on penetration in the poses (runtime jacket up to 460; where the waistcoat shows, 64). The default stays lofted.
+- **Budget:**
+  - The made LOD0 is 167k tris on its own.
+  - With the default LOD choice the suit is about 103k: jacket LOD0 61k, shirt LOD1 21.6k, waistcoat LOD1 9k, trousers LOD1 11.9k. The character LOD0 would then be about 200k, over the 190k cap.
+  - Jacket LOD1 (24.3k) brings it to about 166k.
+  - This needs a decision from the orchestrator and T24.
+
+### Pickup list (exact)
+
+1. **Runtime penetration.**
+   - Wrap-bind the tucked (covered) shirt and waistcoat regions to the jacket's runtime: `sr.wrap_bind` onto the jacket drape at rest, with a negative offset.
+   - Fit their correctives on those targets.
+   - Rerun `--posed-cache c1` and check that `inside_rt` reaches 0.
+2. **Sim faults** (fix in the sim, then re-simulate):
+   - Walk sleeve hole: the jacket sleeve passes inside the shirt sleeve at the back of the upper arm. Look at the shirt sleeve's collider and clearance.
+   - Front-overlap tear below the button: self-contact between the two fronts, or a second hold along the button line.
+   - Cuff crumple: the cuff hold is too stiff against the wrist, or the collider is wrong.
+   - Neck riding up with the arms forward: a stronger neck hold in the arm-forward poses.
+3. **Shirt collar and cuff wrap deviation (71 / 115 mm):** bind those parts to the drape with smaller offsets, or rig them directly from the drape weights.
+4. **Twin determinism:** compare c1det's `hash` with c1's, then add `--twin posed=<c1det>` to `suit_made_cache.py`.
+5. **Item 8:**
+   - the A/B engine frame of `lookdev t13c-made1` (made suit forced in);
+   - the LOD choice, with T24;
+   - then the extras: four-in-hand tie, collar-fall tabs, atlas packing ≥ 70 %, rever UV roll, lapel sheen patch, LOD2 specks, waistcoat shoulder points and welt bend, the 60k gameplay LOD1, and the NOTES update.

@@ -529,7 +529,7 @@ def made_suit(b, M, arm, body_h, lofted):
     piv = drig.skirt_pivots(arm, [lofted["jacket"]], sk)
     arm["made_skirt_pivots"] = json.dumps({f"{s}:{sec}": list(v) for (s, sec), v in piv.items()})
     arm["made_suit_run"] = rec["runs"]["posed"]
-    made = suit_made.swap(b, PART, lofted, rec, arm)
+    made, note["parts"] = suit_made.swap(b, PART, lofted, rec, arm, M.get("lod"))
     note["swapped"] = sorted(made)
     note["posed_run"] = rec["runs"]["posed"]
     return made, note

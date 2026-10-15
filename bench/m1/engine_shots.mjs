@@ -117,7 +117,7 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.lod1\.glb|character\.lod1\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_(curvature|detail)\.png|skin_detail\.json|skin_detail_(pore|micro)\.png|grade_lut\.json|set_bounce\.json|chart\.(glb|json))$/;
+const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.lod1\.glb|character\.lod1\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|suit_wrinkle\.json|suit_wrinkle_[A-Za-z0-9_]+_[0-9]\.png|shader_balls\.(glb|json)|skin_(head|hands)_(curvature|detail)\.png|skin_detail\.json|skin_detail_(pore|micro)\.png|grade_lut\.json|set_bounce\.json|chart\.(glb|json))$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');

@@ -45,10 +45,14 @@ export const WRINKLE_GROUPS: Record<string, string[]> = {
 };
 const GROUP_NAMES = Object.keys(WRINKLE_GROUPS);
 
-/** suit_wrinkle.json: per material its maps (RG = group 0 / 2, BA = group 1 / 3 of map 0 / 1). */
+/** suit_wrinkle.json: per material one array texture of three RGB layers holding the four groups'
+ *  tangent-space XY deltas in order (layer 0: g0.x g0.y g1.x; layer 1: g1.y g2.x g2.y; layer 2: g3.x
+ *  g3.y -). One binding per material: the fragment stage's 16 sampled textures (shadow maps and screen
+ *  textures included) leave the cloth no room for two more. Opaque RGB, so the canvas decode cannot
+ *  premultiply the codes away. */
 export interface WrinkleSidecar {
   range: number;
-  maps: Record<string, THREE.Texture[]>;
+  maps: Record<string, THREE.DataArrayTexture>;
 }
 
 const weightsL: N = uniform(new THREE.Vector4());
@@ -84,24 +88,15 @@ weightsL.onFrameUpdate(() => {
   (weightsR.value as THREE.Vector4).set(r[0]!, r[1]!, r[2]!, r[3]!);
 });
 
-export async function loadWrinkles(base: string, load: (url: string) => Promise<THREE.Texture | null>): Promise<WrinkleSidecar | null> {
+export async function loadWrinkles(base: string, _load?: unknown): Promise<WrinkleSidecar | null> {
   try {
     const r = await fetch(base + 'suit_wrinkle.json');
     if (!r.ok) return null;
     const j = (await r.json()) as { range: number; materials: Record<string, string[]> };
-    const maps: Record<string, THREE.Texture[]> = {};
+    const maps: Record<string, THREE.DataArrayTexture> = {};
     for (const [m, files] of Object.entries(j.materials)) {
-      const ts = await Promise.all(files.map((f) => load(base + f)));
-      if (ts.every((t) => t)) {
-        for (const t of ts as THREE.Texture[]) {
-          t.colorSpace = THREE.NoColorSpace;
-          t.flipY = false;
-          t.generateMipmaps = true;
-          t.minFilter = THREE.LinearMipmapLinearFilter;
-          t.needsUpdate = true;
-        }
-        maps[m] = ts as THREE.Texture[];
-      }
+      const t = await loadLayers(files.map((f) => base + f));
+      if (t) maps[m] = t;
     }
     return { range: j.range, maps };
   } catch {
@@ -109,18 +104,51 @@ export async function loadWrinkles(base: string, load: (url: string) => Promise<
   }
 }
 
+async function loadLayers(urls: string[]): Promise<THREE.DataArrayTexture | null> {
+  const bmps = await Promise.all(
+    urls.map(async (u) => {
+      const r = await fetch(u);
+      if (!r.ok) throw new Error(u);
+      return createImageBitmap(await r.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+    }),
+  );
+  const w = bmps[0]!.width;
+  const h = bmps[0]!.height;
+  if (bmps.some((b) => b.width !== w || b.height !== h)) return null;
+  const data = new Uint8Array(w * h * 4 * bmps.length);
+  const cx = new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+  if (!cx) return null;
+  bmps.forEach((b, i) => {
+    cx.clearRect(0, 0, w, h);
+    cx.drawImage(b, 0, 0);
+    data.set(cx.getImageData(0, 0, w, h).data, i * w * h * 4);
+    b.close();
+  });
+  const t = new THREE.DataArrayTexture(data, w, h, bmps.length);
+  t.format = THREE.RGBAFormat;
+  t.type = THREE.UnsignedByteType;
+  t.colorSpace = THREE.NoColorSpace;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = 4;
+  t.needsUpdate = true;
+  return t;
+}
+
 /** The tangent-space XY delta of the wrinkle maps at this fragment, or null. */
-function wrinkleDelta(P: ParamStore, maps: THREE.Texture[] | undefined, range: number): N | null {
-  if (!maps || !maps.length) return null;
+function wrinkleDelta(P: ParamStore, maps: THREE.DataArrayTexture | undefined, range: number): N | null {
+  if (!maps) return null;
   // side: the bind-pose x (glTF +x = the character's left), blended over +-4 cm at the centre line
   const s = smoothstep(-0.04, 0.04, positionGeometry.x);
   const w = weightsR.mix(weightsL, s);
-  const a = texture(maps[0]!, uv()).mul(2).sub(1);
-  let d: N = a.xy.mul(w.x).add(a.zw.mul(w.y));
-  if (maps[1]) {
-    const b = texture(maps[1], uv()).mul(2).sub(1);
-    d = d.add(b.xy.mul(w.z)).add(b.zw.mul(w.w));
-  }
+  const l0 = texture(maps, uv()).depth(0).rgb.mul(2).sub(1);
+  const l1 = texture(maps, uv()).depth(1).rgb.mul(2).sub(1);
+  const l2 = texture(maps, uv()).depth(2).rgb.mul(2).sub(1);
+  const d: N = l0.xy.mul(w.x)
+    .add(vec2(l0.z, l1.x).mul(w.y))
+    .add(l1.yz.mul(w.z))
+    .add(l2.xy.mul(w.w));
   return d.mul(range).mul(P.u('suitCloth.wrinkleStrength'));
 }
 
