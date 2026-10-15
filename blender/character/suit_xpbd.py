@@ -20,10 +20,14 @@ before it is sewn), and bending runs across welded seams like anywhere else.
     collision a signed distance callable sdf(P) -> (d, grad) (grids built in Blender);
               push-out to a thickness, Coulomb-like friction on the substep displacement
     layers    vertex sets that must stay outside other sets (the left front over the right)
-    fold      (optional, T13d) a fold limit per interior edge: the two vertices opposite the edge
-              keep at least the distance they have when the hinge is folded fold_max_deg, so no
-              single edge folds flat onto itself (a thick cloth's fold has a radius; at 1.6 cm mesh
-              spacing a 180 deg fold in one edge reads as a hinge, T13c: armpit seams 163-179 deg)
+    fold      (optional, T13d) a fold limit per interior edge (hard, an inequality): the two
+              vertices opposite the edge are turned apart about the edge's axis until the hinge is
+              folded at most fold_max_deg, so no single edge folds flat onto itself (a thick cloth's
+              fold has a radius; at 1.2-1.6 cm mesh spacing a 180 deg fold in one edge reads as a
+              hinge, T13c: armpit seams 163-179 deg). An angle, not the opposite vertices' distance:
+              that proxy misses a fold whose triangles are stretched (T13d i2: 168 deg with the
+              opposite vertices further apart than flat). unfold() is also the post-pass after the
+              final push-out.
 
 numpy only, float64, fixed operation order: bit-identical reruns.
 """
@@ -144,29 +148,61 @@ class Solver:
         self.self_r = 0.0
         self.self_excl = 0.0
         self.self_skip = None
-        self.fold_d = None                     # per stencil: the least x2-x3 distance (set_fold)
+        self.fold_psi = None                   # the least angle between the opposite vertices' arms (set_fold)
         # post-collision hooks fn(X, free), each mutating X in place (T13 item 5: the shirt's
         # tuck under the trousers' band, the tie over the shirt front; the waistcoat's back neck)
         self.post = []
 
-    def set_fold(self, max_deg, rest_len_of=None):
-        """Limit every interior edge's fold to max_deg (0 = flat): x2-x3 >= its length at that fold,
-        from the rest triangle heights."""
-        if not len(self.S):
-            return
-        lut = {(int(a), int(b)): l for (a, b), l in zip(self.E, self.L0)}
+    def set_fold(self, max_deg):
+        """Limit every interior edge's fold to max_deg (0 = flat, 180 = folded onto itself)."""
+        self.fold_psi = None if max_deg is None else math.radians(180.0 - float(max_deg))
 
-        def rl(i, j):
-            return np.array([lut[(min(a, b), max(a, b))] for a, b in zip(i, j)])
-        x0, x1, x2, x3 = self.S.T
-        L01, L02, L12, L03, L13 = rl(x0, x1), rl(x0, x2), rl(x1, x2), rl(x0, x3), rl(x1, x3)
-
-        def height(a, b, c):                  # of the vertex opposite side a (Heron)
-            s = 0.5 * (a + b + c)
-            return 2.0 * np.sqrt(np.maximum(s * (s - a) * (s - b) * (s - c), 1e-16)) / a
-        h2, h3 = height(L01, L02, L12), height(L01, L03, L13)
-        phi = math.radians(180.0 - max_deg)
-        self.fold_d = np.sqrt(np.maximum(h2 * h2 + h3 * h3 - 2 * h2 * h3 * math.cos(phi), 0.0))
+    def unfold(self, X, free=None, sweeps=1):
+        """The fold limit as a projection: per stencil (x0 x1 the edge, x2 x3 opposite) the arms a, b
+        (x2, x3 less their foot on the edge's line) make the angle psi = 180 - fold; where psi is under
+        the limit, a and b turn apart about the edge's axis (rotations keep the heights, so the
+        triangles stay isometric to what they were), shared by inverse mass. Returns the stencils
+        moved over all sweeps."""
+        if self.fold_psi is None or not len(self.S):
+            return 0
+        wp = self.w if free is None else np.where(free, self.w, 0.0)
+        psi_min = self.fold_psi
+        moved = 0
+        for _ in range(sweeps):
+            for c in self.scol:
+                S = self.S[c]
+                x0, x1, x2, x3 = X[S[:, 0]], X[S[:, 1]], X[S[:, 2]], X[S[:, 3]]
+                e = x1 - x0
+                el = np.linalg.norm(e, axis=1)
+                ok = el > 1e-9
+                eh = e / np.maximum(el, 1e-12)[:, None]
+                a = x2 - x0
+                a -= (a * eh).sum(1)[:, None] * eh
+                b = x3 - x0
+                b -= (b * eh).sum(1)[:, None] * eh
+                la, lb = np.linalg.norm(a, axis=1), np.linalg.norm(b, axis=1)
+                ok &= (la > 1e-9) & (lb > 1e-9)
+                cr = np.cross(a, b)
+                sn = (cr * eh).sum(1)
+                psi = np.arctan2(np.abs(sn), (a * b).sum(1))
+                bad = ok & (psi < psi_min)
+                w2, w3 = wp[S[:, 2]], wp[S[:, 3]]
+                bad &= (w2 + w3) > 0
+                if not bad.any():
+                    continue
+                moved += int(bad.sum())
+                k = eh[bad] * np.where(sn[bad] >= 0, 1.0, -1.0)[:, None]   # b sits at +psi from a about k
+                dt = psi_min - psi[bad]
+                ws = (w2 + w3)[bad]
+                d3 = dt * w3[bad] / ws                 # b turns +d3 about k, a turns -d2
+                d2 = dt * w2[bad] / ws
+                ab, bb = a[bad], b[bad]
+                a2 = ab * np.cos(d2)[:, None] - np.cross(k, ab) * np.sin(d2)[:, None]
+                b2 = bb * np.cos(d3)[:, None] + np.cross(k, bb) * np.sin(d3)[:, None]
+                i2, i3 = S[bad, 2], S[bad, 3]
+                X[i2] += a2 - ab
+                X[i3] += b2 - bb
+        return moved
 
     def set_sew(self, pairs, rest=None):
         self.sew = np.asarray(pairs, int).reshape(-1, 2)
@@ -214,22 +250,8 @@ class Solver:
             dl = -C / den[:, None]
             X[S] += (ws * K * s[:, None])[:, :, None] * dl[:, None, :]
         # fold limit (inequality, hard)
-        if self.fold_d is not None:
-            for c in self.scol:
-                i, j = self.S[c, 2], self.S[c, 3]
-                d = X[i] - X[j]
-                L = np.sqrt((d * d).sum(1))
-                bad = L < self.fold_d[c]
-                if not bad.any():
-                    continue
-                i, j, d, L = i[bad], j[bad], d[bad], L[bad]
-                n = d / np.maximum(L, 1e-12)[:, None]
-                ws = wp[i] + wp[j]
-                ok = ws > 0
-                i, j, n, ws = i[ok], j[ok], n[ok], ws[ok]
-                C = (self.fold_d[c][bad][ok] - L[ok]) / ws
-                X[i] += (wp[i] * C)[:, None] * n
-                X[j] -= (wp[j] * C)[:, None] * n
+        if self.fold_psi is not None:
+            self.unfold(X, free)
         # holds
         if len(self.hold_idx) and self.hold_k > 0:
             i = self.hold_idx

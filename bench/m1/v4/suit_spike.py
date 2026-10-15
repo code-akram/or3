@@ -1094,6 +1094,16 @@ def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=
                                                                     "spike_shirt"))) else clay
             if o.name in MADE_SLOTS:
                 mat = uc
+            if "tie_shell" in o.name:
+                # the modelled tie in its own darker clay (in the under clay it vanished on the shirt)
+                tc = bpy.data.materials.get("spike_clay_tie")
+                if tc is None:
+                    tc = bpy.data.materials.new("spike_clay_tie")
+                    tc.use_nodes = True
+                    b_ = tc.node_tree.nodes["Principled BSDF"]
+                    b_.inputs["Base Color"].default_value = (0.16, 0.17, 0.24, 1)
+                    b_.inputs["Roughness"].default_value = 0.45
+                mat = tc
             o.data.materials.clear()
             o.data.materials.append(mat)
     if sc.world is None:
@@ -3960,16 +3970,19 @@ POSED = {
     # the jacket's neckline on the collar's row
     "rigid": {"on": True, "cuff_r_m": 0.012, "collar_r_m": 0.012, "margin_m": 0.03, "jneck": True,
               "jneck_margin_m": 0.04, "part_r_m": 0.002, "button_r_m": 0.012},
-    "anchors": {"on": True, "reach_m": 0.04, "gap_max_m": 0.003},
+    "anchors": {"on": True, "reach_m": 0.04, "gap_max_m": 0.003, "lat_m": 0.02},
     # the modelled four-in-hand (suit_tie; opts override suit_tie.DEFAULTS)
     "tie": {"on": True, "top_above_band_m": 0.002, "tip_above_band_m": 0.004, "blend_m": 0.08, "opts": {}},
-    "overlap": {"on": True, "reach_m": 0.04, "gap_max_m": 0.004},
+    # gap: the rest gap itself (to 12 mm): the made fronts are shells with their own thickness, and a
+    # posed gap under the rest one let the under-front through the over-front (i2 walk: a sawtooth)
+    "overlap": {"on": True, "reach_m": 0.04, "gap_max_m": 0.012},
     # the fold limit per interior edge (suit_xpbd.Solver.set_fold): T13c's armpit seams folded flat
     "fold_deg": 140.0,
+    "fold_fix_rounds": 3,
     # hidden-face culling (suit_cull): ray cone tilts (deg) and azimuths, the margin the visible set
     # grows by on the mesh, the cuff's (the 1.5 cm past the sleeve plus the turn), the jacket's inside
     # (vertices more than inner_off_m inside its drape: lining, facings, turn-ups)
-    "cull": {"on": True, "tilts": [0.0, 45.0, 75.0], "k": 8, "eps_m": 0.0015, "reach_m": 0.6, "margin_m": 0.025,
+    "cull": {"on": True, "view_zmin": -0.5, "tilts": [0.0, 45.0, 75.0], "k": 8, "eps_m": 0.0015, "reach_m": 0.6, "margin_m": 0.025,
              "cuff_margin_m": 0.012, "lining_m": 0.0025, "inner_off_m": 0.0015, "lods": {"1": 0.4, "2": 0.15}},
     # close-ups per pose: name -> (bone whose posed head is the target, offset (m), azimuth, scale)
     "close": {"cuff_l": ["hand_l", [0, 0, 0.03], 60.0, 0.30], "cuff_r": ["hand_r", [0, 0, 0.03], -60.0, 0.30],
@@ -4191,6 +4204,67 @@ def nearest_fn(co, tris):
     return f
 
 
+def panel_bind_fn(Gx, glob):
+    """T13d: the wrap binding by panel. Where two panels of one garment overlap (the fronts below the
+    button, a placket) a made vertex 2-3 mm out from its own drape can be nearer the other panel's
+    drape (i3: 16 of the jacket's over-front vertices bound to the under-front; when the fronts part
+    they tore away from their neighbours, a sawtooth down the edge). A made vertex whose faces are all
+    on one panel (the face attribute 'panel', 1-based into the drape's panel names) binds to the drape
+    faces touching that panel; a seam vertex and a part without the attribute bind as before (glob)."""
+    from mathutils.bvhtree import BVHTree
+    X, T = Gx["X0"], Gx["Tw"]
+    names = list(Gx.get("pnames") or [])
+    trees = {}
+
+    def tree(pn):
+        if pn not in trees:
+            fs = np.nonzero(np.array([any(pn in Gx["panels"][v] for v in t) for t in T]))[0]
+            trees[pn] = (BVHTree.FromPolygons([tuple(map(float, p)) for p in X],
+                                              [tuple(int(i) for i in T[f]) for f in fs]), fs) if len(fs) else None
+        return trees[pn]
+
+    def f(V, ob):
+        fi, bc = glob(V)
+        pa = ob.data.attributes.get("panel") if ob is not None else None
+        if pa is None or pa.domain != "FACE" or not names:
+            return fi, bc, {"panel_bound": 0}
+        pv = np.empty(len(pa.data), np.int64)
+        pa.data.foreach_get("value", pv)
+        vp = [set() for _ in range(len(V))]
+        for pl in ob.data.polygons:
+            for v in pl.vertices:
+                vp[v].add(int(pv[pl.index]))
+        moved = 0
+        for k, ps in enumerate(vp):
+            if len(ps) != 1:
+                continue
+            q = next(iter(ps)) - 1
+            if not 0 <= q < len(names):
+                continue
+            pn = names[q]
+            if pn in Gx["panels"][T[fi[k]][0]] or pn in Gx["panels"][T[fi[k]][1]] or pn in Gx["panels"][T[fi[k]][2]]:
+                continue
+            tr = tree(pn)
+            if tr is None:
+                continue
+            loc, _, li, _ = tr[0].find_nearest(Vector(V[k]))
+            if loc is None:
+                continue
+            fidx = int(tr[1][li])
+            a, b, c = X[T[fidx]]
+            v0, v1, v2 = b - a, c - a, np.array(loc) - a
+            d00, d01, d11 = v0 @ v0, v0 @ v1, v1 @ v1
+            d20, d21 = v2 @ v0, v2 @ v1
+            den = max(d00 * d11 - d01 * d01, 1e-18)
+            v_ = (d11 * d20 - d01 * d21) / den
+            w_ = (d00 * d21 - d01 * d20) / den
+            u = np.clip(np.array([1 - v_ - w_, v_, w_]), 0, 1)
+            fi[k], bc[k] = fidx, u / u.sum()
+            moved += 1
+        return fi, bc, {"panel_bound": moved}
+    return f
+
+
 def tris_of(F):
     """Triangles of polygons (fan)."""
     return np.array([(f[0], f[i], f[i + 1]) for f in F for i in range(1, len(f) - 1)], int)
@@ -4235,7 +4309,7 @@ def garment_drape(run, key, X0=None):
     for i, p in zip(wm, pk):
         panels[i].add(str(p))
     return {"key": key, "run": run, "X0": X3, "Tw": Tw, "wm": wm, "Lw": Lw, "mw": mw, "kbw": kbw, "P": P_,
-            "kind": kind_w, "panels": panels, "st": st}
+            "kind": kind_w, "panels": panels, "st": st, "pnames": pnames}
 
 
 def seam_report(G, Y, thr):
@@ -4297,7 +4371,40 @@ def pose_solve(G, Y0, sdf, frames, holds=(), pull=None, pairs=(), self_contact=T
         S.post = [fac]
     S.post = list(S.post) + list(hooks)
     S.run(frames, P_["fps"], P_["substeps"], g_of=lambda f: 9.81, ksew_of=lambda f: 5000.0)
+    if fold_deg:
+        _FOLD[id(G)] = S
     return S.X.copy()
+
+
+_FOLD = {}          # the last solver per garment (its stencils and colours, for fold_fix)
+
+
+def fold_fix(G, X, free, real, pu, hooks, rounds):
+    """T13d: the fold limit after the final push-out: the push-out and the layer hooks act after the
+    solver's last substep and can fold an armpit edge back over (i2: 175-179 deg). Rounds of the
+    limiter's projection (several sweeps), the push-out of what it moved, the hooks. Returns the
+    stencils turned in all rounds."""
+    S = _FOLD.get(id(G))
+    if S is None:
+        return 0
+    n = 0
+    for _ in range(rounds):
+        m = S.unfold(X, free, sweeps=4)
+        n += m
+        if not m:
+            break
+        X0 = X.copy()
+        X[:], _ = push_out(X, G["Tw"], real, pu["clear_m"], 0)
+        X[~free] = X0[~free]
+        for _ in range(2):
+            for h_ in hooks:
+                h_(X, free)
+    for _ in range(10):                 # and the limit last, alone
+        m = S.unfold(X, free, sweeps=4)
+        n += m
+        if not m:
+            break
+    return n
 
 
 def made_parts(prefix):
@@ -4441,7 +4548,8 @@ class Anchors:
     normal by gap. Unlike a distance field this does not depend on which face is nearest in the
     pose, so a vertex that starts through the under-layer is put back on the right side."""
 
-    def __init__(self, X, V, T, reach=0.04, gap_max=0.003, gap_min=0.0008, sign=None):
+    def __init__(self, X, V, T, reach=0.04, gap_max=0.003, gap_min=0.0008, sign=None, lat_max=0.02):
+        self.lat_max = lat_max
         fi, bc, h, dist = surf_bind(X, V, T, reach)
         if sign is None:            # the under-layer's faces may wind either way: most points are above
             sign = 1.0 if np.median(h[fi >= 0]) >= 0 else -1.0
@@ -4463,11 +4571,14 @@ class Anchors:
     def hook(self, Vp):
         """A post-collision hook against the posed under-layer Vp (static during the solve)."""
         P, n = self.frame(Vp)
-        idx, gap = self.idx, self.gap
+        idx, gap, lat = self.idx, self.gap, self.lat_max
 
         def f(X, free, P=P, n=n, idx=idx, gap=gap):
-            s = ((X[idx] - P) * n).sum(1)
+            d = X[idx] - P
+            s = (d * n).sum(1)
             bad = (s < gap) & free[idx]
+            if lat:
+                bad &= np.linalg.norm(d - s[:, None] * n, axis=1) < lat
             if bad.any():
                 X[idx[bad]] += (gap[bad] - s[bad])[:, None] * n[bad]
         return f
@@ -4483,7 +4594,12 @@ class Anchors:
 
     def count(self, X, Vp, tol=0.0):
         P, n = self.frame(Vp)
-        return int((((X[self.idx] - P) * n).sum(1) < -tol).sum())
+        d = X[self.idx] - P
+        s = (d * n).sum(1)
+        bad = s < -tol
+        if self.lat_max:
+            bad &= np.linalg.norm(d - s[:, None] * n, axis=1) < self.lat_max
+        return int(bad.sum())
 
 
 class Overlap:
@@ -4500,6 +4616,18 @@ class Overlap:
         self.tri = T[under_faces][fi[ok]]
         self.bc, self.sign = bc[ok], sign
         self.gap = np.clip(h[ok], 0.001, gap_max)
+
+    def ease_near(self, X0, pts, r0=0.03, r1=0.06):
+        """Near the button pairs the pair's own rest gap governs: over-vertices within r0 of a pair
+        vertex drop out, the gap eases from 1 mm at r0 to the rest gap at r1 (T13d i3: the rest
+        gap held against the button's pull crumpled the fronts round the button in the walk)."""
+        if not len(pts):
+            return
+        d = np.min(np.linalg.norm(X0[self.a][:, None, :] - X0[np.asarray(pts)][None, :, :], axis=2), 1)
+        keep = d >= r0
+        t = np.clip((d - r0) / (r1 - r0), 0, 1)
+        g = np.maximum(0.001, self.gap * t * t * (3 - 2 * t))
+        self.a, self.tri, self.bc, self.gap = self.a[keep], self.tri[keep], self.bc[keep], g[keep]
 
     def __call__(self, X, free):
         A, B = X[self.tri[:, 1]] - X[self.tri[:, 0]], X[self.tri[:, 2]] - X[self.tri[:, 0]]
@@ -4562,6 +4690,7 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
         vis["trousers"] = np.zeros(len(tparts[tshell]["V0"]), bool)
     if tie:
         vis["tie"] = np.zeros(len(parts[tie]["V0"]), bool)
+    body_vis = None
     per_pose = []
     for k, pname in enumerate(poses):
         dp.apply_pose(arm, pose_spec(pname), rig_)
@@ -4583,23 +4712,30 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
         for key, occ in (("shirt", occ_st), ("waistcoat", occ_w)):
             P_ = rt_Y[key][k]
             N_ = sr.vertex_normals(P_, G[key]["Tw"]) * sg[key]
-            vis[key] |= sc.visible(P_, N_, occ, dirs, ~vis[key], eps=C["eps_m"], reach=C["reach_m"])
+            vis[key] |= sc.visible(P_, N_, occ, dirs, ~vis[key], eps=C["eps_m"], reach=C["reach_m"], zmin=C.get("view_zmin"))
         P_ = rt_Y["jacket"][k]
         N_ = -sr.vertex_normals(P_, Gj["Tw"]) * sg["jacket"]
         vis["jacket_in"] |= sc.visible(P_ + N_ * C["lining_m"], N_, occ_j, dirs, ~vis["jacket_in"], eps=C["eps_m"],
-                                       reach=C["reach_m"])
+                                       reach=C["reach_m"], zmin=C.get("view_zmin"))
         if cuff:
             P_ = place(cuff, rt_Y["shirt"][k], Ms[k])
             N_ = sr.vertex_normals(P_, tris_of(parts[cuff]["F"]))
-            vis["cuffs"] |= sc.visible(P_, N_, occ_s, dirs, ~vis["cuffs"], eps=C["eps_m"], reach=C["reach_m"])
+            vis["cuffs"] |= sc.visible(P_, N_, occ_s, dirs, ~vis["cuffs"], eps=C["eps_m"], reach=C["reach_m"], zmin=C.get("view_zmin"))
         if tie:
             P_ = Tie_[0][0]
             N_ = sr.vertex_normals(P_, tris_of(parts[tie]["F"]))
-            vis["tie"] |= sc.visible(P_, N_, occ_s, dirs, ~vis["tie"], eps=C["eps_m"], reach=C["reach_m"])
+            vis["tie"] |= sc.visible(P_, N_, occ_s, dirs, ~vis["tie"], eps=C["eps_m"], reach=C["reach_m"], zmin=C.get("view_zmin"))
         if tshell:
             P_ = sr.skin(tparts[tshell]["V0"], tparts[tshell]["W"], Ms[k])
             N_ = sr.vertex_normals(P_, tris_of(tparts[tshell]["F"]))
-            vis["trousers"] |= sc.visible(P_, N_, occ_s, dirs, ~vis["trousers"], eps=C["eps_m"], reach=C["reach_m"])
+            vis["trousers"] |= sc.visible(P_, N_, occ_s, dirs, ~vis["trousers"], eps=C["eps_m"], reach=C["reach_m"], zmin=C.get("view_zmin"))
+        # the body where it shows past the whole outfit (the build's hide_body deletes the rest)
+        Pb = np.array(cop)
+        if body_vis is None:
+            body_vis = np.zeros(len(Pb), bool)
+        Nb = sr.vertex_normals(Pb, np.asarray(tris))
+        occ_b = sc.bvh_of(Bm + Sm_ + Wm_ + Tm + Jm + Tie_)
+        body_vis |= sc.visible(Pb, Nb, occ_b, dirs, ~body_vis, eps=C["eps_m"], reach=C["reach_m"], zmin=C.get("view_zmin"))
         per_pose.append({kk: int(v.sum()) - n0[kk] for kk, v in vis.items()})
         print(f"[cull] {pname}: newly visible {per_pose[-1]}", flush=True)
     # grow over each mesh, then the faces
@@ -4663,6 +4799,10 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
     for nm, m in keep.items():
         F_ = parts[nm]["F"] if nm in parts else tparts[nm]["F"]
         st["parts"][nm] = {"tris_before": sc.tri_count(F_), "tris_after": sc.tri_count([f for f, k_ in zip(F_, m) if k_])}
+    from mathutils.kdtree import KDTree as _KD
+    tri_a = np.asarray(tris)
+    shown_v = sc.grow_dist(body_vis, body_rest_co(body), sc.adjacency(tri_a, len(body_vis)), C.get("body_margin_m", 0.03))
+    st["body_shown"] = [int(shown_v.sum()), int(len(shown_v))]
     # the runtime penetration against what is kept: jacket drape vertices inside the body or behind a
     # kept under-layer face; and the kept under-layer faces' vertices outside the jacket where it
     # covered them at rest (shown through)
@@ -4688,8 +4828,19 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
         L_body = Layers(cop, tris, [])
         Yj = rt_Y["jacket"][k]
         ins = [i for i, p_ in enumerate(Yj) if L_all.signed(p_)[0] < -0.0005]
-        inb = sum(1 for i in ins if L_body.signed(Yj[i])[0] < -0.0005)
-        res[pname]["inside_rt_culled"] = {"jacket": len(ins), "jacket_body": inb, "jacket_layers": len(ins) - inb}
+        dep = {i: L_body.signed(Yj[i]) for i in ins}
+        inb_ = [i for i in ins if dep[i][0] < -0.0005]
+        inb = len(inb_)
+        # where it shows: the body's nearest point on a face with a shown vertex (else the build deleted it)
+        Pb_ = np.array(cop)
+        kd_b = _KD(len(Pb_))
+        for i_, v_ in enumerate(Pb_):
+            kd_b.insert(v_, i_)
+        kd_b.balance()
+        ins_shown = [i for i in inb_ if shown_v[kd_b.find(dep[i][1])[1]]]
+        res[pname]["inside_rt_culled"] = {"jacket": len(ins), "jacket_body": inb, "jacket_layers": len(ins) - inb,
+                                          "jacket_body_shown": len(ins_shown),
+                                          "body_depth_mm_max": round(-min([dep[i][0] for i in inb_], default=0.0) * 1000, 1)}
         res[pname]["inside_rt_culled_idx"] = ins[:400]
         print(f"[cull] {pname}: jacket inside (runtime, culled layers) {res[pname]['inside_rt_culled']}", flush=True)
     st["s_total"] = round(time.perf_counter() - t0, 1)
@@ -4703,7 +4854,7 @@ def culled_lods(ratios):
     (no weights or keys; suit_made.lod_from skins them from the full part at build time)."""
     from character import suit_made as smd
     out = {}
-    for g in ("jacket", "shirt", "waistcoat", "trousers"):
+    for g in ("jacket", "shirt", "waistcoat", "trousers", "tie"):
         src = [o for o in bpy.data.objects if o.type == "MESH" and o.name.startswith(f"rig_spike_{g}_")
                and "collider" not in o.name]
         if not src:
@@ -4748,8 +4899,13 @@ def make_tie(T, parts, Gs, base, sr, collar_row, stats):
     bvh = BVHTree.FromPolygons([tuple(map(float, v)) for v in Vc], [tuple(int(i) for i in f) for f in Fc])
 
     def front(x, z):
-        h = bvh.ray_cast(Vector((x, -1.0, z)), Vector((0.0, 1.0, 0.0)), 2.0)
-        return float(h[0].y) if h[0] is not None else -0.12
+        # the front half only: above the band's front edge at the CF the ray passes through the
+        # collar's gap and meets the back of the band (i3: the knot's top row 13 cm back); step down
+        for dz in np.arange(0.0, 0.0301, 0.002):
+            h = bvh.ray_cast(Vector((x, -1.0, z - dz)), Vector((0.0, 1.0, 0.0)), 2.0)
+            if h[0] is not None and h[0].y < -0.03:
+                return float(h[0].y)
+        return -0.10
     Vk = parts["spike_shirt_collar"]["V0"]
     cf = (np.abs(Vk[:, 0]) < 0.004) & (Vk[:, 1] < 0)
     z_top = float(Vk[cf, 2].max()) + T["top_above_band_m"]
@@ -4878,8 +5034,11 @@ def main_posed(O):
     parts = {}
     for key, pre in (("shirt", "spike_shirt_"), ("waistcoat", "spike_waistcoat_"), ("jacket", "spike_jacket_")):
         bf = bind_fn(G[key]["X0"], G[key]["Tw"])
+        pbf = panel_bind_fn(G[key], bf)
         for nm, (V, F) in made_parts(pre).items():
-            fi, bc = bf(V)
+            fi, bc, pst = pbf(V, bpy.data.objects.get(nm)) if O.get("panel_bind", True) else (*bf(V), {})
+            if pst.get("panel_bound"):
+                stats.setdefault("panel_bound", {})[nm] = pst["panel_bound"]
             parts[nm] = {"key": key, "F": F, "V0": V, "bind": sr.wrap_bind(G[key]["X0"], G[key]["Tw"], V, fi, bc)}
     tparts = {}
     for nm, (V, F) in made_parts("spike_trousers_").items():
@@ -5046,7 +5205,7 @@ def main_posed(O):
             for u in unders:
                 if u in col0:
                     anc[(outer, u)] = Anchors(G[outer]["X0"], col0[u][0], col0[u][1], reach=O["anchors"]["reach_m"],
-                                              gap_max=O["anchors"]["gap_max_m"])
+                                              gap_max=O["anchors"]["gap_max_m"], lat_max=O["anchors"].get("lat_m", 0.0))
     ovl = {}
     if O["overlap"]["on"]:
         for key in ("waistcoat", "jacket"):
@@ -5060,6 +5219,10 @@ def main_posed(O):
                                 gap_max=O["overlap"]["gap_max_m"]),
                         Overlap(Gx["X0"], Gx["Tw"], np.nonzero(isr)[0], lf, reach=O["overlap"]["reach_m"],
                                 gap_max=O["overlap"]["gap_max_m"])]
+            prs = w_pairs if key == "waistcoat" else j_pairs
+            pv = sorted({int(v) for pr, _ in prs for v in pr})
+            for o_ in ovl[key]:
+                o_.ease_near(Gx["X0"], pv, O["overlap"].get("pair_r0_m", 0.03), O["overlap"].get("pair_r1_m", 0.06))
     stats["anchors"] = {f"{a}/{b}": int(len(v.idx)) for (a, b), v in anc.items()}
     stats["overlap"] = {k: [{"verts": int(len(o.a)), "sign": o.sign} for o in v] for k, v in ovl.items()}
     print(f"[spike] anchors {stats['anchors']} overlap {stats['overlap']}", flush=True)
@@ -5171,8 +5334,18 @@ def main_posed(O):
                 for _ in range(3):
                     for h_ in hooks:
                         h_(Yk, free_)
+                rec[f"{key}_inside_hooked"] = inside_count(Yk, real)
+                if O.get("final_push", True):
+                    Y1_ = Yk.copy()
+                    Yk, _ = push_out(Yk, Gx["Tw"], real, pu["clear_m"], 0)
+                    Yk[pinned[key]] = Y1_[pinned[key]]
+                if O["fold_deg"] and O.get("fold_fix_rounds", 0):
+                    # last: the fold limit (the push-out in the armpit's crevice folds an edge back over;
+                    # i3 offline: the limit alone moves 35-50 vertices <= 9 mm, into body the build deletes)
+                    rec[f"{key}_unfolded"] = fold_fix(Gx, Yk, free_, real, pu, hooks, O["fold_fix_rounds"])
                 rec[f"{key}_pushed"] = moved
                 rec[f"{key}_inside"] = inside_count(Yk, real)
+                rec[f"{key}_inside_body"] = inside_count(Yk, Layers(cop, tris, []))
                 if hk:
                     rec[f"{key}_below_anchor"] = int(sum(an.count(Yk, Vp, 0.0005) for an, Vp in hk))
                 if key in ovl:

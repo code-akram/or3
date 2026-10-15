@@ -184,6 +184,8 @@ def load_lod(run, garment, k, posed=None):
             nm = f"spike_{garment}_lod{k}"
     else:
         nm = f"spike_{garment}_lod{k}"
+    if not run:                         # the tie has no garment run: only the posed run's LODs
+        return None
     with bpy.data.libraries.load(os.path.join(run, "spike.blend"), link=False) as (src, dst):
         dst.objects = [n for n in src.objects if n == nm]
     o = dst.objects[0] if dst.objects else None
@@ -299,7 +301,7 @@ def swap(b, part_fmt, lofted, rec, arm, lods=None):
                 bpy.context.scene.collection.objects.unlink(ob)
         k = (lods or {}).get(g, 0)
         if k:
-            lo = load_lod(rec["runs"][g], g, k, rec["runs"]["posed"])
+            lo = load_lod(rec["runs"].get(g), g, k, rec["runs"]["posed"])
             if lo is not None:
                 info[g] = {"lod": k, **lod_from(ob, lo)}
                 lo.parent = ob.parent
