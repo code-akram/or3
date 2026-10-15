@@ -25,7 +25,7 @@ This is the first time the viewer runs on the M4 Air. Every engine number so far
 | 4 | **Gameplay tier, live.** Open:<br>`http://127.0.0.1:5173/character.html?asset=lookdev/20261015T045719Z-t24-a1&ktx2=1&dpr=1&tier=gameplay&view=gameplay&rig=hero&perf=1&session=air1-live-gameplay`<br>Same as step 3: 30 s, then **save**. While it runs, press **Shift+Esc** (Chrome Task Manager) and note the tab's *Memory footprint* and *GPU memory*. | 1.5 min |
 | 5 | Close the tunnel (Ctrl+C) and tell Claude: "Air session done, air1". | — |
 
-The total is about 9–10 minutes. Step 2 is the long one; most of its time goes to downloading the two GLBs over the tunnel (83 MB), and the GPU work takes seconds. If a step fails, the page shows a red box. Take a screenshot and send it; re-running a step with `session=air2` keeps the first run's files.
+The total is about 9–10 minutes. Step 2 is the long one. Most of its time is transfer, because `archlinux` is a remote host: the two GLBs come down the tunnel (83 MB) and about 25 MB of PNG frames go up. The GPU work itself takes seconds. If a step fails, the page shows a red box. Take a screenshot and send it; re-running a step with `session=air2` keeps the first run's files.
 
 ## What gets uploaded, and where it lands
 

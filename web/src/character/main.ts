@@ -327,6 +327,18 @@ async function deviceCapture(api: CaptureApi, tier: ResolvedTier, mon: PerfMonit
     files.push(name);
   };
   const decode = (b64: string) => Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+  // frames go up as PNG where the browser can encode one (the host is remote: ~5x fewer bytes than RGBA)
+  const postFrame = async (name: string, px: Uint8Array<ArrayBuffer>, w: number, h: number) => {
+    if (typeof OffscreenCanvas !== 'undefined') {
+      const oc = new OffscreenCanvas(w, h);
+      const c2 = oc.getContext('2d');
+      if (c2) {
+        c2.putImageData(new ImageData(new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength), w, h), 0, 0);
+        return post(name, await oc.convertToBlob({ type: 'image/png' }), { 'content-type': 'image/png' });
+      }
+    }
+    return post(name, px, { 'x-width': String(w), 'x-height': String(h), 'content-type': 'application/octet-stream' });
+  };
   const spec = (s: string): [ViewName, RigName, string] => {
     const [v, rr] = s.split(':') as [ViewName, string | undefined];
     const own: RigName = v === 'portrait' ? 'hero' : 'neutral';
@@ -343,7 +355,7 @@ async function deviceCapture(api: CaptureApi, tier: ResolvedTier, mon: PerfMonit
       const t = performance.now();
       const r = await api.capture(v, rig, w, h, undefined, withPost);
       const name = `${prefix}${stem}${withPost ? '_beauty' : ''}.png`;
-      await post(name, decode(r.b64), { 'x-width': String(w), 'x-height': String(h), 'content-type': 'application/octet-stream' });
+      await postFrame(name, decode(r.b64), w, h);
       shots.push({ view: v, rig, post: withPost, file: name, res: [w, h], render_ms: r.ms, wall_ms: Math.round(performance.now() - t), draw_calls: r.draw_calls, triangles: r.triangles });
       hud.textContent = `[${session}] ${tier.tier}: uploaded ${name}`;
     }
@@ -365,8 +377,6 @@ async function deviceCapture(api: CaptureApi, tier: ResolvedTier, mon: PerfMonit
     for (let k = warm - 1; k >= 1; k--) api.advance(-k * step, tts, tts);
     const lumas: Float32Array[] = [];
     const frames: { file: string; deg: number; render_ms: number }[] = [];
-    const oc = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(tts, tts) : null;
-    const c2 = oc?.getContext('2d') ?? null;
     for (let i = 0; i < n; i++) {
       const deg = (i / fps) * 20;
       for (let k = sub - 1; k >= 1; k--) api.advance(deg - k * step, tts, tts);
@@ -376,10 +386,7 @@ async function deviceCapture(api: CaptureApi, tier: ResolvedTier, mon: PerfMonit
       for (let k = 0; k < L.length; k++) L[k] = 0.2126 * px[k * 4]! + 0.7152 * px[k * 4 + 1]! + 0.0722 * px[k * 4 + 2]!;
       lumas.push(L);
       const file = `${prefix}tt/frame_${String(i).padStart(3, '0')}.png`;
-      if (c2 && oc) {
-        c2.putImageData(new ImageData(new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength), tts, tts), 0, 0);
-        await post(file, await oc.convertToBlob({ type: 'image/png' }), { 'content-type': 'image/png' });
-      } else await post(file, px, { 'x-width': String(tts), 'x-height': String(tts), 'content-type': 'application/octet-stream' });
+      await postFrame(file, px, tts, tts);
       frames.push({ file, deg: +deg.toFixed(3), render_ms: r.ms });
       hud.textContent = `[${session}] ${tier.tier}: turntable ${i + 1}/${n}`;
     }
