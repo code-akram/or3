@@ -406,6 +406,9 @@ export class Stage {
       // light (fill, wrap, rim strips) is what AO stands in for, the key's shadow map has its own occlusion
       const size = Math.max(s.size[0] ?? 0.3, s.size[1] ?? 0.3);
       l.userData.aoWeight = Math.min(1, size / Math.max(d, 1e-3));
+      // T18: the Blender emitter's rectangle (the eye material's cornea reflects it, LTC), placed as
+      // rectLight() would place a RectAreaLight here
+      l.userData.rect = { w: s.size[0] ?? 0.3, h: s.size[1] ?? s.size[0] ?? 0.3, quaternion: s.quaternion && this.view?.name === 'portrait' ? s.quaternion : null };
       // shadows: the key always; the rims too (they only hit edges, which is exactly where a
       // shadowless rim leaks through the head); T10: the fill and the hero wrap as well
       if (this.castsShadow(s)) {
