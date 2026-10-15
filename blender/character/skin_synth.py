@@ -177,6 +177,8 @@ def regions(fr, m):
         beard = smoothstep(-0.040, -0.060, h) * (1 - r["nose"]) * smoothstep(-0.03, 0.0, f) \
             * smoothstep(0.075, 0.055, u)
     r["beard"] = beard * (1 - lips)
+    # T17: the inner eye corners (caruncle side, ~14 mm medial of the globe centre), a soft warm zone
+    r["canthus"] = gauss(u - 0.016, 0.005) * gauss(h + 0.002, 0.005) * outside_eye * smoothstep(-0.01, 0.01, f)
     r["tzone"] = np.clip(r["forehead"] * gauss(u, 0.028) + r["nose"] + 0.6 * r["chin"], 0, 1)
     return r
 
@@ -459,6 +461,7 @@ def synth_head(m, c, cl, cr):
     # smooth zone gradients: a broad cheek flush and a little warmth around the eyes
     tint(R["cheek"] * z * c["flush_cheek_w"], c["flush_apple"])
     tint(R["lid"] * z * 0.5, (1.04, 0.97, 0.97))
+    tint(R["canthus"] * z * c["canthus"], c["canthus_rgb"])      # warmer, redder inner eye corners
     tint(R["ears"] * z, (1.12, 0.92, 0.90))                      # ears reddened by cold
     tint(R["beard"] * c["beard_shadow"], (0.80, 0.84, 0.91))     # cool, darker beard zone
     tint(R["under_eye"] * c["under_eye"], (0.88, 0.85, 0.91))    # violet-brown circles
@@ -502,6 +505,8 @@ def synth_head(m, c, cl, cr):
     # along the haemoglobin absorption axis (R up a little, G and B down: redder and slightly darker,
     # hb_patch_rgb) and, apart, along melanin's (all down, blue most: browner, mel_patch_rgb). The
     # haemoglobin field is ~5-12 mm (the 150 / 90 / 120 per m noises), the melanin ~3-20 mm.
+    # Off in the shipped config since T17 a7: at the strength the a* gate asked for, the 5-12 mm
+    # patches read as a rash at 100 % (t17-skin.md); the colour now lives in the broad zones above.
     if c["hb_patch"] > 0 or c["mel_patch"] > 0:
         under = np.clip(1.5 * R["under_eye"] + R["orbit"], 0, 1)
         pw = np.clip(R["cheek"] + R["apple"] + R["nose"] + R["nose_tip"] + R["alar"] + 0.8 * R["chin"]
@@ -735,6 +740,7 @@ DEFAULT_HEAD = {
     "corner_r": 0.004, "corner_ao_lift": 0.6, "corner_lift": 1.0,
     "zones": 1.0, "beard_shadow": 1.0, "under_eye": 1.0, "socket_dark": 1.0, "lid_dark": 1.0,
     "orbit_dark": 0.0, "orbit_rgb": (0.86, 0.80, 0.84),      # T12 periorbital ring (both lids), 0 = off
+    "canthus": 0.0, "canthus_rgb": (1.10, 0.93, 0.94),       # T17 inner eye corners, 0 = off
     "rough_orbit": 0.0,
     "scalp_dark": 1.0, "scalp_dark_from": 0.6, "scalp_dark_rgb": (0.78, 0.77, 0.82),  # 0 = off (v3)
     "veins": 0.6, "capillaries": 0.6, "stubble": 0.5,
