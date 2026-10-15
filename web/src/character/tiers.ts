@@ -151,12 +151,13 @@ export function noShadowList(shadows: string, data: EngineStage | null): string[
   return [...names].filter((n) => !cast.has(n));
 }
 
-/** The gameplay framing (checkpoint 3 §1.1): a third-person camera `dist` m from the chest at the
- * three-quarter azimuth, a little above eye height, 46 deg vertical FOV (head ~90 px of 956 at 3 m, 60-120
- * px over 2.5-4 m). No f-stop: no DoF. */
+/** The gameplay framing (checkpoint 3 §1.1): a third-person camera `dist` m from the hips (the whole
+ * figure in frame) at the three-quarter azimuth, a little above eye height, 46 deg vertical FOV (head ~90
+ * px of 956 at 3 m, 60-120 px over 2.5-4 m). No f-stop: no DoF. */
 export function gameplayCamera(data: EngineStage, dist = 3, azimuthDeg = 35): StageCamera {
   const head = data.landmarks.head_mid;
-  const target = [0, head[1]! - 0.38, 0];
+  const floor = data.landmarks.floor_y;
+  const target = [0, floor + 0.56 * (head[1]! - floor), 0];
   const camY = head[1]! + 0.05;
   const dy = camY - target[1]!;
   const horiz = Math.sqrt(Math.max(0.01, dist * dist - dy * dy));
