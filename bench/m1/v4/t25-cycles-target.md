@@ -221,3 +221,5 @@ The order is shuffled per sheet. The answer key goes to `key/answer_key.json` in
 - **The plate test** needs the user's yes and real plates. The harness, the hook and the licence path are done and tested on placeholders. Every sheet so far is a harness test, and `score` refuses those.
 - **Not run:** ArcFace (`private/`); an Air capture (every engine number is SwiftShader).
 - **Main moved during the track.** I merged main 0092b1c (T17, T24, T13b) before the final engine re-match; there were no conflicts. The pre-merge `a_` frames are the lighting-only A/B on the old asset.
+
+_Orchestrator, after review: ArcFace on the T25 finals is 0.014 (engine hero closeup) and 0.039 (Cycles portrait crop), ≤ 0.25 ✓. Visual check at 100 %: the magenta no longer paints the right cheek and the teal jaw outline is gone; the change is subtle and the face still reads frontally lit. The flat-key question goes to the user._
