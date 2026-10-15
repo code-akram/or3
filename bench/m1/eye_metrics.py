@@ -23,7 +23,8 @@ Per eye (near = the key side, image left; far = image right), around the iris ce
   ratio      sclera / iris
   ratio2     the mean of the nasal and temporal box medians / iris (T18b: robust; see sclera2 in eye_measure)
   catchlight pixels of the iris disc at >= 0.5 x the disc's peak and >= 2 x the iris median, as a share of
-             the disc's area; the peak (0..255 display luma) as well
+             the disc's area; the peak (0..255 display luma) as well; its flux (sum of linear L - iris over the
+             7 x 7 px around the peak, which a pixel filter or denoiser keeps) and flux / peak (px)
   sat        median HSV saturation (display sRGB, 8 bit) over the iris annulus
   under      16 x 6 boxes on the iris column 20 px (bag) and 36 px (cheek top) below the iris centre: median
              display sRGB and linear luminance (T18b's under-eye; T19's 92 vs 118 box was not scripted)
@@ -199,6 +200,12 @@ def eye_measure(fr, name, centre, r=IRIS_R):
     Ld = fr.L[disc]
     peak = Ld.max()
     cl = (Ld >= 0.5 * peak) & (Ld >= 2 * iris)
+    # T18b: the catchlight's flux, sum of (L - iris) over the 7 x 7 px around the disc's peak (scene-linear):
+    # a pixel filter or denoiser spreads a highlight but keeps its flux, so this compares across filters
+    pk = np.argmax(np.where(disc, fr.L, -1))
+    py_, px_ = np.unravel_index(pk, fr.L.shape)
+    win = fr.L[max(py_ - 3, 0):py_ + 4, max(px_ - 3, 0):px_ + 4]
+    flux = float(np.clip(win - iris, 0, None).sum())
     rgb = fr.rgb[ann][keep]
     mx = rgb.max(-1)
     sat = np.where(mx > 0, (mx - rgb.min(-1)) / np.maximum(mx, 1e-9), 0)
@@ -217,6 +224,9 @@ def eye_measure(fr, name, centre, r=IRIS_R):
         "sclera2": round(sclera2, 5), "ratio2": round(sclera2 / max(iris, 1e-9), 3),
         "catchlight_share": round(float(cl.sum()) / (math.pi * r * r), 5),
         "catchlight_px": int(cl.sum()),
+        "catchlight_flux": round(flux, 4),
+        # flux / peak: the area of a flat-topped highlight with this flux and peak (px)
+        "catchlight_eq_px": round(flux / max(float(Ld.max()) - iris, 1e-9), 2),
         "catchlight_peak_disp": round(float(fr.D[disc].max()), 1),
         "sat": round(float(np.median(sat)), 3),
         "iris_disp_rgb": [round(float(v), 1) for v in np.median(fr.rgb[ann][keep], 0)],
@@ -268,7 +278,7 @@ def compare(a):
     rel = {}
     for eye in ("near", "far"):
         rel[eye] = {k: round(e[eye][k] / max(c[eye][k], 1e-9), 3)
-                    for k in ("ratio", "ratio2", "iris", "sclera", "sclera2", "sclera_nasal", "sclera_temporal", "catchlight_share", "sat")}
+                    for k in ("ratio", "ratio2", "iris", "sclera", "sclera2", "sclera_nasal", "sclera_temporal", "catchlight_share", "catchlight_flux", "catchlight_eq_px", "sat")}
         for k in ("bag", "cheek"):
             rel[eye][f"under_{k}"] = round(e[eye]["under"][k]["lum"] / max(c[eye]["under"][k]["lum"], 1e-9), 3)
     rel["both"] = {k: round(e["both"][k] / max(c["both"][k], 1e-9), 3) for k in ("ratio", "ratio2", "catchlight_share", "sat")}

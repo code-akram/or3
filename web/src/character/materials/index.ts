@@ -1241,7 +1241,7 @@ export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
   private readonly screen: N | null;
   private readonly sh: EyeShade;
 
-  constructor(src: Std, private readonly P: ParamStore, screenAO?: THREE.Texture | null) {
+  constructor(src: Std, private readonly P: ParamStore, screenAO?: THREE.Texture | null, msaa = false) {
     super();
     copyStd(this, src);
     const sh = eyeShade(src, P, new EyeFrames());
@@ -1269,7 +1269,9 @@ export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
     this.screen = screenAONode(screenAO);
     // T18b: flag the wet eye in the temporal target's 'hair' attachment (green; hair writes 1 in every channel):
     // HairTRAA resolves these pixels as specular (temporal.ts: linear blend, no luminance weighting)
-    this.mrtNode = mrt({ hair: vec4(0, 1, 0, 0) });
+    // (temporal modes only: MSAA has no 'hair' attachment, and an MRT of none of the target's names leaves
+    // the fragment an empty output struct, which WGSL rejects)
+    if (!msaa) this.mrtNode = mrt({ hair: vec4(0, 1, 0, 0) });
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
@@ -1529,7 +1531,7 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
         // brows: their own gains (T9b: the brow region is calibrated apart from the beard)
         return new HairMaterial(src, P, { prefix: src.name.startsWith('brows') ? 'brows' : 'facialHair', msaa, screenAO: side.screenAO });
       case 'eye':
-        return new EyeMaterial(src, P, side.screenAO);
+        return new EyeMaterial(src, P, side.screenAO, msaa);
       case 'eyeshell':
         return new EyeShellMaterial(src, P);
       case 'eyewet':
