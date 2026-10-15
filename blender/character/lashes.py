@@ -191,7 +191,12 @@ def build(b, frame, cfg):
     uv = bm.loops.layers.uv.verify()
     W, H = cfg["atlas"]
     strips = sorted(lines)
-    sh = H // len(strips)
+    # T18: the upper lid's lashes in two rows (a front row and a shorter back row, row2_*), each
+    # with its own game strip; atlas slots: one per strip
+    rows2 = cfg.get("row2_frac", 0.0) > 0
+    nslots = sum(2 if (lid == "upper" and rows2) else 1 for _, lid in strips)
+    sh = H // nslots
+    slot = 0
     canvas = beard_bake.Canvas(W, H)
     vroots = []
     stats = {"lashes": {}, "strip_tris": 0}
@@ -219,6 +224,12 @@ def build(b, frame, cfg):
         r = r + d * rng.normal(0, lc["row_jitter_m"], n)[:, None] + tang * rng.normal(0, 0.0002, n)[:, None]
         # length profile over the lid (inner .. outer), per-lash jitter
         L = np.interp(u, np.linspace(0, 1, len(lc["length_m"])), lc["length_m"]) * rng.uniform(0.8, 1.05, n)
+        # T18: the back row (upper lid): roots behind the front row on the margin, shorter, more curl
+        row = np.zeros(n, int)
+        if lid == "upper" and rows2:
+            row = (rng.uniform(0, 1, n) < cfg["row2_frac"]).astype(int)
+            r = r + np.array([0.0, cfg["row2_back_m"], 0.0]) * row[:, None]
+            L = L * np.where(row == 1, cfg["row2_length"], 1.0)
         # curl: bend toward 'up' (upper lid: +z, lower: -z), in the plane of d and up
         up = np.array([0, 0, 1.0 if lid == "upper" else -1.0])
         # lashes leave the lid forward and slightly toward the curl side
@@ -229,7 +240,7 @@ def build(b, frame, cfg):
         bend_ax /= np.maximum(np.linalg.norm(bend_ax, axis=1, keepdims=True), 1e-9)
         k = cfg["points"]
         s = np.linspace(0, 1, k)
-        curl = math.radians(lc["curl_deg"]) * rng.uniform(0.7, 1.2, n)
+        curl = math.radians(lc["curl_deg"]) * rng.uniform(0.7, 1.2, n) * np.where(row == 1, cfg.get("row2_curl", 1.0), 1.0)
         yaw = rng.normal(0, math.radians(lc["splay_deg"]), n)
         # lashes splay outward toward the outer corner
         yaw = yaw + (u - 0.3) * math.radians(lc["fan_deg"]) * side
@@ -253,71 +264,80 @@ def build(b, frame, cfg):
         all_mel.append(mel)
         all_red.append(red)
         stats["lashes"][f"{'l' if side > 0 else 'r'}_{lid}"] = int(n)
-        # --- game strip: columns along the lid, rows root / mid / tip ---
-        cols = lc["strip_cols"]
-        rows = 3
-        cu = np.linspace(0.0, 1.0, cols)
-        grid = np.zeros((rows, cols, 3))
-        for ci, cuv in enumerate(cu):
-            near = np.argsort(np.abs(u - cuv))[:max(4, n // cols)]
-            mean = pts[near].mean(0)
-            for ri, f_ in enumerate((0.0, 0.5, 1.0)):
-                grid[ri, ci] = mean[int(round(f_ * (k - 1)))]
-            # the root row on the lid margin itself
-            ri0 = int(np.clip(round(cuv * 63), 0, 63))
-            grid[0, ci] = line[ri0]
-            # A ribbon along lashes that leave the lid forward is seen edge-on
-            # from the front; card lashes are tilted toward the viewer (the
-            # forward run is shortened), the standard cheat.
-            for ri in range(1, rows):
-                off = grid[ri, ci] - grid[0, ci]
-                # not at the outer corner: there the lashes fan out of a
-                # recess under the hood, and a flattened strip sinks into it
-                s0 = lc.get("strip_forward_scale", 1.0)
-                off[1] *= s0 + (1 - s0) * min(max((cuv - 0.6) / 0.4, 0.0), 1.0)
-                q = Vector(grid[0, ci] + off)
-                loc, nrm, _, _ = frame.skin_bvh.find_nearest(q)
-                if loc is not None and (q - loc).dot(nrm) < cfg["strip_gap_m"]:
-                    q = loc + nrm * cfg["strip_gap_m"]
-                grid[ri, ci] = q[:]
-        vs = [[None] * cols for _ in range(rows)]
-        for ri in range(rows):
-            for ci in range(cols):
-                vv = bm.verts.new(Vector(grid[ri, ci]))
-                _, bi, _ = bkd.find(Vector(line[int(np.clip(round(cu[ci] * 63), 0, 63))]))
-                for e in body.data.vertices[bi].groups:
-                    nm = gname.get(e.group)
-                    if nm in ogi and e.weight > 0:
-                        vv[dl][ogi[nm]] = e.weight
-                vs[ri][ci] = vv
-                vroots.append(Vector(line[int(np.clip(round(cu[ci] * 63), 0, 63))]))
-        y0 = si * sh
-        pad = 2
-        for ri in range(rows - 1):
-            for ci in range(cols - 1):
-                f = bm.faces.new((vs[ri][ci], vs[ri][ci + 1], vs[ri + 1][ci + 1], vs[ri + 1][ci]))
-                for loop, (a, c_) in zip(f.loops, ((ci, ri), (ci + 1, ri), (ci + 1, ri + 1), (ci, ri + 1))):
-                    loop[uv].uv = ((pad + a / (cols - 1) * (W - 2 * pad)) / W,
-                                   (y0 + pad + c_ / (rows - 1) * (sh - 2 * pad)) / H)
-                stats["strip_tris"] += 2
-        # texture: lash j's point i at (u_j + lateral drift, i / (k-1))
-        lat = ((pts - pts[:, :1]) * tang[:, None, :]).sum(2) / max(total, 1e-6)
-        U = (u[:, None] + lat).clip(0, 1)
-        V = np.tile(s, (n, 1))
-        px = pad + U * (W - 2 * pad)
-        py = y0 + pad + V * (sh - 2 * pad)
-        a_ = np.stack([px[:, :-1], py[:, :-1]], -1).reshape(-1, 2)
-        b_ = np.stack([px[:, 1:], py[:, 1:]], -1).reshape(-1, 2)
-        tt = np.tile((np.arange(k - 1) + 0.5) / (k - 1), n)
-        rr = np.maximum(cfg["strip_radius_px"] * (1 - 0.7 * tt), 0.5)
-        col = np.array(beard_bake.linear(hair_mesh.hex_rgb(cfg["color"])))
-        cc = np.tile(col, (len(tt), 1)) * (0.6 + 0.4 * tt)[:, None]
-        canvas.lines(a_, b_, rr, cc)
-        # the dark lash line along the root edge (0.3 mm)
-        lx = np.linspace(pad, W - pad, 200)
-        ly = np.full(200, y0 + pad + 1.0)
-        canvas.lines(np.stack([lx[:-1], ly[:-1]], 1), np.stack([lx[1:], ly[1:]], 1),
-                     np.full(199, cfg["lash_line_px"]), np.tile(col * 0.5, (199, 1)))
+        # --- game strip(s): columns along the lid, rows root / mid / tip; one per lash row (T18) ---
+        all_n, all_u, all_pts_k, all_tang = n, u, pts, tang
+        for rsel in ((0, 1) if (lid == "upper" and rows2) else (0,)):
+            pick = row == rsel
+            n, u, pts, tang = int(pick.sum()), all_u[pick], all_pts_k[pick], all_tang[pick]
+            if n < 4:
+                continue
+            back = np.array([0.0, cfg.get("row2_back_m", 0.0) * rsel, 0.0])
+            cols = lc["strip_cols"]
+            rows = 3
+            cu = np.linspace(0.0, 1.0, cols)
+            grid = np.zeros((rows, cols, 3))
+            for ci, cuv in enumerate(cu):
+                near = np.argsort(np.abs(u - cuv))[:max(4, n // cols)]
+                mean = pts[near].mean(0)
+                for ri, f_ in enumerate((0.0, 0.5, 1.0)):
+                    grid[ri, ci] = mean[int(round(f_ * (k - 1)))]
+                # the root row on the lid margin itself
+                ri0 = int(np.clip(round(cuv * 63), 0, 63))
+                grid[0, ci] = line[ri0] + back
+                # A ribbon along lashes that leave the lid forward is seen edge-on
+                # from the front; card lashes are tilted toward the viewer (the
+                # forward run is shortened), the standard cheat.
+                for ri in range(1, rows):
+                    off = grid[ri, ci] - grid[0, ci]
+                    # not at the outer corner: there the lashes fan out of a
+                    # recess under the hood, and a flattened strip sinks into it
+                    s0 = lc.get("strip_forward_scale", 1.0)
+                    off[1] *= s0 + (1 - s0) * min(max((cuv - 0.6) / 0.4, 0.0), 1.0)
+                    q = Vector(grid[0, ci] + off)
+                    loc, nrm, _, _ = frame.skin_bvh.find_nearest(q)
+                    if loc is not None and (q - loc).dot(nrm) < cfg["strip_gap_m"]:
+                        q = loc + nrm * cfg["strip_gap_m"]
+                    grid[ri, ci] = q[:]
+            vs = [[None] * cols for _ in range(rows)]
+            for ri in range(rows):
+                for ci in range(cols):
+                    vv = bm.verts.new(Vector(grid[ri, ci]))
+                    _, bi, _ = bkd.find(Vector(line[int(np.clip(round(cu[ci] * 63), 0, 63))]))
+                    for e in body.data.vertices[bi].groups:
+                        nm = gname.get(e.group)
+                        if nm in ogi and e.weight > 0:
+                            vv[dl][ogi[nm]] = e.weight
+                    vs[ri][ci] = vv
+                    vroots.append(Vector(line[int(np.clip(round(cu[ci] * 63), 0, 63))]))
+            y0 = slot * sh
+            pad = 2
+            for ri in range(rows - 1):
+                for ci in range(cols - 1):
+                    f = bm.faces.new((vs[ri][ci], vs[ri][ci + 1], vs[ri + 1][ci + 1], vs[ri + 1][ci]))
+                    for loop, (a, c_) in zip(f.loops, ((ci, ri), (ci + 1, ri), (ci + 1, ri + 1), (ci, ri + 1))):
+                        loop[uv].uv = ((pad + a / (cols - 1) * (W - 2 * pad)) / W,
+                                       (y0 + pad + c_ / (rows - 1) * (sh - 2 * pad)) / H)
+                    stats["strip_tris"] += 2
+            # texture: lash j's point i at (u_j + lateral drift, i / (k-1))
+            lat = ((pts - pts[:, :1]) * tang[:, None, :]).sum(2) / max(total, 1e-6)
+            U = (u[:, None] + lat).clip(0, 1)
+            V = np.tile(s, (n, 1))
+            px = pad + U * (W - 2 * pad)
+            py = y0 + pad + V * (sh - 2 * pad)
+            a_ = np.stack([px[:, :-1], py[:, :-1]], -1).reshape(-1, 2)
+            b_ = np.stack([px[:, 1:], py[:, 1:]], -1).reshape(-1, 2)
+            tt = np.tile((np.arange(k - 1) + 0.5) / (k - 1), n)
+            rr = np.maximum(cfg["strip_radius_px"] * (1 - 0.7 * tt), 0.5)
+            col = np.array(beard_bake.linear(hair_mesh.hex_rgb(cfg["color"])))
+            cc = np.tile(col, (len(tt), 1)) * (0.6 + 0.4 * tt)[:, None]
+            canvas.lines(a_, b_, rr, cc)
+            # the dark lash line along the root edge (0.3 mm)
+            lx = np.linspace(pad, W - pad, 200)
+            ly = np.full(200, y0 + pad + 1.0)
+            canvas.lines(np.stack([lx[:-1], ly[:-1]], 1), np.stack([lx[1:], ly[1:]], 1),
+                         np.full(199, cfg["lash_line_px"]), np.tile(col * 0.5, (199, 1)))
+            slot += 1
+        n, u, pts, tang = all_n, all_u, all_pts_k, all_tang
     # hero curves: all lashes in one object (collided above), clumped
     P = np.concatenate(all_pts)
     o = beard_groom.make_curves("lashes_hero", P, np.concatenate(all_rad),
