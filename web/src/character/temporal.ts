@@ -8,6 +8,12 @@
 //             disocclusion), the clip box is wider while the pixel is still (the hash noise is the
 //             variance) and tightens with screen motion (where the ghosting would come from).
 //             Stills accumulate progressively (current weight max(1/(n+1), floor)) after a history reset.
+//             T18b SPECULAR-AWARE: the eye writes (0, 1) into the 'hair' attachment (hair: 1s); on those
+//             (3x3-dilated) pixels the blend is linear (three's flickerReduction weights each sample by
+//             1 / (1 + luma), so a 1-2 px catchlight that the jitter puts in a pixel some frames and not
+//             others averages toward the dark frames: T18 lost 45 % of its peak and pulsed +-10 %), the
+//             clip is wider while still (the jitter moving the highlight is its variance) and the weight
+//             floor is higher (the history follows the surface, a reflection does not: shorter trails).
 //   SizedTAAU three's TAAUNode (TAA upsampling: render at `scale` x the output and reconstruct) sized by
 //             Output (the node otherwise sizes itself from the canvas, which the headless capture is not).
 //
@@ -72,6 +78,11 @@ export interface TemporalParams {
   hairGammaMoving: N;
   /** screen motion (px / frame) over which hair's gamma goes from still to moving (exp falloff) */
   hairMotionPx: N;
+  /** T18b, specular pixels (the 'hair' attachment's green minus red: the eye writes (0, 1)): the weight
+   * floor, the still clip gamma, and linear (1) vs flickerReduction (0) blending */
+  specMinWeight: N;
+  specGamma: N;
+  specLinear: N;
 }
 
 const quad = new THREE.QuadMesh(null as unknown as THREE.NodeMaterial);
@@ -172,9 +183,16 @@ export class HairTRAA extends (TRAANode as unknown as new (...a: any[]) => any) 
       const histUV = uvNode.sub(offUV);
       const prevDepth = samplePreviousDepth(this._previousDepthNode, histUV, this._previousCameraProjectionMatrixInverse, this._previousCameraWorldMatrix, this._cameraWorldMatrixInverse, this._cameraNearFar, this.camera);
       // hair coverage in the 3x3 (dilated, so the hashed silhouette counts)
-      let hairN: N = this.hair.load(texel).r;
-      for (const [x, y] of [[-1, -1], [-1, 1], [1, -1], [1, 1], [1, 0], [0, -1], [0, 1], [-1, 0]] as const) hairN = max(hairN, this.hair.offset(ivec2(x, y)).load(texel).r);
+      const h0 = this.hair.load(texel);
+      let hairN: N = h0.r;
+      let specN: N = h0.g.sub(h0.r);
+      for (const [x, y] of [[-1, -1], [-1, 1], [1, -1], [1, 1], [1, 0], [0, -1], [0, 1], [-1, 0]] as const) {
+        const hn = this.hair.offset(ivec2(x, y)).load(texel);
+        hairN = max(hairN, hn.r);
+        specN = max(specN, hn.g.sub(hn.r));
+      }
       const isHair = hairN.greaterThan(0.5);
+      const isSpec = specN.greaterThan(0.5).and(isHair.not());
       const validUV = histUV.greaterThanEqual(0).all().and(histUV.lessThanEqual(1).all());
       const isEdge = farthest.sub(closest).greaterThan(this.edgeDepthDiff);
       const disocc = closest.sub(prevDepth).greaterThan(this.depthThreshold);
@@ -184,14 +202,17 @@ export class HairTRAA extends (TRAANode as unknown as new (...a: any[]) => any) 
       const motionPx = uvNode.sub(histUV).mul(size).length();
       const motion = motionPx.div(this.maxVelocityLength).saturate();
       // progressive for stills: 1 / (n + 1) until the floor (an EMA from then on)
-      const floorW = mix(p.minWeight, p.hairMinWeight, isHair);
+      const floorW = isSpec.select(p.specMinWeight, mix(p.minWeight, p.hairMinWeight, isHair));
       const w = max(float(1).div(this.frames.add(1)), floorW).toVar();
       w.addAssign(subpixel(offUV, size).mul(0.25));
       w.assign(valid.select(w.add(motion).saturate(), 1));
       const gStock = mix(0.5, 1, motion.oneMinus().pow2());
-      const gHair = mix(p.hairGammaMoving, p.hairGamma, exp(motionPx.div(p.hairMotionPx).negate()));
-      const clipped = varianceClip(texel, cur, hist, isHair.select(gHair, gStock));
-      return flickerReduction(cur, clipped, w);
+      const still = exp(motionPx.div(p.hairMotionPx).negate());
+      const gHair = mix(p.hairGammaMoving, p.hairGamma, still);
+      const gSpec = mix(gStock, p.specGamma, still);
+      const clipped = varianceClip(texel, cur, hist, isSpec.select(gSpec, isHair.select(gHair, gStock)));
+      const fr = flickerReduction(cur, clipped, w);
+      return isSpec.select(mix(fr, mix(clipped, cur, w), p.specLinear), fr);
     });
     this._resolveMaterial.contextNode = T.context(builder.getSharedContext());
     this._resolveMaterial.colorNode = resolve();

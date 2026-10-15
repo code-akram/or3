@@ -234,9 +234,17 @@ export const DEFAULT_PARAMS = {
     // painted bulge, no parallax)
     refraction: 1,
     ior: 1.376,
-    /** Iris radius (mm; eyes_hq iris_mm / 2) and its plane under the limbus plane (the hero's recess_mm). */
+    /** Iris radius (mm; eyes_hq iris_mm / 2) and its plane under the limbus plane (the hero's recess_mm),
+     * the pupil margin this far forward of the root (the hero's iris_cone_mm). T18b: the hero's values (T18
+     * had 0 / none against the game mesh's 2.2 mm cornea). */
     irisRadiusMm: 5.9,
-    irisRecessMm: 0.0,
+    irisRecessMm: 0.5,
+    irisConeMm: 0.15,
+    /** T18b: refract and reflect at the hero cornea (eyes_hq.HERO: cornea_bulge_mm over the globe, film_mm
+     * shell offset), fitted per eye in JS; 0 = the game mesh's own bulge (2.2 mm, T18). */
+    heroCornea: 1,
+    heroBulgeMm: 1.3,
+    filmMm: 0.02,
     /** Iris cone: the pupil margin forward of the root (slope of the iris normal toward the rim). */
     irisCone: 0.05,
     /** Scale of the eyes_normal map's slopes (iris fibres / crypts, conjunctival vessels). */
@@ -253,8 +261,17 @@ export const DEFAULT_PARAMS = {
     /** Lid shell (eye_lidshell) opacity scale over its baked alpha; the tear meniscus specular. */
     shellStrength: 1.0,
     meniscusSpec: 1.0,
-    /** Radiance of the surroundings the wet eye reflects (x Fresnel x corneaStrength; emissive). */
-    envVeil: [0.03, 0.035, 0.045], // 0.05/0.07/0.12 read as a blue crescent on the nasal limbus at 100 %
+    /** T18b: the sclera's roughness (eyes_hq rough_sclera; the ORM map is no longer bound) and the cornea's for
+     * its reflection of the set bounce (indirect specular; Cycles' cornea 0.02, film 0.04). Replaces T18's
+     * envVeil, a constant emissive stand-in for the set's reflection. */
+    roughSclera: 0.32,
+    corneaEnvRoughness: 0.05,
+    /** T18b lid contact (materials/index.ts lidShadow): on (1) / off (0) or a strength, the occluder band in
+     * front of the eye surface it sees (bias mm .. range m) and the filter radius (shadow-map texels). */
+    lidShadow: 1,
+    lidShadowBiasMm: 0.2,
+    lidShadowRange: 0.006,
+    lidShadowTexels: 1.5,
   },
   cloth: {
     albedoGain: 1.0,
@@ -288,6 +305,13 @@ export const DEFAULT_PARAMS = {
     hairGamma: 1.25,
     hairGammaMoving: 0.75,
     hairMotionPx: 1,
+    /** T18b, specular pixels (the eye flags itself, temporal.ts): the current-frame weight floor, the still
+     * clip gamma (to the moving one, the stock 0.5, over hairMotionPx) and the blend (1 = linear; 0 = three's
+     * flickerReduction, whose 1 / (1 + luma) weights halve a bright sub-pixel catchlight against its dark
+     * jittered neighbours: T18 measured its peak at -45 % with a +-10 % pulse) */
+    specMinWeight: 0.1,
+    specGamma: 1.5,
+    specLinear: 1,
     /** frames accumulated per still capture (progressive, then the EMA floor) */
     stillFrames: 24,
     /** taau render scale (?scale= at load overrides) */

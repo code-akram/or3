@@ -72,13 +72,23 @@ const ttWarmup = Number(opt('tt-warmup', 24));
 const wantChart = argv.includes('--chart');
 // T18b: --crop x,y,w,h renders only that window of every still (same camera; e.g. the eyes of the 1920x1080
 // portrait), --tt-crop x,y,w,h the same for the turntable frames (of the --tt-size frame)
-const parseCrop = (v) => (v ? v.split(',').map(Number) : null);
+// (the width rounded up to 64 px: WebGPU's readback rows are 256-byte aligned)
+const parseCrop = (v) => (v ? v.split(',').map(Number).map((x, i) => (i === 2 ? Math.ceil(x / 64) * 64 : x)) : null);
 const cropArg = parseCrop(opt('crop', null));
 const ttCrop = parseCrop(opt('tt-crop', null));
 // T18b: --texcheck [VARIANTS]: no frames; per view (--views) and per URL variant (';'-separated query strings,
 // default below), a fresh page load renders one frame with the texture audit on (main.ts textureAudit,
 // texbudget.ts) -> <prefix>texcheck.json; exits 1 when any pipeline binds more than 16 sampled textures in a stage
 const texcheckArg = argv.includes('--texcheck') ? (argv[argv.indexOf('--texcheck') + 1] ?? '') : null;
+// T18b: --sweep 'a=eye.lidShadow:0;b=eye.lidShadow:1,eye.scleraWrap:0' captures every still once per entry
+// in the same page (live __viewer.setParam between entries: uniforms only), as <prefix><name>_<stem>.png;
+// each entry's sets apply on top of the previous entries'
+const sweep = (opt('sweep', '') || '=')
+  .split(';')
+  .map((e) => {
+    const [name, sets] = e.split('=');
+    return { name, sets: (sets ?? '').split(',').filter(Boolean).map((kv) => [kv.split(':')[0], JSON.parse(kv.split(':')[1])]) };
+  });
 const TEXCHECK_VARIANTS = ['', 'ltc=0', 'sharemaps=0', 'pcss=0', 'contact=0', 'tier=gameplay', 'hairshadow=0'];
 const TT_DEG_PER_S = 20; // main.ts turntable speed
 /** 'closeup:hero' -> [view, rig, file stem] (the default rig: hero for the portrait, else neutral) */
@@ -243,9 +253,15 @@ async function run(backend) {
     const shots = [];
     // the portrait twice: game_portrait.png without post (the parity frame, compared with
     // hero.sh --parity) and game_portrait_beauty.png with bloom, halation and grain
-    const jobs = views.flatMap((v) => (v === 'portrait' && beauty ? [[v, false], [v, true]] : [[v, false]]));
-    for (const [spec, post] of jobs) {
-      const [v, rig, stem] = viewSpec(spec);
+    const jobs = sweep.flatMap((sw) => views.flatMap((v) => (v === 'portrait' && beauty ? [[v, false, sw], [v, true, sw]] : [[v, false, sw]])));
+    let swPrev = null;
+    for (const [spec, post, sw] of jobs) {
+      if (sw !== swPrev) {
+        for (const [k, val] of sw.sets) await page.evaluate(([k, val]) => window.__viewer.setParam(k, val), [k, val]);
+        swPrev = sw;
+      }
+      const [v, rig, stem0] = viewSpec(spec);
+      const stem = sw.name ? `${sw.name}_${stem0}` : stem0;
       const [fw, fh] = v === 'portrait' ? [pw, ph] : [size, size];
       const [w, h] = cropArg ? [cropArg[2], cropArg[3]] : [fw, fh];
       const name = `${outPrefix}${stem}${post ? '_beauty' : ''}.png`;
@@ -401,7 +417,7 @@ async function runTexcheck() {
         page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 300)));
         page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`.slice(0, 300)));
         page.setDefaultTimeout(timeoutS * 1000);
-        const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1', view: v, rig });
+        const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1', view: v, rig, texaudit: '1' });
         for (const [k, val] of new URLSearchParams(extraQuery)) q.set(k, val);
         for (const [k, val] of new URLSearchParams(variant)) q.set(k, val);
         const t = Date.now();
@@ -413,9 +429,12 @@ async function runTexcheck() {
           const a = await page.evaluate(([v, rig, post]) => window.__viewer.textureAudit(v, rig, 128, 128, post), [v, rig, post]);
           // the pipeline errors of an over-limit shader arrive asynchronously
           await page.waitForTimeout(500);
-          runs.push({ variant: variant || '(default)', view: spec, post, ...a, console_errors: [...new Set(errors)].slice(0, 10), wall_ms: Date.now() - t });
+          // the session audit holds every pipeline since the page loaded (the first 64 px frame included)
+          const ses = a.session ?? { max_fragment: a.max_fragment, over: [], materials: [] };
+          const sizeErr = errors.filter((e) => /sampled textures/.test(e));
+          runs.push({ variant: variant || '(default)', view: spec, post, ...a, over: [...a.over, ...ses.over], console_errors: [...new Set(errors)].slice(0, 10), texture_limit_errors: sizeErr.length, wall_ms: Date.now() - t });
           const top = a.materials.slice(0, 3).map((m) => `${m.material} ${m.fragment}`).join(', ');
-          console.error(`[engine_shots] texcheck ${variant || '(default)'} ${spec}${post ? ' beauty' : ''}: max ${a.max_fragment} frag / ${a.max_vertex} vert (${a.shadow_maps} maps; ${top}), ${a.over.length} over, ${errors.length} console errors`);
+          console.error(`[engine_shots] texcheck ${variant || '(default)'} ${spec}${post ? ' beauty' : ''}: max ${a.max_fragment} frag (session ${ses.max_fragment}) / ${a.max_vertex} vert (${a.shadow_maps} maps; ${top}), ${a.over.length + ses.over.length} over, ${errors.length} console errors (${sizeErr.length} texture-limit)`);
         }
         await page.close();
       }
@@ -424,11 +443,13 @@ async function runTexcheck() {
     await browser.close();
   }
   const over = runs.flatMap((r) => r.over.map((o) => ({ variant: r.variant, view: r.view, post: r.post, ...o })));
+  // WebGPU's own verdict: any "sampled textures (N) ... exceeds" console error fails the check too
+  const limitErrors = runs.reduce((n, r) => n + r.texture_limit_errors, 0);
   // per material, the worst over every run
   const worst = {};
   for (const r of runs)
-    for (const m of r.materials) if (!worst[m.material] || m.fragment > worst[m.material].fragment) worst[m.material] = { ...m, variant: r.variant, view: r.view, post: r.post };
-  const out = { build, when: new Date().toISOString(), limit: 16, ok: over.length === 0, max_fragment: Math.max(0, ...runs.map((r) => r.max_fragment)), over, worst_per_material: Object.values(worst).sort((a, b) => b.fragment - a.fragment), runs };
+    for (const m of [...r.materials, ...(r.session?.materials ?? [])]) if (!worst[m.material] || m.fragment > worst[m.material].fragment) worst[m.material] = { ...m, variant: r.variant, view: r.view, post: r.post };
+  const out = { build, when: new Date().toISOString(), limit: 16, ok: over.length === 0 && limitErrors === 0, max_fragment: Math.max(0, ...runs.map((r) => Math.max(r.max_fragment, r.session?.max_fragment ?? 0))), over, texture_limit_errors: limitErrors, worst_per_material: Object.values(worst).sort((a, b) => b.fragment - a.fragment), runs };
   await writeFile(join(build, `${outPrefix}texcheck.json`), JSON.stringify(out, null, 1));
   console.log(JSON.stringify({ ok: out.ok, max_fragment: out.max_fragment, over: over.length, worst: out.worst_per_material.slice(0, 6).map((m) => `${m.material}: ${m.fragment} (${m.variant} ${m.view})`) }, null, 1));
   return out.ok;

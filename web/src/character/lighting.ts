@@ -149,6 +149,18 @@ export class LinkedShadowNode extends (THREE as any).ShadowNode {
   }
 }
 
+/** twin LightShadow -> its parent's (the owner of the depth map) */
+const ownerOf = new WeakMap<THREE.LightShadow, THREE.LightShadow>();
+
+/** T18b: the depth texture a light's shadow samples (its own, or its parent's for a twin), made now if no
+ * shadow node has built it yet, so another node of the same material can sample the SAME texture (one
+ * binding; e.g. the eye's lid-contact test, materials/index.ts). */
+export function shadowDepthTexture(shadow: THREE.LightShadow, builder: unknown): THREE.DepthTexture {
+  const owner = ownerOf.get(shadow) ?? shadow;
+  const base = (THREE as any).ShadowNode.prototype.setupRenderTarget;
+  return sharedTarget(owner, () => base.call({}, owner, builder)).depthTexture;
+}
+
 /** A twin LightShadow that shares the parent's camera, matrix and map size (the filters read them). */
 export function linkedShadow(owner: THREE.LightShadow): THREE.LightShadow {
   // a SpotLightShadow (not exported by three/webgpu): the owner's class, then the shared fields
@@ -158,6 +170,7 @@ export function linkedShadow(owner: THREE.LightShadow): THREE.LightShadow {
   s.mapSize = owner.mapSize;
   s.bias = 0;
   s.normalBias = 0;
+  ownerOf.set(s, owner);
   return s;
 }
 

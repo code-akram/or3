@@ -53,7 +53,8 @@ DEFAULTS = {
     "pupil_deg": 9.0, "iris_deg": 30.0, "limbus_deg": 2.5,
     # T18: the iris -30 % saturation (HSV, sRGB) and -15 % value: was #4a2e1a / #20120a / #2e1d10 /
     # #8e5e33, which read amber in both renderers (checkpoint 3 §2.4); fibre gain 0.95 -> 0.75
-    "iris": "#3f2e22", "iris_inner": "#1b130e", "iris_outer": "#271d15", "collarette": "#795c43",
+    # T18b: a further -6 % (the engine sat at -29 % on the far eye against T12)
+    "iris": "#3f2f24", "iris_inner": "#1b130f", "iris_outer": "#271e16", "collarette": "#795e46",
     "fibre_gain": 0.75,
     "outer_mix": 0.6, "limbus_frac": 0.12, "limbal_dark": 0.55,
     "sclera": "#bdab9d", "sclera_back": "#86675f", "vein": "#a2423a", "vein_amount": 0.8,
@@ -790,6 +791,11 @@ HERO = {
     "cornea_ior": 1.376, "cornea_rough": 0.02, "film_rough": 0.04,
     "occl_mix": 0.5,           # share of the baked lid occlusion kept on the hero eyeball
     "iris_rough": 0.6, "sclera_rough": 0.14, "sclera_specular": 0.5, "eyeball_sss": 0.3,
+    # T18b: no subsurface under the cornea. The iris is an opaque pigmented stroma, not a 1.5 mm-mfp
+    # scatterer; with the sclera's random walk (radius 1.5 mm x (1, .45, .3)) Cycles blurred the
+    # collarette (the ring the engine kept and Cycles lost) and bled the sclera's red into the iris
+    # (+17 % saturation over the engine's on the same albedo, T18)
+    "iris_sss": 0.0,
     "meniscus_mm": 0.15, "meniscus_rough": 0.05, "meniscus_ior": 1.336,
     "caruncle": "#a57a72", "caruncle_mm": (1.8, 1.1, 0.5), "caruncle_deg": 5.0,
 }
@@ -956,7 +962,8 @@ def hero(b):
     nt.links.new(uvn.outputs["UV"], sep.inputs[0])
     vl = math.sqrt(math.radians(cfg["cornea_deg"]) / math.pi)
     for inp, (v_in, v_out) in (("Roughness", (hc["iris_rough"], hc["sclera_rough"])),
-                               ("Specular IOR Level", (0.0, hc["sclera_specular"]))):
+                               ("Specular IOR Level", (0.0, hc["sclera_specular"])),
+                               ("Subsurface Weight", (hc.get("iris_sss", hc["eyeball_sss"]), hc["eyeball_sss"]))):
         mr = nt.nodes.new("ShaderNodeMapRange")
         mr.inputs["From Min"].default_value = vl - 0.004
         mr.inputs["From Max"].default_value = vl + 0.004
@@ -965,7 +972,6 @@ def hero(b):
         nt.links.new(sep.outputs["Y"], mr.inputs["Value"])
         nt.links.new(mr.outputs["Result"], p.inputs[inp])
     p.subsurface_method = "RANDOM_WALK"
-    p.inputs["Subsurface Weight"].default_value = hc["eyeball_sss"]
     p.inputs["Subsurface Radius"].default_value = (1.0, 0.45, 0.3)
     p.inputs["Subsurface Scale"].default_value = 0.0015
     if data.get("normal") is not None:      # T18: iris fibres / crypts and the conjunctival vessels

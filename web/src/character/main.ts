@@ -308,6 +308,9 @@ function outputOptions(P: ParamStore, aa: AAMode) {
       hairGamma: P.u('aa.hairGamma'),
       hairGammaMoving: P.u('aa.hairGammaMoving'),
       hairMotionPx: P.u('aa.hairMotionPx'),
+      specMinWeight: P.u('aa.specMinWeight'),
+      specGamma: P.u('aa.specGamma'),
+      specLinear: P.u('aa.specLinear'),
     },
     lens: { maxPx: P.u('dof.maxPx'), radiusScale: P.u('dof.radiusScale'), maxPassScale: P.u('dof.maxPassScale') },
     dofFullRes: !!(P.get('dof.fullRes') as number),
@@ -749,6 +752,9 @@ async function main(): Promise<void> {
   if (mrtOK) limits.maxColorAttachmentBytesPerSample = Math.min(mrtBytes, 64);
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || perfLive || q.get('timestamps') === '1', requiredLimits: limits });
   await renderer.init();
+  // T18b: ?texaudit=1 records every pipeline from the first frame on (textureAudit() reports them as `session`)
+  const sessionBudget = q.get('texaudit') === '1' ? new TextureBudget(renderer) : null;
+  sessionBudget?.start();
   state.limits = { max_sampled_textures_per_stage: limits.maxSampledTexturesPerShaderStage ?? 16 };
   if (!forceWebGL && (limits.maxSampledTexturesPerShaderStage ?? 16) < 18 && tier.tier === 'hero' && q.get('capture') !== '1')
     state.warnings.push('adapter allows 16 sampled textures per shader stage: the live hero portrait needs 18 (eyes); add &shadows=key,rim,kicker');
@@ -1182,7 +1188,8 @@ async function main(): Promise<void> {
       const audit = tb.stop(16); // WebGPU's default per-stage limit, whatever this adapter offers
       rt.dispose();
       resize();
-      return { view, rig, post, adapter_limit: state.limits?.max_sampled_textures_per_stage ?? 16, shadow_maps: stage.shadowMapCount(), lights: stage.describeLights(), ...audit };
+      const session = sessionBudget?.report(16) ?? null;
+      return { view, rig, post, adapter_limit: state.limits?.max_sampled_textures_per_stage ?? 16, shadow_maps: stage.shadowMapCount(), lights: stage.describeLights(), ...audit, session };
     },
     /** T19: per-pass GPU times of `frames` moving frames (shadow maps and AO every frame, as in motion) of
      * a view at w x h after `warmup` frames (profile.ts; needs ?timestamps=1 for the GPU side). */

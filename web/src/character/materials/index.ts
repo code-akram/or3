@@ -24,12 +24,14 @@ import { albedo, diffuseRamp } from './style';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
 import { HERO_RADII_MM } from './sss';
 import { temporalFrame } from '../temporal';
-import { rectFormFactor, screenTerm, withSharedLighting } from '../lighting';
+import { depthLoad, rectFormFactor, screenTerm, shadowDepthTexture, withSharedLighting } from '../lighting';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, cameraWorldMatrix, exp, log, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, varying, vec2, vec3, vec4, vertexColor } = TSL as any;
 // T18 eye: refraction, frames and the emitter-shaped catchlight
 const { asin, atan, cameraViewMatrix, cross, dFdx, dFdy, refract, step, uniform } = TSL as any;
+// T18b: the eye's lid-contact shadow test
+const { ivec2, perspectiveDepthToViewZ, positionWorld, reference, renderGroup, vogelDiskSample } = TSL as any;
 // T17 skin: the lighting's specular total (LightsNode's 'totalSpecular' property) for the SSS pass MRT
 const { property } = TSL as any;
 
@@ -698,11 +700,29 @@ export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number
 //            size (stage.ts userData.rect), so catchlights take the softbox / strip shape; the
 //            point-GGX lobe stays for lights without one
 //   eye light the Blender rig's camera catchlight lights the diffuse at eye.eyeLightDiffuse (T19: 1, as Cycles)
+// T18b:
+//   optics   the cornea that refracts and reflects is the HERO's (eyes_hq.HERO: 1.3 mm bulge over the globe,
+//            0.02 mm film, iris recessed 0.5 mm with a 0.15 mm cone), fitted analytically per eye in JS and
+//            ray-intersected in the shader; the game mesh keeps its 2.2 mm bulge only as a silhouette (the
+//            read40 harness anchors on its apex). The 2.2 mm bulge has a 6.0 mm apex radius against the hero's
+//            7.1 mm: it magnified the iris ~5 % more and shrank every catchlight to 0.84x in size (0.70x area).
+//   textures the roughness is analytic (iris / sclera by the cornea mask), so the ORM map is not bound; the
+//            LTC tables are the ones three's rect lights bind (float when filterable): 7 textures fewer
+//            than T18's worst case, 13 with the hero rig's 5 shadow maps (WebGPU's limit is 16)
+//   cornea reflection the set bounce (PMREM environment) on the cornea normal through three's indirect specular
+//            (f0 x eye.corneaStrength, eye.corneaEnvRoughness); replaces T18's constant envVeil
+//   lid contact the eye does not cast into the shadow maps; per shadowed light the eye samples the light's own
+//            depth map (the same binding) at its surface with a 0.2 mm bias for occluders within
+//            eye.lidShadowRange: the lids and lashes on the globe, which the maps' 3 mm normal bias and
+//            1.5 mm depth bias put out of reach (the temporal sclera under the rim and kicker read lit)
 
-let ltcLib: { LTC_HALF_1: THREE.DataTexture; LTC_HALF_2: THREE.DataTexture } | null = null;
-function ltcTextures(): { l1: N; l2: N } {
-  ltcLib ??= RectAreaLightTexturesLib.init() as unknown as { LTC_HALF_1: THREE.DataTexture; LTC_HALF_2: THREE.DataTexture };
-  return { l1: texture(ltcLib.LTC_HALF_1), l2: texture(ltcLib.LTC_HALF_2) };
+let ltcLib: { LTC_HALF_1: THREE.DataTexture; LTC_HALF_2: THREE.DataTexture; LTC_FLOAT_1: THREE.DataTexture; LTC_FLOAT_2: THREE.DataTexture } | null = null;
+/** The LTC tables, the same texture objects three's RectAreaLightNode binds (float when filterable), so a
+ * material that does its own LTC shares their bindings. */
+function ltcTextures(builder?: { isAvailable(f: string): boolean }): { l1: N; l2: N } {
+  ltcLib ??= RectAreaLightTexturesLib.init() as unknown as NonNullable<typeof ltcLib>;
+  const f = !!builder?.isAvailable('float32Filterable');
+  return { l1: texture(f ? ltcLib.LTC_FLOAT_1 : ltcLib.LTC_HALF_1), l2: texture(f ? ltcLib.LTC_FLOAT_2 : ltcLib.LTC_HALF_2) };
 }
 
 /** Least-squares sphere through points (flat xyz array): [cx, cy, cz, r] or null. */
@@ -737,6 +757,22 @@ interface EyeSide {
   corneaZ: number; // cornea sphere centre along the axis, from the eye centre (m)
   corneaR: number;
   vertex: number; // a vertex of this eye (its skin weights carry the frame)
+}
+
+/** T18b: the hero cornea's sphere (eyes_hq.bulge_profile with the hero's bulge and film over a globe of
+ * radius R, cornea edge thetaC), least-squares fitted over theta < 0.3 rad like the mesh fit: [z, r] (m). */
+export function heroCornea(R: number, thetaC: number, bulgeM: number, filmM: number): [number, number] {
+  const pts: number[] = [];
+  for (let i = 0; i <= 24; i++) {
+    const th = (0.3 * i) / 24;
+    const r = R + filmM + (th < thetaC ? bulgeM * Math.max(1 - (th / thetaC) ** 2, 0) ** 1.3 : 0);
+    for (let k = 0; k < 8; k++) {
+      const ph = (2 * Math.PI * k) / 8;
+      pts.push(r * Math.sin(th) * Math.cos(ph), r * Math.sin(th) * Math.sin(ph), r * Math.cos(th));
+    }
+  }
+  const sp = fitSphere(pts);
+  return sp ? [sp[2], sp[3]] : [0, R + filmM];
 }
 
 /** Per-eye frames of the eye mesh (both eyes in one mesh), refitted from the geometry when it changes. */
@@ -848,7 +884,7 @@ class EyeFrames {
 }
 
 /** The geometry uniforms of one eye material (world space; view space in the shader). */
-function eyeFrameNodes(frames: EyeFrames): Record<string, N> {
+function eyeFrameNodes(frames: EyeFrames, P: ParamStore): Record<string, N> {
   const sync = (f: { object: THREE.Object3D; renderId: number }): void => frames.sync(f.object, f.renderId);
   const u3 = (get: () => THREE.Vector3): N =>
     uniform(new THREE.Vector3()).onObjectUpdate((f: never) => {
@@ -861,7 +897,17 @@ function eyeFrameNodes(frames: EyeFrames): Record<string, N> {
       return get();
     });
   const S = (k: number): EyeSide | undefined => frames.sides[k];
+  // T18b: the hero cornea's sphere per eye (z along the axis from the eye centre, radius), from the params
+  const hero = (k: number): [number, number] => {
+    const e = S(k);
+    if (!e?.ok) return [e?.corneaZ ?? 0, e?.corneaR ?? 0.008];
+    return heroCornea(e.radius, e.thetaC, (P.get('eye.heroBulgeMm') as number) * 1e-3, (P.get('eye.filmMm') as number) * 1e-3);
+  };
   return {
+    hz0: u1(() => hero(0)[0]),
+    hz1: u1(() => hero(1)[0]),
+    hr0: u1(() => hero(0)[1]),
+    hr1: u1(() => hero(1)[1]),
     c0: u3(() => frames.wC[0]!),
     c1: u3(() => frames.wC[1]!),
     a0: u3(() => frames.wA[0]!),
@@ -900,12 +946,14 @@ interface EyeShade {
   irisN: N; // iris normal at the hit
   scleraN: N; // vein-perturbed normal outside the cornea
   ior: N;
+  /** T18b: the hero cornea's normal where the view ray enters it (the mesh normal outside the cornea) */
+  corneaN: N;
 }
 
 const TAU = 2 * Math.PI;
 
 function eyeShade(src: Std, P: ParamStore, frames: EyeFrames): EyeShade {
-  const u = eyeFrameNodes(frames);
+  const u = eyeFrameNodes(frames, P);
   const view = (w: N, wv: number): N => cameraViewMatrix.mul(vec4(w, wv)).xyz;
   // which eye: the nearer centre (the UV's u = 0.5 seam belongs to both halves)
   const C0 = view(u.c0, 1);
@@ -920,8 +968,9 @@ function eyeShade(src: Std, P: ParamStore, frames: EyeFrames): EyeShade {
   const R = pick(u.r0, u.r1);
   const thetaC = pick(u.tc0, u.tc1);
   const ok = pick(u.ok0, u.ok1).mul(P.u('eye.refraction'));
-  const corneaO = C.add(A.mul(pick(u.cz0, u.cz1)));
-  const corneaR = pick(u.cr0, u.cr1);
+  // T18b: the hero cornea (analytic sphere) refracts and reflects; the light path of the iris model too
+  const corneaO = C.add(A.mul(pick(u.hz0, u.hz1)));
+  const corneaR = pick(u.hr0, u.hr1);
   const ior = P.u('eye.ior');
   const rhoI = P.u('eye.irisRadiusMm').mul(0.001);
   const thetaI = asin(rhoI.div(R).min(0.95));
@@ -931,12 +980,31 @@ function eyeShade(src: Std, P: ParamStore, frames: EyeFrames): EyeShade {
   const rho0 = d.sub(A.mul(a0)).length();
   const theta0 = atan(rho0, a0);
   const inCornea = smoothstep(thetaC.add(0.004), thetaC.sub(0.02), theta0).mul(ok);
-  // the view ray refracted at the cornea, to the iris plane
-  const Nc = geometryNormal;
-  const rd = refract(positionView.normalize(), Nc, float(1).div(ior));
+  // the view ray (from the camera at the view-space origin) enters the hero cornea sphere at Pc
+  const vdir = positionView.normalize();
+  const oc = corneaO.negate(); // ray origin (0) - sphere centre
+  const bq = oc.dot(vdir);
+  const disc = bq.mul(bq).sub(oc.dot(oc).sub(corneaR.mul(corneaR)));
+  const tHit = bq.negate().sub(disc.max(0).sqrt());
+  const Pc0 = vdir.mul(tHit);
+  const dc = Pc0.sub(C);
+  const thetaHit = atan(dc.sub(A.mul(dc.dot(A))).length(), dc.dot(A));
+  // the analytic cornea where the ray meets it inside the limbus; the mesh near the edge and outside
+  const useA = step(0, disc).mul(smoothstep(thetaC, thetaC.sub(0.03), thetaHit)).mul(P.u('eye.heroCornea'));
+  const Pc = mix(positionView, Pc0, useA);
+  const Nc = mix(geometryNormal, Pc0.sub(corneaO).normalize(), useA).normalize();
+  // the view ray refracted at the cornea, to the iris surface: the plane eye.irisRecessMm under the limbus
+  // plane, its pupil margin eye.irisConeMm forward of the root (one fixed-point step onto the cone)
+  const rd = refract(vdir, Nc, float(1).div(ior));
+  const dP = Pc.sub(C);
+  const aP = dP.dot(A);
   const plane = R.mul(thetaI.cos()).sub(P.u('eye.irisRecessMm').mul(0.001));
-  const t = a0.sub(plane).max(0).div(rd.dot(A).negate().max(0.05));
-  const H = d.add(rd.mul(t));
+  const down = rd.dot(A).negate().max(0.05);
+  const t0 = aP.sub(plane).max(0).div(down);
+  const rhoT = dP.add(rd.mul(t0)).sub(A.mul(dP.add(rd.mul(t0)).dot(A))).length();
+  const cone = P.u('eye.irisConeMm').mul(0.001).mul(float(1).sub(rhoT.div(rhoI).clamp(0, 1)));
+  const t = aP.sub(plane.add(cone)).max(0).div(down);
+  const H = dP.add(rd.mul(t));
   const hx = H.dot(Ex);
   const hz = H.dot(Ez);
   const rho1 = vec2(hx, hz).length();
@@ -963,7 +1031,7 @@ function eyeShade(src: Std, P: ParamStore, frames: EyeFrames): EyeShade {
     const tTheta = tRho.mul(theta0.cos()).sub(A.mul(theta0.sin())); // away from the pole, on the sphere
     scleraN = geometryNormal.add(tPhi.mul(ns0.x.mul(ns))).add(tTheta.mul(ns0.y.mul(ns))).normalize();
   }
-  return { C, A, Ex, Ez, R, thetaC, corneaO, corneaR, inCornea, H, eRho, ePhi, rhoI, st, irisN: irisN.normalize(), scleraN, ior };
+  return { C, A, Ex, Ez, R, thetaC, corneaO, corneaR, inCornea, H, eRho, ePhi, rhoI, st, irisN: irisN.normalize(), scleraN, ior, corneaN: Nc };
 }
 
 /** A light's emitter rectangle (Blender area size; stage.ts puts it in userData.rect) in view space. */
@@ -1006,9 +1074,10 @@ function rectUniforms(light: THREE.Light): RectUniforms | null {
   return { centre, hw, hh, radiance, unshadowed };
 }
 
-/** LTC GGX (f0 0.04) of a rectangle on normal Nn: the reflected radiance without the light colour. */
-function ltcSpec(Nn: N, r: N, c: N, hw: N, hh: N): N {
-  const { l1, l2 } = ltcTextures();
+/** LTC GGX (f0 0.04) of a rectangle on normal Nn: the reflected radiance without the light colour. The
+ * tables: three's own (`lut`, from its RectAreaLightNode input) or the same objects (ltcTextures). */
+function ltcSpec(Nn: N, r: N, c: N, hw: N, hh: N, lut: { l1: N; l2: N }): N {
+  const { l1, l2 } = lut;
   const V = positionViewDirection;
   const t1 = l1.sample(LTC_Uv({ N: Nn, V, roughness: r }));
   const t2 = l2.sample(LTC_Uv({ N: Nn, V, roughness: r }));
@@ -1020,7 +1089,7 @@ function ltcSpec(Nn: N, r: N, c: N, hw: N, hh: N): N {
 
 /** The cornea's (or any wet film's) specular for one direct light: the emitter's rectangle when the
  * light carries one (shadow and spot cone kept from three's light colour), else point GGX. */
-function wetSpecular(P: ParamStore, input: DirectInput, Nn: N, rough: N): N {
+function wetSpecular(P: ParamStore, input: DirectInput, Nn: N, rough: N, builder?: unknown): N {
   const { lightDirection: L, lightColor, lightNode } = input;
   const light = lightNode?.light;
   const ru = light && (P.get('eye.catchlightRect') as number) ? rectUniforms(light) : null;
@@ -1030,13 +1099,63 @@ function wetSpecular(P: ParamStore, input: DirectInput, Nn: N, rough: N): N {
     const lum = (c: N): N => c.dot(vec3(0.2126, 0.7152, 0.0722));
     // shadow x spot cone: three's light colour over the unattenuated one at this distance
     const vis = lum(lightColor).mul(d2).div(lum(ru.unshadowed).max(1e-9)).clamp(0, 1);
-    return ru.radiance.mul(ltcSpec(Nn, rough, ru.centre, ru.hw, ru.hh)).mul(vis);
+    return ru.radiance.mul(ltcSpec(Nn, rough, ru.centre, ru.hw, ru.hh, ltcTextures(builder as never))).mul(vis);
   }
   const s = BRDF_GGX({ lightDirection: L, f0: vec3(0.04), f90: float(1), roughness: rough, normalView: Nn });
   return lightColor.mul(Nn.dot(L).clamp()).mul(s);
 }
 
+/** T18b lid contact: the visibility of one shadowed light at this eye fragment from occluders between
+ * eye.lidShadowBiasMm and eye.lidShadowRange in front of it along the light (the lids, the lashes), read
+ * from the light's own depth map (the same texture as its shadow node: no extra binding), 8 Vogel taps
+ * over eye.lidShadowTexels rotated per pixel and frame (TRAA integrates them). The shadow node itself
+ * misses these occluders (its depth and normal biases are larger than the lid's height over the globe);
+ * occluders further away stay its job. 1 for lights without a shadow. */
+function lidShadow(P: ParamStore, light: THREE.Light | undefined, builder: unknown): N {
+  const L = light as unknown as { shadow?: THREE.LightShadow; castShadow?: boolean } | undefined;
+  const shadow = L?.shadow;
+  if (!L || !L.castShadow || !shadow || !(P.get('eye.lidShadow') as number)) return float(1);
+  const cam = shadow.camera as THREE.PerspectiveCamera;
+  if (!cam?.isPerspectiveCamera) return float(1);
+  const depth = shadowDepthTexture(shadow, builder);
+  const M = reference('matrix', 'mat4', shadow).setGroup(renderGroup);
+  const mapSize = reference('mapSize', 'vec2', shadow).setGroup(renderGroup);
+  const near = reference('near', 'float', cam).setGroup(renderGroup);
+  const far = reference('far', 'float', cam).setGroup(renderGroup);
+  const sp = M.mul(vec4(positionWorld, 1));
+  const c = sp.xyz.div(sp.w);
+  const uvS = vec2(c.x, float(1).sub(c.y));
+  const zr = perspectiveDepthToViewZ(c.z, near, far).negate();
+  const b0 = P.u('eye.lidShadowBiasMm').mul(0.001);
+  const b1 = P.u('eye.lidShadowRange');
+  const phi = interleavedGradientNoise(screenCoordinate.xy.add(temporalFrame.mod(64).mul(5.588238))).mul(TAU);
+  const hi = ivec2(mapSize.sub(1));
+  const taps = 8;
+  let occ: N = float(0);
+  for (let i = 0; i < taps; i++) {
+    const q = uvS.mul(mapSize).add(vogelDiskSample(i, taps, phi).mul(P.u('eye.lidShadowTexels')));
+    const zd = depthLoad(depth, ivec2(q.floor()).clamp(ivec2(0, 0), hi)).r;
+    const zo = perspectiveDepthToViewZ(zd, near, far).negate();
+    const gap = zr.sub(zo);
+    occ = occ.add(step(b0, gap).mul(step(gap, b1)));
+  }
+  const inside = step(0, uvS.x).mul(step(uvS.x, 1)).mul(step(0, uvS.y)).mul(step(uvS.y, 1)).mul(step(0, sp.w));
+  return float(1).sub(occ.mul(1 / taps).mul(inside).mul(P.u('eye.lidShadow')));
+}
+
 class EyeLightingModel extends THREE.PhysicalLightingModel {
+  /** one lid-contact term per light per build (a rect light's specular and its point-equivalent diffuse) */
+  private readonly lids = new Map<THREE.Light | undefined, N>();
+  private lid(light: THREE.Light | undefined, builder: unknown): N {
+    let n = this.lids.get(light);
+    if (!n) {
+      n = lidShadow(this.P, light, builder);
+      if (light) n = n.toVar();
+      this.lids.set(light, n);
+    }
+    return n;
+  }
+
   constructor(
     private readonly P: ParamStore,
     private readonly screen: N | null = null,
@@ -1046,12 +1165,18 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
   }
 
   override direct(input: unknown, builder?: unknown): void {
-    const { lightDirection: L, lightColor, reflectedLight, lightNode } = input as DirectInput;
+    const { lightDirection: L, reflectedLight, lightNode } = input as DirectInput;
     const P = this.P;
-    // the sclera's own wet specular (three's physical, on the vein normal; masked off on the cornea
-    // by the material's specular intensity); its diffuse is replaced below
+    const lid = this.lid(lightNode?.light, builder);
+    const lightColor = (input as DirectInput).lightColor.mul(lid);
+    const lit = { ...(input as object), lightColor } as DirectInput;
+    // the sclera's own wet specular (three's physical, on the vein normal; off on the cornea, whose lobe is
+    // the catchlight below); its diffuse is replaced below
     const sink = vec3(0).toVar();
-    super.direct({ ...(input as object), reflectedLight: { ...reflectedLight, directDiffuse: sink } } as never, builder as never);
+    const spec = vec3(0).toVar();
+    super.direct({ ...lit, reflectedLight: { ...reflectedLight, directDiffuse: sink, directSpecular: spec } } as never, builder as never);
+    const sclera = this.sh ? float(1).sub(this.sh.inCornea) : float(1);
+    reflectedLight.directSpecular.addAssign(spec.mul(sclera));
     const occl = directOcclusion(P, null, null, this.screen, lightNode?.light);
     const eyeLight = lightNode?.light?.name === 'eye' ? P.u('eye.eyeLightDiffuse') : float(1);
     const lambert = BRDF_Lambert({ diffuseColor: diffuseColor.rgb });
@@ -1090,17 +1215,25 @@ class EyeLightingModel extends THREE.PhysicalLightingModel {
     } else {
       reflectedLight.directDiffuse.addAssign(sink.mul(occl).mul(eyeLight));
     }
-    // cornea: the wet lobe on the geometric (eyeball / cornea) normal, the emitter's shape when known
+    // cornea: the wet lobe on the cornea normal (the hero cornea's, T18b), the emitter's shape when known
     const r = float(P.u('eye.corneaRoughness')).clamp(0.02, 1);
-    reflectedLight.directSpecular.addAssign(wetSpecular(P, input as DirectInput, geometryNormal, r).mul(P.u('eye.corneaStrength')));
+    const Nw = this.sh ? this.sh.corneaN : geometryNormal;
+    reflectedLight.directSpecular.addAssign(wetSpecular(P, lit, Nw, r, builder).mul(P.u('eye.corneaStrength')));
   }
 
   override directRectArea(input: unknown, builder?: unknown): void {
     const i = input as RectInput;
-    super.directRectArea(input as never, builder as never);
-    // the cornea's reflection of an area light is the light's shape: LTC GGX (f0 0.04) on the eyeball normal
+    const lid = this.lid(i.lightNode?.light, builder);
+    const lightColor = i.lightColor.mul(lid);
+    // three's LTC lobe on the sclera only (the cornea's is the catchlight below)
+    const spec = vec3(0).toVar();
+    super.directRectArea({ ...(input as object), lightColor, reflectedLight: { ...i.reflectedLight, directSpecular: spec } } as never, builder as never);
+    i.reflectedLight.directSpecular.addAssign(spec.mul(this.sh ? float(1).sub(this.sh.inCornea) : float(1)));
+    // the cornea's reflection of an area light is the light's shape: LTC GGX (f0 0.04) on the cornea normal,
+    // with the tables three's rect light node bound
     const r = float(this.P.u('eye.corneaRoughness')).clamp(0.02, 1);
-    i.reflectedLight.directSpecular.addAssign(i.lightColor.mul(ltcSpec(geometryNormal, r, i.lightPosition, i.halfWidth, i.halfHeight)).mul(this.P.u('eye.corneaStrength')));
+    const Nw = this.sh ? this.sh.corneaN : geometryNormal;
+    i.reflectedLight.directSpecular.addAssign(lightColor.mul(ltcSpec(Nw, r, i.lightPosition, i.halfWidth, i.halfHeight, { l1: i.ltc_1, l2: i.ltc_2 })).mul(this.P.u('eye.corneaStrength')));
   }
 }
 
@@ -1120,18 +1253,23 @@ export class EyeMaterial extends THREE.MeshPhysicalNodeMaterial {
     const ring = smoothstep(P.u('eye.limbalWidth'), float(0), sh.st.y.sub(limbV).abs()).mul(P.u('eye.limbalDarken'));
     const rgb = mix(base.rgb, seen.rgb.mul(float(1).sub(ring)), sh.inCornea);
     this.colorNode = vec4(albedo(P, 'eye', rgb), 1);
-    if (src.roughnessMap) this.roughnessNode = texture(src.roughnessMap, uv()).g;
-    this.normalNode = sh.scleraN;
-    this.specularIntensityNode = float(1).sub(sh.inCornea);
-    // the wet surface's reflection of the surroundings (the Cycles hero's set and fill veil the iris):
-    // a constant radiance x Fresnel, a stand-in until the set-bounce environment (checkpoint 3 §2.5)
-    const nv = geometryNormal.dot(positionViewDirection).clamp();
-    const fres = float(0.04).add(float(0.96).mul(float(1).sub(nv).pow(5)));
-    this.emissiveNode = P.u('eye.envVeil').mul(fres).mul(P.u('eye.corneaStrength'));
+    // T18b: no ORM: the roughness is the bake's own split (eyes_hq rough_iris / rough_sclera at the cornea
+    // edge) on the cornea mask; the baked lid occlusion is already in the albedo
+    this.roughnessMap = null;
+    this.metalnessMap = null;
+    this.aoMap = null;
+    this.roughnessNode = mix(P.u('eye.roughSclera'), P.u('eye.corneaEnvRoughness'), sh.inCornea);
+    // three's specular: the sclera's on the vein normal; on the cornea only its indirect lobe (the set
+    // bounce reflected by the cornea, T18b) at the cornea's f0 share (its direct lobe is the catchlight)
+    this.normalNode = mix(sh.scleraN, sh.corneaN, sh.inCornea).normalize();
+    this.specularIntensityNode = mix(float(1), P.u('eye.corneaStrength'), sh.inCornea);
     this.metalnessNode = float(0);
     this.clearcoat = 0; // the cornea lobe lives in EyeLightingModel
     this.normalMap = null;
     this.screen = screenAONode(screenAO);
+    // T18b: flag the wet eye in the temporal target's 'hair' attachment (green; hair writes 1 in every channel):
+    // HairTRAA resolves these pixels as specular (temporal.ts: linear blend, no luminance weighting)
+    this.mrtNode = mrt({ hair: vec4(0, 1, 0, 0) });
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
@@ -1172,7 +1310,7 @@ class EyeWetLightingModel extends THREE.PhysicalLightingModel {
     const spec = vec3(0).toVar();
     super.direct({ ...(input as object), reflectedLight: { directDiffuse: diffuse, directSpecular: spec } } as never, builder as never);
     reflectedLight.directDiffuse.addAssign(diffuse.mul(directOcclusion(this.P, null, null, this.screen, lightNode?.light)));
-    reflectedLight.directSpecular.addAssign(wetSpecular(this.P, input as DirectInput, normalView, float(0.05)).mul(this.P.u('eye.meniscusSpec')));
+    reflectedLight.directSpecular.addAssign(wetSpecular(this.P, input as DirectInput, normalView, float(0.05), builder).mul(this.P.u('eye.meniscusSpec')));
   }
 }
 
@@ -1436,7 +1574,10 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
       return nm;
     };
     m.material = Array.isArray(m.material) ? m.material.map(swap) : swap(m.material);
-    m.castShadow = true;
+    // T18b: the globe and its films cast no shadow (in Cycles they shadow only the lids' hidden inner faces);
+    // that lets the eye test the maps with a lid-sized bias (lidShadow) without shadowing itself
+    const r0 = roles.get((Array.isArray(m.material) ? m.material[0] : m.material)?.name ?? '');
+    m.castShadow = !(r0 === 'eye' || r0 === 'eyeshell' || r0 === 'eyewet');
     m.receiveShadow = true;
     m.frustumCulled = false; // skinned: the bind-pose bounds are wrong once posed
   });

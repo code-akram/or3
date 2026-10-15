@@ -84,6 +84,13 @@ export class TextureBudget {
     const objects = (this.renderer as any)._objects;
     if (this.orig) objects.get = this.orig;
     this.orig = null;
+    const r = this.report(limit);
+    this.seen.clear();
+    return r;
+  }
+
+  /** The audit of every render object recorded so far (recording continues). */
+  report(limit: number): TextureAudit {
     const all: TextureUse[] = [];
     for (const [ro, pass] of this.seen) {
       let c;
@@ -94,7 +101,6 @@ export class TextureBudget {
       }
       all.push({ material: String(ro.material?.name || ro.material?.type || '?'), object: String(ro.object?.name || ro.object?.type || '?'), pass, ...c });
     }
-    this.seen.clear();
     const worst = new Map<string, TextureUse>();
     for (const u of all) {
       const k = u.material;

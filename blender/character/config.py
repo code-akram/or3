@@ -505,7 +505,11 @@ DEFAULTS = {
                       "row_jitter_m": 0.00025, "strip_cols": 8, "strip_forward_scale": 0.6},
             "lower": {"count": 60, "length_m": [0.0018, 0.0032, 0.0045, 0.0042, 0.003],
                       "curl_deg": 25, "forward": 0.45, "splay_deg": 8, "fan_deg": 20,
-                      "row_jitter_m": 0.0002, "strip_cols": 6, "radius_scale": 0.7},
+                      "row_jitter_m": 0.0002, "strip_cols": 6, "radius_scale": 0.7,
+                      # T18b: the game strip's lower lashes: thinner strokes, no lash line, lighter roots
+                      # and value (at 100 % the T18 strip read as a row of black specks under the iris)
+                      "strip_radius_px": 0.9, "strip_min_px": 0.35, "lash_line_px": 0,
+                      "strip_root_dark": 0.15, "strip_value": 1.5},
             # near-black brown, dense upper line (the hero lashes alone frame the eye); clumps of 3-5
             "melanin": 0.985, "redness": 0.35, "clump": 0.6, "gap_m": 0.00015,
             "hero": {"radius_m": [0.000045, 0.00006], "tip_radius": 0.2,

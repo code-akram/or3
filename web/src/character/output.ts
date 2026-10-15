@@ -281,6 +281,9 @@ export class Output {
       hairGamma: tp.hairGamma ?? uniform(1.25),
       hairGammaMoving: tp.hairGammaMoving ?? uniform(0.75),
       hairMotionPx: tp.hairMotionPx ?? uniform(1),
+      specMinWeight: tp.specMinWeight ?? uniform(0.1),
+      specGamma: tp.specGamma ?? uniform(1.5),
+      specLinear: tp.specLinear ?? uniform(1),
     };
     let node: N;
     if (this.aa === 'traa') {

@@ -24,11 +24,14 @@ Per eye (near = the key side, image left; far = image right), around the iris ce
   catchlight pixels of the iris disc at >= 0.5 x the disc's peak and >= 2 x the iris median, as a share of
              the disc's area; the peak (0..255 display luma) as well
   sat        median HSV saturation (display sRGB, 8 bit) over the iris annulus
+  under      16 x 6 boxes on the iris column 20 px (bag) and 36 px (cheek top) below the iris centre: median
+             display sRGB and linear luminance (T18b's under-eye; T19's 92 vs 118 box was not scripted)
 --blur PX applies the same Gaussian (sigma PX, display values) to both frames before measuring: the
 equal-filter catchlight comparison (Cycles' 1.5 px Blackman-Harris pixel filter + OIDN vs the engine's TRAA).
 
 turntable: per frame of an engine turntable dir (frame_*.png), the catchlight peak (display luma max) and
-its area (pixels >= 0.5 x peak) in --box, and the temporal noise there (mean |L(t-1) - 2 L(t) + L(t+1)|),
+its area (pixels >= 0.5 x peak within 4 px of the peak) in --box, the peak's frame-to-frame step and
+coefficient of variation (the pulse), and the temporal noise there (mean |L(t-1) - 2 L(t) + L(t+1)|),
 T18's TRAA table.
 
 stdlib + numpy + ffmpeg (no imaging library), like lookdev_report.py.
@@ -194,8 +197,15 @@ def eye_measure(fr, name, centre, r=IRIS_R):
     rgb = fr.rgb[ann][keep]
     mx = rgb.max(-1)
     sat = np.where(mx > 0, (mx - rgb.min(-1)) / np.maximum(mx, 1e-9), 0)
+    # under-eye (T18b): 16 x 6 boxes centred on the iris column, 20 px (the bag / lower-lid shadow) and
+    # 36 px (the cheek top) below the iris centre; median display sRGB (0..255) and linear luminance
+    under = {}
+    for k, dy_ in (("bag", 20), ("cheek", 36)):
+        m = (X >= cx - 8) & (X < cx + 8) & (Y >= cy + dy_ - 3) & (Y < cy + dy_ + 3)
+        under[k] = {"srgb": [round(float(v), 1) for v in np.median(fr.rgb[m], 0)], "lum": round(float(np.median(fr.L[m])), 5)}
     return {
         "centre": [round(cx, 1), round(cy, 1)],
+        "under": under,
         "iris": round(iris, 5), "sclera": round(sclera, 5),
         "sclera_nasal": round(float(np.median(nasal)), 5), "sclera_temporal": round(float(np.median(temporal)), 5),
         "ratio": round(sclera / max(iris, 1e-9), 3),
@@ -253,12 +263,24 @@ def compare(a):
     for eye in ("near", "far"):
         rel[eye] = {k: round(e[eye][k] / max(c[eye][k], 1e-9), 3)
                     for k in ("ratio", "iris", "sclera", "sclera_nasal", "sclera_temporal", "catchlight_share", "sat")}
+        for k in ("bag", "cheek"):
+            rel[eye][f"under_{k}"] = round(e[eye]["under"][k]["lum"] / max(c[eye]["under"][k]["lum"], 1e-9), 3)
     rel["both"] = {k: round(e["both"][k] / max(c["both"][k], 1e-9), 3) for k in ("ratio", "catchlight_share", "sat")}
     out = {"engine": e, "cycles": c, "engine_over_cycles": rel}
     return out
 
 
 # ------------------------------------------------------------------------------------- turntable
+
+def box_mean(D, r):
+    """Mean over the (2r+1)^2 window (edge-padded)."""
+    P = np.pad(D, r, mode="edge")
+    c = np.cumsum(np.cumsum(P, 0), 1)
+    c = np.pad(c, ((1, 0), (1, 0)))
+    k = 2 * r + 1
+    h, w = D.shape
+    return (c[k:k + h, k:k + w] - c[:h, k:k + w] - c[k:k + h, :w] + c[:h, :w]) / (k * k)
+
 
 def turntable(a):
     files = sorted(f for f in os.listdir(a.dir) if f.startswith("frame_") and f.endswith(".png"))
@@ -270,13 +292,19 @@ def turntable(a):
             img = img[y:y + h, x:x + w]
         D = luma_disp(img)
         Ls.append(D)
-        p = D.max()
+        # the catchlight: the pixel standing highest over its 9 x 9 mean (a skin sheen in the box is broad)
+        iy, ix = np.unravel_index(int((D - box_mean(D, 4)).argmax()), D.shape)
+        p = D[iy, ix]
         peaks.append(round(float(p), 1))
-        areas.append(int((D >= 0.5 * p).sum()))
+        # its area: pixels >= half its peak within 4 px
+        win = D[max(iy - 4, 0):iy + 5, max(ix - 4, 0):ix + 5]
+        areas.append(int((win >= 0.5 * p).sum()))
     noise = [float(np.abs(Ls[i - 1] - 2 * Ls[i] + Ls[i + 1]).mean()) for i in range(1, len(Ls) - 1)]
     dp = [abs(peaks[i] - peaks[i - 1]) for i in range(1, len(peaks))]
     return {"dir": os.path.abspath(a.dir), "box": a.box, "frames": len(files), "peak": peaks, "area_px": areas,
             "peak_mean": round(float(np.mean(peaks)), 1), "peak_step_mean": round(float(np.mean(dp)), 2) if dp else 0,
+            "peak_cv": round(float(np.std(peaks) / max(np.mean(peaks), 1e-9)), 4),
+            "area_mean": round(float(np.mean(areas)), 2),
             "noise_mean": round(float(np.mean(noise)), 3) if noise else 0}
 
 

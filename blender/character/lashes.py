@@ -327,15 +327,21 @@ def build(b, frame, cfg):
             a_ = np.stack([px[:, :-1], py[:, :-1]], -1).reshape(-1, 2)
             b_ = np.stack([px[:, 1:], py[:, 1:]], -1).reshape(-1, 2)
             tt = np.tile((np.arange(k - 1) + 0.5) / (k - 1), n)
-            rr = np.maximum(cfg["strip_radius_px"] * (1 - 0.7 * tt), 0.5)
-            col = np.array(beard_bake.linear(hair_mesh.hex_rgb(cfg["color"])))
-            cc = np.tile(col, (len(tt), 1)) * (0.6 + 0.4 * tt)[:, None]
+            # T18b: per-lid stroke radius, root darkening, value and lash line (the lower lid's: thinner,
+            # lighter, no line, so at 100 % its lashes read as fine lashes, not black specks at the roots)
+            rr = np.maximum(lc.get("strip_radius_px", cfg["strip_radius_px"]) * (1 - 0.7 * tt),
+                            lc.get("strip_min_px", 0.5))
+            col = np.array(beard_bake.linear(hair_mesh.hex_rgb(cfg["color"]))) * lc.get("strip_value", 1.0)
+            rd = lc.get("strip_root_dark", 0.4)
+            cc = np.tile(col, (len(tt), 1)) * (1 - rd + rd * tt)[:, None]
             canvas.lines(a_, b_, rr, cc)
             # the dark lash line along the root edge (0.3 mm)
-            lx = np.linspace(pad, W - pad, 200)
-            ly = np.full(200, y0 + pad + 1.0)
-            canvas.lines(np.stack([lx[:-1], ly[:-1]], 1), np.stack([lx[1:], ly[1:]], 1),
-                         np.full(199, cfg["lash_line_px"]), np.tile(col * 0.5, (199, 1)))
+            line_px = lc.get("lash_line_px", cfg["lash_line_px"])
+            if line_px > 0:
+                lx = np.linspace(pad, W - pad, 200)
+                ly = np.full(200, y0 + pad + 1.0)
+                canvas.lines(np.stack([lx[:-1], ly[:-1]], 1), np.stack([lx[1:], ly[1:]], 1),
+                             np.full(199, line_px), np.tile(col * 0.5, (199, 1)))
             slot += 1
         n, u, pts, tang = all_n, all_u, all_pts_k, all_tang
     # hero curves: all lashes in one object (collided above), clumped
