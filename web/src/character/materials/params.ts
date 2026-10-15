@@ -51,8 +51,11 @@ export const DEFAULT_PARAMS = {
     directAO: 0.5,
   },
   hair: {
-    /** T10: 1.3 (was 1.0), with the R lobe halved and TRT off (see spec1 / spec2). */
-    albedoGain: 1.3,
+    /** T10: 1.3 (was 1.0), with the R lobe halved and TRT off (see spec1 / spec2). T20: 0. Under the
+     * studio lights the Cycles hero's dark hair takes 1-5 % of its crown / side / back light from the key
+     * (93-96 % from the rim): a near-black Chiang fibre has no Lambertian body, and this term was the
+     * engine's key-lit excess (per-term basis on the v5 cards: every fit put it at 0). */
+    albedoGain: 0.0,
     /** Primary (white, shifted toward the root) and secondary (albedo tinted, toward the tip) lobes. */
     shift1: -0.08,
     shift2: 0.12,
@@ -69,11 +72,11 @@ export const DEFAULT_PARAMS = {
     specAO: 1.0,
     /** Warm multiple-scattering body (T9b): a fully wrapped diffuse in the scatter tint, the albedo's
      * chroma ^ scatterSat at luminance 1; the TRT lobe (spec2) takes the same tint. */
-    scatter: 0.008,
+    scatter: 0.024,     // T20 fit (fibre tint): 0.008 x 3
     scatterSat: 0.4,
     /** TT (T9b): backlit transmission in the scatter tint: gain x the R-like cone (ttExponent) x the
      * forward-scattering azimuth term ((1 - Lp.Vp) / 2)^ttPow. */
-    tt: 0.36,
+    tt: 1.62,           // T20 fit (fibre tint): 0.36 x 4.5 (x 3 left the T10 rim closeup at 0.69 under TRAA)
     ttPow: 6.0,
     ttExponent: 16,
     /** T9, calibrated on the closeup parity (bench/m1/hair_test.py --parts parity: hair-region mean
@@ -96,7 +99,7 @@ export const DEFAULT_PARAMS = {
     // side mass behind the temple (Cycles lights the top), and a broad TT (ttPow 2) lit everything the rim
     // reached; the fit wants a narrow forward TT (ttPow 6) at 2.8x, more diffuse / scatter body, R at half
     // and no TRT. Per light 0.98 / 1.13 / 0.98, portrait crown / back 3.07 vs Cycles 3.21.
-    spec1: 0.0175,
+    spec1: 0.031,       // T20 fit (with fresnel 1): 0.0175 x 1.75
     spec2: 0.0,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
@@ -131,6 +134,16 @@ export const DEFAULT_PARAMS = {
     /** Optical depth of the hair layer above the fibres the camera sees (materials HairLightingModel):
      * every light into the scalp hair x exp(-surfaceDepth / |N.L|); 0 = off. */
     surfaceDepth: 0.0,
+    /** T20: 1 = the TT and scatter terms take the strand's own fibre transmittance exp(-ttDepth (ln albedo)^2)
+     * (materials HairMaterial), 0 = the T9b unit-luminance tint. ttDepth = 2 / (fac^2 path): fac 5.509 is
+     * Chiang's radial-roughness factor at 0.5, path the atlas albedo's (hair_groom_cards CARDS.albedo.path). */
+    fibreTint: 1,
+    ttDepth: 0.0659,    // path 1.0 (T20 cards); 0.0969 for the path 0.68 builds (T15-T16)
+    /** T20: Fresnel on the R lobe (Schlick, IOR 1.55, relative to normal incidence), 0 = off (T9b-T16). */
+    fresnel: 1,
+    /** T20: the baked directional hair occlusion (TEXCOORD_2 / _3 of v5 builds) on every light into the scalp
+     * hair: 1 for the gameplay tier, where the deep shadow (hair.deepShadow) is off; 0 = off (hero tier). */
+    dirOcclusion: 0,
   },
   /** T10 screen-space AO (ao.ts): GTAO at half resolution on a depth / normal prepass (cards with their
    * alpha), multiplied into the direct diffuse of every character material, per light by the light's
