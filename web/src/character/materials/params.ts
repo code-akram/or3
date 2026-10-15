@@ -72,7 +72,7 @@ export const DEFAULT_PARAMS = {
     specAO: 1.0,
     /** Warm multiple-scattering body (T9b): a fully wrapped diffuse in the scatter tint, the albedo's
      * chroma ^ scatterSat at luminance 1; the TRT lobe (spec2) takes the same tint. */
-    scatter: 0.04,      // T20 fit (fibre tint): 0.008 x 5
+    scatter: 0.024,     // T20 fit (fibre tint): 0.008 x 3
     scatterSat: 0.4,
     /** TT (T9b): backlit transmission in the scatter tint: gain x the R-like cone (ttExponent) x the
      * forward-scattering azimuth term ((1 - Lp.Vp) / 2)^ttPow. */
@@ -99,7 +99,7 @@ export const DEFAULT_PARAMS = {
     // side mass behind the temple (Cycles lights the top), and a broad TT (ttPow 2) lit everything the rim
     // reached; the fit wants a narrow forward TT (ttPow 6) at 2.8x, more diffuse / scatter body, R at half
     // and no TRT. Per light 0.98 / 1.13 / 0.98, portrait crown / back 3.07 vs Cycles 3.21.
-    spec1: 0.026,       // T20 fit (with fresnel 1): 0.0175 x 1.5
+    spec1: 0.031,       // T20 fit (with fresnel 1): 0.0175 x 1.75
     spec2: 0.0,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
