@@ -45,6 +45,17 @@ import { ContactShadows } from './contact';
 import { PassProfiler } from './profile';
 import { TIERS, applyTierParams, gameplayCamera, hasParam, noShadowList, resolveTier, type ResolvedTier, type TierName } from './tiers';
 import { PerfMonitor, newSession, perfOverlay } from './perf';
+import { TextureBudget } from './texbudget';
+
+/** T18b: narrow the camera (already placed for a w x h frame, lens shift included) to the window
+ * [x, y, cw, ch] of that frame; returns the window's size in pixels. */
+function cropCamera(cam: THREE.PerspectiveCamera, w: number, h: number, crop: [number, number, number, number]): [number, number] {
+  const [x, y, cw, ch] = crop;
+  const v = cam.view && cam.view.enabled ? cam.view : null;
+  cam.setViewOffset(w, h, (v?.offsetX ?? 0) + x, (v?.offsetY ?? 0) + y, cw, ch);
+  cam.updateProjectionMatrix();
+  return [cw, ch];
+}
 
 /** The stage views plus T24's gameplay framing (tiers.ts gameplayCamera, injected into the stage data). */
 const VIEWS_ALL = [...VIEWS, 'gameplay'] as const;
@@ -1003,7 +1014,7 @@ async function main(): Promise<void> {
      * history; keep = true continues the current history instead (same view / pose / size, the model
      * turned to angleDeg; frames default 1): the turntable (engine_shots --turntable). linear = true
      * returns scene-linear float32 RGBA (no grade / exposure / view) as base64 instead. */
-    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false, angleDeg = 0, opts: { frames?: number; keep?: boolean; linear?: boolean } = {}) => {
+    capture: async (view: ViewName, rig: RigName, w: number, h: number, pose?: string, post = false, angleDeg = 0, opts: { frames?: number; keep?: boolean; linear?: boolean; crop?: [number, number, number, number] } = {}) => {
       if (!opts.keep) {
         setView(view, rig);
         poseName = pose ?? (view === 'portrait' ? 'stand' : 'rest');
@@ -1015,9 +1026,12 @@ async function main(): Promise<void> {
       model.rotation.y = (angleDeg * Math.PI) / 180;
       model.updateMatrixWorld(true);
       applyCamera(camera, stage.view!.camera, w, h);
+      // T18b: crop = [x, y, cw, ch] of the w x h frame: the same camera, only that window rendered (cw x ch
+      // pixels identical to the full frame's, but for the vignette and bloom, which are full-frame effects)
+      const [cw, ch] = opts.crop ? cropCamera(camera, w, h, opts.crop) : [w, h];
       const frames = opts.frames ?? (output.temporal && !opts.keep ? (P.get('aa.stillFrames') as number) : 1);
       const t = performance.now();
-      const px = opts.linear ? await output.captureLinear(scene, camera, w, h, frames) : await output.capture(scene, camera, w, h, frames);
+      const px = opts.linear ? await output.captureLinear(scene, camera, cw, ch, frames) : await output.capture(scene, camera, cw, ch, frames);
       const ms = performance.now() - t;
       const st = statsNow();
       if (!opts.keep) resize();
@@ -1028,16 +1042,36 @@ async function main(): Promise<void> {
     },
     /** One more frame of the current view into the temporal history (no readback): the in-between
      * frames of a turntable at the display rate (engine_shots --tt-hz). */
-    advance: (angleDeg: number, w: number, h: number) => {
+    advance: (angleDeg: number, w: number, h: number, crop?: [number, number, number, number]) => {
       model.rotation.y = (angleDeg * Math.PI) / 180;
       model.updateMatrixWorld(true);
       applyCamera(camera, stage.view!.camera, w, h);
+      if (crop) [w, h] = cropCamera(camera, w, h, crop);
       if (!advanceRT || advanceRT.width !== w || advanceRT.height !== h) {
         advanceRT?.dispose();
         advanceRT = new THREE.RenderTarget(w, h, { type: THREE.UnsignedByteType, depthBuffer: false });
       }
       output.render(scene, camera, w, h, advanceRT);
       return true;
+    },
+    /** T18b: the sampled textures every pipeline of one frame of a view binds per shader stage
+     * (texbudget.ts), against the device's limit (WebGPU default 16). engine_shots --texcheck. */
+    textureAudit: async (view: ViewName, rig: RigName, w = 256, h = 256, post = false) => {
+      setView(view, rig);
+      poseName = view === 'portrait' ? 'stand' : 'rest';
+      amount = 1;
+      applyPose();
+      setBeauty(post);
+      applyCamera(camera, stage.view!.camera, w, h);
+      const rt = new THREE.RenderTarget(w, h, { type: THREE.UnsignedByteType, depthBuffer: false });
+      const tb = new TextureBudget(renderer);
+      tb.start();
+      output.render(scene, camera, w, h, rt);
+      await renderer.readRenderTargetPixelsAsync(rt, 0, 0, 1, 1);
+      const audit = tb.stop(16); // WebGPU's default per-stage limit, whatever this adapter offers
+      rt.dispose();
+      resize();
+      return { view, rig, post, adapter_limit: state.limits?.max_sampled_textures_per_stage ?? 16, shadow_maps: stage.shadowMapCount(), lights: stage.describeLights(), ...audit };
     },
     /** T19: per-pass GPU times of `frames` moving frames (shadow maps and AO every frame, as in motion) of
      * a view at w x h after `warmup` frames (profile.ts; needs ?timestamps=1 for the GPU side). */

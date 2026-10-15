@@ -480,7 +480,10 @@ export class Output {
       this.jitter = [j[0] - 0.5, j[1] - 0.5];
       const fw = view?.fullWidth ?? iw;
       const fh = view?.fullHeight ?? ih;
-      cam.setViewOffset(fw, fh, (view?.offsetX ?? 0) + (this.jitter[0] * fw) / iw, (view?.offsetY ?? 0) + (this.jitter[1] * fh) / ih, view?.width ?? fw, view?.height ?? fh);
+      // a render pixel is view.width / iw full-frame units (T18b: a cropped window, view.width < fullWidth)
+      const vw = view?.width ?? fw;
+      const vh = view?.height ?? fh;
+      cam.setViewOffset(fw, fh, (view?.offsetX ?? 0) + (this.jitter[0] * vw) / iw, (view?.offsetY ?? 0) + (this.jitter[1] * vh) / ih, vw, vh);
       cam.updateProjectionMatrix();
       cam.updateMatrixWorld();
       if (this.traa) this.traa.camera = cam;

@@ -30,6 +30,10 @@
 //        the same URL from local headless Chromium. With tiers (T24) the page captures each tier in turn
 //        (stills, a 2 s turntable, the perf loop) as <tier>_*.png / <tier>_tt/ / <tier>_shots.json /
 //        <tier>_perf.json (bench/m1/v4/air-session.md).
+//   --texcheck ['q1;q2;...'] (T18b): no frames; the sampled-texture audit (web texbudget.ts) of every pipeline of
+//        each view under each URL variant (default: the hero tier, ltc=0, sharemaps=0, pcss=0, contact=0, the
+//        gameplay tier, hairshadow=0) -> <prefix>texcheck.json; exit 1 if any binds > 16 per stage (WebGPU's default)
+//   --crop x,y,w,h / --tt-crop x,y,w,h (T18b): only that window of each still / turntable frame (same camera)
 //   --tier hero|gameplay (T24): the quality tier for the headless shots (= --query tier=X --prefix X_; X_shots.json)
 //
 // Containment: the server exposes only web/dist-viewer and RUN_DIR (under /asset/), bound to 127.0.0.1, and
@@ -66,6 +70,16 @@ const ttSize = Number(opt('tt-size', 640));
 const ttHz = Number(opt('tt-hz', ttFps));
 const ttWarmup = Number(opt('tt-warmup', 24));
 const wantChart = argv.includes('--chart');
+// T18b: --crop x,y,w,h renders only that window of every still (same camera; e.g. the eyes of the 1920x1080
+// portrait), --tt-crop x,y,w,h the same for the turntable frames (of the --tt-size frame)
+const parseCrop = (v) => (v ? v.split(',').map(Number) : null);
+const cropArg = parseCrop(opt('crop', null));
+const ttCrop = parseCrop(opt('tt-crop', null));
+// T18b: --texcheck [VARIANTS]: no frames; per view (--views) and per URL variant (';'-separated query strings,
+// default below), a fresh page load renders one frame with the texture audit on (main.ts textureAudit,
+// texbudget.ts) -> <prefix>texcheck.json; exits 1 when any pipeline binds more than 16 sampled textures in a stage
+const texcheckArg = argv.includes('--texcheck') ? (argv[argv.indexOf('--texcheck') + 1] ?? '') : null;
+const TEXCHECK_VARIANTS = ['', 'ltc=0', 'sharemaps=0', 'pcss=0', 'contact=0', 'tier=gameplay', 'hairshadow=0'];
 const TT_DEG_PER_S = 20; // main.ts turntable speed
 /** 'closeup:hero' -> [view, rig, file stem] (the default rig: hero for the portrait, else neutral) */
 function viewSpec(v) {
@@ -232,14 +246,15 @@ async function run(backend) {
     const jobs = views.flatMap((v) => (v === 'portrait' && beauty ? [[v, false], [v, true]] : [[v, false]]));
     for (const [spec, post] of jobs) {
       const [v, rig, stem] = viewSpec(spec);
-      const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
+      const [fw, fh] = v === 'portrait' ? [pw, ph] : [size, size];
+      const [w, h] = cropArg ? [cropArg[2], cropArg[3]] : [fw, fh];
       const name = `${outPrefix}${stem}${post ? '_beauty' : ''}.png`;
       const t = Date.now();
-      const r = await page.evaluate(([v, rig, w, h, p, post]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, post), [v, rig, w, h, poseArg, post]);
+      const r = await page.evaluate(([v, rig, w, h, p, post, crop]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, post, 0, crop ? { crop } : {}), [v, rig, fw, fh, poseArg, post, cropArg]);
       const px = Buffer.from(r.b64, 'base64');
       if (px.length !== w * h * 4) throw new Error(`${v}: got ${px.length} bytes for ${w}x${h}`);
       await writeFile(join(build, name), png(w, h, px));
-      shots.push({ view: v, rig, post, file: name, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
+      shots.push({ view: v, rig, post, file: name, res: [w, h], crop: cropArg, render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
       console.error(`[engine_shots] ${backend} ${name} ${w}x${h}: ${Date.now() - t} ms`);
     }
     const turntable = ttSeconds > 0 ? await captureTurntable(page, backend) : null;
@@ -316,19 +331,20 @@ async function captureTurntable(page, backend) {
   if (temporal) {
     const warm = Math.max(0, ttWarmup);
     // the view, pose and a fresh history at the first warm-up angle, then turn into frame 0
-    await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a, { frames: 1 }), [v, rig, ttSize, ttSize, poseArg, -warm * stepDeg]);
-    for (let k = warm - 1; k >= 1; k--) await page.evaluate(([a, w]) => window.__viewer.advance(a, w, w), [-k * stepDeg, ttSize]);
+    await page.evaluate(([v, rig, w, h, p, a, crop]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a, crop ? { frames: 1, crop } : { frames: 1 }), [v, rig, ttSize, ttSize, poseArg, -warm * stepDeg, ttCrop]);
+    for (let k = warm - 1; k >= 1; k--) await page.evaluate(([a, w, crop]) => window.__viewer.advance(a, w, w, crop ?? undefined), [-k * stepDeg, ttSize, ttCrop]);
   }
+  const [tw, th] = ttCrop ? [ttCrop[2], ttCrop[3]] : [ttSize, ttSize];
   for (let i = 0; i < n; i++) {
     const deg = (i / ttFps) * TT_DEG_PER_S;
-    if (temporal) for (let k = sub - 1; k >= 1; k--) await page.evaluate(([a, w]) => window.__viewer.advance(a, w, w), [deg - k * stepDeg, ttSize]);
+    if (temporal) for (let k = sub - 1; k >= 1; k--) await page.evaluate(([a, w, crop]) => window.__viewer.advance(a, w, w, crop ?? undefined), [deg - k * stepDeg, ttSize, ttCrop]);
     const r = temporal
-      ? await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a, { keep: true, frames: 1 }), [v, rig, ttSize, ttSize, poseArg, deg])
-      : await page.evaluate(([v, rig, w, h, p, a]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a), [v, rig, ttSize, ttSize, poseArg, deg]);
+      ? await page.evaluate(([v, rig, w, h, p, a, crop]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a, crop ? { keep: true, frames: 1, crop } : { keep: true, frames: 1 }), [v, rig, ttSize, ttSize, poseArg, deg, ttCrop])
+      : await page.evaluate(([v, rig, w, h, p, a, crop]) => window.__viewer.capture(v, rig, w, h, p ?? undefined, false, a, crop ? { crop } : {}), [v, rig, ttSize, ttSize, poseArg, deg, ttCrop]);
     const px = Buffer.from(r.b64, 'base64');
     const file = `frame_${String(i).padStart(3, '0')}.png`;
-    await writeFile(join(dir, file), png(ttSize, ttSize, px));
-    const L = new Float32Array(ttSize * ttSize);
+    await writeFile(join(dir, file), png(tw, th, px));
+    const L = new Float32Array(tw * th);
     for (let k = 0; k < L.length; k++) L[k] = 0.2126 * px[k * 4] + 0.7152 * px[k * 4 + 1] + 0.0722 * px[k * 4 + 2];
     lumas.push(L);
     frames.push({ file, deg: +deg.toFixed(3), render_ms: r.ms });
@@ -345,7 +361,7 @@ async function captureTurntable(page, backend) {
   const ff = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-framerate', String(ttFps), '-i', join(dir, 'frame_%03d.png'), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '12', join(build, `${outPrefix}turntable.mp4`)]);
   if (ff.status === 0) video = `${outPrefix}turntable.mp4`;
   const mean = noise.reduce((x, y) => x + y, 0) / Math.max(1, noise.length);
-  return { view: v, rig, stem, seconds: ttSeconds, fps: ttFps, aa: aaMode, hz: temporal ? ttHz : ttFps, warmup: temporal ? ttWarmup : 0, deg_per_s: TT_DEG_PER_S, res: [ttSize, ttSize], frames, dir: `${outPrefix}turntable`, video, temporal_noise: noise, temporal_noise_mean: +mean.toFixed(4), wall_ms: Date.now() - t0 };
+  return { view: v, rig, stem, seconds: ttSeconds, fps: ttFps, aa: aaMode, hz: temporal ? ttHz : ttFps, warmup: temporal ? ttWarmup : 0, deg_per_s: TT_DEG_PER_S, res: [ttSize, ttSize], crop: ttCrop, frames, dir: `${outPrefix}turntable`, video, temporal_noise: noise, temporal_noise_mean: +mean.toFixed(4), wall_ms: Date.now() - t0 };
 }
 
 if (serveMode) {
@@ -368,6 +384,65 @@ if (serveMode) {
   server.close();
   console.log(JSON.stringify({ ok: true, device_capture: true, uploaded }, null, 1));
   process.exit(0);
+}
+
+/** --texcheck: the texture audit per view x variant, each a fresh page (the pipelines of that config only). */
+async function runTexcheck() {
+  const variants = texcheckArg && !texcheckArg.startsWith('--') ? texcheckArg.split(';') : TEXCHECK_VARIANTS;
+  const browser = await chromium.launch({ headless: true, channel: 'chromium', args: ARGS });
+  const runs = [];
+  try {
+    for (const variant of variants) {
+      for (const spec of views) {
+        const [v, rig] = viewSpec(spec);
+        const posts = v === 'portrait' && beauty ? [false, true] : [false];
+        const page = await browser.newPage({ viewport: { width: 256, height: 256 } });
+        const errors = [];
+        page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 300)));
+        page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`.slice(0, 300)));
+        page.setDefaultTimeout(timeoutS * 1000);
+        const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1', view: v, rig });
+        for (const [k, val] of new URLSearchParams(extraQuery)) q.set(k, val);
+        for (const [k, val] of new URLSearchParams(variant)) q.set(k, val);
+        const t = Date.now();
+        await page.goto(`http://127.0.0.1:${port}/character.html?${q}`, { waitUntil: 'load' });
+        await page.waitForFunction(() => window.__viewerState?.ready || window.__viewerState?.phase === 'error', null, { timeout: timeoutS * 1000, polling: 500 });
+        const st = await page.evaluate(() => window.__viewerState);
+        if (st.phase === 'error') throw new Error(`viewer error: ${st.error}`);
+        for (const post of posts) {
+          const a = await page.evaluate(([v, rig, post]) => window.__viewer.textureAudit(v, rig, 128, 128, post), [v, rig, post]);
+          // the pipeline errors of an over-limit shader arrive asynchronously
+          await page.waitForTimeout(500);
+          runs.push({ variant: variant || '(default)', view: spec, post, ...a, console_errors: [...new Set(errors)].slice(0, 10), wall_ms: Date.now() - t });
+          const top = a.materials.slice(0, 3).map((m) => `${m.material} ${m.fragment}`).join(', ');
+          console.error(`[engine_shots] texcheck ${variant || '(default)'} ${spec}${post ? ' beauty' : ''}: max ${a.max_fragment} frag / ${a.max_vertex} vert (${a.shadow_maps} maps; ${top}), ${a.over.length} over, ${errors.length} console errors`);
+        }
+        await page.close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+  const over = runs.flatMap((r) => r.over.map((o) => ({ variant: r.variant, view: r.view, post: r.post, ...o })));
+  // per material, the worst over every run
+  const worst = {};
+  for (const r of runs)
+    for (const m of r.materials) if (!worst[m.material] || m.fragment > worst[m.material].fragment) worst[m.material] = { ...m, variant: r.variant, view: r.view, post: r.post };
+  const out = { build, when: new Date().toISOString(), limit: 16, ok: over.length === 0, max_fragment: Math.max(0, ...runs.map((r) => r.max_fragment)), over, worst_per_material: Object.values(worst).sort((a, b) => b.fragment - a.fragment), runs };
+  await writeFile(join(build, `${outPrefix}texcheck.json`), JSON.stringify(out, null, 1));
+  console.log(JSON.stringify({ ok: out.ok, max_fragment: out.max_fragment, over: over.length, worst: out.worst_per_material.slice(0, 6).map((m) => `${m.material}: ${m.fragment} (${m.variant} ${m.view})`) }, null, 1));
+  return out.ok;
+}
+
+if (texcheckArg !== null) {
+  let ok = false;
+  try {
+    ok = await runTexcheck();
+  } catch (e) {
+    console.error(`[engine_shots] texcheck failed: ${String(e?.message ?? e).slice(0, 500)}`);
+  }
+  server.close();
+  process.exit(ok ? 0 : 1);
 }
 
 const result = { build, when: new Date().toISOString(), attempts: [] };
