@@ -70,6 +70,7 @@ CARDS = {
               "strand_px": 1.15, "strand_scale": 1.0,     # strand half-width in final px at the root
               "tip_px": 0.45, "tip_fade": 0.12, "tip_alpha": 0.3,     # T15: tip_alpha 0.15
               "max_strands": 420, "under_max_strands": 700,
+              "root_stagger_m": [0.008, 0.005],    # T20: strand starts spread over 8 mm, each fading in over 5 mm
               "flow_jitter_deg": 6.0, "seed": 5},
     # Per-strand colour from the groom's melanin / redness (hair_strand_raster.chiang_color),
     # Random Color and the root-dark / tip-light gradient as the hero shader; `path` < 1
@@ -356,6 +357,12 @@ def raster_clump(prof, cols, rng, W, H, ss, acfg, max_strands=None, k_end=None, 
         tip = np.clip((s - (1 - acfg["tip_fade"])) / acfg["tip_fade"], 0, 1)
         rad = (acfg["strand_px"] + (acfg["tip_px"] - acfg["strand_px"]) * tip) * acfg["strand_scale"]
         alpha = 1.0 - (1.0 - acfg["tip_alpha"]) * tip
+        rs = acfg.get("root_stagger_m")
+        if rs:
+            # T20: each strand fades in from its own start over the first few mm (staggered roots): a
+            # card's narrow root end drew a solid dark tooth on the forehead along the hairline
+            r0 = rng.uniform(0.0, rs[0])
+            alpha = alpha * nsmooth(r0, r0 + rs[1], v * vtot)
         sid = float(sids[j]) if sids is not None else float(rng.random())
         rough = rc["base"] + rc["jitter"] * (2 * sid - 1)
         col = cols[j, :k].mean(0)  # one colour per strand (the gradient is in the orm root AO)
