@@ -28,11 +28,13 @@ export const DEFAULT_PARAMS = {
     scatterColor: [0.9, 0.25, 0.12],
     scatterWidth: 0.35,
     scatterStrength: 0.25,
-    /** Dual-lobe specular (Jimenez / Kelemen-Szirmay-Kalos style): roughness multipliers and mix. */
+    /** Dual-lobe specular (Jimenez / Kelemen-Szirmay-Kalos style): roughness multipliers and mix.
+     * T17: lobe 2 at 2x the map roughness with 0.35 of the energy (was 1.45 / 0.2, too close to lobe 1
+     * to read as a sheen around the highlight). */
     specF0: 0.028,
     lobe1Roughness: 0.85,
-    lobe2Roughness: 1.45,
-    lobeMix: 0.2,
+    lobe2Roughness: 2.0,
+    lobeMix: 0.35,
     specGain: 0.6,
     roughnessScale: 1.0,
     roughnessBias: 0.0,
@@ -49,6 +51,34 @@ export const DEFAULT_PARAMS = {
     /** Baked AO into the DIRECT diffuse (three's aoMap only touches indirect light, and the hero
      * world is 0.003, so without this the AO channel does nothing). Until GTAO lands. */
     directAO: 0.5,
+    /** T17 detail tiles (skin_detail.json): pores (~1.5 mm period) and micro relief (~0.25 mm), tiled
+     * in the part UV, weighted per region by the detail map (R pores, G micro) and faded out where a
+     * tile period falls under fadePx[1] pixels (from fadePx[0]); the normal variance the fade removes
+     * goes to roughness (toksvig, a fraction of the tile's slope variance). 0 = off. */
+    detail: 1.0,
+    poreNormal: 1.0,
+    microNormal: 1.0,
+    detailFadePx: [2.5, 1.2],
+    toksvig: 0.5,
+    /** roughness added in the pits (tile B, openness) */
+    poreRough: 0.06,
+    /** specular cavity on lobe 1: ORM blue (the baked cavity) and the tile pits */
+    cavitySpec: 1.0,
+    poreCavity: 0.5,
+    /** T17 transmission through thin parts (ears, nostrils, lids): thickness t = thickScale x
+     * thick_dist_mm x sqrt(detail B) (inside AO), the profile's transmittance T(t), the unshadowed light
+     * through the back, max(0, -N.L + wrap) / (1 + wrap). Parts thicker than the bake distance get none. */
+    transmission: 1.0,
+    transThickScale: 1.0,
+    transWrap: 0.3,
+    /** T17 screen-space SSS (ssss.ts, Jimenez 2015 separable; temporal AA modes; ?ssss=0 = the LUT):
+     * the profile radii scale, the depth step (mm) over which a neighbour stops counting, and the
+     * share of the albedo applied before the blur (0.5 = sqrt split: keeps pore-scale colour). With it
+     * the diffuse is Lambert on a lightly blurred normal (ssssNormalBlur) and the screen blur scatters. */
+    ssssWidth: 1.0,
+    ssssFalloffMm: 6.0,
+    ssssAlbedoPre: 0.5,
+    ssssNormalBlur: [0.3, 0.12, 0.05],
   },
   hair: {
     /** T10: 1.3 (was 1.0), with the R lobe halved and TRT off (see spec1 / spec2). */

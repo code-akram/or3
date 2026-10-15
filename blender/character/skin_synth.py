@@ -485,6 +485,26 @@ def synth_head(m, c, cl, cr):
     fw = (c["hb_fine_strong"] * fw + c["hb_fine_weak"] * (1 - fw)) * (1 - lips) \
         * (1 - np.clip(1.5 * R["under_eye"], 0, 1)) * (1 - R["beard"])   # under-eye less saturated; none in the beard
     alb *= 1 + (fine * fw)[..., None] * np.array(c["hb_fine_rgb"], np.float32)
+    # ---- T17 haemoglobin and melanin layers at 1-20 mm (checkpoint-3 §2.2: Lab a* sigma in the
+    # 8-30 px portrait band was 0.86, the bar >= 1.5). Smooth gradient noise only (no threshold, no
+    # one-sided curve: v2 skin18 showed that flecks read as a rash), unit std over the skin, swung
+    # along the haemoglobin absorption axis (R up a little, G and B down: redder and slightly darker,
+    # hb_patch_rgb) and, apart, along melanin's (all down, blue most: browner, mel_patch_rgb). The
+    # haemoglobin field is ~5-12 mm (the 150 / 90 / 120 per m noises), the melanin ~3-20 mm.
+    if c["hb_patch"] > 0 or c["mel_patch"] > 0:
+        under = np.clip(1.5 * R["under_eye"] + R["orbit"], 0, 1)
+        pw = np.clip(R["cheek"] + R["apple"] + R["nose"] + R["nose_tip"] + R["alar"] + 0.8 * R["chin"]
+                     + 0.7 * R["forehead"] + 0.6 * R["temple"] + 0.6 * R["neck"] + R["ears"], 0, 1)
+        skin_w = (1 - lips) * (1 - 0.7 * under) * (1 - 0.8 * smoothstep(0.3, 0.8, R["beard"])) \
+            * (1 - 0.8 * R["scalp"])
+        if c["hb_patch"] > 0:
+            zh = np.clip(zscore(0.45 * m.hb_f1 + 0.30 * m.hb + 0.25 * m.lump), -2.5, 2.5)
+            wh = (c["hb_patch"] * pw + c["hb_patch_weak"] * (1 - pw)) * skin_w
+            alb *= np.clip(1 + (zh * wh)[..., None] * np.array(c["hb_patch_rgb"], np.float32), 0.5, 1.5)
+        if c["mel_patch"] > 0:
+            zm = np.clip(zscore(0.5 * m.mot_low + 0.3 * m.mel + 0.2 * m.hb_f2), -2.5, 2.5)
+            wm = c["mel_patch"] * (0.6 + 0.4 * pw) * skin_w
+            alb *= np.clip(1 + (zm * wm)[..., None] * np.array(c["mel_patch_rgb"], np.float32), 0.5, 1.5)
     # melanin drift (20-50 mm): +-6 % value, darker patches a touch yellower
     mel = np.clip((m.mel - 0.5) * 2.5, -1, 1) * (1 - lips)
     alb *= (1 - c["melanin"] * mel)[..., None]
@@ -560,7 +580,23 @@ def synth_head(m, c, cl, cr):
     rough += struct - (float(struct[skin_px].mean()) if skin_px.any() else 0.0)
     # oiliness varies smoothly (the T-zone a little shinier, rough_tzone); any
     # highlight breakup comes from the pores and micro relief, not from a mask
+    # T17: roughness structure 12 -> ~22 % of the face mean, correlated with the pores: denser pore
+    # clusters (the pore weights x the ~2 mm cluster field) rougher, the plateaus between them glossier,
+    # the pits themselves rougher (rough_pore), and larger oil / dry patches (rough_patch2, ~3-8 mm).
+    # Zero mean over the skin again, so the regional means stay.
+    pore_dens = (w_nose + 0.85 * w_cheek + 0.6 * w_fore) * cluster
+    pore_d = np.clip(pores / (0.04 * MM), 0, 1)      # pits() is positive into the skin
+    struct2 = c["rough_density"] * np.clip(zscore(pore_dens), -2.5, 2.5) * smoothstep(0.05, 0.3, pore_dens + 0.5 * face) \
+        + c["rough_pore"] * pore_d \
+        + c["rough_patch2"] * np.clip(zscore(0.6 * m.hb_f2 + 0.4 * m.mot_mid), -2.5, 2.5) * (1 - lips)
+    struct2 *= (1 - lips) * (1 - 0.5 * np.clip(R["lid"] * 1.5, 0, 1))
+    rough += struct2 - (float(struct2[skin_px].mean()) if skin_px.any() else 0.0)
     lip_r = c["rough_lips"] + 0.12 * smoothstep(0.55, 0.72, m.aniso_v)
+    # T17 lip wetness (both renderers): glossier toward where the lips meet (a ~lip_wet_mm band from
+    # the seam), the dry vertical creases stay rough
+    if c["lip_wet"] > 0:
+        wet = lip_seam(m, lips, ao, c["lip_wet_mm"] * MM) * (1 - 0.7 * smoothstep(0.2, 0.8, crease))
+        lip_r = lip_r - c["lip_wet"] * (lip_r - c["lip_wet_rough"]) * wet
     rough = rough * (1 - lw) + lip_r * lw
     # no wet band on the skin: the lid and under-eye skin lie within a
     # millimetre of the eyeball radius over several millimetres, so any radial
@@ -575,6 +611,7 @@ def synth_head(m, c, cl, cr):
     mask_pores = (np.stack([w_nose, w_cheek, w_fore], -1) * (no_beard * cluster)[..., None]).astype(np.float32)
     oil = np.clip(R["tzone"] * 1.0 + 0.3 * R["cheek"], 0, 1) * (1 - lips) * (1 - np.clip(R["under_eye"] * 1.5, 0, 1))
     oil = oil * (0.8 + 0.4 * m.mot_low)                       # ~2 cm, smooth: no edges inside a highlight
+    oil = np.maximum(oil, c["lip_wet_coat"] * lw)             # T17: the hero coat on the (wet) lips
     fuzz = np.clip(R["cheek"] + 0.7 * R["ears"] + 0.5 * R["forehead"] + 0.4 * R["neck"], 0, 1) * (1 - R["beard"]) * (1 - lips)
     lid_clear = smoothstep(0.0168, 0.0178, fr.eye_d)          # micro relief up to the lid margin
     micro = np.clip(0.6 + 0.4 * R["cheek"] - 0.3 * R["nose"] - 0.5 * R["scalp"], 0, 1) * (1 - lips) * lid_clear \
@@ -707,6 +744,13 @@ DEFAULT_HEAD = {
     "rough_patch": 0.05, "rough_mid": 0.04, "rough_line": 0.05,
     "hero_mid_gain": 1.5,                      # hero displacement of the mid band and fine lines, x
     "rough": 0.47, "rough_tzone": 0.37, "rough_beard": 0.58, "rough_ears": 0.48, "rough_lips": 0.45,
+    # T17 (checkpoint-3 §2.2): haemoglobin / melanin layers (amount at the strong regions, weak elsewhere;
+    # the RGB swing per unit std), roughness structure, lip wetness, the specular cavity (ORM blue)
+    "hb_patch": 0.0, "hb_patch_weak": 0.0, "hb_patch_rgb": (0.25, -0.45, -0.40),
+    "mel_patch": 0.0, "mel_patch_rgb": (-0.45, -0.60, -0.95),
+    "rough_density": 0.0, "rough_pore": 0.0, "rough_patch2": 0.0,
+    "lip_wet": 0.0, "lip_wet_mm": 1.6, "lip_wet_rough": 0.22, "lip_wet_coat": 0.0,
+    "cavity_fine": 0.0003, "cavity_broad": 0.0015,
 }
 
 DEFAULT_HANDS = {

@@ -60,9 +60,17 @@ DEFAULTS = {
             # head_sculpt.hand_field); 2.0 / 0.9 / 0.35 before T22
             "sculpt": {"knuckle_mm": 0.0, "tendon_mm": 0.0, "nail_mm": 0.0, "lid_margin_mm": 0.4},
             "uv": True, "uv_px": {"head_px": 4096, "hands_px": 2048},
+            # T17 (bench/m1/v4/t17-skin.md): "detail" writes the engine's detail tiles, detail maps and
+            # thickness (skin_detail.json), the cavity in ORM blue and the hero's pore-tile displacement;
+            # the head block turns on the haemoglobin / melanin layers, the roughness structure and the
+            # lip wetness (skin_synth.DEFAULT_HEAD has them off).
             "skin": {"bake_px": 4096, "ao_samples": 16, "ao_down": 2, "margin_px": 16, "sss": 0.0,
-                     "save_maps": True, "base": "#c4a996",
-                     "head": {}, "hands": {}},
+                     "save_maps": True, "base": "#c4a996", "detail": True,
+                     "head": {"hb_patch": 0.16, "hb_patch_weak": 0.06, "mel_patch": 0.06,
+                              "rough_patch": 0.08, "rough_mid": 0.05,
+                              "rough_density": 0.075, "rough_pore": 0.12, "rough_patch2": 0.09,
+                              "rough_lips": 0.36, "lip_wet": 1.0, "lip_wet_rough": 0.22, "lip_wet_coat": 0.6},
+                     "hands": {}},
             # Generated eyeballs + iris texture (eyes_hq.py); null keeps the MPFB eyes.
             "eyes": {},
         },

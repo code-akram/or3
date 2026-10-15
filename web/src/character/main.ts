@@ -11,7 +11,9 @@
 //      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty; dof=only: the DoF
 //      with the rest of the post off) &lut=0 (analytic grade + three's AgX instead of Blender's baked LUTs)
 //      &bounce=0 (no set-bounce environment) &scene=chart (T16 grey chart under the hero rig: chart.glb next
-//      to engine_stage.json) &passcheck=1 (self-test of Output's pass hook, passcheck.ts)
+//      to engine_stage.json) &passcheck=1 (self-test of Output's pass hook, passcheck.ts) &ssss=0 (T17: the
+//      pre-integrated LUT instead of the screen-space SSS pass) &detail=0 (T17: no skin detail tiles, cavity,
+//      transmission)
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
@@ -22,7 +24,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DeformRuntime, type RigRules } from './deform';
 import { Poser, PRESETS, applyPreset } from './poses';
 import { ParamStore } from './materials/params';
-import { addHairDepthPrepass, assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
+import { addHairDepthPrepass, assignMaterials, type Sidecars, type SkinDetail, type WeaveSidecar } from './materials';
+import { installSSSS, type SSSSHandle } from './ssss';
 import { skinLUT } from './materials/sss';
 import { Output, type AAMode } from './output';
 import { bounceTexture, type BounceJson } from './bounce';
@@ -49,6 +52,7 @@ interface ViewerState {
   hairMaps?: Record<string, string>;
   hairPrepass?: number;
   sssLutMs?: number;
+  skinDetail?: unknown;
   gaze?: unknown;
   warnings: string[];
 }
@@ -97,6 +101,50 @@ async function loadWeave(base: string): Promise<WeaveSidecar | null> {
   tile.generateMipmaps = true;
   tile.minFilter = THREE.LinearMipmapLinearFilter;
   return { tile, materials: j.materials };
+}
+
+/** skin_detail.json (T17, blender/character/skin_tex.write_detail_sidecars): the pore and micro tiles
+ * (tiled, mipmapped), the per-part detail maps (region weights, thickness) and the ORM cavity flag. */
+async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
+  interface J {
+    tiles: { pore: string; micro: string };
+    materials: Record<string, { detail: string; pore_repeat: number | null; micro_repeat: number | null }>;
+    pore_cells: number;
+    micro_cells: number[];
+    thick_dist_mm: number;
+    cavity_in_orm_b?: boolean;
+    tile_slope_var?: { pore: number; micro: number };
+  }
+  const j = await fetchJson<J>(base + 'skin_detail.json');
+  if (!j) return null;
+  const [pore, micro] = await Promise.all([loadTexture(base + j.tiles.pore), loadTexture(base + j.tiles.micro)]);
+  if (!pore || !micro) return null;
+  for (const t of [pore, micro]) {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+  }
+  const materials: SkinDetail['materials'] = {};
+  await Promise.all(
+    Object.entries(j.materials).map(async ([name, m]) => {
+      const map = await loadTexture(base + m.detail);
+      if (map) map.anisotropy = 4;
+      if (m.pore_repeat && m.micro_repeat) materials[name] = { map, poreRepeat: m.pore_repeat, microRepeat: m.micro_repeat };
+    }),
+  );
+  const mc = j.micro_cells;
+  return {
+    pore,
+    micro,
+    materials,
+    poreCells: j.pore_cells,
+    microCells: mc.length ? mc.reduce((a, b) => a + b, 0) / mc.length : 23,
+    thickDistMm: j.thick_dist_mm,
+    cavity: !!j.cavity_in_orm_b,
+    // pre-T17b builds lack the variance: ~ the first build's tiles
+    slopeVar: j.tile_slope_var ?? { pore: 0.02, micro: 0.01 },
+  };
 }
 
 async function loadTexture(url: string): Promise<THREE.Texture | null> {
@@ -477,7 +525,7 @@ async function main(): Promise<void> {
     progress.total = e.total;
     hud.textContent = `loading character.glb ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;
   });
-  const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands, lutJson, bounceJson] = await Promise.all([
+  const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands, lutJson, bounceJson, skinDetail] = await Promise.all([
     glbP,
     fetchJson<RigRules>(base + 'character.rig.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
@@ -487,6 +535,7 @@ async function main(): Promise<void> {
     loadTexture(base + 'skin_hands_curvature.png'),
     q.get('lut') === '0' ? null : fetchJson<GradeLutJson>(base + 'grade_lut.json'),
     q.get('bounce') === '0' ? null : fetchJson<BounceJson>(base + 'set_bounce.json'),
+    q.get('detail') === '0' ? null : loadSkinDetail(base),
   ]);
   const tLoaded = performance.now();
   let overrides: unknown = paramJson;
@@ -505,6 +554,8 @@ async function main(): Promise<void> {
   output.dofAlways = q.get('dof') === 'only';
   output.dofDebug = q.get('dofview') ?? '';
   if (q.get('passcheck') === '1') installPassCheck(output); // self-test of the pass hook (passcheck.ts)
+  // T17: separable screen-space SSS (ssss.ts) on the temporal paths; ?ssss=0 (or msaa) = the LUT
+  const ssss: SSSSHandle | null = q.get('ssss') === '0' ? null : installSSSS(output, P);
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
 
@@ -534,7 +585,11 @@ async function main(): Promise<void> {
   if (sceneAO && q.get('aoview') === 'normal') output.setDebugAO(sceneAO.normalTexture, true);
   const aaview = q.get('aaview');
   if (aaview === 'raw' || aaview === 'velocity' || aaview === 'hair') output.setDebugTemporal(aaview);
-  const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands), screenAO: sceneAO?.texture ?? null };
+  const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands), screenAO: sceneAO?.texture ?? null, skinDetail, ssss: !!ssss };
+  state.skinDetail = skinDetail
+    ? { materials: Object.fromEntries(Object.entries(skinDetail.materials).map(([k, v]) => [k, { pore_repeat: v.poreRepeat, micro_repeat: v.microRepeat, map: !!v.map }])), cavity: skinDetail.cavity, thick_dist_mm: skinDetail.thickDistMm }
+    : null;
+  if (!skinDetail && q.get('detail') !== '0') state.warnings.push('no skin_detail.json: skin without detail tiles / cavity / transmission (pre-T17 build)');
   if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, aa === 'msaa');
@@ -745,6 +800,7 @@ async function main(): Promise<void> {
     grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)',
     bounce: bounceTex ? { gain: P.get('bounce.gain'), irradiance: bounceJson?.irradiance ?? null } : null,
     passes: output.passList.map((p) => `${p.stage}:${p.name}`),
+    skin: { ssss: ssss ? ssss.info() : null, detail: state.skinDetail ?? null },
     fill_shadow: stage.shadowFill,
     frame: fs.summary(),
     first_frame_ms: Math.round(firstFrameMs),

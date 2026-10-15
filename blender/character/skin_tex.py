@@ -26,6 +26,7 @@ Pipeline (cfg["head"]["refine"]["skin"]):
          Subdivision modifier (1 px dicing).
 """
 
+import json
 import math
 import os
 import time
@@ -600,6 +601,237 @@ def write_curvature(out_dir, key, v):
     return name
 
 
+# --- T17 detail tiles, cavity, thickness (bench/m1/v4/checkpoint-3.md §2.2) --------------------
+
+# Two tiled 512^2 tangent-space normal tiles the engine repeats over the skin UVs (the 4k maps are
+# 0.13-0.25 mm/texel, so pores are 1-2 texels there and the mip chain erases them; checkpoint-3 §2.2):
+#   pore   pits at a ~1.5 mm spacing (a jittered 16 x 16 grid over 24 mm, 15 % of the sites empty),
+#          radius 0.12-0.28 mm log-uniform, slightly elliptic, each in a shallow funnel
+#   micro  the skin's surface relief: furrows round ~0.3 x 0.23 mm plateaus (Voronoi edges on a
+#          20 x 26 jittered grid over 6 mm), broken by a periodic low noise, plus a fine grain
+# RGB = normal XY (glTF +Y = +v) and the openness (B: 1 inside a pore pit / a furrow), so the engine
+# can occlude the specular and roughen the pits with the same texel. Rows are Blender's (row 0 = v 0);
+# the PNG sidecar is written top-down, as every glTF image. The hero (Cycles) displaces by the same
+# pore tile (hero_material), so both renderers carry the same pore field.
+MM_ = 0.001
+DETAIL = {
+    "px": 512,
+    "pore_tile_mm": 24.0, "pore_cells": 16, "pore_empty": 0.15, "pore_jitter": 0.42,
+    "pore_r_mm": (0.12, 0.28), "pore_depth_mm": 0.05, "pore_aspect": (1.0, 1.45),
+    "pore_funnel": 3.2, "pore_funnel_depth": 0.45,
+    "pore_undulation_mm": 0.006, "pore_undulation_px": 7.0,   # soft ~1 mm domes between the pores
+    "micro_tile_mm": 6.0, "micro_cells": (20, 26), "micro_jitter": 0.45,
+    "micro_depth_mm": 0.012, "micro_w_mm": 0.022, "micro_break": 0.6, "micro_grain_mm": 0.003,
+    "normal_gain": 1.0, "seed": 1717,
+    # per-region pore-tile weight from the synth's pore mask (nose, cheek, forehead)
+    "pore_region_gain": (1.0, 0.85, 0.6),
+    # thickness: inside-AO distance (mm): t = D sqrt(AO) for a slab thinner than D
+    "thick_dist_mm": 10.0, "thick_samples": 24,
+    "detail_px": {"head": 1024, "hands": 512},
+}
+
+
+def _periodic_noise(rng, n, sigma_px):
+    """Tileable smooth noise (n x n), zero mean, unit std: white noise low-passed in the FFT domain."""
+    w = rng.standard_normal((n, n))
+    f = np.fft.fftfreq(n)
+    k2 = f[:, None] ** 2 + f[None, :] ** 2
+    a = np.real(np.fft.ifft2(np.fft.fft2(w) * np.exp(-2 * (np.pi * sigma_px) ** 2 * k2)))
+    return (a - a.mean()) / max(a.std(), 1e-9)
+
+
+def _cells(rng, n, nx, ny, jitter):
+    """Per pixel of an n x n tile: the 9 neighbouring jittered grid sites (toroidal), as
+    (dx, dy) in tile units from the pixel and the site index (iy * nx + ix)."""
+    ox = 0.5 + rng.uniform(-jitter, jitter, (ny, nx))
+    oy = 0.5 + rng.uniform(-jitter, jitter, (ny, nx))
+    t = (np.arange(n) + 0.5) / n
+    X, Y = np.meshgrid(t, t, indexing="xy")          # X along columns (u), Y along rows (v)
+    cx = np.floor(X * nx).astype(np.int64)
+    cy = np.floor(Y * ny).astype(np.int64)
+    out = []
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            ix, iy = (cx + dx) % nx, (cy + dy) % ny
+            sx = (cx + dx + ox[iy, ix]) / nx - X
+            sy = (cy + dy + oy[iy, ix]) / ny - Y
+            out.append((sx, sy, iy * nx + ix))
+    return out
+
+
+def _normals(h_mm, texel_mm, gain=1.0):
+    """Tangent-space normal (+X = +u along columns, +Y = +v along rows) of a periodic height."""
+    du = (np.roll(h_mm, -1, 1) - np.roll(h_mm, 1, 1)) / (2 * texel_mm)
+    dv = (np.roll(h_mm, -1, 0) - np.roll(h_mm, 1, 0)) / (2 * texel_mm)
+    n = np.stack([-du * gain, -dv * gain, np.ones_like(h_mm)], -1)
+    return n / np.linalg.norm(n, axis=-1, keepdims=True)
+
+
+def detail_tiles(d=DETAIL):
+    """{'pore': (h_mm, rgb), 'micro': (h_mm, rgb)}: the two tiles, deterministic (d['seed'])."""
+    rng = np.random.default_rng(d["seed"])
+    n = d["px"]
+    # ---- pore tile
+    T = d["pore_tile_mm"]
+    nc = d["pore_cells"]
+    m = nc * nc
+    lr = np.log(d["pore_r_mm"])
+    rad = np.exp(rng.uniform(lr[0], lr[1], m))
+    depth = d["pore_depth_mm"] * (rad / d["pore_r_mm"][1]) ** 0.7 * rng.uniform(0.6, 1.2, m)
+    depth[rng.uniform(0, 1, m) < d["pore_empty"]] = 0.0
+    ang = rng.uniform(0, np.pi, m)
+    asp = rng.uniform(*d["pore_aspect"], m)
+    h = np.zeros((n, n))
+    open_ = np.zeros((n, n))
+    for sx, sy, idx in _cells(rng, n, nc, nc, d["pore_jitter"]):
+        x, y = sx * T, sy * T
+        ca, sa = np.cos(ang[idx]), np.sin(ang[idx])
+        a_ = (x * ca + y * sa) / asp[idx]
+        b_ = -x * sa + y * ca
+        dist = np.hypot(a_, b_)
+        r = rad[idx]
+        pit = 1 - smoothstep(0.0, r, dist)
+        fun = 1 - smoothstep(0.0, r * d["pore_funnel"], dist)
+        hi = -depth[idx] * ((1 - d["pore_funnel_depth"]) * pit ** 1.5 + d["pore_funnel_depth"] * fun ** 2)
+        h = np.minimum(h, hi)
+        open_ = np.maximum(open_, pit * (depth[idx] > 0))
+    h = h + d["pore_undulation_mm"] * _periodic_noise(rng, n, d["pore_undulation_px"])
+    pore_n = _normals(h, T / n, d["normal_gain"])
+    pore = np.concatenate([pore_n[..., :2] * 0.5 + 0.5, open_[..., None]], -1).astype(np.float32)
+    # ---- micro tile
+    Tm = d["micro_tile_mm"]
+    mx, my = d["micro_cells"]
+    f1 = np.full((n, n), np.inf)
+    f2 = np.full((n, n), np.inf)
+    for sx, sy, _ in _cells(rng, n, mx, my, d["micro_jitter"]):
+        dist = np.hypot(sx * Tm, sy * Tm)
+        f2 = np.where(dist < f1, f1, np.minimum(f2, dist))
+        f1 = np.minimum(f1, dist)
+    edge = 0.5 * (f2 - f1)                                   # mm to the nearest cell border
+    brk = 1 - d["micro_break"] * (1 - smoothstep(-0.6, 0.6, _periodic_noise(rng, n, n / 10)))
+    fur = (1 - smoothstep(0.0, d["micro_w_mm"], edge)) * brk
+    hm = -d["micro_depth_mm"] * fur + d["micro_grain_mm"] * _periodic_noise(rng, n, 1.2)
+    micro_n = _normals(hm, Tm / n, d["normal_gain"])
+    micro = np.concatenate([micro_n[..., :2] * 0.5 + 0.5, fur[..., None]], -1).astype(np.float32)
+    return {"pore": (h.astype(np.float32), pore), "micro": (hm.astype(np.float32), micro)}
+
+
+def write_png(path, rgb):
+    """8-bit RGB PNG of a Blender-convention (row 0 = v 0) array, written top-down (glTF rows)."""
+    from .export import _png_rgb8
+    _png_rgb8(path, rgb[::-1])
+    return os.path.basename(path)
+
+
+def cavity_map(m, hgt, k_fine, k_broad, blur_m=0.0015):
+    """Specular cavity (1 = open, 0 = deep): the Laplacian of the game height at the texel (pores,
+    fine lines) and over ~blur_m (creases), clipped. Rides in ORM blue (pack_orm)."""
+    lap = np.clip(m.cavity(hgt), 0, None)
+    texel = float(np.median(m.tex_m[m.valid])) if m.valid.any() else 1e-3
+    hb, _ = _masked_blur(hgt.astype(np.float64), m.valid, blur_m / max(texel, 1e-6))
+    lapb = np.clip(m.cavity(hb.astype(np.float32)), 0, None)
+    return np.clip(1 - np.clip(lap * k_fine, 0, 1) - np.clip(lapb * k_broad, 0, 1), 0, 1).astype(np.float32)
+
+
+def _ao_inside(dist_m):
+    """Bake source: the Ambient Occlusion node's 'inside' mode on this object only, D = dist_m: the
+    fraction of cosine-weighted rays into the body that travel D without leaving it. A slab of
+    thickness t < D gives AO = (t / D)^2, so t = D sqrt(AO) (thin: ears, alae, lids)."""
+    def f(nt, i):
+        ao = nt.nodes.new("ShaderNodeAmbientOcclusion")
+        ao.inside = True
+        ao.only_local = True
+        ao.samples = 16
+        ao.inputs["Distance"].default_value = dist_m
+        comb = nt.nodes.new("ShaderNodeCombineColor")
+        for k in range(3):
+            nt.links.new(ao.outputs["AO"], comb.inputs[k])
+        return comb.outputs[0]
+    return f
+
+
+def detail_map(syn, thick_ao, key, px, d=DETAIL):
+    """Engine detail map (px^2): R pore-tile weight, G micro-tile weight, B thickness AO (t = D sqrt)."""
+    mp = syn["mask_pores"]
+    g = np.asarray(d["pore_region_gain"], np.float32)
+    pore_w = np.clip((mp * g).sum(-1), 0, 1) if key == "head" else np.clip(mp[..., 1], 0, 1)
+    micro_w = np.clip(syn["mask_hero"][..., 2], 0, 1)
+    rgb = np.stack([pore_w, micro_w, np.clip(thick_ao, 0, 1)], -1)
+    f = rgb.shape[0] // px
+    if f > 1:
+        rgb = rgb[:px * f, :px * f].reshape(px, f, px, f, 3).mean(axis=(1, 3))
+    return rgb.astype(np.float32)
+
+
+def uv_mm(m):
+    """Millimetres per UV unit over the covered texels (median; MPFB islands vary about +-30 %)."""
+    ok = m.valid & m.cover
+    return float(np.median(m.tex_m[ok])) * m.size * 1000.0 if ok.any() else None
+
+
+def pack_orm(b, out):
+    """The skin ORM images (R occlusion, G roughness, B cavity) into the GLB as written: the glTF
+    exporter re-composes a metallicRoughness image from the sockets it can trace and fills B
+    (metallic, unlinked in skin_material) with white, so the cavity is lost. The image keeps its
+    name; its bytes are replaced in place and every later bufferView shifts. metallicFactor stays 0."""
+    names = getattr(b, "skin_orm", None)
+    if not names:
+        return None
+    from . import export, hair_strand_raster as hsr
+    doc, bin_ = export._read_glb(out)
+    done = []
+    for im in doc.get("images", []):
+        if im.get("name") not in names or "bufferView" not in im:
+            continue
+        img = bpy.data.images.get(im["name"])
+        if img is None:
+            continue
+        png = hsr.image_png_bytes(img)
+        bv = doc["bufferViews"][im["bufferView"]]
+        o0, n0 = bv.get("byteOffset", 0), bv["byteLength"]
+        pad = (-len(png)) % 4
+        new = png + b"\x00" * pad
+        old_span = n0 + ((-n0) % 4)
+        bin_ = bytearray(bytes(bin_[:o0]) + new + bytes(bin_[o0 + old_span:]))
+        delta = len(new) - old_span
+        for v in doc["bufferViews"]:
+            if v is not bv and v.get("byteOffset", 0) > o0:
+                v["byteOffset"] = v.get("byteOffset", 0) + delta
+        bv["byteLength"] = len(png)
+        done.append(im["name"])
+    for mat in doc.get("materials", []):
+        if mat.get("name", "").startswith("skin_"):
+            mat.setdefault("pbrMetallicRoughness", {})["metallicFactor"] = 0.0
+    doc["buffers"][0]["byteLength"] = len(bin_)
+    export._write_glb(out, doc, bin_)
+    b.notes.setdefault("skin", {})["orm_cavity"] = done
+    return done
+
+
+def write_detail_sidecars(b, out_dir, tiles, details, uvmm, stats):
+    """skin_detail.json + the tiles + per-part detail maps next to the GLB (engine runtime inputs)."""
+    files = {k: write_png(os.path.join(out_dir, f"skin_detail_{k}.png"), tiles[k][1]) for k in ("pore", "micro")}
+    parts = {}
+    for key, rgb in details.items():
+        fn = write_png(os.path.join(out_dir, f"skin_{key}_detail.png"), rgb)
+        mm = uvmm.get(key)
+        parts[f"skin_{key}"] = {"detail": fn, "uv_mm": round(mm, 2) if mm else None,
+                                "pore_repeat": round(mm / DETAIL["pore_tile_mm"], 4) if mm else None,
+                                "micro_repeat": round(mm / DETAIL["micro_tile_mm"], 4) if mm else None}
+    # mean |n_xy|^2 of each tile: the slope variance the engine moves into roughness where it fades a tile
+    var = {k: round(float(np.mean(np.sum((tiles[k][1][..., :2] * 2.0 - 1.0) ** 2, axis=-1))), 5) for k in ("pore", "micro")}
+    rec = {"version": 1, "tiles": files, "materials": parts, "tile_slope_var": var,
+           "pore_tile_mm": DETAIL["pore_tile_mm"], "pore_cells": DETAIL["pore_cells"],
+           "micro_tile_mm": DETAIL["micro_tile_mm"], "micro_cells": list(DETAIL["micro_cells"]),
+           "thick_dist_mm": DETAIL["thick_dist_mm"], "cavity_in_orm_b": True, "stats": stats,
+           "note": "tiles: RG = tangent-space normal XY (glTF +Y), B = pit / furrow openness; wrap REPEAT, "
+                   "mipmapped; uv_tile = uv * repeat. detail map (part UV): R pore-tile weight, G micro-tile "
+                   "weight, B inside-AO, thickness t = thick_dist_mm * sqrt(B). ORM blue = specular cavity."}
+    with open(os.path.join(out_dir, "skin_detail.json"), "w") as f:
+        json.dump(rec, f, indent=1)
+    return ["skin_detail.json"] + list(files.values()) + [p["detail"] for p in parts.values()]
+
+
 # --- images and materials --------------------------------------------------------------------
 
 def make_image(name, rgb, srgb, out_dir=None):
@@ -645,7 +877,9 @@ def gltf_output_group():
     return g
 
 
-def skin_material(name, albedo, orm, normal, sss):
+def skin_material(name, albedo, orm, normal, sss, cavity=False):
+    """glTF-side skin material. cavity: ORM blue is the T17 specular cavity, not metal: Metallic is
+    left unlinked (0) and pack_orm restores the blue channel the exporter drops."""
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     nt = m.node_tree
@@ -658,7 +892,8 @@ def skin_material(name, albedo, orm, normal, sss):
     sep = nt.nodes.new("ShaderNodeSeparateColor")
     nt.links.new(to.outputs["Color"], sep.inputs[0])
     nt.links.new(sep.outputs["Green"], p.inputs["Roughness"])
-    nt.links.new(sep.outputs["Blue"], p.inputs["Metallic"])
+    if not cavity:
+        nt.links.new(sep.outputs["Blue"], p.inputs["Metallic"])
     grp = nt.nodes.new("ShaderNodeGroup")
     grp.node_tree = gltf_output_group()
     nt.links.new(sep.outputs["Red"], grp.inputs["Occlusion"])
@@ -783,6 +1018,9 @@ def build(b):
         a3 = bk.run("attr3", _attrs(("sk_crisp", "sk_crisp_w", None))) if cv is not None else None
         a4 = bk.run("attr4", _attrs(("sk_t22", "sk_t22_w", None))) if tv is not None else None
         ao = bk.run("ao", None, samples=int(c.get("ao_samples", 16)), bake_type="AO", down=int(c.get("ao_down", 2)))
+        # T17: thickness for the engine's transmission (ears, alae, lids): inside AO at 1/4 size
+        thick = bk.run("thick", _ao_inside(DETAIL["thick_dist_mm"] * MM_), samples=DETAIL["thick_samples"],
+                       down=4) if c.get("detail", True) else None
     finally:
         bk.finish()
         for o in hidden:
@@ -822,11 +1060,19 @@ def build(b):
             syn["hgt_hero"] = (syn["hgt_hero"] + r).astype(np.float32)
     out_dir = b.out_dir if c.get("save_maps") else None
     imgs, hero_in = {}, {"body": body.name, "cfg": c}
-    for key, m, syn in (("head", maps[0], head), ("hands", maps[1], hands)):
-        z = np.zeros_like(syn["rough"])
+    use_detail = c.get("detail", True)
+    cav_stats = {}
+    for key, m, syn, cc in (("head", maps[0], head, hc), ("hands", maps[1], hands, hh)):
+        # T17: ORM blue = the specular cavity (pack_orm keeps it in the GLB; the engine reads it when
+        # skin_detail.json says so); before T17 it was 0 and linked to Metallic
+        cav = cavity_map(m, syn["hgt_game"], cc.get("cavity_fine", 0.0003), cc.get("cavity_broad", 0.0015)) \
+            if use_detail else np.zeros_like(syn["rough"])
+        if use_detail:
+            sk = m.valid & m.cover
+            cav_stats[key] = {"mean": round(float(cav[sk].mean()), 4), "p5": round(float(np.percentile(cav[sk], 5)), 4)}
         imgs[key] = {
             "albedo": make_image(f"skin_{key}_albedo", syn["albedo"], True, out_dir),
-            "orm": make_image(f"skin_{key}_orm", np.stack([syn["occl"], syn["rough"], z], -1), False, out_dir),
+            "orm": make_image(f"skin_{key}_orm", np.stack([syn["occl"], syn["rough"], cav], -1), False, out_dir),
             "normal": make_image(f"skin_{key}_normal", m.normal_map(syn["hgt_game"]), False, out_dir),
         }
         # hero-only inputs: height in mm (lines; pores come from the shader), masks
@@ -843,12 +1089,42 @@ def build(b):
             v, st = curvature(m, CURV_PX[key])
             st["file"] = write_curvature(b.out_dir, key, v)
             curv[key] = st
+    # T17 detail layer: the two tiles, the per-part detail maps (pore / micro weights, thickness), the
+    # sidecar for the engine; the hero displaces by the same pore tile (hero_material)
+    detail_stats = None
+    if use_detail:
+        tiles = detail_tiles()
+        uvmm = {"head": uv_mm(maps[0]), "hands": uv_mm(maps[1])}
+        details, thick_st = {}, {}
+        for key, i, syn in (("head", 0, head), ("hands", 1, hands)):
+            m = maps[i]
+            ta = thick[i][..., 0] if thick is not None else np.ones(m.P.shape[:2], np.float32)
+            texel = float(np.median(m.tex_m[m.valid])) if m.valid.any() else 1e-3
+            ta, _ = _masked_blur(np.where(m.valid, ta, 1.0).astype(np.float64), m.valid, 0.0015 / max(texel, 1e-6))
+            ta = np.where(m.valid, ta, 1.0).astype(np.float32)
+            details[key] = detail_map(syn, ta, key, DETAIL["detail_px"][key])
+            tmm = DETAIL["thick_dist_mm"] * np.sqrt(np.clip(ta[m.valid & m.cover], 0, 1))
+            thick_st[key] = {"p5_mm": round(float(np.percentile(tmm, 5)), 2),
+                             "p50_mm": round(float(np.percentile(tmm, 50)), 2),
+                             "thin_lt4mm_pct": round(float(100 * (tmm < 4).mean()), 2)}
+        detail_stats = {"uv_mm": {k: round(v, 2) if v else None for k, v in uvmm.items()}, "thickness": thick_st,
+                        "cavity": cav_stats}
+        if getattr(b, "out_dir", None):
+            detail_stats["files"] = write_detail_sidecars(b, b.out_dir, tiles, details, uvmm, detail_stats)
+        tile_img = make_float_image("skin_detail_pore_height", tiles["pore"][0])
+        tile_img.use_fake_user = True
+        hero_in["tile"] = {"image": tile_img,
+                           "repeat": {k: (v / DETAIL["pore_tile_mm"] if v else None) for k, v in uvmm.items()},
+                           "gain": tuple(DETAIL["pore_region_gain"])}
     sss = float(c.get("sss", 0.0))
     idx = [p.material_index for p in me.polygons]
     me.materials.clear()
     for key in ("head", "hands"):
-        me.materials.append(skin_material(f"skin_{key}", imgs[key]["albedo"], imgs[key]["orm"], imgs[key]["normal"], sss))
+        me.materials.append(skin_material(f"skin_{key}", imgs[key]["albedo"], imgs[key]["orm"], imgs[key]["normal"], sss,
+                                          cavity=use_detail))
     restore_indices(me, idx)
+    if use_detail:
+        b.skin_orm = [imgs[k]["orm"].name for k in ("head", "hands")]
     face = maps[0].cover & (np.abs(maps[0].region - 0.5) < 0.05) & (maps[0].lips < 0.3)
     stats = {"sizes": bake_px, "seconds": round(time.perf_counter() - t0, 2),
              "height_mm": {k: [round(float(v["hgt_game"].min()) * 1000, 3), round(float(v["hgt_game"].max()) * 1000, 3)]
@@ -859,7 +1135,10 @@ def build(b):
              "roughness_mean": round(float(head["rough"][maps[0].cover].mean()), 3),
              "roughness_face_mean": round(float(head["rough"][face].mean()), 3) if face.any() else None,
              "roughness_face_std": round(float(head["rough"][face].std()), 4) if face.any() else None,
-             "crisp": crisp_stats, "t22": t22_stats, "hero_rest": rest is not None, "curvature": curv}
+             "roughness_face_std_rel": (round(float(head["rough"][face].std() / head["rough"][face].mean()), 4)
+                                        if face.any() else None),
+             "crisp": crisp_stats, "t22": t22_stats, "hero_rest": rest is not None, "curvature": curv,
+             "detail": detail_stats}
     b.notes["skin"] = stats
     print(f"[skin] done in {stats['seconds']} s", flush=True)
     return stats
@@ -887,6 +1166,8 @@ HERO = {
     "rough_plateau": -0.03, "rough_furrow": 0.10,
     "dicing_px": 1.0, "max_subdivisions": 10,
     "displacement": True,
+    # T17: the engine's pore tile (skin_tex.DETAIL) as micro-displacement in the hero height, x
+    "tile_gain": 1.0,
 }
 
 
@@ -908,8 +1189,10 @@ def _math(nt, op, a, b, x, y):
     return n.outputs[0]
 
 
-def hero_material(name, im, hc, layers):
-    """One Principled (the hero rig's clay/normal passes swap the first one)."""
+def hero_material(name, im, hc, layers, tile=None):
+    """One Principled (the hero rig's clay/normal passes swap the first one). tile: T17's pore tile
+    (image of the tile height in mm, UV repeat, per-channel weights of the pore mask), added to the
+    displaced height: micro-displacement at the pore scale, shared with the engine's detail normal."""
     m = bpy.data.materials.new(name)
     m.use_nodes = True
     m.displacement_method = "BOTH" if hc["displacement"] else "BUMP"
@@ -1068,6 +1351,25 @@ def hero_material(name, im, hc, layers):
         nt.links.new(total, bump.inputs["Height"])
         nt.links.new(bump.outputs["Normal"], p.inputs["Normal"])
         nt.links.new(bump.outputs["Normal"], p.inputs["Coat Normal"])
+    if tile is not None and tile.get("repeat") and hc.get("tile_gain", 0) > 0:
+        tc = _node(nt, "ShaderNodeTexCoord", -1700, -1600)
+        mpt = _node(nt, "ShaderNodeMapping", -1500, -1600, vector_type="POINT")
+        mpt.inputs["Scale"].default_value = (tile["repeat"], tile["repeat"], 1.0)
+        nt.links.new(tc.outputs["UV"], mpt.inputs["Vector"])
+        ti = _node(nt, "ShaderNodeTexImage", -1300, -1600, image=tile["image"], extension="REPEAT",
+                   interpolation="Cubic")
+        nt.links.new(mpt.outputs["Vector"], ti.inputs["Vector"])
+        th = _node(nt, "ShaderNodeSeparateColor", -1000, -1600)
+        nt.links.new(ti.outputs["Color"], th.inputs[0])
+        gw = tile["weights"]
+        ws = _math(nt, "ADD", _math(nt, "MULTIPLY", mp.outputs["Red"], gw[0], -800, -1700),
+                   _math(nt, "MULTIPLY", mp.outputs["Green"], gw[1], -800, -1750), -650, -1700)
+        ws = _math(nt, "ADD", ws, _math(nt, "MULTIPLY", mp.outputs["Blue"], gw[2], -800, -1800), -500, -1700)
+        w = _node(nt, "ShaderNodeClamp", -350, -1700)
+        nt.links.new(ws, w.inputs["Value"])
+        macro = _math(nt, "ADD", macro, _math(nt, "MULTIPLY", _math(nt, "MULTIPLY", th.outputs["Red"], w.outputs[0],
+                                                                         -200, -1600), hc["tile_gain"], -50, -1600),
+                      100, -1500)
     disp = _node(nt, "ShaderNodeDisplacement", 400, -400, space="WORLD")
     disp.inputs["Midlevel"].default_value = 0.0
     disp.inputs["Scale"].default_value = 0.001
@@ -1098,9 +1400,16 @@ def hero(b):
     me = body.data
     idx = [p.material_index for p in me.polygons]
     me.materials.clear()
-    me.materials.append(hero_material("skin_head_hero", data["head"], hc, head_layers))
+    tile = data.get("tile")
+
+    def tile_of(key, weights):
+        if not tile or not tile["repeat"].get(key):
+            return None
+        return {"image": tile["image"], "repeat": tile["repeat"][key], "weights": weights}
+    me.materials.append(hero_material("skin_head_hero", data["head"], hc, head_layers,
+                                      tile_of("head", tile["gain"] if tile else None)))
     me.materials.append(hero_material("skin_hands_hero", data["hands"], dict(hc, micro_bump=1.0, dimple_depth=0.0),
-                                      hands_layers))
+                                      hands_layers, tile_of("hands", (0.0, 1.0, 0.0))))
     restore_indices(me, idx)
     if hc["displacement"]:
         mod = body.modifiers.new("hero_dice", "SUBSURF")

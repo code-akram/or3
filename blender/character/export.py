@@ -125,6 +125,8 @@ def write_glb(b, out):
         export_morph=morph, export_morph_normal=morph, export_yup=True, export_apply=False,
         export_tangents=True, export_image_format="AUTO")
     pack_hair_maps(b, out)
+    from . import skin_tex
+    skin_tex.pack_orm(b, out)  # T17: the skin ORM's blue (specular cavity) back into the GLB
     write_sidecars(b, out)
 
 
