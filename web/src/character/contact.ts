@@ -80,6 +80,7 @@ export class ContactShadows implements OutputPass {
       const target = this.lightPos.add(this.halfW.mul(xi.x.mul(2).sub(1))).add(this.halfH.mul(xi.y.mul(2).sub(1)));
       const dir = target.sub(pos).normalize().toVar();
       const facing = n.dot(dir).greaterThan(0.02);
+      const nv = n.dot(pos.normalize().negate()).clamp(0.15, 1);
       const p0 = pos.add(n.mul(P.u('light.contactBias'))).toVar();
       const maxD = P.u('light.contactDistance');
       const thick = P.u('light.contactThickness');
@@ -92,7 +93,9 @@ export class ContactShadows implements OutputPass {
         const sq = getScreenPosition(Q, this.proj);
         const zs = perspectiveDepthToViewZ(texture(depthTex).sample(sq).r, this.near, this.far);
         const delta = zs.sub(Q.z); // > 0: the depth buffer's surface is in front of the ray point
-        const eps = max(P.u('light.contactBias'), Q.z.negate().mul(this.pxScale).mul(0.75));
+        // a pixel's depth footprint, wider at grazing view (silhouettes: the half-res depth there mixes
+        // the surface with what is behind it and would self-shadow the lit edge)
+        const eps = max(P.u('light.contactBias'), Q.z.negate().mul(this.pxScale).mul(0.75).div(nv));
         const inside = sq.x.greaterThan(0).and(sq.x.lessThan(1)).and(sq.y.greaterThan(0)).and(sq.y.lessThan(1));
         const hit = delta.greaterThan(eps).and(delta.lessThan(thick)).and(inside);
         const fade = float(1).sub(smoothstep(0.6, 1.0, s));
