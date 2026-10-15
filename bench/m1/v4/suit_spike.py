@@ -3954,7 +3954,12 @@ POSED = {
     # the layer order at runtime: each layer's fit misses by several mm, more than the gaps between
     # layers, so the under-layers' covered vertices (hidden under the next layer out at rest) sink
     # along their normal, feathered to nothing over margin_m from the visible ones (deform_rig.tuck)
-    "tuck": {"on": True, "reach_m": 0.05, "margin_m": 0.03, "depth_m": {"shirt": 0.012, "waistcoat": 0.007}},
+    # T13d: off. The cull removes what the jacket hides in every pose; the sink pushed the shirt in the
+    # closed armpit out through the jacket (a cover found along -n is the other side of the arm)
+    "tuck": {"on": False, "reach_m": 0.05, "margin_m": 0.03, "depth_m": {"shirt": 0.012, "waistcoat": 0.007}},
+    # T13d: the correctives refitted to keep the layer order and the jacket out of the body (constrain_fit)
+    "constrain": {"on": True, "rounds": 8, "trigger_m": 0.0005, "margin_m": 0.0012, "body_margin_m": 0.0015,
+                  "body_depth_max_m": 0.02, "weight": 100.0, "sink_r_m": 0.015, "sink_max_m": 0.012},
     "gain_fit": True,            # refit the skirt bones' follow gains to the simulated skirt
     "dem_bones_diag": True,      # T13b's eight free jacket bones: refit and leave-one-out on this set
     "jacket_bones": 8, "fit_iters": 4, "waist_z": 1.03, "drive_lam": 0.1,
@@ -3979,8 +3984,10 @@ POSED = {
     # the fold limit per interior edge (suit_xpbd.Solver.set_fold): T13c's armpit seams folded flat
     "fold_deg": 140.0,
     "fold_fix_rounds": 3,
-    # the under-layers on the jacket's runtime where they stay under it in every pose (bind_under)
-    "bind_under": {"on": True, "reach_m": 0.03, "lat_m": 0.015, "gap_min_m": 0.002, "gap_max_m": 0.025,
+    # the under-layers on the jacket's runtime where they stay under it in every pose (bind_under). Off:
+    # on i4 it doubled the layer crossings (its targets follow the jacket's fit error, 21-29 mm off the
+    # sim, and cross their unbound neighbours); constrain_fit does the job
+    "bind_under": {"on": False, "reach_m": 0.03, "lat_m": 0.015, "gap_min_m": 0.002, "gap_max_m": 0.025,
                    "margin_m": 0.015},
     # hidden-face culling (suit_cull): ray cone tilts (deg) and azimuths, the margin the visible set
     # grows by on the mesh, the cuff's (the 1.5 cm past the sleeve plus the turn), the jacket's inside
@@ -5070,7 +5077,27 @@ def bind_under(G, Y, rtj, K, B, pinned):
         el = ok & (hs < -0.0005) & (np.abs(hs) > 0.7 * dist) & ~pinned[key]
         tri = Tj[np.maximum(fi, 0)]
         gaps = np.zeros((K, len(X)))
-        for k in range(K):
+        cover = B.get("cover_m")
+        if cover:
+            # covered in every pose: the layer slides under the jacket (a shirt sleeve 2-4 cm along the
+            # jacket's as the arm lifts), so not the same face point but a ray out along its normal
+            # meets the jacket's sim within cover_m. Bound on the rest point at the rest gap: hidden.
+            from mathutils.bvhtree import BVHTree as _BVH
+            Nu0 = sr.vertex_normals(X, Gx["Tw"])
+            Pj0 = np.einsum("nk,nki->ni", bc, Xj[tri])
+            su = 1.0 if np.median(((Pj0 - X) * Nu0).sum(1)[el]) >= 0 else -1.0     # the under-layer's outward
+            cand = np.nonzero(el)[0]
+            for k in range(K):
+                bvh = _BVH.FromPolygons([tuple(map(float, v)) for v in Y["jacket"][k]], [tuple(map(int, t)) for t in Tj])
+                Nu = sr.vertex_normals(Y[key][k], Gx["Tw"]) * su
+                keep_ = np.zeros(len(cand), bool)
+                for j, v in enumerate(cand):
+                    o_ = Y[key][k][v]
+                    keep_[j] = bvh.ray_cast(Vector(o_ - Nu[v] * 0.002), Vector(Nu[v]), cover + 0.002)[0] is not None
+                el[cand[~keep_]] = False
+                cand = cand[keep_]
+            gaps[:] = np.clip(-hs, B["gap_min_m"], B["gap_max_m"])[None]
+        for k in range(K if not cover else 0):
             N = sr.vertex_normals(Y["jacket"][k], Tj) * sg
             P_ = np.einsum("nk,nki->ni", bc, Y["jacket"][k][tri])
             n_ = np.einsum("nk,nki->ni", bc, N[tri])
@@ -5110,6 +5137,200 @@ def bind_under(G, Y, rtj, K, B, pinned):
                    "under_at_rest": int((ok & (hs < -0.0005)).sum()),
                    "target_dev_from_sim_mm_max": round(max(dev, default=0.0) * 1000, 1)}
     return out, st
+
+
+def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tparts, place, cops, tris, C,
+                  tie_nm=None):
+    """T13d: the runtime made to keep the layer order. The corrective fit misses the sim by 5-14 mm
+    RMS over the 35 poses (a ridge over shared cones), more than the 1-7 mm between the layers, so
+    the fitted layers cross wherever the error points inward. Per round every rest-referenced anchor
+    (an outer layer's vertex over the under-layer point it lay over at rest) and every jacket vertex
+    against the posed body is read on the runtime; a pair under the trigger is resolved:
+    - an under-layer (the shirt, the waistcoat under the jacket) sinks at rest along its inward
+      normal by the shortfall (the most any pose asks), feathered over sink_r_m: pose-independent,
+      so it cannot leak into the other poses as a cone shape does, and it is hidden there;
+    - the outer layer goes out (against the skinned trousers, the body, and a rigid cuff or collar
+      row the drape cannot move): its active vertices refitted with the pairs as weighted rows (a
+      vertex's cone shapes are its own unknowns: min |A S - D|^2 + lam |S|^2 + w |n.Y - b|^2); a
+      pair once active stays, pinned where it is while it holds.
+    Changes S, G[key]["X0"] (the sunk rest) and rt_Y in place; returns (stats, {key: sink (n,)})."""
+    from mathutils.kdtree import KDTree
+    from character import suit_rig as sr
+    K = len(Ms)
+    trig, mg, mgb = C["trigger_m"], C["margin_m"], C["body_margin_m"]
+    w = np.sqrt(C["weight"])
+    act, act_ix = {}, {}
+    hist = []
+    Lb = [Layers(cops[k], tris, []) for k in range(K)]
+    Cn = Acone.shape[1]
+    X0b = {k_: G[k_]["X0"].copy() for k_ in G}
+    sink = {k_: np.zeros((len(G[k_]["X0"]), 3)) for k_ in G}
+    kd_cache = {}
+    Rinv = {}                   # (key, k) -> per-vertex inverse blended rotations (lazy)
+
+    def rinv(key, k):
+        if (key, k) not in Rinv:
+            Rinv[(key, k)] = np.linalg.inv(sr.blended(G[key]["W"], Ms[k])[:, :3, :3])
+        return Rinv[(key, k)]
+
+    def under_pts(u, k):
+        if u == "trousers":
+            tn = col0["trousers"][2]
+            return sr.skin(tparts[tn]["V0"], tparts[tn]["W"], Ms[k]), None, None
+        nm = tie_nm if u == "tie" else f"spike_{u}_collider"
+        p_ = parts[nm]
+        key = p_["key"]
+        sup = G[key]["Tw"][p_["bind"]["fi"]]               # each collider vertex's drape face
+        free = np.ones(len(sup), bool)
+        if p_.get("rigid") is not None:
+            free[p_["rigid"][0]] = False
+        if p_.get("blend") is not None:
+            free &= p_["blend"][0] < 0.5
+        return place(nm, rt_Y[key][k], Ms[k]), (key, sup), free
+
+    def read():
+        out = {}
+        for (outer, u), an in anc.items():
+            if u not in col0 or (u == "tie" and not tie_nm):
+                continue
+            src = (outer, u)
+            lm = an.lat_max or 9.0
+            for k in range(K):
+                Vp, sup, free = under_pts(u, k)
+                P_, n_ = an.frame(Vp)
+                d_ = rt_Y[outer][k][an.idx] - P_
+                s_ = (d_ * n_).sum(1)
+                lat_ = np.linalg.norm(d_ - s_[:, None] * n_, axis=1)
+                sel = set(np.nonzero((s_ < trig) & (lat_ < lm))[0].tolist()) | act_ix.get((src, k), set())
+                for a in sel:
+                    if lat_[a] < lm:
+                        out[(src, k, int(a))] = (outer, u, an, int(a), n_[a], max(0.0, mg - float(s_[a])), sup, free)
+        src = ("body", "jacket")
+        for k in range(K):
+            Yj = rt_Y["jacket"][k]
+            ax = act_ix.get((src, k), set())
+            for i in range(len(Yj)):
+                loc, nor, fi, d = Lb[k].body_bvh.find_nearest(Vector(Yj[i]))
+                if loc is None:
+                    continue
+                nor = np.array(nor)
+                s = float((Yj[i] - np.array(loc)) @ nor)
+                if (trig > s > -C["body_depth_max_m"]) or i in ax:
+                    out[(src, k, i)] = ("jacket", "body", None, i, nor, max(0.0, mgb - s), None, None)
+        return out
+
+    for r in range(C["rounds"] + 1):
+        pairs = read()
+        short, gate = {}, {}
+        for (src, k, a), v in pairs.items():
+            m_ = mgb if src[0] == "body" else mg
+            nm_ = f"{src[0]}>{src[1]}"
+            if v[5] > m_ - trig + 1e-9:
+                short[nm_] = short.get(nm_, 0) + 1
+            if v[5] > m_ + 0.0005 + 1e-9:
+                gate[nm_] = gate.get(nm_, 0) + 1
+        hist.append({"round": r, "below_trigger": short, "below_-0.5mm": gate, "active": len(act),
+                     "sink_mm_max": {k_: round(float(np.linalg.norm(v_, axis=1).max()) * 1000, 1) for k_, v_ in sink.items()},
+                     "sunk": {k_: int((np.linalg.norm(v_, axis=1) > 1e-4).sum()) for k_, v_ in sink.items()}})
+        print(f"[constrain] round {r}: {hist[-1]}", flush=True)
+        if r == C["rounds"] or not short:
+            break
+        rows = {k_: {} for k_ in G}          # outer layers: {vertex: [(k, n, b)]}, n . Y_v(k) >= b
+        need = {k_: {} for k_ in G}          # under layers: {vertex: rest-space inward sink wanted}
+        for key_, (outer, u, an, a, n, defi, sup, free) in pairs.items():
+            if u == "body" or sup is None:
+                if defi > 1e-9 or key_ in act:
+                    act[key_] = act.get(key_, 0) + 1
+                    act_ix.setdefault((key_[0], key_[1]), set()).add(key_[2])
+                    i = a if u == "body" else int(an.idx[a])
+                    rows[outer].setdefault(i, []).append((key_[1], n, float(n @ rt_Y[outer][key_[1]][i]) + defi))
+                continue
+            if defi <= 1e-9:
+                continue
+            k = key_[1]
+            key_u, sup_f = sup
+            dv = sorted({int(x) for j in an.T[an.fi[a]] if free[j] for x in sup_f[j]})
+            if not dv:                       # a rigid row: the outer goes out
+                act[key_] = act.get(key_, 0) + 1
+                act_ix.setdefault((key_[0], key_[1]), set()).add(key_[2])
+                i = int(an.idx[a])
+                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + defi))
+                continue
+            Ri = rinv(key_u, k)[dv]
+            dr = np.einsum("nij,j->ni", Ri, -n)                 # the push, in rest space
+            for j, d in enumerate(dv):
+                need[key_u].setdefault(d, []).append((dr[j], defi))
+        # the under layers: each wanting vertex's push (rest space, the largest asked), feathered to
+        # its neighbours over sink_r_m (each takes the largest falloff-scaled push near it), added
+        # to the sink so far (a drape's faces wind either way per panel: no normal is trusted)
+        for key, nd in need.items():
+            if not nd:
+                continue
+            add = np.zeros((len(sink[key]), 3))
+            for v, lst in nd.items():
+                for dr_, defi in lst:
+                    u_ = dr_ / max(np.linalg.norm(dr_), 1e-12) * defi
+                    if np.linalg.norm(u_) > np.linalg.norm(add[v]):
+                        add[v] = u_
+            src_v = np.array(sorted(nd))
+            rr = C["sink_r_m"]
+            sm = add.copy()
+            mag = np.linalg.norm(sm, axis=1)
+            if key not in kd_cache:
+                kd_ = KDTree(len(X0b[key]))
+                for v_, p_ in enumerate(X0b[key]):
+                    kd_.insert(p_, v_)
+                kd_.balance()
+                kd_cache[key] = kd_
+            for v in src_v:
+                for (co_, u_, dd) in kd_cache[key].find_range(X0b[key][v], rr):
+                    t_ = 1.0 - dd / rr
+                    f_ = t_ * t_ * (3 - 2 * t_)
+                    m_ = np.linalg.norm(add[v]) * f_
+                    if m_ > mag[u_]:
+                        sm[u_] = add[v] * f_
+                        mag[u_] = m_
+            sink[key] = sink[key] + sm
+            nrm = np.linalg.norm(sink[key], axis=1)
+            sink[key] *= np.minimum(1.0, C["sink_max_m"] / np.maximum(nrm, 1e-12))[:, None]
+            G[key]["X0"][:] = X0b[key] + sink[key]
+            W = G[key]["W"]
+            rt_Y[key][:] = np.stack([sr.skin(G[key]["X0"] + sr.apply_shapes(S[key], Acone[k]), W, Ms[k]) for k in range(K)])
+        # the outer layers: refit the active vertices with their rows
+        for key, rv in rows.items():
+            if not rv:
+                continue
+            Gx = G[key]
+            X0, W = Gx["X0"], Gx["W"]
+            idx = np.array(sorted(rv))
+            Mv = np.stack([sr.blended(W[idx], Ms[k]) for k in range(K)], 1)      # (m, K, 4, 4)
+            Ar = np.sqrt(lam) * np.eye(Cn * 3)
+            br = np.zeros(Cn * 3)
+            for j, v in enumerate(idx):
+                m = masks[key][v]
+                Am = Acone * m[None]
+                Ad = np.zeros((K * 3, Cn * 3))
+                for i3 in range(3):
+                    Ad[i3::3, i3::3] = Am
+                bd = Dres[key][:, v].reshape(-1)
+                cr, cb = [], []
+                for (k, n, b) in rv[v]:
+                    R_, t_ = Mv[j, k, :3, :3], Mv[j, k, :3, 3]
+                    nr = n @ R_
+                    row = np.zeros(Cn * 3)
+                    for i3 in range(3):
+                        row[i3::3] = nr[i3] * Am[k]
+                    cr.append(w * row)
+                    cb.append(w * (b - float(n @ (R_ @ X0[v] + t_))))
+                sol = np.linalg.lstsq(np.vstack([Ad, Ar, np.array(cr)]), np.concatenate([bd, br, np.array(cb)]),
+                                      rcond=None)[0].reshape(Cn, 3)
+                S[key][:, v] = sol * m[:, None]
+            for k in range(K):
+                rt_Y[key][k][idx] = sr.skin(X0[idx] + sr.apply_shapes(S[key][:, idx], Acone[k]), W[idx], Ms[k])
+    st = {"rounds": hist, "active": len(act),
+          "sink": {k_: {"verts": int((np.linalg.norm(v_, axis=1) > 1e-4).sum()),
+                        "max_mm": round(float(np.linalg.norm(v_, axis=1).max()) * 1000, 1)} for k_, v_ in sink.items()}}
+    return st, {k_: np.linalg.norm(v_, axis=1) for k_, v_ in sink.items() if v_.any()}
 
 
 def body_rest_co(body):
@@ -5623,12 +5844,14 @@ def main_posed(O):
         dp.reset(arm)
     # --- pose-space correctives per layer, over the suit's cones
     t = time.perf_counter()
-    S, Dres, rt_Y, loo_rms = {}, {}, {}, {}
+    S, Dres, rt_Y, loo_rms, masks = {}, {}, {}, {}, {}
     Yfit = {k_: Y[k_] for k_ in Y}     # the fit's targets: the sim, the bound under-layers on the jacket
     BU = O.get("bind_under") or {}
     for key in ("jacket", "waistcoat", "shirt"):
         Gx = G[key]
         X0 = Gx["X0"]
+        if key == "waistcoat":
+            W_pre = {k_: G[k_]["W"].copy() for k_ in G}
         if key == "waistcoat" and BU.get("on"):
             bu, stats["bind_under"] = bind_under(G, Y, rt_Y["jacket"], K, BU, pinned)
             for k_, (T_, W_, f_) in bu.items():
@@ -5640,6 +5863,7 @@ def main_posed(O):
         mask = cone_masks(cones, X0, arm) if O["cone_masks"] else np.ones((len(X0), len(cones)))
         S[key] = sr.fit_shapes(D, Acone, mask, lam=O["lam"])
         Dres[key] = D
+        masks[key] = mask
         rt_Y[key] = np.stack([sr.skin(X0 + sr.apply_shapes(S[key], Acone[k]), Gx["W"], Ms[k]) for k in range(K)])
         # leave-one-out: each pose predicted from the shapes fitted without it
         lo_ = []
@@ -5654,8 +5878,34 @@ def main_posed(O):
         loo_rms[key] = lo_
     stats["correctives_s"] = round(time.perf_counter() - t, 1)
     print(f"[spike] correctives: {stats['correctives_s']} s", flush=True)
+    CF = O.get("constrain") or {}
+    if CF.get("on"):
+        t = time.perf_counter()
+        cops = []
+        for k, pname in enumerate(poses):
+            dp.apply_pose(arm, pose_spec(pname), rig_)
+            if rt is not None:
+                rt.apply(rig_, morphs=False)
+            bpy.context.view_layer.update()
+            cops.append(np.array(evaluated(body)))
+        if CF.get("dump"):
+            import pickle
+            pk = {"G": {k_: {"X0": G[k_]["X0"], "W": G[k_]["W"], "Tw": G[k_]["Tw"]} for k_ in G},
+                  "S": S, "Dres": Dres, "masks": masks, "Acone": Acone, "Ms": Ms, "lam": O["lam"],
+                  "rt_Y": rt_Y, "Y": Y, "cops": cops, "pinned": pinned, "BU": BU, "W_pre": W_pre, "poses": poses, "tris": tris, "tie_nm": tie_nm, "CF": CF,
+                  "anc": {k_: {"idx": a_.idx, "fi": a_.fi, "bc": a_.bc, "T": a_.T, "sign": a_.sign,
+                               "lat_max": a_.lat_max, "h0": a_.h0, "gap": a_.gap} for k_, a_ in anc.items()},
+                  "col0": col0,
+                  "parts": {n_: {k2: v2 for k2, v2 in p_.items() if k2 in ("V0", "F", "W", "bind", "rigid", "blend", "key")}
+                            for n_, p_ in parts.items()},
+                  "tparts": {n_: {k2: v2 for k2, v2 in p_.items() if k2 in ("V0", "F", "W")} for n_, p_ in tparts.items()}}
+            with open(os.path.join(A.out_dir, "constrain_in.pkl"), "wb") as f_:
+                pickle.dump(pk, f_)
+        stats["constrain"], sunk = constrain_fit(G, S, Dres, masks, Acone, Ms, O["lam"], rt_Y, anc, col0, parts,
+                                                 tparts, place, cops, tris, CF, tie_nm=tie_nm)
+        stats["constrain"]["s"] = round(time.perf_counter() - t, 1)
     fit_Y = {k_: v_ for k_, v_ in rt_Y.items()}      # the fit as fitted (before the tuck)
-    tuckf = {}
+    tuckf = dict(sunk) if CF.get("on") else {}        # a sunk layer's export base is its sunk rest drape
     if O["tuck"]["on"]:
         tuckf, stats["tuck"] = tuck_layers(G, O["tuck"])
         for key in tuckf:
@@ -5761,11 +6011,14 @@ def main_posed(O):
             Wm = Wm.copy()
             Wm[p["rigid"][0]] = p["rigid"][1]
         V0 = p["V0"]
-        D = np.stack([sr.unskin(Wm, Ms[k], place(nm, Yfit[key][k], Ms[k]), V0) for k in range(K)])
+        Ysrc = rt_Y if CF.get("on") else Yfit
+        # the base: the part on its (tucked / sunk) rest drape. With the constraint the shapes are fitted
+        # on the runtime from that base; the tuck's shapes were fitted on the untucked part
+        Vb = place(nm, Gx["X0"], M_id) if key in tuckf else V0
+        D = np.stack([sr.unskin(Wm, Ms[k], place(nm, Ysrc[key][k], Ms[k]), Vb if CF.get("on") else V0)
+                      for k in range(K)])
         Sm = sr.fit_shapes(D, Acone, cone_masks(cones, V0, arm) if O["cone_masks"] else np.ones((len(V0), len(cones))),
                            lam=O["lam"])
-        # the base: the part on its (tucked) rest drape; the shapes as fitted on the untucked part
-        Vb = place(nm, Gx["X0"], M_id) if key in tuckf else V0
         dev = [float(np.linalg.norm(sr.skin(Vb + sr.apply_shapes(Sm, Acone[k]), Wm, Ms[k])
                                     - place(nm, rt_Y[key][k], Ms[k]), axis=1).max()) for k in range(K)]
         o_ = rig_copy(nm)
