@@ -138,3 +138,5 @@ The brief put the game meniscus and caruncle in `wet.py`. They live in `eyes_hq.
 
 - Metric scripts (scratch, not committed): iris = median luminance over 0.6–0.92 × the iris radius (15.5 px), excluding the sector under the upper lid, with the brightest 8 % dropped. Sclera = median of two 8 × 6–9 px boxes placed relative to each frame's iris centre. Catchlight = pixels in the disc at ≥ 0.5 × the disc peak and ≥ 2 × the iris.
 - One experimental Cycles run went under `private/likeness/hero/20261014T225753Z-t18-nosss`, because `hero.sh` fails closed to private output when a blend has no `character.stats.json` beside it. I did not open it. It holds only the public build. Re-run with the stats linked: `data/build/hero/20261014T230104Z-t18-nosss`.
+
+_Orchestrator, after the merge: ArcFace on `…-t18-b2` is 0.022 (EEVEE closeup) and 0.014 (engine hero closeup), ≤ 0.25 ✓. The stray private copy of the `t18-nosss` Cycles run was deleted._
