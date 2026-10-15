@@ -6,7 +6,7 @@ The suit is being rebuilt as real tailoring: drafted panels, sewn and draped (nu
 |---|---|---|
 | 1 | jacket detail, plus the phase A review fixes | **done**, accepted (open points below, to be fixed before item 6) |
 | 2 | UVs from panels (grain), port the `suit_textures.py` marks | **done** |
-| 2b | item-1 review points 1–3 (back collar roll, vents visible, front quarters cutaway) | next, before item 6 |
+| 2b | item-1 review points 1–4 (back collar roll, vents visible, front quarters cutaway, pressed lapel edge) | **done** (point 5, the back skirt, goes with item 3: the jacket over the made trousers) |
 | 3 | trousers | |
 | 4 | waistcoat | |
 | 5 | shirt (collar band and fall to the `suit_neck.py` frame) | |
@@ -240,3 +240,71 @@ Gate pictures are in `data/build/t13/gate/phaseB/item2/`:
 - **The rever chart's roll** is 21 % short along q. A UV relax toward the 3D lengths would even out the twill there.
 - **The sheen patch** on the lapel roll (above).
 - **The trousers, waistcoat and shirt** get the same treatment in items 3–5. `shell_uv` and `solid` are panel-generic.
+
+## Item 2b: the item-1 review points 1–4
+
+Runs (base `20261014T205840Z-t15-a5`, all full drapes):
+
+- `20261015T005546Z-t13c-k5` is the final run: clay, made jacket, LODs, textures and Cycles frames.
+- `20261015T011946Z-t13c-k5det` is its determinism twin. X1, Xw and X2 hash the same: `fdaf39b6`, `ccc4b096`, `bdc05b8c`.
+- `t13c-k1`…`k4` were the way there. `t13c-e2` is k4's drape with the lapel changes only.
+
+Gate pictures are in `data/build/t13/gate/phaseB/item2b/`:
+
+- `cmp_u6_k5_sheet.png`: item 2 against now, for the back collar, front, back and profile.
+- `cmp_button_k4_k5.png` and `cmp_lapel_k4_k5.png`.
+- `beauty_pattern_*.png`: the closes, including `close_front_hem`, `close_vent` and `close_collar_side`.
+- `beauty_sheet.png`, `grain_sheet.png`, `ab_sheet.png`, `closeup_sheet.png`.
+- The clay `pattern_*.png`.
+
+### What I see (frames at 100 %, before the numbers)
+
+- **Back collar.** The fall now covers the stand and rolls over at the top. The shirt collar shows a clean white band above it all round the back neck. The pick stitching runs along the fall's edge.
+  - One fault: a soft horizontal drag line about 2 cm under the collar seam at the centre back. The back neck pulls slightly, which a tailor would fix with a touch more back-neck length.
+- **Vents.** In `close_vent` and the back view, each back panel's lap reads as a pressed edge with a lip, running from the hem 22 cm up. The vents are closed and overlapped at rest, and the lap edge catches the light. At full body they are still subtle, as closed vents on a dark cloth are.
+- **Front quarters.** Below the button the front edges run straight about 6 cm and then round away to the hem at about 50°. The opening between them shows the trousers, as a lounge jacket's does. The pick stitching follows the curve. This is in `close_front_hem` and the front and ¾ views.
+- **Lapel edge.**
+  - It now reads as a pressed edge: a fine highlight line along the edge with a crease where it meets the lapel face, instead of a broad rounded band (`cmp_lapel_k4_k5.png`).
+  - The edge stands 3.8 mm off the front, from 4.5 mm.
+  - The jacket's other turned edges (fronts, hem, cuffs, vents) get the same crease.
+- **Below the button** (found in k4's frames, now fixed). The left front's edge showed a stepped jag where it rounds away below the button (`cmp_button_k4_k5.png`, left). Three of its edge vertices had gone 2.3 mm behind the right front.
+
+### What was done
+
+- **Point 1: back collar** (commit `bfb2d0d`). Rever stand 3.0 → 2.1 cm, fall below the seam 1.2 → 1.7 cm, and collar roll radius 0.3 → 0.45 cm.
+- **Point 2: vents** (`bfb2d0d`). The lap's pressed edge is a lip in the atlas, a ridge mark 0.8 mm high and 2.4 mm wide, 1.5 mm in from the lap edge. The under panel keeps its groove there, which is the shadow line under the lap.
+- **Point 3: cutaway** (`bfb2d0d`).
+  - The draft's front edge below the button is a Bézier: straight for 6 cm (`cutaway.straight_cm`), then meeting the hem at 50° (`hem_angle_deg`). The hem corner is 6 cm inside the centre front (`front_hem_in_cm`).
+  - Self-contact went 10 → 12 mm. With the fronts cut away, the right sleeve's inner elbow folded through itself (a 117–120° fore-seam hinge in k1 and k2), and 12 mm holds it.
+- **Point 4: lapel edge** (`c4f6dcb`).
+  - The fall lies lower: `h_lay_cm` 0.42 → 0.34, and the rever's final clearance 0.15 → 0.08 cm.
+  - New `suit_made_tex.crisp_normals`: per-corner normals are smoothed only within each face kind (outside, inside, turned edge). Every half-round edge now meets its sheets in a crease.
+  - New stat: `rever.lapel_edge_mm`, the lapel edge's height over the jacket front.
+- **The layer fix** (`c4f6dcb`).
+  - **Cause.** The lofted waistcoat's front edge has faces that look inward (its turned edge's inner rim). In the drape's distance field and in `push_out`, a point in front of them read as "inside the waistcoat".
+  - **Effect.** The cut-away left front, which now crosses that edge, was pushed 2 cm forward in the drape. `push_out` then sent three of its vertices back through the right front.
+  - **Fix.** A garment face now means "inside" only if a ray away from the body hits a garment (`garment_covers`, the rule the inside count already used).
+
+### Numbers (k5)
+
+| | value |
+|---|---|
+| shirt collar above the jacket collar at CB | **11.7 mm** (target 10–15; item 1: 3.8) |
+| lapel edge over the front | median **3.84 mm**, p95 5.66 (target 3–4; was 4.49 / 6.19) |
+| fronts below the button | the left front is 3.0–8.4 mm in front of the right (k4: −2.4 mm, through) |
+| buttons over the drape | min **+1.07 mm**, 0 below (k4: −1.29, 17 below) |
+| inside the body or under-garments | 0 by both rules; 1 vertex pushed (k4: 7); rever inside 0 (k4: 59) |
+| seams | stage-1 gap p95 1.13 mm; strain mean 2.5 %, p99 14.9 % |
+| hinges over 20° | 30: armhole 23 (16 at the underarm), side/front 3, hind 4. The A-pose underarm, as agreed; re-measured after item 6 |
+| texel density | shell 0.91 / 1.00 / 1.10, pockets 0.96 / 1.00 / 1.12, rever 0.82 / 0.98 / 2.16; LOD1 0.80 / 1.02 / 1.44, LOD2 0.69 / 1.01 / 1.46 |
+| tris | LOD0 **61,074**, LOD1 24,428, LOD2 9,102 |
+| determinism | k5 and k5det: X1, Xw and X2 hashes equal |
+| checks | `npm run build` ok; containment 73/73; provenance audit 0 errors, 0 warnings |
+
+### Left from the review
+
+- **Point 5** (the back skirt onto the seat) goes with item 3: the jacket is re-draped over the made trousers.
+  - In k5 the jacket's back is 15–37 mm off the body over the small of the back (z 1.06–1.12) and 6 mm at the seat's fullest point.
+  - The hull's lumbar bridge (`alpha_back` 0.55) and the centre-back suppression are the levers.
+- **The back-neck drag line** under the collar (above).
+
