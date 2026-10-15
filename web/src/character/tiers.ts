@@ -28,6 +28,8 @@
 //   ssss        0|1           separable screen-space SSS (T17: pass 'ssss' / skin.ssss) 1         0
 //   detail      0|1           skin detail normals (T17: skin.detailNormal)              1         1
 //   lod         0|1           1 = load character.lod1[.ktx2].glb (web/tools/lod1.mjs)   0         1
+//   floorshadow 0|1           G1 analytic capsule shadows of the unshadowed lights on    0         1
+//                             the floor (capsules.ts, ground.capsules)
 //
 // SSSS and the detail normals are T17's (not merged when this was written): until a pass named 'ssss' or
 // the params skin.ssss / skin.detailNormal exist the switches are no-ops and stats().tier says so.
@@ -59,11 +61,12 @@ export interface TierFlags {
   ssss: number;
   detail: number;
   lod: number;
+  floorshadow: number;
 }
 
 export const TIERS: Record<TierName, TierFlags> = {
-  hero: { aa: 'traa', scale: 1, dof: '1', hairshadow: 1, hairocc: 0, fillshadow: 1, shadows: 'all', shadowmap: 2048, sharemaps: 1, pcss: 1, contact: 1, specocc: 1, ltc: 1, eyeall: 1, gtao: 1, aores: 0.5, ssss: 1, detail: 1, lod: 0 },
-  gameplay: { aa: 'taau', scale: 0.8, dof: '0', hairshadow: 0, hairocc: 1, fillshadow: 0, shadows: 'key', shadowmap: 1024, sharemaps: 1, pcss: 0, contact: 0, specocc: 1, ltc: 1, eyeall: 1, gtao: 1, aores: 0.25, ssss: 0, detail: 1, lod: 1 },
+  hero: { aa: 'traa', scale: 1, dof: '1', hairshadow: 1, hairocc: 0, fillshadow: 1, shadows: 'all', shadowmap: 2048, sharemaps: 1, pcss: 1, contact: 1, specocc: 1, ltc: 1, eyeall: 1, gtao: 1, aores: 0.5, ssss: 1, detail: 1, lod: 0, floorshadow: 0 },
+  gameplay: { aa: 'taau', scale: 0.8, dof: '0', hairshadow: 0, hairocc: 1, fillshadow: 0, shadows: 'key', shadowmap: 1024, sharemaps: 1, pcss: 0, contact: 0, specocc: 1, ltc: 1, eyeall: 1, gtao: 1, aores: 0.25, ssss: 0, detail: 1, lod: 1, floorshadow: 1 },
 };
 
 export interface ResolvedTier {
@@ -132,6 +135,7 @@ export function applyTierParams(P: ParamStore, f: TierFlags): string[] {
   set('ao.gtao', f.gtao ? 1 : 0, 'gtao');
   set('dof.on', f.dof === '0' ? 0 : 1, 'dof');
   set('aa.scale', f.scale, 'scale');
+  set('ground.capsules', f.floorshadow ? 1 : 0, 'floorshadow');
   // T17 (not merged at T24): no-ops until the params exist
   if (hasParam(P, 'skin.ssss')) P.set('skin.ssss', f.ssss);
   if (hasParam(P, 'skin.detailNormal')) P.set('skin.detailNormal', f.detail);

@@ -45,6 +45,8 @@ import { SceneAO } from './ao';
 import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, type RigName, type ViewName } from './stage';
 import { FrameStats, textureBytes } from './hud';
 import { ContactShadows } from './contact';
+import { CapsuleShadows } from './capsules';
+import { TextureAudit, TextureMemory, installTextureAudit } from './texaudit';
 import { PassProfiler } from './profile';
 import { TIERS, applyTierParams, gameplayCamera, noShadowList, resolveTier, type ResolvedTier, type TierName } from './tiers';
 import { PerfMonitor, newSession, perfOverlay } from './perf';
@@ -739,6 +741,23 @@ async function main(): Promise<void> {
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || perfLive || q.get('timestamps') === '1', requiredLimits: limits });
   await renderer.init();
   state.limits = { max_sampled_textures_per_stage: limits.maxSampledTexturesPerShaderStage ?? 16 };
+  // G1: every pipeline's sampled textures are counted (texaudit.ts); over WebGPU's default 16 is flagged
+  let passOfCam: (c: THREE.Camera | null) => string = () => '?';
+  const overSeen = new Set<string>();
+  const texAudit = new TextureAudit(
+    16,
+    (row) => {
+      const k = `${row.material}|${row.pass}`;
+      if (overSeen.has(k)) return;
+      overSeen.add(k);
+      const msg = `texture limit: ${row.material} (${row.object}, ${row.pass}) samples ${Math.max(row.fragment, row.vertex)} textures in one stage, over WebGPU's default 16 (adapter: ${state.limits?.max_sampled_textures_per_stage ?? 16})`;
+      console.error(msg);
+      state.warnings.push(msg);
+    },
+    (c) => passOfCam(c),
+  );
+  installTextureAudit(renderer, texAudit);
+  const texMem = new TextureMemory(renderer);
   if (!forceWebGL && (limits.maxSampledTexturesPerShaderStage ?? 16) < 18 && tier.tier === 'hero' && q.get('capture') !== '1')
     state.warnings.push('adapter allows 16 sampled textures per shader stage: the live hero portrait needs 18 (eyes); add &shadows=key,rim,kicker');
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
@@ -863,6 +882,9 @@ async function main(): Promise<void> {
   stageAll.lookdev.cameras.gameplay = gameplayCamera(stageAll, Number(q.get('gpdist') ?? 3));
   const stage = new Stage(stageAll, scene, mats.byName, P);
   stage.areaMode = lightAreaMode(P);
+  // G1: the gameplay tier's grounding, analytic capsule shadows of the unshadowed lights on the floor
+  const capsules = (P.get('ground.capsules') as number) > 0 ? new CapsuleShadows(model, P) : null;
+  stage.groundCapsules = capsules;
   // T19: screen-space contact shadows of the key, a 'pre' pass on the GTAO prepass (contact.ts); the key's
   // shadow node multiplies by it
   const contact = sceneAO && (P.get('light.contact') as number) > 0 ? new ContactShadows(sceneAO, P, () => stage.keyLight()) : null;
@@ -871,6 +893,12 @@ async function main(): Promise<void> {
     stage.contactNode = contact.node;
   }
   const profiler = new PassProfiler(renderer, passLabel(stage));
+  passOfCam = (c) => {
+    if (!c) return '?';
+    if (c === camera) return 'main';
+    const sh = stage.shadowCameraName(c);
+    return sh ? `shadow:${sh}` : c.type;
+  };
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
   stage.deepHair = !!tier.flags.hairshadow && !!(P.get('hair.deepShadow') as number);
   stage.shadowFill = !!tier.flags.fillshadow;
@@ -1087,6 +1115,11 @@ async function main(): Promise<void> {
       map_size: P.get('light.mapSize'),
     },
     fill_shadow: stage.shadowFill,
+    // G1 (texaudit.ts): the most fragment textures of any pipeline; the full table with ?texcheck=1
+    // G1: live GPU texture memory by kind (exact from the GPUTextures, in the formats this adapter transcodes to)
+    texture_memory: texMem.report(q.get('texcheck') === '1' ? 40 : 0),
+    texture_audit: q.get('texcheck') === '1' ? texAudit.report() : { limit: texAudit.limit, over: texAudit.over.map((r) => `${r.material} ${r.pass} ${r.fragment}`), pipelines: texAudit.rows.length },
+    ground: capsules ? { capsules: capsules.fits().length, lights: stage.groundShadowLights(), fits: capsules.fits() } : null,
     frame: fs.summary(),
     first_frame_ms: Math.round(firstFrameMs),
   });
@@ -1109,6 +1142,8 @@ async function main(): Promise<void> {
     weights: () => rt.lastWeights,
     lights: () => stage.describeLights(),
     stats: statsNow,
+    /** G1: sampled textures per material and pass (texaudit.ts) */
+    textureAudit: () => texAudit.report(),
     /** Render view (stage camera, rig) at w x h; returns base64 RGBA8 rows, top row first.
      * Temporal AA: a still accumulates `frames` jittered frames (default aa.stillFrames) from a fresh
      * history; keep = true continues the current history instead (same view / pose / size, the model

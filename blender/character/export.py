@@ -302,32 +302,47 @@ def ktx2(b, out):
 def lod1(b, out):
     """LOD1 for the gameplay tier (T24, checkpoint-3 §5.2: ~60k tris, cap 65k): web/tools/lod1.mjs
     simplifies every primitive to its target with meshoptimizer and drops the scalp hair's fly-away
-    cards (by atlas cell, from this build's hair stats) -> <stem>.lod1.glb, and from the KTX2 copy
-    (when export.ktx2 ran first) <stem>.lod1.ktx2.glb, the gate asset. Needs the web/ node deps."""
+    cards (by atlas cell, from this build's hair stats) -> <stem>.lod1.glb. G1: web/tools/texlod.mjs then
+    halves its textures down to what the gameplay camera samples at 2.5 m (texture LOD), and when
+    export.ktx2 ran first, web/tools/ktx2.mjs encodes that into <stem>.lod1.ktx2.glb, the gate asset.
+    Needs the web/ node deps."""
     import subprocess
     import tempfile
     import time
     repo = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-    tool = os.path.join(repo, "web", "tools", "lod1.mjs")
+    tools = os.path.join(repo, "web", "tools")
     stem = out[:-4]
     t = time.perf_counter()
     rec = {}
+
+    def node(args, what):
+        r = subprocess.run(["node", *args], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"{what} failed: {(r.stdout + r.stderr)[-2000:]}")
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump({"hair": b.notes.get("hair", {})}, f)
         stats = f.name
+    dst = stem + ".lod1.glb"
+    full = stem + ".lod1.fulltex.tmp.glb"
     try:
-        for src, dst in ((out, stem + ".lod1.glb"), (stem + ".ktx2.glb", stem + ".lod1.ktx2.glb")):
-            if not os.path.exists(src):
-                continue
-            r = subprocess.run(["node", tool, src, dst, "--stats", stats], capture_output=True, text=True)
-            if r.returncode != 0:
-                raise RuntimeError(f"lod1 failed ({os.path.basename(src)}): {(r.stdout + r.stderr)[-2000:]}")
-            one = json.loads(r.stdout.strip().splitlines()[-1])
-            rec[os.path.basename(dst)] = {"tris": one["tris"], "budget": one["budget"], "bytes": os.path.getsize(dst),
-                                          "primitives": {f"{p['node']}/{p['material']}": [p["before"], p["after"]]
-                                                         for p in one["primitives"]}}
+        one = node([os.path.join(tools, "lod1.mjs"), out, full, "--stats", stats], "lod1")
+        tex = node([os.path.join(tools, "texlod.mjs"), full, dst], "texlod")
+        rec[os.path.basename(dst)] = {"tris": one["tris"], "budget": one["budget"], "bytes": os.path.getsize(dst),
+                                      "primitives": {f"{p['node']}/{p['material']}": [p["before"], p["after"]]
+                                                     for p in one["primitives"]},
+                                      "texlod": {"rgba8_mips_mb": [tex["rgba8_mips_mb_before"], tex["rgba8_mips_mb_after"]],
+                                                 "target_texels_per_m": tex["target_texels_per_m"],
+                                                 "textures": {x["name"]: [x.get("from"), x.get("to")] for x in tex["textures"]}}}
+        if os.path.exists(stem + ".ktx2.glb"):
+            k = node([os.path.join(tools, "ktx2.mjs"), dst, stem + ".lod1.ktx2.glb"], "ktx2 (lod1)")
+            rec[os.path.basename(stem + ".lod1.ktx2.glb")] = {"tris": one["tris"], "bytes": os.path.getsize(stem + ".lod1.ktx2.glb"),
+                                                             "image_mb": k["image_mb_after"]}
     finally:
         os.unlink(stats)
+        if os.path.exists(full):
+            os.unlink(full)
     rec["seconds"] = round(time.perf_counter() - t, 1)
     b.notes["lod1"] = rec
     return rec

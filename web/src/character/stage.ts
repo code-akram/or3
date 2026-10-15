@@ -32,6 +32,7 @@ import { groupOf, roleOf } from './materials';
 import type { ParamStore } from './materials/params';
 import { deepHairFilter, setupHairShadow } from './hairshadow';
 import { LinkedShadowNode, OwnedShadowNode, discDiameter, fitShadow, linkedShadow, pcssFilter } from './lighting';
+import type { CapsuleShadows } from './capsules';
 
 export interface StageCamera {
   position: number[];
@@ -225,6 +226,11 @@ export class Stage {
   shadowFill = true;
   /** T19 A/B (?noshadow=rim,kicker): lights (by parent name) that cast no shadow. */
   noShadow: string[] = [];
+  /** G1 (capsules.ts, ?floorshadow=1): the floor's copies of the unshadowed lights take the body's capsule
+   * shadows. null (the hero tier) = the floor is lit by every scene light, as before G1. */
+  groundCapsules: CapsuleShadows | null = null;
+  /** the floor's light copies (G1) */
+  private floorTwins: THREE.Light[] = [];
   private static ltcReady = false;
 
   constructor(
@@ -553,6 +559,52 @@ export class Stage {
       this.lights.push({ light: l, spec: s });
     }
     this.link(hero);
+    this.linkGround();
+  }
+
+  /** G1: the floor's lights. Without capsules the floor keeps three's default (every light in the scene,
+   * the exported hair twins included; untouched so the hero tier is unchanged). With capsules the floor
+   * gets the same lights, every one that casts no map replaced by a copy whose shadow is the capsules'
+   * visibility of its emitter (only the floor links the copies; the eye light and the map-casting lights,
+   * the key in the gameplay tier, are used as they are). */
+  private linkGround(): void {
+    for (const l of this.floorTwins) {
+      this.group.remove(l);
+      l.dispose();
+    }
+    this.floorTwins = [];
+    const caps = this.groundCapsules;
+    if (!caps) return;
+    caps.reset();
+    const use: THREE.Light[] = [];
+    for (const { light, spec } of this.lights) {
+      if (light.castShadow || spec.name === 'eye') {
+        use.push(light);
+        continue;
+      }
+      const twin = light.clone() as THREE.SpotLight | THREE.RectAreaLight;
+      twin.name = `${spec.name}_ground`;
+      const rq = light.userData.rectQuat as THREE.Quaternion;
+      const ex = new THREE.Vector3(1, 0, 0).applyQuaternion(rq).multiplyScalar((light.userData.rectW as number) / 2);
+      const ey = new THREE.Vector3(0, 1, 0).applyQuaternion(rq).multiplyScalar((light.userData.rectH as number) / 2);
+      const sh = new THREE.SpotLight().shadow as THREE.LightShadow & { shadowNode: unknown };
+      sh.shadowNode = caps.visibility(light, ex, ey);
+      (twin as unknown as { shadow: THREE.LightShadow }).shadow = sh;
+      twin.castShadow = true;
+      this.group.add(twin);
+      if ((twin as THREE.SpotLight).isSpotLight) this.group.add((twin as THREE.SpotLight).target);
+      this.floorTwins.push(twin);
+      use.push(twin);
+    }
+    const fl = this.floor.material as THREE.MeshStandardNodeMaterial;
+    fl.lightsNode = lightsNodeOf([...use, this.hemi]);
+    fl.needsUpdate = true;
+    this.floor.onBeforeRender = () => caps.update();
+  }
+
+  /** G1: the floor's light copies with capsule shadows (names), for stats(). */
+  groundShadowLights(): string[] {
+    return this.floorTwins.map((l) => l.name);
   }
 
   /** Light linking (rig.py twins): per material, the lights whose receivers include its group (the

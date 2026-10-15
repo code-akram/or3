@@ -362,6 +362,16 @@ export const DEFAULT_PARAMS = {
     contactBias: 0.0006,
     contactIntensity: 1,
   },
+  ground: {
+    /** (setup) G1 analytic capsule shadows on the floor (capsules.ts): the floor's copy of every light that
+     * casts no map multiplies by its visibility past 14 capsules fitted to the body. 0 = off (the hero
+     * tier: the floor is lit as before); the tier switch is floorshadow. */
+    capsules: 0,
+    /** 1 = the full shadow; scale of the fitted radii; scale of the emitter's equal-area radius (penumbra). */
+    capsuleStrength: 1,
+    capsuleRadiusScale: 1,
+    capsuleSoftness: 1,
+  },
 };
 
 export type Params = typeof DEFAULT_PARAMS;
