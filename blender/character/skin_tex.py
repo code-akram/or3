@@ -226,7 +226,9 @@ def beard_depth(b, body):
         frame = HeadFrame(b, [body])
         groups = tuple(body.vertex_groups[n].index for n in ("lips", "ears", "head", "neck_01"))
         cheek, neck, back_y = hair_beard.landmarks(frame, cfg)
-        margins = (cfg["margin_m"], cfg["neck_margin_m"], cfg["back_margin_m"], cfg["moustache_margin_m"])
+        margins = hair_beard.line_margins(cfg)
+        # T21: the sideburn and the back line under the ear, as the beard build placed them
+        extra = getattr(b, "beard_extra", None)
         moustache_top = frame.lips_max.z + cfg["moustache_height_m"]
         nose = (frame.lips_min.y - cfg["nose_clear_m"], frame.lips_max.z)
         mw = body.matrix_world
@@ -234,7 +236,7 @@ def beard_depth(b, body):
         fade = cfg["fade_m"]
         for v in body.data.vertices:
             d, m = hair_beard.inside_dist(mw @ v.co, {e.group: e.weight for e in v.groups}, groups,
-                                          cheek, neck, back_y, margins, moustache_top, nose)
+                                          cheek, neck, back_y, margins, moustache_top, nose, extra)
             if d > -1.0:
                 t = min(max((d + m) / (m + fade), 0.0), 1.0)
                 out[v.index] = t * t * (3 - 2 * t)
@@ -629,6 +631,13 @@ DETAIL = {
     "thick_dist_mm": 10.0, "thick_samples": 24,
     "lid_mm": (5.0, 9.0),      # skin within 5 (fully) to 9 mm of an eye sphere: no transmission (the eyeball)
     "detail_px": {"head": 1024, "hands": 512},
+    # T21 stubble tile (layer 2 of the engine's tile array; its weight is the detail map's alpha, written by
+    # hair_beard.paint_underlayer from the beard + stubble roots): ~100 stubs / cm^2 on a jittered grid, each
+    # a cut shaft lying out of its follicle (a capsule len x w, raised h, aimed down the UV v +- dir_sigma),
+    # 10 % of the sites empty; B = the shaft's coverage (dark in the albedo), RG its normal
+    "stubble_tile_mm": 10.0, "stubble_cells": 10, "stubble_jitter": 0.45, "stubble_empty": 0.1,
+    "stubble_len_mm": (0.35, 0.9), "stubble_w_mm": (0.07, 0.11), "stubble_h_mm": 0.035,
+    "stubble_dir_sigma_deg": 35.0, "stubble_follicle_mm": 0.07,
 }
 
 
@@ -714,7 +723,41 @@ def detail_tiles(d=DETAIL):
     hm = -d["micro_depth_mm"] * fur + d["micro_grain_mm"] * _periodic_noise(rng, n, 1.2)
     micro_n = _normals(hm, Tm / n, d["normal_gain"])
     micro = np.concatenate([micro_n[..., :2] * 0.5 + 0.5, fur[..., None]], -1).astype(np.float32)
-    return {"pore": (h.astype(np.float32), pore), "micro": (hm.astype(np.float32), micro)}
+    out = {"pore": (h.astype(np.float32), pore), "micro": (hm.astype(np.float32), micro)}
+    out["stubble"] = stubble_tile(rng, d)
+    return out
+
+
+def stubble_tile(rng, d=DETAIL):
+    """T21: the stubble tile (h_mm, rgb): RG normal, B shaft coverage (see DETAIL stubble_*)."""
+    n = d["px"]
+    T = d["stubble_tile_mm"]
+    nc = d["stubble_cells"]
+    m = nc * nc
+    L = rng.uniform(*d["stubble_len_mm"], m)
+    w = rng.uniform(*d["stubble_w_mm"], m)
+    ang = -np.pi / 2 + np.radians(d["stubble_dir_sigma_deg"]) * rng.standard_normal(m)
+    live = rng.uniform(0, 1, m) >= d["stubble_empty"]
+    texel = T / n
+    h = np.zeros((n, n))
+    cov = np.zeros((n, n))
+    for sx, sy, idx in _cells(rng, n, nc, nc, d["stubble_jitter"]):
+        x, y = -sx * T, -sy * T                    # pixel relative to the follicle (mm)
+        ca, sa = np.cos(ang[idx]), np.sin(ang[idx])
+        along = np.clip(x * ca + y * sa, 0.0, L[idx])
+        dist = np.hypot(x - along * ca, y - along * sa)
+        r = 0.5 * w[idx]
+        inside = np.clip(1 - (dist / r) ** 2, 0, 1)
+        # the shaft rises out of the follicle and lies on the skin toward its cut end
+        lift = 1 - 0.5 * along / L[idx]
+        hi = d["stubble_h_mm"] * np.sqrt(inside) * lift * live[idx]
+        h = np.maximum(h, hi)
+        c = np.clip((r - dist) / texel + 0.5, 0, 1) * live[idx]
+        fol = np.clip((d["stubble_follicle_mm"] - np.hypot(x, y)) / texel + 0.5, 0, 1) * live[idx]
+        cov = np.maximum(cov, np.maximum(c, fol))
+    nrm = _normals(h, texel, d["normal_gain"])
+    rgb = np.concatenate([nrm[..., :2] * 0.5 + 0.5, cov[..., None]], -1).astype(np.float32)
+    return h.astype(np.float32), rgb
 
 
 def write_png(path, rgb):
@@ -811,20 +854,28 @@ def pack_orm(b, out):
 
 def write_detail_sidecars(b, out_dir, tiles, details, uvmm, stats):
     """skin_detail.json + the tiles + per-part detail maps next to the GLB (engine runtime inputs)."""
-    files = {k: write_png(os.path.join(out_dir, f"skin_detail_{k}.png"), tiles[k][1]) for k in ("pore", "micro")}
+    keys = [k for k in ("pore", "micro", "stubble") if k in tiles]
+    files = {k: write_png(os.path.join(out_dir, f"skin_detail_{k}.png"), tiles[k][1]) for k in keys}
     parts = {}
     for key, rgb in details.items():
         fn = write_png(os.path.join(out_dir, f"skin_{key}_detail.png"), rgb)
         mm = uvmm.get(key)
         parts[f"skin_{key}"] = {"detail": fn, "uv_mm": round(mm, 2) if mm else None,
                                 "pore_repeat": round(mm / DETAIL["pore_tile_mm"], 4) if mm else None,
-                                "micro_repeat": round(mm / DETAIL["micro_tile_mm"], 4) if mm else None}
+                                "micro_repeat": round(mm / DETAIL["micro_tile_mm"], 4) if mm else None,
+                                "stubble_repeat": round(mm / DETAIL["stubble_tile_mm"], 4) if mm and "stubble" in tiles else None}
+    # T21: hair_beard.paint_underlayer rewrites the detail maps with the stubble density in alpha
+    b.skin_detail_maps = {"dir": out_dir, "rgb": dict(details), "files": {k: parts[f"skin_{k}"]["detail"] for k in details}}
     # mean |n_xy|^2 of each tile: the slope variance the engine moves into roughness where it fades a tile
     var = {k: round(float(np.mean(np.sum((tiles[k][1][..., :2] * 2.0 - 1.0) ** 2, axis=-1))), 5) for k in ("pore", "micro")}
     rec = {"version": 1, "tiles": files, "materials": parts, "tile_slope_var": var,
            "pore_tile_mm": DETAIL["pore_tile_mm"], "pore_cells": DETAIL["pore_cells"],
            "micro_tile_mm": DETAIL["micro_tile_mm"], "micro_cells": list(DETAIL["micro_cells"]),
            "thick_dist_mm": DETAIL["thick_dist_mm"], "cavity_in_orm_b": True, "stats": stats,
+           "stubble": ({"cells": DETAIL["stubble_cells"], "tile_mm": DETAIL["stubble_tile_mm"],
+                        "mean_cov": round(float(tiles["stubble"][1][..., 2].mean()), 5),
+                        "slope_var": round(float(np.mean(np.sum((tiles["stubble"][1][..., :2] * 2.0 - 1.0) ** 2, axis=-1))), 5)}
+                       if "stubble" in tiles else None),
            "note": "tiles: RG = tangent-space normal XY (glTF +Y), B = pit / furrow openness; wrap REPEAT, "
                    "mipmapped; uv_tile = uv * repeat. detail map (part UV): R pore-tile weight, G micro-tile "
                    "weight, B inside-AO, thickness t = thick_dist_mm * sqrt(B). ORM blue = specular cavity."}

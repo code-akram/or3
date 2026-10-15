@@ -5,7 +5,7 @@
 // URL: character.html?asset=<dir under /asset/>&view=front|three_quarter|profile|closeup|portrait
 //      &rig=neutral|hero&turntable=1&pose=rest|stand|arms_up|...&amount=0..1&gl=1&dpr=1&params=<json>
 //      &area=none|rims|all&post=0&gaze=0&scene=balls&view_transform=standard
-//      &hairshadow=0 (T9b binary shadow on the hair) &fillshadow=0 (unshadowed fill / wrap) &noshadow=rim,kicker
+//      &hairshadow=0 (T9b binary shadow on the hair) &beardshadow=0 (T21: no beard / brow deep-shadow twins) &fillshadow=0 (unshadowed fill / wrap) &noshadow=rim,kicker
 //      (T19 A/B: those lights unshadowed) &gtao=0 (the
 //      baked direct-AO stand-in instead of GTAO) &aoview=1 (show the AO) &lights=key,rim (debug)
 //      &aa=traa|taau|msaa (T16: temporal AA with hashed hair cards, default; TAAU at &scale=0.75; msaa = the
@@ -181,8 +181,9 @@ async function loadTileArray(urls: string[]): Promise<THREE.DataArrayTexture | n
 
 async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
   interface J {
-    tiles: { pore: string; micro: string };
-    materials: Record<string, { detail: string; pore_repeat: number | null; micro_repeat: number | null }>;
+    tiles: { pore: string; micro: string; stubble?: string };
+    materials: Record<string, { detail: string; pore_repeat: number | null; micro_repeat: number | null; stubble_repeat?: number | null }>;
+    stubble?: { cells: number; mean_cov: number; slope_var: number } | null;
     pore_cells: number;
     micro_cells: number[];
     thick_dist_mm: number;
@@ -193,14 +194,16 @@ async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
   if (!j) return null;
   // the two tiles as one 2-layer array texture: one sampled-texture binding, not two (WebGPU allows 16
   // per fragment stage; with T19's lights and shadow maps the skin was at 17: black frames)
-  const tiles = await loadTileArray([base + j.tiles.pore, base + j.tiles.micro]);
+  // T21: the stubble tile is layer 2 when the build has one (same size as the others)
+  const tiles = await loadTileArray([base + j.tiles.pore, base + j.tiles.micro, ...(j.tiles.stubble ? [base + j.tiles.stubble] : [])]);
   if (!tiles) return null;
   const materials: SkinDetail['materials'] = {};
   await Promise.all(
     Object.entries(j.materials).map(async ([name, m]) => {
       const map = await loadTexture(base + m.detail);
       if (map) map.anisotropy = 4;
-      if (m.pore_repeat && m.micro_repeat) materials[name] = { map, poreRepeat: m.pore_repeat, microRepeat: m.micro_repeat };
+      if (m.pore_repeat && m.micro_repeat)
+        materials[name] = { map, poreRepeat: m.pore_repeat, microRepeat: m.micro_repeat, stubbleRepeat: j.tiles.stubble ? (m.stubble_repeat ?? null) : null };
     }),
   );
   const mc = j.micro_cells;
@@ -213,6 +216,7 @@ async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
     cavity: !!j.cavity_in_orm_b,
     // pre-T17b builds lack the variance: ~ the first build's tiles
     slopeVar: j.tile_slope_var ?? { pore: 0.02, micro: 0.01 },
+    stubble: j.tiles.stubble && j.stubble ? { cells: j.stubble.cells, meanCov: j.stubble.mean_cov, slopeVar: j.stubble.slope_var } : null,
   };
 }
 
@@ -873,6 +877,8 @@ async function main(): Promise<void> {
   const profiler = new PassProfiler(renderer, passLabel(stage));
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
   stage.deepHair = !!tier.flags.hairshadow && !!(P.get('hair.deepShadow') as number);
+  // T21: beard / brow twins with the deep shadow (follow the hair's switch; ?beardshadow=0 = the parent's PCSS)
+  stage.deepBeard = q.get('beardshadow') !== '0' && !!(P.get('facialHair.deepShadow') as number);
   stage.shadowFill = !!tier.flags.fillshadow;
   // T24 ?shadows=key (gameplay): every other light unshadowed; plus T19's ?noshadow= A/B list
   stage.noShadow = [...new Set([...(q.get('noshadow') ?? '').split(',').filter(Boolean), ...noShadowList(tier.flags.shadows, stageAll)])];
@@ -1070,6 +1076,7 @@ async function main(): Promise<void> {
     shadow_maps: stage.shadowMapCount(),
     gtao: sceneAO ? { half_res: sceneAO.resolution === 0.5, resolution: sceneAO.resolution, last_ms: Math.round(sceneAO.lastMs) } : null,
     hair_shadow: stage.deepHair ? 'deep (hair twins)' : 'binary',
+    beard_shadow: stage.deepHair && stage.deepBeard ? 'deep (beard twins)' : 'parent',
     aa: output.aa === 'msaa' ? { mode: 'msaa', samples: output.samples, hair: 'alpha to coverage' } : { mode: output.aa, scale: output.aa === 'taau' ? output.scale : 1, hair: `hashed (coverage ${P.get('aa.hairCoverage')})`, still_frames: P.get('aa.stillFrames') },
     dof: output.dofOn ? { thin_lens: true, full_res: !!(P.get('dof.fullRes') as number), radius_scale: P.get('dof.radiusScale') } : null,
     grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)',

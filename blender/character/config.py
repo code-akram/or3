@@ -253,6 +253,16 @@ DEFAULTS = {
             # moustache top): the stubble band.
             "margin_m": 0.014, "neck_margin_m": 0.03, "back_margin_m": 0.006,
             "moustache_margin_m": 0.003,
+            # T21 (bench/m1/v4/t21-beard-brows.md): the sideburn, a band in front of the ear from the cheek
+            # line's start up into the scalp groom's lowest roots there (hair_beard.sideburn_boxes), so the
+            # beard meets the T20 head hair with no bare gap at the temple: width_m in front of the ear front,
+            # back_m behind it, below_m under the cheek line's start, into_hair_m above the hair's roots
+            # (fallback: top_m over the ear top), margin_m its stubble band
+            "sideburn": {"width_m": 0.013, "back_m": 0.002, "below_m": 0.0, "hair_search_m": 0.012,
+                         "into_hair_m": 0.006, "top_m": 0.0, "margin_m": 0.006},
+            # T21: the back edge moves m behind back_y under the ear lobe (over ramp_m), so the jaw angle under
+            # the ear is beard (it was a bare notch between the beard and the ear)
+            "back_low": {"m": 0.010, "ramp_m": 0.015, "up_m": 0.0},
             # Density across the line: 1 at in_m inside, line_density at the
             # line, 0 at out_m outside; stubble from stubble_in_m inside to
             # the patch edge.
@@ -261,7 +271,9 @@ DEFAULTS = {
             "fade": {"in_m": 0.015, "moustache_in_m": 0.004, "out_m": 0.012, "moustache_out_m": 0.004,
                      "neck_in_m": 0.014, "neck_out_m": 0.010,
                      "line_density": 0.08, "pow": 2.0, "line_length": 0.35,
-                     "stubble_in_m": 0.004},
+                     "stubble_in_m": 0.004,
+                     # T21: the back edge and the sideburn fill to their lines (in_m 15 mm left a bare band)
+                     "back_in_m": 0.006, "back_out_m": 0.006, "sideburn_in_m": 0.004, "sideburn_out_m": 0.006},
             # Edge band: from the outer fade to band_m inside the line, the
             # hero strands thin to `radius` x width and `length` x length.
             "edge": {"band_m": 0.015, "moustache_band_m": 0.003, "radius": 0.55, "length": 0.7,
@@ -274,7 +286,8 @@ DEFAULTS = {
             # chin; the moustache hangs over the upper lip edge.
             "length": {"cheek_m": 0.009, "jaw_m": 0.012, "chin_extra_m": 0.012,
                        "chin_radius_m": 0.03, "soul_m": 0.012, "soul_radius_m": 0.010,
-                       "moustache_m": 0.014, "lip_overlap_m": 0.007, "philtrum_scale": 0.7, "under_below_mouth_m": 0.02, "neck_m": 0.0125},
+                       "moustache_m": 0.014, "lip_overlap_m": 0.007, "philtrum_scale": 0.7, "under_below_mouth_m": 0.02, "neck_m": 0.0125,
+                       "sideburn_m": 0.008},
             "comb": {"cheek_back": 0.3, "chin_forward": 0.1, "soul_forward": 0.8, "under_jaw_back": 0.6,
                      "moustache_down": 1.0, "moustache_side": 0.25, "philtrum_x_m": 0.006,
                      "smooth_iters": 3},
@@ -335,7 +348,7 @@ DEFAULTS = {
             # mapping (path 0.68) x gain 0.35, calibrated on the closeup parity (hair_test
             # --parts parity, beard region 1.16x the hero at 0.35, 2.3x at 1 without
             # specular): the hero beard's dense volume self-shadows, the cards do not.
-            "game_cards": {"seed": 211, "count": 2048, "spacing_m": 0.0026, "clump_radius_m": 0.0022,
+            "game_cards": {"seed": 211, "count": 2240, "spacing_m": 0.0026, "clump_radius_m": 0.0022,
                            "min_members": 4, "min_len_m": 0.003, "segments": 3,
                            "tip_extend": 0.06, "width_scale": 1.25, "taper": 0.45,
                            "min_halfwidth_m": 0.0009, "max_halfwidth_m": 0.003,
@@ -344,7 +357,7 @@ DEFAULTS = {
                            # T11: moustache 35 -> 20 deg (it stood off the lip as a bar)
                            "roll_jaw_deg": 55, "roll_moustache_deg": 20, "roll_chin_deg": 20,
                            "roll_lying_deg": 12, "roll_sigma_deg": 12,
-                           "cell": [32, 128], "atlas_px": [2048, 4096], "ss": 2, "data_scale": 2,
+                           "cell": [32, 128], "atlas_px": [2048, 4608], "ss": 2, "data_scale": 2,
                            "strand_px": 0.8, "tip_px": 0.3, "tip_fade": 0.4, "tip_alpha": 0.1,
                            "flow_jitter_deg": 8,
                            "albedo": {"radial_roughness": 0.6, "path": 0.68, "gain": 0.35,
@@ -367,13 +380,37 @@ DEFAULTS = {
                            # root density
                            "edge_fade": {"density": [0.08, 0.8], "pow": 1.5, "min": 0.0, "px_min": 0.5},
                            # T11: the moustache's lip-edge cards clear the lip and fade longer to the tip
-                           "lip_gap_m": 0.0012, "lip_tip_fade": 0.65},
+                           "lip_gap_m": 0.0012, "lip_tip_fade": 0.65,
+                           # T21: every strand fades in from a staggered start (len, jitter: fractions of its
+                           # length): a card's root row drew a hard comb line (the moustache top, the cheek line)
+                           "root_fade": {"len": 0.18, "jitter": 0.12},
+                           # T21: the moustache overhang as a ribbon along the upper lip (hair_beard.lip_ribbon,
+                           # beard_bake.lip_ribbon_cards): columns every col_m, rows across; top_m over the
+                           # vermilion top to the lowest tips (tip_pct, clamped to min / max_over_m, halved
+                           # toward the corners over end_taper_m); y the front_pct of the strand points there,
+                           # gap_m off the skin; cards seg_cols wide, two layers; cross-card alpha: in over
+                           # alpha_in, out from alpha_out[0] to the lip edge to alpha_floor (then the tips);
+                           # the lip-edge clump cards end clip_m over the vermilion top
+                           "lip_ribbon": {"col_m": 0.0015, "rows": 4, "tip_pct": 15, "min_over_m": 0.001,
+                                          "max_over_m": 0.005, "end_taper_m": 0.006, "top_m": 0.003,
+                                          "front_pct": 25, "gap_m": 0.0008, "smooth": 2, "seg_cols": 6,
+                                          "overlap_cols": 1, "layers": 2, "layer_push_m": 0.0004,
+                                          "alpha_in": 0.25, "alpha_out": [0.55, 1.0], "alpha_floor": 0.35,
+                                          "tip_fade": 0.5, "clip_m": 0.001}},
             # The darker under-layer in the game skin albedo (hair_beard.paint_underlayer,
             # after head_refine): beard + stubble root density -> cover -> toward the beard colour.
             # T11: gamma 0.7 -> 0.6, stubble 0.5 -> 0.8, blur 3 -> 8 px: the grown-in shadow past the
             # cheek line, where the cards now fade out
             "underlayer": {"radius_m": 0.003, "full_per_cm2": 200, "stubble_weight": 0.8,
-                           "blur_px": 8, "gamma": 0.6, "strength": 0.85, "colour_gain": 1.0},
+                           "blur_px": 8, "gamma": 0.6, "strength": 0.85, "colour_gain": 1.0,
+                           # T21: the stubble density for the engine's stubble tile (detail map alpha):
+                           # saturates at full_frac of the under-layer's full cover, blurred blur_px
+                           "stubble_mask": {"full_frac": 0.5, "blur_px": 4},
+                           # T21: the strands' lying part (max_len_mm from the root) drawn into the albedo
+                           # (hair_beard.paint_strands): the flow under the cards and past the cheek line
+                           "strands": {"colour": "#1a1715", "width_mm": 0.08, "min_px": 0.45,
+                                       "strength": 0.55, "max_len_mm": 2.5, "max_dist_m": 0.003,
+                                       "keep": 0.6}},
             # Game shells (enabled False since T9: kept for comparison): the decimated patch
             # stacked along the normal at t_k x the local groom canopy; tile k is the groom slice.
             "shells": {"enabled": False, "layers": 14, "t_pow": 1.3, "base_tris": 420, "lift_m": 0.0,
@@ -473,8 +510,14 @@ DEFAULTS = {
                            "underlayer": {"radius_m": 0.002, "full_per_cm2": 300, "stubble_weight": 1.0,
                                           # T11: strength 0.4 -> 0.88 (it did not show), a dark
                                           # neutral brown, not the strands' near-black red
-                                          "blur_px": 12, "gamma": 1.0, "strength": 0.88, "colour_gain": 1.0,
-                                          "colour": "#262220"}},
+                                          # T21: blur 12 -> 4 px (a soft smudge at 100 %), the strands
+                                          # drawn over it (hair_beard.paint_strands: whole brow hairs lie
+                                          # on the skin) so the brow reads as hairs, not a band
+                                          "blur_px": 4, "gamma": 1.0, "strength": 0.7, "colour_gain": 1.0,
+                                          "colour": "#262220",
+                                          "strands": {"colour": "#1d1916", "width_mm": 0.07, "min_px": 0.45,
+                                                      "strength": 0.9, "max_len_mm": 14.0, "max_dist_m": 0.003,
+                                                      "keep": 1.0}}},
             # shells: enabled False since T9 (kept for comparison)
             "shells": {"enabled": False, "layers": 12, "t_pow": 1.2, "base_tris": 90, "lift_m": 0.0,
                        "atlas_cols": 2, "tile": [512, 192], "px_per_m": 6000.0,

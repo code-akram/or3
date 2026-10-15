@@ -221,6 +221,10 @@ export class Stage {
   /** T10: hair-only twins with the deep hair shadow (hairshadow.ts) for every shadowed light that reaches
    * the hair (needs P; ?hairshadow=0 or hair.deepShadow 0 = the T9b binary shadow on the hair). */
   deepHair = true;
+  /** T21: beard / brow twins with the deep shadow (the facial-hair cards as deep-shadow receivers, their own
+   * filter params facialHair.shadow*), for every shadowed light that reaches the 'beard' group; needs P and
+   * deepHair (?beardshadow=0 or facialHair.deepShadow 0 = T9-T20: the beard under the parent's PCF / PCSS). */
+  deepBeard = true;
   /** T10: the fill (and the hero wrap) cast shadows too; false (?fillshadow=0) = T5-T9b: key, rims, kickers. */
   shadowFill = true;
   /** T19 A/B (?noshadow=rim,kicker): lights (by parent name) that cast no shadow. */
@@ -322,7 +326,9 @@ export class Stage {
    * shared), or a link to its parent's map (twins). Sets light.shadow / castShadow. */
   private attachShadow(l: THREE.SpotLight | THREE.RectAreaLight, s: StageLight, sphere: { c: THREE.Vector3; R: number }): string {
     const base = s.name.replace(/_(hair|cloth|skin|props|beard)$/, '');
-    const hairTwin = /_hair$/.test(s.name) && this.deepHair && !!this.P;
+    // T21: a beard twin (viewer-made or exported) takes the deep filter too, with the facial-hair params
+    const beardTwin = /_beard$/.test(s.name) && this.deepHair && this.deepBeard && !!this.P;
+    const hairTwin = (/_hair$/.test(s.name) && this.deepHair && !!this.P) || beardTwin;
     const size = Math.max(s.size[0] ?? 0.3, 1e-3);
     const disc = discDiameter(size, Math.max(s.size[1] ?? size, 1e-3));
     const pcss = !!this.P && this.param('light.pcss', 0) > 0;
@@ -331,7 +337,7 @@ export class Stage {
     if (parent) {
       const ts = linkedShadow(parent.proxy.shadow);
       const tn = ts as unknown as { filterNode: unknown; shadowNode: unknown; radius: number };
-      if (hairTwin) tn.filterNode = deepHairFilter(this.P!);
+      if (hairTwin) tn.filterNode = deepHairFilter(this.P!, beardTwin ? 'facialHair' : 'hair');
       else if (pcss) tn.filterNode = pcssFilter(this.P!, disc);
       else ts.radius = Math.min(12, 1 + (Math.max(size, s.size[1] ?? size) / Math.max(v3(s.position).distanceTo(v3(s.target)), 1e-3)) * 6);
       // the grazing normal offset on the surface twins only (a card normal says nothing about the strands)
@@ -358,7 +364,7 @@ export class Stage {
       proxy.angle = Math.min((80 * Math.PI) / 180, Math.atan(1.4 / Math.max(proxy.position.distanceTo(proxy.target.position), 1e-3)) + 0.2);
       proxy.updateMatrixWorld();
       proxy.target.updateMatrixWorld();
-      setupHairShadow(proxy, this.P!, v3(this.data.landmarks.head_mid));
+      setupHairShadow(proxy, this.P!, v3(this.data.landmarks.head_mid), beardTwin ? 'facialHair' : 'hair');
       label = `deep ${ms}`;
     } else {
       sh.bias = pcss ? 0 : -0.0004;
@@ -382,7 +388,7 @@ export class Stage {
     // T19: everything in 'all', the eye light and the hair twins too (the hair models' directRectArea
     // shades the cards from the rect's form-factor point equivalent, never as GGX)
     if (this.areaMode === 'all') return true;
-    if (s.name === 'eye' || /_hair$/.test(s.name)) return false;
+    if (s.name === 'eye' || /_(hair|beard)$/.test(s.name)) return false;
     return /^(rim|kicker)/.test(s.name);
   }
 
@@ -430,7 +436,7 @@ export class Stage {
         }));
     const out: StageLight[] = [];
     for (const l of base) {
-      const spec = this.data.hero.light_specs[l.name.replace(/_(hair|cloth|skin|props)$/, '')];
+      const spec = this.data.hero.light_specs[l.name.replace(/_(hair|cloth|skin|props|beard)$/, '')];
       if (!spec) continue;
       let pos: THREE.Vector3;
       let aim = subject;
@@ -457,10 +463,10 @@ export class Stage {
     return (s.use_shadow ?? true) && s.name !== 'eye' && !this.noShadow.includes(base) && this.shadowRe().test(s.name);
   }
 
-  /** Does a light with these receivers reach the hair group? */
-  private static reachesHair(r: StageLight['receivers']): boolean {
+  /** Does a light with these receivers reach this group? */
+  private static reaches(r: StageLight['receivers'], group: string): boolean {
     if (!r || r.mode === 'all') return true;
-    const hit = r.groups.includes('hair');
+    const hit = r.groups.includes(group);
     return r.mode === 'include' ? hit : !hit;
   }
 
@@ -469,22 +475,38 @@ export class Stage {
    * only by twins, whose shadow is the deep hair shadow. */
   private withHairTwins(specs: StageLight[]): StageLight[] {
     if (!this.deepHair || !this.P) return specs;
+    return this.withTwins(specs, 'hair');
+  }
+
+  /** T21: the beard / brow cards get the same treatment (checkpoint-3 T21 item 5: in Cycles the beard strands
+   * take the cyan kicker and the magenta rim as a rim along the jaw, the engine beard under the parent's PCF /
+   * PCSS took none of it: the cards sit 0.3-3 mm off the skin, inside the skin's own shadow at grazing). Every
+   * shadowed light that reaches the 'beard' group gets a beard-only twin at the parent's colour and power
+   * (Cycles lights the beard with the parent: rig.py twins only the hair by default), sampling the parent's
+   * map through the deep filter (facialHair.shadowDensity / shadowBias), and the parent leaves the beard. */
+  private withFacialTwins(specs: StageLight[]): StageLight[] {
+    if (!this.deepHair || !this.deepBeard || !this.P) return specs;
+    return this.withTwins(specs, 'beard');
+  }
+
+  private withTwins(specs: StageLight[], group: 'hair' | 'beard'): StageLight[] {
     const names = new Set(specs.map((s) => s.name));
     const out: StageLight[] = [];
+    const twinRe = /_(hair|cloth|skin|props|beard)$/;
     for (const s of specs) {
-      if (/_hair$/.test(s.name) || !this.castsShadow(s) || !Stage.reachesHair(s.receivers) || names.has(`${s.name}_hair`)) {
+      if (twinRe.test(s.name) || !this.castsShadow(s) || !Stage.reaches(s.receivers, group) || names.has(`${s.name}_${group}`)) {
         out.push(s);
         continue;
       }
       const r = s.receivers;
       const parent: StageLight['receivers'] =
         !r || r.mode === 'all'
-          ? { mode: 'exclude', groups: ['hair'] }
+          ? { mode: 'exclude', groups: [group] }
           : r.mode === 'exclude'
-            ? { mode: 'exclude', groups: [...r.groups, 'hair'] }
-            : { mode: 'include', groups: r.groups.filter((g) => g !== 'hair') };
+            ? { mode: 'exclude', groups: [...r.groups, group] }
+            : { mode: 'include', groups: r.groups.filter((g) => g !== group) };
       out.push({ ...s, receivers: parent });
-      out.push({ ...s, name: `${s.name}_hair`, receivers: { mode: 'include', groups: ['hair'] }, viewer_twin: true });
+      out.push({ ...s, name: `${s.name}_${group}`, receivers: { mode: 'include', groups: [group] }, viewer_twin: true });
     }
     return out;
   }
@@ -493,7 +515,7 @@ export class Stage {
     this.clearLights();
     const view = this.view!;
     const hero = view.rig === 'hero';
-    const all = this.withHairTwins(hero ? this.heroLights(view.camera, this.eyesMid()) : this.data.lookdev.lights);
+    const all = this.withFacialTwins(this.withHairTwins(hero ? this.heroLights(view.camera, this.eyesMid()) : this.data.lookdev.lights));
     // parents before their twins (a twin links to its parent's shadow map)
     const isTwin = (n: string) => /_(hair|cloth|skin|props|beard)$/.test(n);
     const specs = [...all.filter((x) => !isTwin(x.name)), ...all.filter((x) => isTwin(x.name))];

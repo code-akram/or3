@@ -71,20 +71,58 @@ def landmarks(frame, cfg):
     return cheek, neck, side[0]
 
 
-def inside_dist(p, w, groups, cheek, neck, back_y, margins, moustache_top, nose):
+def sideburn_boxes(frame, cfg, hair_roots=None):
+    """T21: the sideburn, per side (+1 / -1 by the sign of x - centre x), as a box in profile
+    (y_front, y_back, z_bottom, z_top): a band in front of the ear from the cheek line's start up
+    into the scalp hair's lowest roots in front of the ear (the T20 groom), so the beard and the
+    head hair meet with no bare gap at the temple. None when cfg has no `sideburn` block."""
+    sb = cfg.get("sideburn")
+    if not sb:
+        return None
+    ear_y = frame.ears_min.y
+    y_front, y_back = ear_y - sb["width_m"], ear_y + sb["back_m"]
+    z_bot = frame.ear_z + cfg["sideburn_up_m"] - sb["below_m"]
+    out = {}
+    c = frame.center
+    for side in (1, -1):
+        z_hair = None
+        if hair_roots is not None and len(hair_roots):
+            r = np.asarray(hair_roots)
+            sel = (((r[:, 0] - c.x) * side > 0.03) & (r[:, 1] > y_front - sb["hair_search_m"])
+                   & (r[:, 1] < y_back + 0.004) & (r[:, 2] > frame.ear_z - 0.01))
+            if sel.sum() >= 5:
+                z_hair = float(np.percentile(r[sel, 2], 3))
+        if z_hair is None:
+            z_hair = frame.ears_max.z + sb.get("top_m", 0.0)
+        # into the hair's root zone (under the temple hair), never below the band's own bottom
+        out[side] = (y_front, y_back, z_bot, max(z_hair + sb["into_hair_m"], z_bot + 0.01))
+    return out
+
+
+def inside_dist(p, w, groups, cheek, neck, back_y, margins, moustache_top, nose, extra=None):
     """(signed depth into the beard, the margin band width at this point).
     Kept for skin_tex.beard_depth (the skin's stubble shadow follows the
     same lines); the groom uses inside_line."""
-    d, k = inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose)
-    return d, margins[k]
+    d, k = inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose, extra)
+    return d, margins[min(k, len(margins) - 1)]
 
 
-def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose):
+def back_line_y(p, back_y, extra):
+    """The beard's back edge at p (T21): back_y at and above the ear, moving back_low_m behind it
+    (toward the nape) under the ear lobe, so the jaw angle under the ear is beard, not a bare notch."""
+    if not extra or not extra.get("back_low_m"):
+        return back_y
+    z0, z1 = extra["ear_low_z"], extra["ear_low_z"] - extra["back_low_ramp_m"]
+    return back_y + extra["back_low_m"] * smoothstep(z0, z1, p.z)
+
+
+def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose, extra=None):
     """(signed depth into the beard, which line is nearest: 0 cheek, 1 neck,
-    2 back, 3 moustache top). The lines are in profile, so in front of the
+    2 back, 3 moustache top, 4 sideburn). The lines are in profile, so in front of the
     mouth corners (the philtrum, the nose) the beard is capped at the
     moustache's top edge, and anything above the lips and in front of them
-    (the nose) is out."""
+    (the nose) is out. extra (T21, line_extra): {"sideburn": sideburn_boxes(), "centre_x", and the
+    back line's drop under the ear: "back_low_m", "back_low_ramp_m", "ear_low_z"}."""
     lips, ears, head, neck_g = groups
     if w.get(ears, 0) > 0.2 or w.get(head, 0) + w.get(neck_g, 0) < 0.5:
         return -1.0, 0
@@ -93,6 +131,18 @@ def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose):
     # under an overhanging nose (in front of the lips) keeps its roots.
     if p.z > (nose[2] if len(nose) > 2 else nose[1]) and p.y < nose[0]:
         return -1.0, 0
+    best = _inside_beard(p, cheek, neck, back_line_y(p, back_y, extra), moustache_top)
+    sbx = (extra or {}).get("sideburn")
+    if sbx:
+        yf, yb, z0, z1 = sbx[1 if p.x >= extra["centre_x"] else -1]
+        # the bottom is open: the sideburn joins the cheek beard there (no line)
+        dsb = min(yb - p.y, p.y - yf, z1 - p.z, p.z - z0 + 0.02)
+        if dsb > best[0]:
+            return dsb, 4
+    return best
+
+
+def _inside_beard(p, cheek, neck, back_y, moustache_top):
     ds = [(_line_dist(p, neck, False), 1), (back_y - p.y, 2)]
     if p.y < cheek[0][0]:
         # In front of the cheek line's front end (the mouth corner) the
@@ -104,6 +154,25 @@ def inside_line(p, w, groups, cheek, neck, back_y, moustache_top, nose):
     else:
         ds.append((_line_dist(p, cheek, True), 0))
     return min(ds)
+
+
+def line_margins(cfg):
+    """The stubble band past each line: cheek, neck, back, moustache top, sideburn (T21)."""
+    return (cfg["margin_m"], cfg["neck_margin_m"], cfg["back_margin_m"], cfg["moustache_margin_m"],
+            (cfg.get("sideburn") or {}).get("margin_m", cfg["margin_m"]))
+
+
+def line_extra(frame, cfg, hair_roots=None):
+    """inside_line's T21 terms (the sideburn boxes, the back line under the ear), or None."""
+    sb = sideburn_boxes(frame, cfg, hair_roots)
+    bl = cfg.get("back_low")
+    if sb is None and not bl:
+        return None
+    ex = {"sideburn": sb, "centre_x": frame.center.x}
+    if bl:
+        ex.update({"back_low_m": bl["m"], "back_low_ramp_m": bl["ramp_m"],
+                   "ear_low_z": frame.ears_min.z + bl.get("up_m", 0.0)})
+    return ex
 
 
 def smoothstep(e0, e1, x):
@@ -119,15 +188,16 @@ def region(b, frame, cfg, rng):
     cheek, neck, back_y = landmarks(frame, cfg)
     mw = body.matrix_world
     wob, ph = cfg["line_wobble_m"], [rng.uniform(0, 6.3) for _ in range(3)]
-    margins = (cfg["margin_m"], cfg["neck_margin_m"], cfg["back_margin_m"], cfg["moustache_margin_m"])
+    margins = line_margins(cfg)
     moustache_top = frame.lips_max.z + cfg["moustache_height_m"]
     nose = (frame.lips_min.y - cfg["nose_clear_m"], frame.lips_max.z,
             frame.lips_max.z + cfg.get("philtrum_free_m", 0.0))
+    extra = line_extra(frame, cfg, getattr(frame, "hair_roots", None))
     dist, which = {}, {}
     for v in body.data.vertices:
         p = mw @ v.co
         d, k = inside_line(p, {e.group: e.weight for e in v.groups}, groups, cheek, neck,
-                           back_y, moustache_top, nose)
+                           back_y, moustache_top, nose, extra)
         # the mouth interior (skin behind the lips, facing back or up) is out
         nrm = (mw.to_3x3() @ v.normal)
         if (abs(p.x - frame.center.x) < frame.lips_max.x - frame.center.x
@@ -168,6 +238,7 @@ def region(b, frame, cfg, rng):
     hair_mesh.smooth_boundary(bm, frame.skin_bvh, cfg["edge_smooth_iters"])
     bm.normal_update()
     lips_pts = [mw @ body.data.vertices[i].co for i in on_lips]
+    b.beard_extra = extra   # T21: skin_tex.beard_depth follows the same sideburn / back line
     return obj, bm, depth, line, margins, lips_pts, (cheek, neck, back_y), bare
 
 
@@ -198,9 +269,17 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
         fin = fd["neck_in_m"] if which == 1 else fd["in_m"]
         if which == 3:  # the moustache is only ~12 mm tall: a shorter ramp fills it
             fin = fd.get("moustache_in_m", fin)
+        elif which == 2:  # T21: the back edge fills to the ear (the 15 mm ramp left a bare band before it)
+            fin = fd.get("back_in_m", fin)
+        elif which == 4:  # T21: the sideburn, ~1 cm wide
+            fin = fd.get("sideburn_in_m", fin)
         fout = fd["neck_out_m"] if which == 1 else fd["out_m"]
         if which == 3:
             fout = fd.get("moustache_out_m", fout)
+        elif which == 2:
+            fout = fd.get("back_out_m", fout)
+        elif which == 4:
+            fout = fd.get("sideburn_out_m", fout)
         if d >= 0:
             x = smoothstep(0, fin, d)
             dens = fd["line_density"] + (1 - fd["line_density"]) * x ** fd["pow"]
@@ -240,6 +319,8 @@ def fields(bm, frame, cfg, depth, line, margins, lips_pts, bare):
                 # the root over the lip plus the overlap, along a hair that
                 # runs mostly down
                 L = min(L, (p.z - upper_lip_z + ln["lip_overlap_m"]) / 0.8 + 0.002)
+        elif which == 4 and "sideburn_m" in ln:
+            L = ln["sideburn_m"]
         else:
             L = ln["cheek_m"] + (ln["jaw_m"] - ln["cheek_m"]) * below
             L += ln["chin_extra_m"] * near_chin
@@ -448,7 +529,7 @@ def build(b, frame, cfg):
     if gcards and not sh.get("enabled", True):
         # T9: cards only, over the whole groom; the skin under-layer is painted after
         # head_refine (paint_underlayer, from facial_hair_refit)
-        stats = game_cards(b, frame, obj, bm, gcards, ev_beard, n, rad[:, 0], mel, red, f, rng)
+        stats = game_cards(b, frame, obj, bm, gcards, ev_beard, n, rad[:, 0], mel, red, f, rng, lips_pts)
         b.facial_refit.add("mesh", obj)
         b.cutouts.append("beard_export")
         obj.hide_render = True
@@ -533,7 +614,86 @@ def build(b, frame, cfg):
     return obj
 
 
-def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
+def lip_ribbon(frame, lips_pts, ev, f, rc, skin_bvh):
+    """T21: the lip ribbon's frame (beard_bake.lip_ribbon_cards): columns every col_m along the upper lip
+    where the moustache hangs over it, each with the vermilion top (z_b: the highest upper-lip point of the
+    `lips` group there), the ribbon's top (top_m above it, under the clump cards) and height (down to the
+    lowest moustache tips there, clamped), and per row the moustache surface depth y (the front-most strand
+    points there, kept gap_m off the skin). Also returns the clip heights for the lip-edge clump cards."""
+    c = frame.center
+    slit_z = (frame.lips_min.z + frame.lips_max.z) / 2
+    must = f["moustache"] > 0.5
+    L = np.array([[p.x, p.y, p.z] for p in lips_pts]) if len(lips_pts) else np.zeros((0, 3))
+    up = L[L[:, 2] > slit_z + 0.001] if len(L) else L
+    pm = ev[must]
+    if len(up) < 10 or len(pm) < 20:
+        return None
+    hw = rc["col_m"]
+    xr0, xr1 = np.percentile(up[:, 0], 1), np.percentile(up[:, 0], 99)
+    X = np.arange(xr0, xr1 + 1e-9, hw)
+    nv = rc["rows"]
+    zb = np.full(len(X), np.nan)
+    yb = np.full(len(X), np.nan)
+    over = np.full(len(X), np.nan)
+    for i, x in enumerate(X):
+        u = up[np.abs(up[:, 0] - x) < hw]
+        if len(u) == 0:
+            continue
+        top = u[np.argmax(u[:, 2])]
+        zb[i], yb[i] = top[2], top[1]
+        tips = pm[np.abs(pm[:, -1, 0] - x) < hw, -1, 2]
+        if len(tips) >= 3:
+            over[i] = zb[i] - np.percentile(tips, rc["tip_pct"])
+    ok = ~np.isnan(zb) & ~np.isnan(over) & (over > rc["min_over_m"])
+    if ok.sum() < 4:
+        return None
+    k0, k1 = np.flatnonzero(ok)[[0, -1]]
+    X, zb, yb, over = X[k0:k1 + 1], zb[k0:k1 + 1], yb[k0:k1 + 1], over[k0:k1 + 1]
+    # holes inside the span: interpolate
+    for a in (zb, yb, over):
+        bad = np.isnan(a)
+        if bad.any():
+            a[bad] = np.interp(X[bad], X[~bad], a[~bad])
+    # fade the overhang toward the mouth corners (the moustache turns down past them)
+    edge = np.minimum(X - X[0], X[-1] - X) / max(rc["end_taper_m"], 1e-6)
+    over = np.clip(over, rc["min_over_m"], rc["max_over_m"]) * (0.5 + 0.5 * np.clip(edge, 0, 1))
+    zt = zb + rc["top_m"]
+    H = rc["top_m"] + over
+    tv = np.linspace(0, 1, nv)
+    Y = np.full((len(X), nv), np.nan)
+    flat = pm.reshape(-1, 3)
+    for i, x in enumerate(X):
+        near = flat[np.abs(flat[:, 0] - x) < hw]
+        for q, t in enumerate(tv):
+            z = zt[i] - t * H[i]
+            pz = near[np.abs(near[:, 2] - z) < max(H[i] / (nv - 1), 0.0008)]
+            if len(pz) >= 3:
+                Y[i, q] = np.percentile(pz[:, 1], rc["front_pct"])
+    for q in range(nv):
+        col = Y[:, q]
+        bad = np.isnan(col)
+        if bad.all():
+            col[:] = yb - rc["gap_m"] * 2
+        elif bad.any():
+            col[bad] = np.interp(X[bad], X[~bad], col[~bad])
+    # off the skin by gap_m (and never behind the lip front), then smoothed along the lip
+    for i, x in enumerate(X):
+        for q, t in enumerate(tv):
+            pnt = Vector((x, Y[i, q], zt[i] - t * H[i]))
+            loc, nrm, _, _ = skin_bvh.find_nearest(pnt)
+            if loc is not None:
+                h = (pnt - loc).dot(nrm)
+                if h < rc["gap_m"]:
+                    Y[i, q] = (pnt + nrm * (rc["gap_m"] - h)).y
+    for _ in range(rc["smooth"]):
+        Y[1:-1] = 0.25 * Y[:-2] + 0.5 * Y[1:-1] + 0.25 * Y[2:]
+    return {"x": X, "z_top": zt, "height": H, "y": Y, "z_border": zb,
+            "strands": np.flatnonzero(must), "seg_cols": rc["seg_cols"], "overlap_cols": rc["overlap_cols"],
+            "layers": rc["layers"], "layer_push_m": rc["layer_push_m"], "alpha_in": rc["alpha_in"],
+            "alpha_out": rc["alpha_out"], "alpha_floor": rc["alpha_floor"], "tip_fade": rc["tip_fade"]}
+
+
+def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng, lips_pts=()):
     """The game beard as cards over the whole groom (beard_bake.build_groom_cards):
     blue-noise centres over every strand longer than min_len_m (the silhouette zones
     first: jaw fins, the moustache's lip edge, the chin), lying cards elsewhere."""
@@ -600,8 +760,18 @@ def game_cards(b, frame, obj, bm, gc, ev, rn, rad0, mel, red, f, rng):
     gaps = [gc.get("lip_gap_m", gc["gap_m"]) if lip_edge[j] else gc["gap_m"] for j in centres]
     # ... and its tips fade over a longer stretch (a soft overhang, not a fringe of dark spikes)
     tfs = [gc.get("lip_tip_fade", gc["tip_fade"]) if lip_edge[j] else gc["tip_fade"] for j in centres]
+    # T21: the overhang as a lip ribbon (cards along the lip curve, cross-card alpha); the lip-edge clump
+    # cards end at the vermilion border, where the ribbon takes over
+    rib, clips = None, None
+    rc = gc.get("lip_ribbon")
+    if rc:
+        rib = lip_ribbon(frame, lips_pts, ev, f, rc, frame.skin_bvh)
+        if rib is not None:
+            clips = [float(np.interp(ev[j, 0, 0], rib["x"], rib["z_border"])) + rc["clip_m"] if lip_edge[j] else None
+                     for j in centres]
     stats = beard_bake.build_groom_cards(b, obj, bm, gb, centres, rolls, lambda r: wcache[kd.find(Vector(r))[1]],
-                                         gc, "beard", frame.skin_bvh, crng, gaps=gaps, tip_fades=tfs)
+                                         gc, "beard", frame.skin_bvh, crng, gaps=gaps, tip_fades=tfs, clips=clips,
+                                         ribbons=rib)
     stats["zone_cards"] = int(sum(1 for j in centres if zone[j]))
     stats["lip_edge_cards"] = int(sum(1 for j in centres if lip_edge[j]))
     stats["albedo_median_linear"] = [round(float(x), 5) for x in np.median(rgb, 0)]
@@ -641,6 +811,7 @@ def paint_underlayer(b, key="beard"):
     if img is None or body is None:
         return {"skipped": "no skin_head_albedo / body"}
     roots, wts = [], []
+    roots_objs = []
     for o in bpy.data.objects:
         if o.type != "CURVES":
             continue
@@ -649,6 +820,7 @@ def paint_underlayer(b, key="beard"):
                 continue
         elif not o.name.startswith("beard_hero_") or "_under_" in o.name:
             continue
+        roots_objs.append(o)
         r = beard_groom.base_points(o)[:, 0]
         roots.append(r)
         wts.append(np.full(len(r), cfg["stubble_weight"] if "_stubble_" in o.name else 1.0))
@@ -669,7 +841,7 @@ def paint_underlayer(b, key="beard"):
     rr = cfg["radius_m"]
     me.calc_loop_triangles()
     vdens = {}
-    tri_uv, tri_val = [], []
+    tri_uv, tri_val, tri_pos = [], [], []
     lo_corner = np.array([R[:, 0].min(), R[:, 1].min(), R[:, 2].min()]) - 2 * rr
     hi_corner = np.array([R[:, 0].max(), R[:, 1].max(), R[:, 2].max()]) + 2 * rr
     for lt in me.loop_triangles:
@@ -687,14 +859,24 @@ def paint_underlayer(b, key="beard"):
             continue
         tri_uv.append([tuple(uvl.data[li].uv) for li in lt.loops])
         tri_val.append(vals)
+        tri_pos.append([tuple(p) for p in ps])
     if not tri_uv:
         return {"skipped": f"no {key} texels"}
     w, h = img.size
     area = math.pi * rr * rr * 1e4          # cm^2
     full = cfg["full_per_cm2"] * area       # weighted roots in the disc for full cover
-    tv = np.clip(np.array(tri_val) / full, 0, 1)[..., None]
+    tv_raw = np.array(tri_val)
+    tv = np.clip(tv_raw / full, 0, 1)[..., None]
     cov, hit = hgc._tri_raster(w, h, np.array(tri_uv), tv)
     cov = hsr_blur(cov[..., 0], cfg["blur_px"])
+    sm = cfg.get("stubble_mask")
+    stub_st = None
+    if sm and key == "beard":
+        # T21: the stubble density for the engine's stubble tile (the detail map's alpha): every beard and
+        # stubble root counts, saturating at full_frac of the under-layer's full cover
+        sv = np.clip(tv_raw / (full * sm["full_frac"]), 0, 1)[..., None]
+        scov, _ = hgc._tri_raster(w, h, np.array(tri_uv), sv)
+        stub_st = write_stubble_alpha(b, hsr_blur(scov[..., 0], sm["blur_px"]))
     a = cfg["strength"] * np.clip(cov, 0, 1) ** cfg["gamma"]
     px = np.empty(w * h * 4, np.float32)
     img.pixels.foreach_get(px)
@@ -707,13 +889,103 @@ def paint_underlayer(b, key="beard"):
         # the hero rig's warm key
         col = beard_bake.linear(np.array([hair_mesh.hex_rgb(cfg["colour"])]))[0] * cfg["colour_gain"]
     out = lin * (1 - a[..., None]) + col[None, None] * a[..., None]
+    sp = cfg.get("strands")
+    strand_st = None
+    if sp:
+        # T21: the strands themselves drawn into the albedo (their footprint on the skin, at the texel scale),
+        # so the band / the grown-in edge has the hair's flow, not only a blurred density
+        strand_st = paint_strands(out, w, h, tri_pos, np.array(tri_uv), roots_objs, sp)
     px[..., :3] = hair_mesh.linear_to_srgb(out)
     img.pixels.foreach_set(px.ravel())
     img.pack()
     st = {"texels": int((a > 0.01).sum()), "max_cover": round(float(a.max()), 3), "tris": len(tri_uv),
-          "roots": int(len(R)), "image": [w, h]}
+          "roots": int(len(R)), "image": [w, h], "strands": strand_st, "stubble_mask": stub_st}
     b.notes.setdefault(key, {})["underlayer"] = st
     return st
+
+
+def write_stubble_alpha(b, dens):
+    """T21: the head detail map rewritten as RGBA with A = 1 - 0.5 x the stubble density (dens: the head
+    albedo's texels, Blender rows), box-downsampled to the detail map. A >= 0.5 keeps the RGB exact even
+    where a loader premultiplies."""
+    dm = getattr(b, "skin_detail_maps", None)
+    if not dm or "head" not in dm["rgb"]:
+        return None
+    import os
+    from . import hair_strand_raster as hsr_
+    rgb = dm["rgb"]["head"]
+    n = rgb.shape[0]
+    f = dens.shape[0] // n
+    d = np.clip(dens[:n * f, :n * f].reshape(n, f, n, f).mean(axis=(1, 3)), 0, 1) if f > 1 else np.clip(dens, 0, 1)
+    rgba = np.concatenate([rgb, (1.0 - 0.5 * d)[..., None]], -1)
+    a8 = np.clip(np.round(rgba[::-1] * 255.0), 0, 255).astype(np.uint8)
+    with open(os.path.join(dm["dir"], dm["files"]["head"]), "wb") as fh:
+        fh.write(hsr_.png_rgba8(a8))
+    return {"texels_over_0.1": int((d > 0.1).sum()), "mean_in_band": round(float(d[d > 0.05].mean()), 3) if (d > 0.05).any() else 0.0}
+
+
+def paint_strands(lin, w, h, tri_pos, tri_uv, objs, sp):
+    """T21: the hero strands' footprints in the game skin albedo (lin: (h, w, 3) linear, Blender rows, edited
+    in place): every strand point snapped to the skin triangles near the grooms (their UVs by barycentric
+    transfer), each segment drawn as an anti-aliased line of width_mm (in texels, floor min_px) and pulled
+    toward the hair colour by strength x coverage. Long strands are cut at max_len_mm (the lying part over
+    the skin; the rest stands off it, and the cards draw it)."""
+    from mathutils.bvhtree import BVHTree
+    from mathutils.geometry import barycentric_transform
+    if not objs or not len(tri_pos):
+        return None
+    verts, polys = [], []
+    for t in tri_pos:
+        polys.append([len(verts), len(verts) + 1, len(verts) + 2])
+        verts.extend(Vector(p) for p in t)
+    bvh = BVHTree.FromPolygons(verts, polys, all_triangles=True)
+    # texel size (m): the median edge length in metres over its length in texels
+    e_m, e_px = [], []
+    for t, u in zip(tri_pos[::7], tri_uv[::7]):
+        e_m.append((Vector(t[0]) - Vector(t[1])).length)
+        e_px.append(math.hypot((u[0][0] - u[1][0]) * w, (u[0][1] - u[1][1]) * h))
+    texel_m = float(np.median(np.array(e_m) / np.maximum(np.array(e_px), 1e-6)))
+    canvas = beard_bake.Canvas(w, h)
+    col = beard_bake.linear(np.array([hair_mesh.hex_rgb(sp["colour"])]))[0]
+    segs_a, segs_b = [], []
+    kept = 0
+    for o in objs:
+        P = beard_groom.base_points(o)
+        if sp.get("keep", 1.0) < 1.0:
+            P = P[np.random.default_rng(len(P)).random(len(P)) < sp["keep"]]
+        for s in P:
+            seg = np.linalg.norm(np.diff(s, axis=0), axis=1)
+            arc = np.concatenate([[0.0], np.cumsum(seg)])
+            s = s[arc <= sp["max_len_mm"] * 1e-3] if arc[-1] > sp["max_len_mm"] * 1e-3 else s
+            if len(s) < 2:
+                continue
+            uvs = []
+            for p in s:
+                loc, _, fi, dist = bvh.find_nearest(Vector(p))
+                if loc is None or dist > sp["max_dist_m"]:
+                    uvs.append(None)
+                    continue
+                a_, b_, c_ = (Vector(tri_pos[fi][q]) for q in range(3))
+                ua, ub, uc = (Vector((tri_uv[fi][q][0], tri_uv[fi][q][1], 0.0)) for q in range(3))
+                uv = barycentric_transform(loc, a_, b_, c_, ua, ub, uc)
+                uvs.append((uv.x * w, uv.y * h))
+            for q in range(len(uvs) - 1):
+                if uvs[q] is None or uvs[q + 1] is None:
+                    continue
+                if math.hypot(uvs[q][0] - uvs[q + 1][0], uvs[q][1] - uvs[q + 1][1]) > 40:   # a UV seam
+                    continue
+                segs_a.append(uvs[q])
+                segs_b.append(uvs[q + 1])
+            kept += 1
+    if not segs_a:
+        return {"strands": 0}
+    r_px = max(0.5 * sp["width_mm"] * 1e-3 / max(texel_m, 1e-9), sp["min_px"])
+    A, B = np.array(segs_a), np.array(segs_b)
+    canvas.lines(A, B, np.full(len(A), r_px), np.tile(col, (len(A), 1)))
+    cov = canvas.alpha.reshape(h, w) * sp["strength"]
+    lin[...] = lin * (1 - cov[..., None]) + col[None, None] * cov[..., None]
+    return {"strands": kept, "segments": int(len(A)), "radius_px": round(r_px, 3), "texel_mm": round(texel_m * 1e3, 3),
+            "texels_over_0.2": int((cov > 0.2).sum())}
 
 
 def hsr_blur(a, r):

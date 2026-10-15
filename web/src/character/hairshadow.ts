@@ -33,15 +33,17 @@ type N = any;
 
 const TAPS = 8;
 
-/** The filter for one hair-twin light (three calls it with the light's shadow inputs at build). */
-export function deepHairFilter(P: ParamStore): N {
+/** The filter for one hair-twin light (three calls it with the light's shadow inputs at build). T21: `prefix`
+ * 'facialHair' for the beard / brow twins (their own density and bias: the beard cards do not cast, so the
+ * first occluder under them is the skin, and the depth below it is how far inside the jaw's shadow they sit). */
+export function deepHairFilter(P: ParamStore, prefix: 'hair' | 'facialHair' = 'hair'): N {
   return Fn(({ depthTexture, shadowCoord, shadow }: { depthTexture: THREE.DepthTexture; shadowCoord: N; shadow: THREE.LightShadow }) => {
     const mapSize = reference('mapSize', 'vec2', shadow).setGroup(renderGroup);
     const near = reference('near', 'float', shadow.camera).setGroup(renderGroup);
     const far = reference('far', 'float', shadow.camera).setGroup(renderGroup);
-    const density = P.u('hair.shadowDensity');
-    const bias = P.u('hair.shadowBias');
-    const radius = P.u('hair.shadowRadius');
+    const density = P.u(`${prefix}.shadowDensity`);
+    const bias = P.u(`${prefix}.shadowBias`);
+    const radius = P.u(`${prefix}.shadowRadius`);
     // receiver depth along the light axis (metres)
     const zr = perspectiveDepthToViewZ(shadowCoord.z, near, far).negate();
     const phi = interleavedGradientNoise(screenCoordinate.xy).mul(6.28318530718);
@@ -61,14 +63,14 @@ export function deepHairFilter(P: ParamStore): N {
 
 /** The hair twin's shadow: no hardware bias (the filter's own depth bias), a tighter frustum
  * (shadow.focus) around the head so the texels are about a millimetre, its own map size. */
-export function setupHairShadow(l: THREE.SpotLight, P: ParamStore, head: THREE.Vector3): void {
+export function setupHairShadow(l: THREE.SpotLight, P: ParamStore, head: THREE.Vector3, prefix: 'hair' | 'facialHair' = 'hair'): void {
   const s = l.shadow;
   const size = P.get('hair.shadowMapSize') as number;
   s.mapSize.set(size, size);
   s.bias = 0;
   s.normalBias = 0;
   s.radius = 1;
-  (s as unknown as { filterNode: N }).filterNode = deepHairFilter(P);
+  (s as unknown as { filterNode: N }).filterNode = deepHairFilter(P, prefix);
   const toHead = head.clone().sub(l.position);
   const axis = l.target.position.clone().sub(l.position).normalize();
   const dist = toHead.length();

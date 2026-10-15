@@ -94,9 +94,12 @@ export function roleOf(name: string): Role {
   return 'generic';
 }
 
-/** Light-linking groups (blender/hero/rig.py TWIN_GROUPS) by material name. */
-export function groupOf(name: string): 'hair' | 'cloth' | 'skin' | 'other' {
+/** Light-linking groups (blender/hero/rig.py TWIN_GROUPS) by material name. T21: the beard and brow cards
+ * are rig.py's 'beard' group (beard_objects: beard, stubble and brows), so the viewer can give them their
+ * own light twins (stage.ts withFacialTwins: the deep shadow, as the scalp hair's). */
+export function groupOf(name: string): 'hair' | 'beard' | 'cloth' | 'skin' | 'other' {
   if (name === 'hair' || name === 'hair_cards') return 'hair';
+  if (/^(beard|brows)(_cards)?$/.test(name)) return 'beard';
   if (name.startsWith('skin_')) return 'skin';
   if (name.startsWith('suit_') && name !== 'suit_shirt') return 'cloth';
   return 'other';
@@ -289,10 +292,14 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
 
 /** skin_detail.json (blender/character/skin_tex.write_detail_sidecars), as loaded by main.ts. */
 export interface SkinDetail {
-  /** layer 0 the pore tile, layer 1 the micro tile (one binding: the fragment stage's 16 sampled textures) */
+  /** layer 0 the pore tile, layer 1 the micro tile, T21: layer 2 the stubble tile (one binding: the fragment
+   * stage's 16 sampled textures) */
   tiles: THREE.Texture;
-  /** skin material name -> its detail map (R pore weight, G micro weight, B inside AO) and repeats */
-  materials: Record<string, { map: THREE.Texture | null; poreRepeat: number; microRepeat: number }>;
+  /** skin material name -> its detail map (R pore weight, G micro weight, B inside AO, T21: A = 1 - 0.5 x the
+   * stubble density) and repeats */
+  materials: Record<string, { map: THREE.Texture | null; poreRepeat: number; microRepeat: number; stubbleRepeat?: number | null }>;
+  /** T21: the stubble tile (layer 2): cells per tile, mean coverage (B), slope variance; null = none */
+  stubble?: { cells: number; meanCov: number; slopeVar: number } | null;
   poreCells: number;
   microCells: number;
   thickDistMm: number;
@@ -344,13 +351,30 @@ export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
       const wP = det.r.mul(k).mul(P.u('skin.poreNormal'));
       const wM = det.g.mul(k).mul(P.u('skin.microNormal'));
       const b = texture(src.normalMap).rgb.mul(2).sub(1);
-      const dxy = tp.rg.mul(2).sub(1).mul(wP.mul(fP)).add(tm.rg.mul(2).sub(1).mul(wM.mul(fM)));
+      let dxy = tp.rg.mul(2).sub(1).mul(wP.mul(fP)).add(tm.rg.mul(2).sub(1).mul(wM.mul(fM)));
+      // T21 stubble (checkpoint-3 T21 item 2): the tile array's layer 2 under the beard cards, weighted by the
+      // detail map's alpha (stubble + beard root density, A = 1 - 0.5 d): the stubs' relief, their dark shafts
+      // in the albedo (the mip mean at a distance) and a matte skin where hair breaks the sheen
+      let stubLost: N = float(0);
+      let stubRough: N = float(0);
+      if (dt.stubble && dm.stubbleRepeat) {
+        const uvS = uv().mul(dm.stubbleRepeat);
+        const ts = texture(dt.tiles, uvS).depth(2);
+        const fS = fadeOf(uvS, dt.stubble.cells);
+        const ds = float(1).sub(det.a).mul(2).clamp(0, 1).mul(P.u('skin.stubble'));
+        const wS = ds.mul(P.u('skin.stubbleNormal'));
+        dxy = dxy.add(ts.rg.mul(2).sub(1).mul(wS.mul(fS)));
+        stubLost = wS.mul(wS).mul(float(1).sub(fS)).mul(dt.stubble.slopeVar);
+        stubRough = ds.mul(P.u('skin.stubbleRough'));
+        const cov = ts.b.mul(ds).mul(P.u('skin.stubbleAlbedo')).clamp(0, 1);
+        this.colorNode = vec4(mix(albedo(P, 'skin', c.rgb), P.u('skin.stubbleColour'), cov), 1);
+      }
       const n = vec3(b.xy.add(dxy), b.z).normalize();
       this.normalNode = normalMap(n.mul(0.5).add(0.5), vec2(src.normalScale.x, src.normalScale.y).mul(P.u('skin.normalScale')));
       if (rough) {
         // pits rougher; the slope variance a fade removes goes to roughness (toksvig: r^2 + var)
-        rough = rough.add(tp.b.mul(wP).mul(fP).mul(P.u('skin.poreRough')));
-        const lost = wP.mul(wP).mul(float(1).sub(fP)).mul(dt.slopeVar.pore).add(wM.mul(wM).mul(float(1).sub(fM)).mul(dt.slopeVar.micro));
+        rough = rough.add(tp.b.mul(wP).mul(fP).mul(P.u('skin.poreRough'))).add(stubRough);
+        const lost = wP.mul(wP).mul(float(1).sub(fP)).mul(dt.slopeVar.pore).add(wM.mul(wM).mul(float(1).sub(fM)).mul(dt.slopeVar.micro)).add(stubLost);
         rough = rough.mul(rough).add(lost.mul(P.u('skin.toksvig'))).sqrt();
       }
       // lobe-1 cavity: the baked one (ORM blue) and the visible pits
@@ -456,7 +480,7 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     // Kajiya-Kay does not (Cycles per light: the rim lights 83-97 % of the crown / side / back hair).
     const lh = L.dot(H).clamp(0, 1);
     const fr = float(0.0465).add(float(0.9535).mul(float(1).sub(lh).pow(5))).div(0.0465);
-    const s1f = pre === 'hair' ? s1.mul(mix(float(1), fr, P.u('hair.fresnel'))) : s1;
+    const s1f = s1.mul(mix(float(1), fr, P.u(`${pre}.fresnel`)));
     const spec = P.u('hair.spec1Color').mul(s1f).mul(P.u(`${pre}.spec1`)).add(this.h.tint.mul(s2).mul(P.u(`${pre}.spec2`))).mul(this.h.specScale);
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
     // TT (T9b): light passing through the fibres toward the camera when the hair is backlit (the warm
@@ -581,10 +605,13 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     // strand's red (T15: front falls 1.23x the Cycles r/g, side mass 1.3x Cycles from TT alone). The colour
     // is read at the sharper mip of the ID (the mean colour of a minified card is a grey-strand average).
     let fibre: N = tint;
-    if (opts.prefix === 'hair' && src.map) {
+    if (src.map) {
+      // T21: the beard / brows too, with their own switch and depth (their albedo is the scalp's Chiang mapping
+      // at path 0.68, times a gain and a body floor, so ttDepth is a fit there, not the derivation above)
+      const pre = opts.prefix;
       const cs = texture(src.map).bias(P.u('hair.idLodBias')).rgb.max(1e-4);
       const lc = log(cs);
-      fibre = mix(tint, exp(lc.mul(lc).mul(P.u('hair.ttDepth')).negate()), P.u('hair.fibreTint'));
+      fibre = mix(tint, exp(lc.mul(lc).mul(P.u(`${pre}.ttDepth`)).negate()), P.u(`${pre}.fibreTint`));
     }
     // T20 directional occlusion: 4 x 6 bits packed in the strand UV v (TEXCOORD_1 y, which the exporter writes as
     // 1 - v), decoded per vertex (the packed integer does not survive interpolation; the decoded values do)

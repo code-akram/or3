@@ -40,6 +40,8 @@ def post(b):
         if groom is not None:
             from . import hair_groom
             g = hair_groom.build(b, frame, cfg["clumps"], groom)
+            # T21: the beard's sideburn reaches up into these roots (hair_beard.sideburn_boxes)
+            frame.hair_roots = g.get("roots")
             if g["cfg"].get("cards", "groom") == "groom":
                 from . import hair_groom_cards
                 cards = hair_groom_cards.build(b, frame, cfg["clumps"], g)

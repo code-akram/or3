@@ -62,6 +62,16 @@ export const DEFAULT_PARAMS = {
     toksvig: 0.5,
     /** roughness added in the pits (tile B, openness) */
     poreRough: 0.06,
+    /** T21 stubble under the beard cards (skin_detail.json `stubble`: layer 2 of the tile array, its density in
+     * the detail map's alpha, A = 1 - 0.5 density): the stub relief (stubbleNormal), the stubs' dark shafts in
+     * the albedo (stubbleAlbedo: mix toward stubbleColour by tile B x density; the mip mean is what a distant
+     * view keeps), and the matte that hair breaks the skin's sheen into (stubbleRough: roughness added x
+     * density). 0 = off. */
+    stubble: 1.0,
+    stubbleNormal: 1.0,
+    stubbleAlbedo: 0.8,
+    stubbleColour: [0.012, 0.010, 0.009],
+    stubbleRough: 0.12,
     /** specular cavity on lobe 1: ORM blue (the baked cavity) and the tile pits */
     cavitySpec: 1.0,
     poreCavity: 0.5,
@@ -204,6 +214,19 @@ export const DEFAULT_PARAMS = {
     scatter: 0.0,
     tt: 0.0,
     alphaTest: 0.22,
+    /** T21: Fresnel on the R lobe (as hair.fresnel, T20): the cuticle reflection rises ~4x toward grazing,
+     * which is where the hero rig's kicker and rim meet the beard; 0 = off (T9-T20). */
+    fresnel: 0,
+    /** T21: 1 = the TT / scatter colour is the strand's fibre transmittance exp(-ttDepth (ln albedo)^2), as the
+     * scalp's (T20); 0 = the unit-luminance tint. */
+    fibreTint: 0,
+    ttDepth: 0.0969,
+    /** T21: beard / brow twins with the deep shadow (stage.ts withFacialTwins; read at load, ?beardshadow=0):
+     * the transmittance exp(-shadowDensity x (depth below the first occluder - shadowBias)), metres. */
+    deepShadow: 1,
+    shadowDensity: 120,
+    shadowBias: 0.002,
+    shadowRadius: 1.5,
   },
   /** Brow cards (T9b; were facialHair): the same lobes and maps, own gains, calibrated on the brow
    * region of the closeup parity (bench/m1/hair_test.py --parts parity, hero brow strands). */
@@ -218,6 +241,10 @@ export const DEFAULT_PARAMS = {
     scatter: 0.004,
     tt: 0.0,
     alphaTest: 0.22,
+    /** T21: as facialHair.fresnel / fibreTint (the brows share the beard's light twins and their filter) */
+    fresnel: 0,
+    fibreTint: 0,
+    ttDepth: 0.0969,
   },
   eye: {
     albedoGain: 1.0,

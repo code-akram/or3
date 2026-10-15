@@ -412,7 +412,7 @@ def strand_rgb(mel, red, acfg, rng):
 
 
 def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, skin_bvh, rng, gaps=None,
-                      tip_fades=None):
+                      tip_fades=None, clips=None, ribbons=None):
     """The game facial hair as cards only (T9): the skin patch bm (it carried the skin
     weights) is replaced by one tapered strip per centre strand, following the mean of
     the strands rooted within clump_radius_m (their growth direction), with its own atlas
@@ -422,8 +422,12 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
     radius (m,) at the root; optional (T11) alpha (m,) per-strand alpha scale (the cheek-line
     fade: root density) and px (m,) per-strand width scale (grey strands finer). gaps: per
     centre skin clearance in m past the root row (default cfg gap_m; T11: the moustache's
-    lip edge); tip_fades: per centre tip_fade (T11: the lip edge fades longer). Writes obj (finish)
-    and its fh_root attribute; returns stats."""
+    lip edge); tip_fades: per centre tip_fade (T11: the lip edge fades longer). T21: clips: per centre None or a z (m) where
+    the card ends (the moustache's lip-edge cards stop at the vermilion border, where the lip
+    ribbon takes over); cfg root_fade {len, jitter}: each strand fades in from a staggered start
+    (a card's root row drew a hard comb line: the moustache top, the cheek line); ribbons: lip
+    ribbon cards (lip_ribbon_cards) drawn into the same atlas after the clump cards. Writes obj
+    (finish) and its fh_root attribute; returns stats."""
     bmesh.ops.delete(bm, geom=list(bm.faces), context="FACES")
     left = [v for v in bm.verts if v.is_valid]
     if left:
@@ -454,6 +458,10 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
     gap = cfg["gap_m"]
     s_alpha = groom.get("alpha")
     s_px = groom.get("px")
+    rf = cfg.get("root_fade")
+    # T21: the staggered root start per strand (own stream: the card picks and IDs are unchanged)
+    r0_all = np.random.default_rng(cfg.get("seed", 0) + 31).uniform(0, rf["jitter"], m) if rf else None
+    clipped = 0
     for ci, j in enumerate(centres):
         if made >= ncols * nrows:
             skipped += 1
@@ -474,6 +482,23 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
         tip_dir = (spine[-1] - spine[-2]) / max(seg[-1], 1e-9)
         C = np.vstack([spine, spine[-1] + tip_dir * (target - total)])
         arcC = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(C, axis=0), axis=1))])
+        clip_end = None
+        if clips is not None and clips[ci] is not None:
+            # T21: end the card where its spine drops below the clip height (k points are kept: the
+            # spine is resampled along its own arc to the clip, so the frame below stays k long)
+            below = np.flatnonzero(C[:, 2] < clips[ci])
+            if len(below) and below[0] > 0:
+                q = below[0]
+                za, zb = C[q - 1, 2], C[q, 2]
+                f_ = (za - clips[ci]) / max(za - zb, 1e-9)
+                a_end = arcC[q - 1] + f_ * (arcC[q] - arcC[q - 1])
+                if a_end >= cfg["min_len_m"]:
+                    clip_end = a_end
+        if clip_end is not None:
+            sk = np.linspace(0, clip_end, len(C))
+            C = np.stack([np.interp(sk, arcC, C[:, q]) for q in range(3)], 1)
+            arcC = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(C, axis=0), axis=1))])
+            clipped += 1
         vtot = arcC[-1]
         lens.append(vtot)
         T = np.gradient(C, axis=0)
@@ -497,7 +522,8 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
         dmax = np.abs(dep).max() + 1e-6
         for i in np.argsort(dep.mean(1), kind="stable"):
             u = (O[i] * wdir[:k]).sum(1) / hwk[:k]
-            v = np.clip((arcC[:k] + (O[i] * T[:k]).sum(1)) / vtot, 0, 1)
+            v_raw = (arcC[:k] + (O[i] * T[:k]).sum(1)) / vtot
+            v = np.clip(v_raw, 0, 1)
             sl = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(S[i], axis=0), axis=1))])
             s_ = sl / max(sl[-1], 1e-9)
             tf = cfg["tip_fade"] if tip_fades is None else tip_fades[ci]
@@ -509,6 +535,12 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
             alpha = 1.0 - (1.0 - cfg["tip_alpha"]) * tip
             if s_alpha is not None:
                 alpha = alpha * float(s_alpha[mem[i]])
+            if rf:
+                r0 = r0_all[mem[i]]
+                alpha = alpha * np.clip((s_ - r0) / rf["len"], 0, 1) ** 1.5
+            if clip_end is not None:
+                # the members' lengths past the clipped card end are the ribbon's: faded out, not piled at v = 1
+                alpha = alpha * (1.0 - np.clip((v_raw - 0.8) / 0.2, 0, 1))
             sid = float(sid_all[mem[i]])
             cell.draw((0.5 + 0.5 * u) * cw, v * ch, rad, alpha, v, dep[i] / dmax, rgb[mem[i]], sid,
                       rc["base"] + rc["jitter"] * (2 * sid - 1), jit)
@@ -554,6 +586,12 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
                 loop[uv2].uv = (tt, 1.0)
             tris += 2
         made += 1
+    rib_stats = None
+    if ribbons:
+        rib_stats = lip_ribbon_cards(bm, uv, uv2, dl, atl, made, ncols, nrows, cw, ch, groom, sid_all, ribbons,
+                                     weights_of, cfg, skin_bvh, vroots)
+        made += rib_stats["cards"]
+        tris += rib_stats["tris"]
     fill = atl.bleed()
     imgs = atl.images(name + "_cards")
     hsr.save_pngs(b, imgs, name + "_cards")
@@ -578,4 +616,101 @@ def build_groom_cards(b, obj, bm, groom, centres, rolls, weights_of, cfg, name, 
             "cell_cov_p10_p50": [round(float(np.percentile(covs, q)), 3) for q in (10, 50)],
             "empty_cells": int((covs < 0.01).sum()),
             "tangent_nudged_loops": nudged, "tangent_culled_faces": culled_tan,
-            "atlas_fill_linear": [round(float(x), 6) for x in fill]}
+            "atlas_fill_linear": [round(float(x), 6) for x in fill],
+            "clipped_cards": clipped, "ribbons": rib_stats}
+
+
+def lip_ribbon_cards(bm, uv, uv2, dl, atl, made, ncols, nrows, cw, ch, groom, sid_all, rib, weights_of, cfg,
+                     skin_bvh, vroots):
+    """T21 (checkpoint-3 T21 item 1): the moustache's overhang as cards laid ALONG the upper lip, not one card
+    per clump hanging over it (T11's 280 lip-edge cards read as a fringe of dark spikes). rib (hair_beard.
+    lip_ribbon): per x column along the lip (x, the vermilion top z_b, the overhang, the ribbon's surface y per
+    row) and the lip-edge strands to draw. Each card spans `seg_cols` columns; its cell holds the strands that
+    cross it, drawn across the card (the cell's u: top -> lip edge, v: along the lip), so its alpha runs across
+    the card: a fade-in under the clump cards above and a cross-card fade toward the lip, where only the
+    strand tips are left. Two layers, the second offset half a card and a little further out."""
+    pts, rgb = groom["pts"], groom["rgb"]
+    s_alpha, s_px = groom.get("alpha"), groom.get("px")
+    rad_ref = float(np.median(groom["radius"]))
+    X, ZT, H, Y = rib["x"], rib["z_top"], rib["height"], rib["y"]     # (nx,), (nx,), (nx,), (nx, nv)
+    nv = Y.shape[1]
+    tv = np.linspace(0, 1, nv)
+    sel = rib["strands"]
+    seg = rib["seg_cols"]
+    a_in, a_out0, a_out1 = rib["alpha_in"], rib["alpha_out"][0], rib["alpha_out"][1]
+    ss, jit, rc = cfg["ss"], math.radians(cfg.get("flow_jitter_deg", 6.0)), cfg["roughness"]
+    # strand points: their t across the ribbon at their own x, their s along it
+    P = pts[sel]
+    sl = np.concatenate([np.zeros((len(sel), 1)), np.cumsum(np.linalg.norm(np.diff(P, axis=1), axis=2), 1)], 1)
+    s_all = sl / np.maximum(sl[:, -1:], 1e-9)
+    zt = np.interp(P[..., 0], X, ZT)
+    hh = np.interp(P[..., 0], X, H)
+    T_all = (zt - P[..., 2]) / np.maximum(hh, 1e-6)
+    cards = tris = 0
+    starts = []
+    for layer in range(rib["layers"]):
+        off = (seg // 2) * layer
+        i0 = -off if layer else 0
+        while i0 < len(X) - 1:
+            a, b_ = max(i0, 0), min(i0 + seg, len(X) - 1)
+            if b_ - a >= 2:
+                starts.append((layer, a, b_))
+            i0 += seg - rib["overlap_cols"]
+    for layer, a, b_ in starts:
+        if made + cards >= ncols * nrows:
+            break
+        x0, x1 = X[a], X[b_]
+        cell = hsr.Cell(cw, ch, ss)
+        inx = ((P[..., 0] >= x0 - 0.001) & (P[..., 0] <= x1 + 0.001)).any(1) & ((T_all > -0.1) & (T_all < 1.1)).any(1)
+        idx = np.flatnonzero(inx)
+        # back to front: the strands further from the skin (lower y = in front) last
+        order = idx[np.argsort(-P[idx][:, :, 1].mean(1), kind="stable")]
+        for i in order:
+            gi = sel[i]
+            sx = (P[i, :, 0] - x0) / (x1 - x0)
+            t = T_all[i]
+            s_ = s_all[i]
+            tip = np.clip((s_ - (1 - rib["tip_fade"])) / rib["tip_fade"], 0, 1)
+            w = cfg["strand_px"] * float(np.clip(groom["radius"][gi] / rad_ref, 0.5, 1.6))
+            if s_px is not None:
+                w *= float(s_px[gi])
+            rad = w + (cfg["tip_px"] - w) * tip
+            alpha = (1.0 - (1.0 - cfg["tip_alpha"]) * tip) * float(s_alpha[gi] if s_alpha is not None else 1.0)
+            # the cross-card alpha: in under the clump cards, out toward the lip edge
+            alpha = alpha * np.clip(t / a_in, 0, 1) * (1.0 - (1.0 - rib["alpha_floor"]) * np.clip((t - a_out0) / (a_out1 - a_out0), 0, 1))
+            sid = float(sid_all[gi])
+            cell.draw(t * cw, sx * ch, rad, alpha, s_, np.zeros_like(t), rgb[gi], sid,
+                      rc["base"] + rc["jitter"] * (2 * sid - 1), jit)
+        r = cell.resolve()
+        slot = made + cards
+        u0, v0, u1, v1 = atl.put((slot % ncols) * cw, (slot // ncols) * ch, r, cfg["ao"])
+        # the grid: columns a..b_ along the lip, nv rows across (top -> lip edge)
+        push = rib["layer_push_m"] * layer
+        grid = []
+        cx = 0.5 * (x0 + x1)
+        wts = weights_of(np.array([cx, float(np.interp(cx, X, Y[:, 0])), float(np.interp(cx, X, ZT))]))
+        for ci in range(a, b_ + 1):
+            row = []
+            for q in range(nv):
+                p = Vector((X[ci], Y[ci, q] - push, ZT[ci] - tv[q] * H[ci]))
+                vv = bm.verts.new(p)
+                for g_, w_ in wts.items():
+                    vv[dl][g_] = w_
+                vroots.append(Vector((X[ci], Y[ci, 0], ZT[ci])))
+                row.append(vv)
+            grid.append(row)
+        ncol = b_ - a
+        for ci in range(ncol):
+            for q in range(nv - 1):
+                quad = (grid[ci][q], grid[ci + 1][q], grid[ci + 1][q + 1], grid[ci][q + 1])
+                f = bm.faces.new(quad)
+                f.material_index = 0
+                for loop, (cc, qq) in zip(f.loops, ((ci, q), (ci + 1, q), (ci + 1, q + 1), (ci, q + 1))):
+                    sx, tq = cc / ncol, tv[qq]
+                    loop[uv].uv = (u0 + (u1 - u0) * tq, v0 + (v1 - v0) * sx)
+                    loop[uv2].uv = (tq, 1.0)
+                tris += 2
+        cards += 1
+    return {"cards": cards, "tris": tris, "columns": int(len(X)), "strands": int(len(sel)),
+            "x_span_mm": round(float(X[-1] - X[0]) * 1e3, 1) if len(X) else 0,
+            "height_mm_p50": round(float(np.median(H)) * 1e3, 1) if len(H) else 0}
