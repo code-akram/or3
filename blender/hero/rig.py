@@ -75,7 +75,7 @@ HERO_E = 3.0
 HERO_EXPOSURE = -0.6
 HERO_LOOK = "AgX - Base Contrast"   # skin-direction.md: contrast via CDL power in the grade, not the look
 HERO_WB = 3900                       # skin-direction.md: white point (K) of the hero grade
-EYE_DIFFUSE = 0.3                    # the eye light is mostly a catchlight
+EYE_DIFFUSE = 0.3                    # the eye light is mostly a catchlight (EEVEE only: Cycles ignores it, T19)
 TT_E = 4.0
 TT_EXPOSURE = 0.0
 

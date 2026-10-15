@@ -24,9 +24,10 @@ import { albedo, diffuseRamp } from './style';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
 import { HERO_RADII_MM } from './sss';
 import { temporalFrame } from '../temporal';
+import { rectFormFactor, screenTerm, withSharedLighting } from '../lighting';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, exp, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, cameraWorldMatrix, exp, log, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, varying, vec2, vec3, vec4, vertexColor } = TSL as any;
 // T18 eye: refraction, frames and the emitter-shaped catchlight
 const { asin, atan, cameraViewMatrix, cross, dFdx, dFdy, refract, step, uniform } = TSL as any;
 // T17 skin: the lighting's specular total (LightsNode's 'totalSpecular' property) for the SSS pass MRT
@@ -60,18 +61,22 @@ interface RectInput {
   ltc_2: N;
 }
 
-/** A rect light (three's LTC path, ?area=rims|all) as the point light the custom terms (skin SSS
- * diffuse, cloth sheen + fuzz) understand: direction to the centre and the intensity of a small
- * Lambertian emitter, I = L A cos(theta_light), over d^2. The LTC keeps the specular; three's stock
- * directRectArea has no sheen and knows nothing of these terms, so without this they vanish. */
+/** A rect light (three's LTC path) as the point light the custom terms (skin SSS diffuse, cloth sheen +
+ * fuzz, the hair lobes) understand. T19: the rect's VECTOR FORM FACTOR F (the sum of its edge terms,
+ * Arvo 1994 / Heitz 2016): a Lambert receiver of normal n gets E = pi L (F . n) from the whole rect
+ * (horizon unclipped), so the point equivalent is the direction F/|F| at the intensity of a plane facing
+ * it, pi L |F|, exact for a big emitter close by. (T6 took the centre direction and L A cos / d^2, which
+ * is the small-emitter limit: the hero fill (2 m square at 2.5 m) came out 24 % and the wrap 16 % hot.)
+ * Zero behind the emitter (it shines along its local -z). The LTC keeps the specular. */
 function rectAsPoint(i: RectInput): { L: N; color: N } {
-  const toL = i.lightPosition.sub(positionView);
-  const d2 = toL.dot(toL).max(1e-4);
-  const L = toL.normalize();
+  const c = i.lightPosition;
+  const F = rectFormFactor(c, i.halfWidth, i.halfHeight, positionView);
+  const toL = c.sub(positionView);
   const n = i.halfWidth.cross(i.halfHeight);
-  const area = n.length().mul(4);
-  const cosL = n.normalize().dot(L).max(0); // shines along local -z: the lit side has L along +z
-  return { L, color: i.lightColor.mul(area).mul(cosL).div(d2) };
+  const front = n.dot(toL).greaterThan(0); // shines along local -z: the lit side has toL along +z
+  const f = F.length();
+  const dir = F.div(f.max(1e-8)); // rectFormFactor orients F toward the light
+  return { L: dir, color: i.lightColor.mul(front.select(f.mul(Math.PI), float(0))) };
 }
 
 export type Role = 'skin' | 'hair' | 'facial' | 'lash' | 'eye' | 'eyeshell' | 'eyewet' | 'cloth' | 'shirt' | 'generic';
@@ -384,6 +389,8 @@ interface HairNodes {
   rough: N; // per-strand roughness (ORM G): scales the lobe exponents around hair.roughRef
   specScale: N; // per-card specular scale (UV1 u: the baker's layer_spec) x the occlusion on the lobes
   tint: N; // warm scatter colour: the albedo's chroma, saturated (luminance 1)
+  fibre: N; // T20, scalp hair: the colour of the TT / multiple-scatter terms (the strand's own transmittance, or tint)
+  dirOcc: N | null; // T20: baked directional occlusion, L1 fit (mean, gx, gy, gz) in model axes, or null
   screen: N | null; // screen-space AO (ao.ts) or null
 }
 
@@ -410,7 +417,14 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     // hair (N: the mass's proxy normal). Beer-Lambert in that optical depth darkens the side of the mass
     // a rim grazes, and keeps backlit thin locks (light through the card, |N.L| large) glowing. The deep
     // shadow (hairshadow.ts) has the hair above the outer layer.
-    const lightColor = pre === 'hair' ? lightIn.mul(exp(P.u('hair.surfaceDepth').negate().div(N.dot(L).abs().max(0.05)))) : lightIn;
+    let lightColor = pre === 'hair' ? lightIn.mul(exp(P.u('hair.surfaceDepth').negate().div(N.dot(L).abs().max(0.05)))) : lightIn;
+    // T20 gameplay tier: the baked directional hair occlusion (hair_groom_cards.dir_occlusion) toward the
+    // light, mean + g.L in model (= world) axes; hair.dirOcclusion 0 (hero tier: the deep shadow) = off
+    if (this.h.dirOcc) {
+      const Lw = cameraWorldMatrix.mul(vec4(L, 0)).xyz.normalize();
+      const o = this.h.dirOcc.x.add(this.h.dirOcc.yzw.dot(Lw)).clamp(0, 1);
+      lightColor = lightColor.mul(mix(float(1), o, P.u('hair.dirOcclusion')));
+    }
     const V = positionViewDirection;
     const T = this.h.tangent;
     const w = P.u('hair.diffuseWrap');
@@ -421,7 +435,7 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     // fully wrapped, albedo-chroma tinted diffuse. Dark hair is lit mostly by light that went through
     // other fibres, which comes out with the fibre's transmittance colour, not white.
     const msWrap = nl.add(1).mul(0.5).max(0);
-    reflectedLight.directDiffuse.addAssign(lightColor.mul(diffuseRamp(P, msWrap)).mul(this.h.tint).mul(P.u(`${pre}.scatter`)).mul(occ).mul(1 / Math.PI));
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(diffuseRamp(P, msWrap)).mul(this.h.fibre).mul(P.u(`${pre}.scatter`)).mul(occ).mul(1 / Math.PI));
     const H = L.add(V).normalize();
     // per-strand roughness: a rougher strand has a broader lobe (exponent ~ 1 / variance)
     const er = P.u('hair.roughRef').div(this.h.rough.max(0.05)).pow(2);
@@ -436,7 +450,14 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const s2 = kk(P.u('hair.shift2'), P.u('hair.exponent2'));
     const atten = nl.mul(0.75).add(0.25).clamp(0, 1);
     // R: white, shifted to the root; TRT: the scatter tint (T9b; was sqrt(albedo), near grey on dark hair)
-    const spec = P.u('hair.spec1Color').mul(s1).mul(P.u(`${pre}.spec1`)).add(this.h.tint.mul(s2).mul(P.u(`${pre}.spec2`))).mul(this.h.specScale);
+    // T20: Fresnel on R (the cuticle reflection), relative to normal incidence: Schlick at the angle between
+    // L and the half vector, f0 of IOR 1.55. A light behind the hair (the studio rim, the hero rim / kicker)
+    // meets the fibres at grazing incidence and reflects ~4x what a front key does; the hero's Chiang R has it,
+    // Kajiya-Kay does not (Cycles per light: the rim lights 83-97 % of the crown / side / back hair).
+    const lh = L.dot(H).clamp(0, 1);
+    const fr = float(0.0465).add(float(0.9535).mul(float(1).sub(lh).pow(5))).div(0.0465);
+    const s1f = pre === 'hair' ? s1.mul(mix(float(1), fr, P.u('hair.fresnel'))) : s1;
+    const spec = P.u('hair.spec1Color').mul(s1f).mul(P.u(`${pre}.spec1`)).add(this.h.tint.mul(s2).mul(P.u(`${pre}.spec2`))).mul(this.h.specScale);
     reflectedLight.directSpecular.addAssign(lightColor.mul(spec).mul(atten));
     // TT (T9b): light passing through the fibres toward the camera when the hair is backlit (the warm
     // glow on the hero's lengths under the rim; per-light Cycles frames put ~80 % of the hero hair's
@@ -450,7 +471,7 @@ class HairLightingModel extends THREE.PhysicalLightingModel {
     const fwd = float(1).sub(Lp.dot(Vp)).mul(0.5).pow(P.u('hair.ttPow'));
     const tth = tj.dot(H);
     const cone = float(1).sub(tth.mul(tth)).max(0).sqrt().pow(P.u('hair.ttExponent').mul(er));
-    reflectedLight.directSpecular.addAssign(lightColor.mul(this.h.tint).mul(fwd.mul(cone).mul(P.u(`${pre}.tt`))).mul(this.h.specScale));
+    reflectedLight.directSpecular.addAssign(lightColor.mul(this.h.fibre).mul(fwd.mul(cone).mul(P.u(`${pre}.tt`))).mul(this.h.specScale));
   }
 
   override directRectArea(input: unknown): void {
@@ -490,7 +511,7 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
   /** KHR_materials_anisotropy texture (flow, depth), for the depth prepass */
   readonly anisoMap: THREE.Texture | null;
 
-  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair' | 'brows'; msaa: boolean; screenAO?: THREE.Texture | null | undefined }) {
+  constructor(src: Std, private readonly P: ParamStore, opts: { prefix: 'hair' | 'facialHair' | 'brows'; msaa: boolean; screenAO?: THREE.Texture | null | undefined; dirOcc?: boolean }) {
     super();
     copyStd(this, src);
     this.prefix = opts.prefix;
@@ -551,7 +572,31 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     // scatter tint: the albedo's chroma raised to scatterSat, normalised to luminance 1
     const sat = col.max(1e-4).pow(P.u('hair.scatterSat'));
     const tint = sat.div(sat.dot(vec3(0.2126, 0.7152, 0.0722)).max(1e-5)).min(4);
-    this.nodes = { tangent: T, shiftOff, rough, specScale, tint, screen: screenAONode(opts.screenAO) };
+    // T20, scalp hair: the TT and multiple-scatter colour is the strand's own fibre transmittance, not a
+    // unit-luminance tint. The atlas albedo is Chiang's colour of the strand's absorption sigma
+    // (hair_strand_raster.chiang_color: c = exp(-sqrt(sigma path) fac)), so sigma = (ln c)^2 / (fac^2 path) and
+    // a pass through the fibre (about 2 radii) transmits exp(-2 sigma) = exp(-ttDepth (ln c)^2), ttDepth =
+    // 2 / (fac^2 path). A near-black strand (melanin 0.9) transmits ~0.1 / 0.02 / 0.0005 (a dim deep red), a
+    // grey one ~0.6 / 0.4 / 0.2: the unit-luminance tint gave every strand a grey strand's glow in a dark
+    // strand's red (T15: front falls 1.23x the Cycles r/g, side mass 1.3x Cycles from TT alone). The colour
+    // is read at the sharper mip of the ID (the mean colour of a minified card is a grey-strand average).
+    let fibre: N = tint;
+    if (opts.prefix === 'hair' && src.map) {
+      const cs = texture(src.map).bias(P.u('hair.idLodBias')).rgb.max(1e-4);
+      const lc = log(cs);
+      fibre = mix(tint, exp(lc.mul(lc).mul(P.u('hair.ttDepth')).negate()), P.u('hair.fibreTint'));
+    }
+    // T20 directional occlusion: 4 x 6 bits packed in the strand UV v (TEXCOORD_1 y, which the exporter writes as
+    // 1 - v), decoded per vertex (the packed integer does not survive interpolation; the decoded values do)
+    let dirOcc: N | null = null;
+    if (opts.dirOcc) {
+      const p0 = float(1).sub(uv(1).y).round();
+      const d = (x: N) => x.div(64).floor();
+      const p1 = d(p0), p2 = d(p1), p3 = d(p2);
+      const q = (x: N, y: N) => x.sub(y.mul(64)).div(63);
+      dirOcc = varying(vec4(q(p0, p1), q(p1, p2).mul(2).sub(1), q(p2, p3).mul(2).sub(1), p3.div(63).mul(2).sub(1)));
+    }
+    this.nodes = { tangent: T, shiftOff, rough, specScale, tint, fibre, dirOcc, screen: screenAONode(opts.screenAO) };
     this.normalNode = null; // shade the card as a fibre bundle: the smooth proxy normal from the GLB
     this.roughnessNode = rough;
     this.metalnessNode = float(0);
@@ -652,7 +697,7 @@ export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number
 //   cornea   GGX against the emitter's rectangle (LTC) for every light that carries its Blender
 //            size (stage.ts userData.rect), so catchlights take the softbox / strip shape; the
 //            point-GGX lobe stays for lights without one
-//   eye light the Blender rig's camera catchlight lights the diffuse at eye.eyeLightDiffuse (0.3)
+//   eye light the Blender rig's camera catchlight lights the diffuse at eye.eyeLightDiffuse (T19: 1, as Cycles)
 
 let ltcLib: { LTC_HALF_1: THREE.DataTexture; LTC_HALF_2: THREE.DataTexture } | null = null;
 function ltcTextures(): { l1: N; l2: N } {
@@ -1314,6 +1359,18 @@ export interface MaterialSet {
 export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidecars, msaa: boolean): MaterialSet {
   const byName = new Map<string, THREE.MeshPhysicalNodeMaterial>();
   const roles = new Map<string, Role>();
+  // T20: hair materials whose meshes carry the baked directional occlusion, packed in TEXCOORD_1 y (older
+  // builds hold the card side there, +-1, so 1 - v is 0 or 2; a packed value is a 24-bit integer)
+  const occ = new Set<string>();
+  root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    const a = m.isMesh ? m.geometry.attributes.uv1 : undefined;
+    if (!a) return;
+    let packed = false;
+    for (let i = 0; i < a.count && !packed; i++) packed = 1 - a.getY(i) > 2.5;
+    if (!packed) return;
+    for (const mt of Array.isArray(m.material) ? m.material : [m.material]) occ.add(mt.name);
+  });
   const make = (src: Std): THREE.MeshPhysicalNodeMaterial => {
     const role = roleOf(src.name);
     roles.set(src.name, role);
@@ -1328,7 +1385,7 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
         });
       }
       case 'hair':
-        return new HairMaterial(src, P, { prefix: 'hair', msaa, screenAO: side.screenAO });
+        return new HairMaterial(src, P, { prefix: 'hair', msaa, screenAO: side.screenAO, dirOcc: occ.has(src.name) });
       case 'facial':
       case 'lash':
         // brows: their own gains (T9b: the brow region is calibrated apart from the beard)
@@ -1347,6 +1404,24 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
         return new GenericMaterial(src, P, side.screenAO);
     }
   };
+  // T19 shared light terms (lighting.ts): specular occlusion from the GTAO term on every model but the
+  // hair cards' (their fibre lobes keep the strand occlusion, T10), and the direct-diffuse AO on the rect
+  // path of the eye and generic models (the others apply it in their own directRectArea)
+  const screen = screenTerm(side.screenAO);
+  const specOcc = (P.get('light.specOcclusion') as number) > 0;
+  const shared = (nm: THREE.MeshPhysicalNodeMaterial, role: Role): void => {
+    const orig = nm.setupLightingModel.bind(nm);
+    const opts = {
+      specOcclusion: specOcc && role !== 'hair' && role !== 'facial' && role !== 'lash',
+      rectDiffuseAO: role === 'generic',
+      // the models whose rect diffuse is three's LTC (the skin and hair models take rectAsPoint's F)
+      ltcDiffuse: role === 'generic' || role === 'cloth' || role === 'shirt',
+      // the eye's diffuse (refracted iris, limbus, sclera; its own direct AO) is in direct(): under the
+      // rects from their point equivalent, as the skin's
+      rectDiffuseAsPoint: role === 'eye',
+    };
+    nm.setupLightingModel = ((b: unknown) => withSharedLighting((orig as unknown as (x: unknown) => THREE.LightingModel)(b), P, screen, opts)) as typeof nm.setupLightingModel;
+  };
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
@@ -1355,6 +1430,7 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
       let nm = byName.get(s.name);
       if (!nm) {
         nm = make(s);
+        shared(nm, roles.get(s.name)!);
         byName.set(s.name, nm);
       }
       return nm;

@@ -82,8 +82,11 @@ export const DEFAULT_PARAMS = {
     ssssNormalBlur: [0.3, 0.12, 0.05],
   },
   hair: {
-    /** T10: 1.3 (was 1.0), with the R lobe halved and TRT off (see spec1 / spec2). */
-    albedoGain: 1.3,
+    /** T10: 1.3 (was 1.0), with the R lobe halved and TRT off (see spec1 / spec2). T20: 0. Under the
+     * studio lights the Cycles hero's dark hair takes 1-5 % of its crown / side / back light from the key
+     * (93-96 % from the rim): a near-black Chiang fibre has no Lambertian body, and this term was the
+     * engine's key-lit excess (per-term basis on the v5 cards: every fit put it at 0). */
+    albedoGain: 0.0,
     /** Primary (white, shifted toward the root) and secondary (albedo tinted, toward the tip) lobes. */
     shift1: -0.08,
     shift2: 0.12,
@@ -100,11 +103,11 @@ export const DEFAULT_PARAMS = {
     specAO: 1.0,
     /** Warm multiple-scattering body (T9b): a fully wrapped diffuse in the scatter tint, the albedo's
      * chroma ^ scatterSat at luminance 1; the TRT lobe (spec2) takes the same tint. */
-    scatter: 0.008,
+    scatter: 0.024,     // T20 fit (fibre tint): 0.008 x 3
     scatterSat: 0.4,
     /** TT (T9b): backlit transmission in the scatter tint: gain x the R-like cone (ttExponent) x the
      * forward-scattering azimuth term ((1 - Lp.Vp) / 2)^ttPow. */
-    tt: 0.36,
+    tt: 1.62,           // T20 fit (fibre tint): 0.36 x 4.5 (x 3 left the T10 rim closeup at 0.69 under TRAA)
     ttPow: 6.0,
     ttExponent: 16,
     /** T9, calibrated on the closeup parity (bench/m1/hair_test.py --parts parity: hair-region mean
@@ -127,7 +130,7 @@ export const DEFAULT_PARAMS = {
     // side mass behind the temple (Cycles lights the top), and a broad TT (ttPow 2) lit everything the rim
     // reached; the fit wants a narrow forward TT (ttPow 6) at 2.8x, more diffuse / scatter body, R at half
     // and no TRT. Per light 0.98 / 1.13 / 0.98, portrait crown / back 3.07 vs Cycles 3.21.
-    spec1: 0.0175,
+    spec1: 0.031,       // T20 fit (with fresnel 1): 0.0175 x 1.75
     spec2: 0.0,
     spec1Color: [1.0, 0.97, 0.94],
     /** Flips the flow tangent (root->tip convention check). */
@@ -162,6 +165,16 @@ export const DEFAULT_PARAMS = {
     /** Optical depth of the hair layer above the fibres the camera sees (materials HairLightingModel):
      * every light into the scalp hair x exp(-surfaceDepth / |N.L|); 0 = off. */
     surfaceDepth: 0.0,
+    /** T20: 1 = the TT and scatter terms take the strand's own fibre transmittance exp(-ttDepth (ln albedo)^2)
+     * (materials HairMaterial), 0 = the T9b unit-luminance tint. ttDepth = 2 / (fac^2 path): fac 5.509 is
+     * Chiang's radial-roughness factor at 0.5, path the atlas albedo's (hair_groom_cards CARDS.albedo.path). */
+    fibreTint: 1,
+    ttDepth: 0.0659,    // path 1.0 (T20 cards); 0.0969 for the path 0.68 builds (T15-T16)
+    /** T20: Fresnel on the R lobe (Schlick, IOR 1.55, relative to normal incidence), 0 = off (T9b-T16). */
+    fresnel: 1,
+    /** T20: the baked directional hair occlusion (TEXCOORD_2 / _3 of v5 builds) on every light into the scalp
+     * hair: 1 for the gameplay tier, where the deep shadow (hair.deepShadow) is off; 0 = off (hero tier). */
+    dirOcclusion: 0,
   },
   /** T10 screen-space AO (ao.ts): GTAO at half resolution on a depth / normal prepass (cards with their
    * alpha), multiplied into the direct diffuse of every character material, per light by the light's
@@ -231,8 +244,10 @@ export const DEFAULT_PARAMS = {
     /** The caustic on the iris side away from the light. */
     causticGain: 0.25,
     scleraWrap: 0.15,
-    /** The hero rig's camera catchlight lights the diffuse at this share (Blender: diffuse 0.3). */
-    eyeLightDiffuse: 0.3,
+    /** The hero rig's camera catchlight lights the eye's diffuse at this share (punctual path only; the
+     * LTC rect path is full). T19: 1, as Cycles renders it: Blender's diffuse_factor 0.3 on that light is
+     * EEVEE-only (the per-light grey chart: full diffuse = 1.02x Cycles' eye-only chart). */
+    eyeLightDiffuse: 1,
     /** 1 = cornea specular against each light's Blender rectangle (LTC), so catchlights take its shape. */
     catchlightRect: 1,
     /** Lid shell (eye_lidshell) opacity scale over its baked alpha; the tear meniscus specular. */
@@ -298,6 +313,54 @@ export const DEFAULT_PARAMS = {
    * hero rig; gain 1 = Cycles' radiance as rendered. */
   bounce: {
     gain: 1,
+  },
+  /** T19 lighting and shadows (lighting.ts, contact.ts, stage.ts). The 0/1 switches are the per-feature
+   * toggles of the quality tiers (T24); "(setup)" = read when the lights are built (a view change), the
+   * rest are live uniforms. URL overrides: ?ltc=0 ?pcss=0 ?contact=0 ?specocc=0 ?sharemaps=0. */
+  light: {
+    /** (setup) hybrid LTC: every light an LTC rect of its Blender size (area specular, exact area
+     * irradiance) with its spot proxy's shadow; 0 = T10's shadowed spots (80 deg cone, point irradiance). */
+    ltc: 1,
+    /** (setup) the eye light reaches every material, as in Cycles (which ignores the light's diffuse
+     * factor 0.3: the grey chart measures it at full diffuse); 0 = T5-T16, the eyes only. */
+    eyeAll: 1,
+    /** (setup) twins sample their parent's depth map (one map per light); 0 = a map per twin (T10). */
+    shareMaps: 1,
+    /** (setup) shadow map size of every light, and the frame sphere's margin (fitShadow). */
+    mapSize: 2048,
+    fitMargin: 1.15,
+    /** (setup) PCSS on the parent lights; 0 = three's 5-tap PCF at a radius from the emitter size (T10). */
+    pcss: 1,
+    pcssTaps: 16,
+    pcssBlockerTaps: 12,
+    /** Emitter size scale, how far above a receiver the blocker search reaches (m), filter radius clamp
+     * (texels), depth bias (m), and the receiver-plane bias: slopeBias x tan(N, L) (clamped to
+     * slopeMin..slopeMax) per metre of filter radius, the whole bias capped at biasMax (m). */
+    pcssScale: 1,
+    pcssSearch: 0.15,
+    pcssMinTexels: 1,
+    pcssMaxTexels: 40,
+    shadowBias: 0.0015,
+    slopeBias: 1,
+    slopeMin: 0.6,
+    slopeMax: 6,
+    biasMax: 0.02,
+    /** (setup) normal offset of the receiver in the parent maps (m; T10 0.004), plus normalOffset shadow-map
+     * texels x tan(N, L) (lighting.ts grazingOffset). */
+    normalBias: 0.003,
+    normalOffset: 2,
+    /** Specular occlusion from the GTAO term (Lagarde): strength on the direct (x the light's AO weight)
+     * and indirect specular; (setup) 0 also skips the wrap. */
+    specOcclusion: 1,
+    /** Screen-space contact shadows of the key (contact.ts), on the GTAO prepass depth. contact (setup):
+     * on / off; steps (setup); distance (m) the ray marches toward a random point of the key's rect;
+     * thickness (m) an occluder is assumed to have; bias (m) along the normal; intensity. */
+    contact: 1,
+    contactSteps: 10,
+    contactDistance: 0.025,
+    contactThickness: 0.012,
+    contactBias: 0.0006,
+    contactIntensity: 1,
   },
 };
 
