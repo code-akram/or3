@@ -37,6 +37,8 @@ ap.add_argument("--closes", default="close_pocket,close_button,close_lapel,close
 ap.add_argument("--grain", action="store_true", help="also the pinstripe grain check")
 ap.add_argument("--only-grain", action="store_true")
 ap.add_argument("--lods", default="", help="views of the textured LODs (e.g. front,three_quarter)")
+ap.add_argument("--garment", default="jacket", choices=("jacket", "trousers", "waistcoat"),
+                help="the run's made garment: spike_jacket_* (t13_* materials) or spike_trousers_* (t13t_*)")
 A = ap.parse_args(argv)
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "blender"))
@@ -53,8 +55,34 @@ CLOSES = {"close_pocket": (20.0, (0.12, -0.12, 1.02), 0.24, 0.15),
           "close_lapel": (20.0, (0.07, -0.12, 1.36), 0.20, 0.15),
           "close_button": (5.0, (0.0, -0.13, 1.125), 0.10, 0.15),
           "close_collar_back": (160.0, (0.0, 0.05, 1.57), 0.24, 0.05),
+          "close_collar_side": (125.0, (0.0, 0.03, 1.55), 0.30, 0.05),
+          "close_vent": (165.0, (0.10, 0.08, 0.98), 0.32, 0.0),
+          "close_front_hem": (15.0, (0.03, -0.12, 0.98), 0.36, 0.1),
           "close_cuff_btn": (110.0, (0.47, -0.12, 1.12), 0.18, 0.15),
-          "close_34": (35.0, (0.0, 0.0, 1.42), 0.62, 0.15)}
+          "close_34": (35.0, (0.0, 0.0, 1.42), 0.62, 0.15),
+          # the trousers (T13 item 3): hem and break, knee, seat and back pockets, fly, band
+          "close_hem": (15.0, (0.17, -0.05, 0.12), 0.34, 0.0),
+          "close_hem_side": (90.0, (0.17, -0.03, 0.12), 0.34, 0.0),
+          "close_knee": (20.0, (0.15, -0.05, 0.55), 0.40, 0.0),
+          "close_seat": (180.0, (0.0, 0.08, 1.02), 0.45, 0.0),
+          "close_fly": (10.0, (0.04, -0.10, 1.04), 0.30, 0.0),
+          "close_band": (30.0, (0.10, -0.08, 1.08), 0.26, 0.0),
+          # the waistcoat (T13 item 4): the V and buttons, the left point and welt, the breast
+          # welt, the back, the side
+          "close_v": (8.0, (0.0, -0.12, 1.30), 0.30, 0.0),
+          "close_point": (15.0, (0.05, -0.12, 1.10), 0.24, 0.0),
+          "close_wwelt": (25.0, (0.10, -0.11, 1.20), 0.22, 0.0),
+          "close_breast": (20.0, (0.10, -0.10, 1.38), 0.22, 0.0),
+          "close_wback": (180.0, (0.0, 0.08, 1.30), 0.50, 0.0),
+          "close_wside": (90.0, (0.15, 0.0, 1.28), 0.45, 0.0)}
+G = {"jacket": {"prefix": "spike_jacket_", "mat": "t13", "lofted": ("suit_jacket", "suit_buttons"),
+                "hide": ("suit_jacket", "suit_buttons"), "target": (0, 0, 1.22), "scale": 1.15},
+     "trousers": {"prefix": "spike_trousers_", "mat": "t13t", "lofted": ("suit_trousers",),
+                  "hide": ("suit_trousers", "suit_jacket", "suit_buttons", "suit_waistcoat"),
+                  "target": (0, 0, 0.62), "scale": 1.35},
+     "waistcoat": {"prefix": "spike_waistcoat_", "mat": "t13w", "lofted": ("suit_waistcoat",),
+                   "hide": ("suit_waistcoat", "suit_jacket", "suit_buttons"),
+                   "target": (0, 0, 1.22), "scale": 1.15}}[A.garment]
 
 
 def append(path, objects=(), materials=()):
@@ -152,19 +180,31 @@ def main():
         o.data.materials.clear()
         for mn in GARMENT_MATS[key]:
             o.data.materials.append(mats.get(mn) or bpy.data.materials.get(mn))
-        if key not in ("suit_jacket", "suit_buttons"):
+        if key not in G["hide"]:
             under.append(o.name)
+    # a jacket run over the made trousers (suit_spike --trousers-from): those, not the lofted
+    made_tr = [o.name for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("spike_trousers_")
+               and "lod" not in o.name]
+    if A.garment != "trousers" and made_tr:
+        under = [n for n in under if "suit_trousers" not in n] + made_tr
+        tm = [bpy.data.materials.get(f"t13t_{s}") for s in ("wool", "lining", "wool", "button")]
+        if all(m is not None for m in tm):
+            from character import suit_hero, suit_made_tex
+            suit_hero.twill(tm[0], suit_hero.DEFAULTS["twill"])
+            # their own slots (the spike's clay renders may have left the clay in them)
+            suit_made_tex.assign([bpy.data.objects[n] for n in made_tr], tm)
     # the pattern jacket
     # the lofted jacket's wool (its weave falls back to the material's own coordinates without
     # UVs); a plain black wool if the base has none
-    own = bpy.data.materials.get("t13_wool")
+    mp = G["mat"]
+    own = bpy.data.materials.get(f"{mp}_wool")
     if own is not None:
         # the run's own pattern-UV materials (T13 item 2)
         from character import suit_hero, suit_textures
         suit_hero.twill(own, suit_hero.DEFAULTS["twill"])
         print("[beauty] cycles weave:", suit_textures.cycles_weave(), flush=True)
-        wool, lining, btn = own, bpy.data.materials["t13_lining"], bpy.data.materials["t13_button"]
-        for nm in ("t13_wool_normal", "suit_t13_wool_albedo", "suit_t13_wool_orm"):
+        wool, lining, btn = own, bpy.data.materials[f"{mp}_lining"], bpy.data.materials[f"{mp}_button"]
+        for nm in (f"{mp}_wool_normal", f"suit_{mp}_wool_albedo", f"suit_{mp}_wool_orm"):
             im = bpy.data.images.get(nm)
             if im is not None:      # the atlas, for the gate sheet
                 w_, h_ = im.size
@@ -183,7 +223,7 @@ def main():
     grain = grain_material(own["suit_atlas_side_m"]) if (own is not None and (A.grain or A.only_grain)) else None
     pattern = []
     for o in bpy.data.objects:
-        if o.type == "MESH" and o.name.startswith("spike_jacket_") and "lod" not in o.name:
+        if o.type == "MESH" and o.name.startswith(G["prefix"]) and "lod" not in o.name:
             o.data.materials.clear()
             for m in (wool, lining, wool, btn):
                 o.data.materials.append(m)
@@ -196,7 +236,8 @@ def main():
                 for p in o.data.polygons:
                     p.material_index = 0
             pattern.append(o.name)
-    lofted = [o.name for o in bpy.data.objects if o.type == "MESH" and ("suit_jacket" in o.name or "suit_buttons" in o.name)]
+    lofted = [o.name for o in bpy.data.objects if o.type == "MESH" and any(k in o.name for k in G["lofted"])]
+    TG, SC = G["target"], G["scale"]
     hero_names = [o.name for o in hero if o is not None and o.type == "MESH"]
     # render setup
     sc.render.engine = "CYCLES"
@@ -250,23 +291,31 @@ def main():
                 me.materials[0] = grain
                 me.materials[2] = grain
         for v in ("front", "three_quarter", "back"):
-            shoot(f"grain_{v}", base_show + pattern, VIEWS[v], (0, 0, 1.22), 1.15, 0.15)
-        shoot("grain_close_34", base_show + pattern, *CLOSES["close_34"])
-        shoot("grain_close_cuff_btn", base_show + pattern, *CLOSES["close_cuff_btn"])
+            shoot(f"grain_{v}", base_show + pattern, VIEWS[v], TG, SC, 0.15)
+        if A.garment == "jacket":
+            shoot("grain_close_34", base_show + pattern, *CLOSES["close_34"])
+            shoot("grain_close_cuff_btn", base_show + pattern, *CLOSES["close_cuff_btn"])
+        else:
+            if A.garment == "waistcoat":
+                shoot("grain_close_v", base_show + pattern, *CLOSES["close_v"])
+                shoot("grain_close_point", base_show + pattern, *CLOSES["close_point"])
+            else:
+                shoot("grain_close_seat", base_show + pattern, *CLOSES["close_seat"])
+            shoot("grain_close_knee", base_show + pattern, *CLOSES["close_knee"])
         for n, m in keep.items():
             bpy.data.objects[n].data.materials[0] = m
             bpy.data.objects[n].data.materials[2] = m
         if A.only_grain:
             return
     for v in [x for x in A.views.split(",") if x]:
-        shoot(f"lofted_{v}", base_show + lofted, VIEWS[v], (0, 0, 1.22), 1.15, 0.15)
-        shoot(f"pattern_{v}", base_show + pattern, VIEWS[v], (0, 0, 1.22), 1.15, 0.15)
+        shoot(f"lofted_{v}", base_show + lofted, VIEWS[v], TG, SC, 0.15)
+        shoot(f"pattern_{v}", base_show + pattern, VIEWS[v], TG, SC, 0.15)
     for c in [x for x in A.closes.split(",") if x]:
         az, tgt, scale, dz = CLOSES[c]
         shoot(f"pattern_{c}", base_show + pattern, az, tgt, scale, dz)
-    for ob in sorted((o for o in bpy.data.objects if o.name.startswith("spike_jacket_lod")), key=lambda o: o.name):
+    for ob in sorted((o for o in bpy.data.objects if o.name.startswith(G["prefix"] + "lod")), key=lambda o: o.name):
         for v in [x for x in A.lods.split(",") if x]:
-            shoot(f"{ob.name.removeprefix('spike_jacket_')}_{v}", base_show + [ob.name], VIEWS[v], (0, 0, 1.22), 1.15, 0.15)
+            shoot(f"{ob.name.removeprefix(G['prefix'])}_{v}", base_show + [ob.name], VIEWS[v], TG, SC, 0.15)
 
 
 main()

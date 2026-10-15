@@ -71,7 +71,10 @@ DEFAULTS = {
     "hem_flare_cm": 1.0,          # half hem wider than the half seat
     "button_ext_cm": 2.0,         # button extension past CF
     "button_below_waist_cm": 2.0, # the (one) button = the break point
-    "front_hem_in_cm": 1.5,       # cutaway: front hem corner this far inside CF
+    "front_hem_in_cm": 6.0,       # cutaway: front hem corner this far inside CF (it was 1.5: the
+                                  # fronts ran straight down below the button)
+    "cutaway": {"straight_cm": 6.0,   # below the button the edge runs straight this far, then rounds
+                "hem_angle_deg": 50.0},  # ... meeting the hem at this angle (from the hem line)
     "lapel_width_cm": 8.0,        # perpendicular to the roll line at the lapel point
     "lapel_belly_cm": 0.6,
     "gorge_drop_cm": 7.5,         # gorge point below the front neck point
@@ -833,7 +836,11 @@ def draft(M, opts=None):
     Hf = np.array([Gc - o["front_hem_in_cm"], yh])
     side_f = catmull([P_sf, (x_sf, ysc + 1.0), (x_sf + sfw / 2, yw), (x_sf + sfs / 2, ys), (x_sf + sfh / 2, yh)])
     hem_f = np.array([[x_sf + sfh / 2, yh], Hf])
-    front_e = bezier(Hf, (Gc + 0.6, yh - 4.0), (Gc + ext, y_btn + 7.0), B)
+    # the front quarters: straight down from the button, then a rounded cutaway to the hem
+    cu = o["cutaway"]
+    a_h = math.radians(cu["hem_angle_deg"])
+    L1 = 0.4 * float(np.linalg.norm(B - Hf))
+    front_e = bezier(Hf, Hf + L1 * np.array([math.cos(a_h), -math.sin(a_h)]), (Gc + ext, y_btn + cu["straight_cm"]), B)
     sh_dir = (NPf - SPf) / np.linalg.norm(NPf - SPf)
     R0 = NPf + sh_dir * o["roll_past_np_cm"]
     t_r = (R0 - B) / np.linalg.norm(R0 - B)                     # up the roll line
