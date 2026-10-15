@@ -3961,9 +3961,9 @@ POSED = {
     # closed armpit out through the jacket (a cover found along -n is the other side of the arm)
     "tuck": {"on": False, "reach_m": 0.05, "margin_m": 0.03, "depth_m": {"shirt": 0.012, "waistcoat": 0.007}},
     # T13d: the correctives refitted to keep the layer order and the jacket out of the body (constrain_fit)
-    "constrain": {"on": True, "rounds": 8, "trigger_m": 0.0005, "margin_m": 0.0012, "body_margin_m": 0.0015,
+    "constrain": {"on": True, "rounds": 14, "trigger_m": 0.0005, "margin_m": 0.0012, "body_margin_m": 0.0015,
                   "body_depth_max_m": 0.02, "weight": 10.0, "weight_body": 1000.0, "outer_after": 2,
-                  "move_max_m": {"jacket": 0.016, "waistcoat": 0.008, "shirt": 0.008},
+                  "move_max_m": {"jacket": 0.016, "waistcoat": 0.012, "shirt": 0.012},
                   "kept_only": True},
     "gain_fit": True,            # refit the skirt bones' follow gains to the simulated skirt
     "dem_bones_diag": True,      # T13b's eight free jacket bones: refit and leave-one-out on this set
@@ -4909,6 +4909,7 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
         body_in = [i for i, v_ in bd.items() if v_[0] < -0.0005]
         body_sh = {i for i in body_in if shown_v[kd_b.find(bd[i][1])[1]]}
         ord_bad = {}
+        plane_only = {}
         for (outer, u), an in (anc or {}).items():
             if outer != "jacket" or u not in (col0 or {}):
                 continue
@@ -4932,10 +4933,36 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
             s_ = (d_ * n_).sum(1)
             lat_ = np.linalg.norm(d_ - s_[:, None] * n_, axis=1)
             bad_ = (s_ < -0.0005) & (lat_ < (an.lat_max or 9.0)) & kept_f
+            if bad_.any() and C.get("gate_exact", True):
+                # the anchor's tangent plane misreads a curved under-layer away from the anchor point (an
+                # armpit 15 mm off: ~3 mm): a flagged vertex is confirmed against the under-layer's
+                # nearest surface point within 3 cm, signed by the interpolated normal there
+                from mathutils.bvhtree import BVHTree as _BVH
+                Tt_ = an.T
+                bv_ = _BVH.FromPolygons([tuple(map(float, v_)) for v_ in Vp], [tuple(map(int, t_)) for t_ in Tt_])
+                Nn_ = sr.vertex_normals(Vp, Tt_) * an.sign
+                for a_ in np.nonzero(bad_)[0]:
+                    q_ = Yj[an.idx[a_]]
+                    loc_, _, f_, _ = bv_.find_nearest(Vector(q_), 0.03)
+                    if loc_ is None:
+                        continue
+                    A_, B_, C_ = Vp[Tt_[f_]]
+                    loc_ = np.array(loc_)
+                    v0_, v1_, v2_ = B_ - A_, C_ - A_, loc_ - A_
+                    d00, d01, d11, d20, d21 = v0_ @ v0_, v0_ @ v1_, v1_ @ v1_, v2_ @ v0_, v2_ @ v1_
+                    den = max(d00 * d11 - d01 * d01, 1e-18)
+                    yy, zz = (d11 * d20 - d01 * d21) / den, (d00 * d21 - d01 * d20) / den
+                    bcc = np.clip(np.array([1 - yy - zz, yy, zz]), 0, 1)
+                    nl_ = bcc / bcc.sum() @ Nn_[Tt_[f_]]
+                    nl_ /= max(np.linalg.norm(nl_), 1e-12)
+                    if float((q_ - loc_) @ nl_) >= -0.0005 and np.linalg.norm(loc_ - P_[a_]) < 0.03:
+                        bad_[a_] = False
+                        plane_only[u] = plane_only.get(u, 0) + 1
             for i in an.idx[bad_]:
                 ord_bad.setdefault(int(i), u)
         gate = set(ord_bad) | body_sh
         res[pname]["pen_rt"] = {"gate": len(gate), "layers": len(ord_bad), "body_shown": len(body_sh),
+                                "plane_only": plane_only,
                                 "body_all": len(body_in),
                                 "by_layer": {u: sum(1 for v_ in ord_bad.values() if v_ == u) for u in set(ord_bad.values())},
                                 "body_depth_mm_max": round(-min([bd[i][0] for i in body_in], default=0.0) * 1000, 1)}
@@ -5252,6 +5279,7 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
 
     S0 = {k_: S[k_].copy() for k_ in G}
     capped = {k_: set() for k_ in G}
+    best = None
     for r in range(C["rounds"] + 1):
         pairs = read()
         short, gate = {}, {}
@@ -5264,6 +5292,11 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 gate[nm_] = gate.get(nm_, 0) + 1
         hist.append({"round": r, "below_trigger": short, "below_-0.5mm": gate, "active": len(act)})
         print(f"[constrain] round {r}: {hist[-1]}", flush=True)
+        # the last rounds trade a few pairs back and forth (a capped vertex's scaled change): keep the
+        # round with the fewest pairs through, the jacket's first (the gate's)
+        score = (sum(v_ for k_, v_ in gate.items() if k_.startswith(("jacket>", "body>"))), sum(gate.values()))
+        if best is None or score < best[0]:
+            best = (score, r, {k_: S[k_].copy() for k_ in G}, {k_: rt_Y[k_].copy() for k_ in G})
         if r == C["rounds"] or not short:
             break
         for key_, v in pairs.items():
@@ -5346,7 +5379,10 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 S[key][:, v] = S0[key][:, v] + dS
             for k in range(K):
                 rt_Y[key][k][idx] = sr.skin(X0[idx] + sr.apply_shapes(S[key][:, idx], Acone[k]), W[idx], Ms[k])
-    return {"rounds": hist, "active": len(act)}
+    for k_ in G:
+        S[k_][:] = best[2][k_]
+        rt_Y[k_][:] = best[3][k_]
+    return {"rounds": hist, "active": len(act), "kept_round": best[1]}
 
 
 def body_rest_co(body):
