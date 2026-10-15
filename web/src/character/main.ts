@@ -12,7 +12,9 @@
 //      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty; dof=only: the DoF
 //      with the rest of the post off) &lut=0 (analytic grade + three's AgX instead of Blender's baked LUTs)
 //      &bounce=0 (no set-bounce environment) &scene=chart (T16 grey chart under the hero rig: chart.glb next
-//      to engine_stage.json) &passcheck=1 (self-test of Output's pass hook, passcheck.ts)
+//      to engine_stage.json) &passcheck=1 (self-test of Output's pass hook, passcheck.ts) &ssss=0 (T17: the
+//      pre-integrated LUT instead of the screen-space SSS pass) &detail=0 (T17: no skin detail tiles, cavity,
+//      transmission)
 //      T19 lighting toggles (params block `light`, the quality tiers' switches): &ltc=0 (T10's shadowed spots
 //      instead of shadowed LTC rects) &pcss=0 (PCF) &contact=0 (no key contact shadows) &specocc=0 (no GTAO
 //      specular occlusion) &sharemaps=0 (a shadow map per twin) &eyeall=0 (the eye light on the eyes only)
@@ -32,7 +34,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DeformRuntime, type RigRules } from './deform';
 import { Poser, PRESETS, applyPreset } from './poses';
 import { ParamStore } from './materials/params';
-import { addHairDepthPrepass, assignMaterials, type Sidecars, type WeaveSidecar } from './materials';
+import { addHairDepthPrepass, assignMaterials, type Sidecars, type SkinDetail, type WeaveSidecar } from './materials';
+import { SSSS_MRT_BYTES, installSSSS, type SSSSHandle } from './ssss';
 import { skinLUT } from './materials/sss';
 import { Output, type AAMode } from './output';
 import { bounceTexture, type BounceJson } from './bounce';
@@ -43,7 +46,7 @@ import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, 
 import { FrameStats, textureBytes } from './hud';
 import { ContactShadows } from './contact';
 import { PassProfiler } from './profile';
-import { TIERS, applyTierParams, gameplayCamera, hasParam, noShadowList, resolveTier, type ResolvedTier, type TierName } from './tiers';
+import { TIERS, applyTierParams, gameplayCamera, noShadowList, resolveTier, type ResolvedTier, type TierName } from './tiers';
 import { PerfMonitor, newSession, perfOverlay } from './perf';
 import { TextureBudget } from './texbudget';
 
@@ -77,6 +80,7 @@ interface ViewerState {
   hairMaps?: Record<string, string>;
   hairPrepass?: number;
   sssLutMs?: number;
+  skinDetail?: unknown;
   gaze?: unknown;
   warnings: string[];
   /** T24: the device limit that decides whether the live hero portrait compiles (eyes bind 18 textures) */
@@ -143,6 +147,95 @@ async function loadWeave(base: string): Promise<WeaveSidecar | null> {
   tile.generateMipmaps = true;
   tile.minFilter = THREE.LinearMipmapLinearFilter;
   return { tile, materials: j.materials };
+}
+
+/** skin_detail.json (T17, blender/character/skin_tex.write_detail_sidecars): the pore and micro tiles
+ * (tiled, mipmapped), the per-part detail maps (region weights, thickness) and the ORM cavity flag. */
+/** T17: same-size RGB(A) PNGs as the layers of one DataArrayTexture (raw values: no colour conversion,
+ * no premultiply; rows top first = v 0, as loadTexture's flipY false), repeat-wrapped, mipmapped. */
+async function loadTileArray(urls: string[]): Promise<THREE.DataArrayTexture | null> {
+  try {
+    const bmps = await Promise.all(
+      urls.map(async (u) => {
+        const r = await fetch(u);
+        if (!r.ok) throw new Error(u);
+        return createImageBitmap(await r.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+      }),
+    );
+    const w = bmps[0]!.width;
+    const h = bmps[0]!.height;
+    if (bmps.some((b) => b.width !== w || b.height !== h)) return null;
+    const data = new Uint8Array(w * h * 4 * bmps.length);
+    const cx = new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+    if (!cx) return null;
+    bmps.forEach((b, i) => {
+      cx.clearRect(0, 0, w, h);
+      cx.drawImage(b, 0, 0);
+      data.set(cx.getImageData(0, 0, w, h).data, i * w * h * 4);
+      b.close();
+    });
+    const t = new THREE.DataArrayTexture(data, w, h, bmps.length);
+    t.format = THREE.RGBAFormat;
+    t.type = THREE.UnsignedByteType;
+    t.colorSpace = THREE.NoColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.needsUpdate = true;
+    return t;
+  } catch {
+    return null;
+  }
+}
+
+async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
+  interface J {
+    tiles: { pore: string; micro: string };
+    materials: Record<string, { detail: string; pore_repeat: number | null; micro_repeat: number | null }>;
+    pore_cells: number;
+    micro_cells: number[];
+    thick_dist_mm: number;
+    cavity_in_orm_b?: boolean;
+    tile_slope_var?: { pore: number; micro: number };
+  }
+  const j = await fetchJson<J>(base + 'skin_detail.json');
+  if (!j) return null;
+  // the two tiles as one 2-layer array texture: one sampled-texture binding, not two (WebGPU allows 16
+  // per fragment stage; with T19's lights and shadow maps the skin was at 17: black frames)
+  const tiles = await loadTileArray([base + j.tiles.pore, base + j.tiles.micro]);
+  if (!tiles) return null;
+  const materials: SkinDetail['materials'] = {};
+  await Promise.all(
+    Object.entries(j.materials).map(async ([name, m]) => {
+      const map = await loadTexture(base + m.detail);
+      if (map) map.anisotropy = 4;
+      if (m.pore_repeat && m.micro_repeat) materials[name] = { map, poreRepeat: m.pore_repeat, microRepeat: m.micro_repeat };
+    }),
+  );
+  const mc = j.micro_cells;
+  return {
+    tiles,
+    materials,
+    poreCells: j.pore_cells,
+    microCells: mc.length ? mc.reduce((a, b) => a + b, 0) / mc.length : 23,
+    thickDistMm: j.thick_dist_mm,
+    cavity: !!j.cavity_in_orm_b,
+    // pre-T17b builds lack the variance: ~ the first build's tiles
+    slopeVar: j.tile_slope_var ?? { pore: 0.02, micro: 0.01 },
+  };
+}
+
+/** The adapter's maxColorAttachmentBytesPerSample (32 = the WebGPU default, also when unknown). */
+async function adapterAttachmentBytes(): Promise<number> {
+  try {
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter(o: object): Promise<{ limits: { maxColorAttachmentBytesPerSample?: number } } | null> } }).gpu;
+    const a = gpu ? await gpu.requestAdapter({ powerPreference: 'high-performance' }) : null;
+    return a?.limits.maxColorAttachmentBytesPerSample ?? 32;
+  } catch {
+    return 32;
+  }
 }
 
 async function loadTexture(url: string): Promise<THREE.Texture | null> {
@@ -647,6 +740,13 @@ async function main(): Promise<void> {
   // bounce env + its own maps), over WebGPU's default 16 per stage; ask for what the adapter offers
   // (Chrome 146+: up to 48 on capable GPUs). SwiftShader offers 16: there the live hero portrait fails.
   const limits = forceWebGL ? {} : await adapterTextureLimits();
+  // T17: the screen-space SSS adds two RGBA16F attachments to the temporal MRT (5 x 8 = 40 bytes per
+  // sample; WebGPU's default limit is 32): ask for the adapter's limit (64 max), or run without it (the LUT).
+  // The tier decides (hero 1, gameplay 0; &ssss= wins), never under MSAA or WebGL.
+  const wantSSSS = tier.flags.ssss === 1 && tier.flags.aa !== 'msaa' && !forceWebGL;
+  const mrtBytes = wantSSSS ? await adapterAttachmentBytes() : 32;
+  const mrtOK = mrtBytes >= SSSS_MRT_BYTES;
+  if (mrtOK) limits.maxColorAttachmentBytesPerSample = Math.min(mrtBytes, 64);
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || perfLive || q.get('timestamps') === '1', requiredLimits: limits });
   await renderer.init();
   state.limits = { max_sampled_textures_per_stage: limits.maxSampledTexturesPerShaderStage ?? 16 };
@@ -654,6 +754,8 @@ async function main(): Promise<void> {
     state.warnings.push('adapter allows 16 sampled textures per shader stage: the live hero portrait needs 18 (eyes); add &shadows=key,rim,kicker');
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
+  const ssssOK = wantSSSS && isWebGPU && mrtOK;
+  if (wantSSSS && !ssssOK) state.warnings.push(`screen-space SSS off (${isWebGPU ? `adapter colour attachment bytes ${mrtBytes} < ${SSSS_MRT_BYTES}` : 'WebGL2'}): the pre-integrated LUT`);
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // Output encodes sRGB itself
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.shadowMap.enabled = true;
@@ -687,7 +789,7 @@ async function main(): Promise<void> {
     state.warnings.push(`no ${glbName(1)}: LOD0 (build with --lod1 or run web/tools/lod1.mjs)`);
     return loader.loadAsync(base + glbName(0), onProgress);
   });
-  const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands, lutJson, bounceJson] = await Promise.all([
+  const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands, lutJson, bounceJson, skinDetail] = await Promise.all([
     glbP,
     fetchJson<RigRules>(base + 'character.rig.json'),
     fetchJson<EngineStage>(base + 'engine_stage.json'),
@@ -697,6 +799,7 @@ async function main(): Promise<void> {
     loadTexture(base + 'skin_hands_curvature.png'),
     q.get('lut') === '0' ? null : fetchJson<GradeLutJson>(base + 'grade_lut.json'),
     q.get('bounce') === '0' ? null : fetchJson<BounceJson>(base + 'set_bounce.json'),
+    tier.flags.detail ? loadSkinDetail(base) : null,
   ]);
   const tLoaded = performance.now();
   let overrides: unknown = paramJson;
@@ -709,7 +812,8 @@ async function main(): Promise<void> {
   }
   const P = new ParamStore(overrides);
   // T24: the tier's switches (tiers.ts; the URL's own switches already folded in) into the params
-  const tierNoop = applyTierParams(P, tier.flags);
+  // T17's detail switch is load-time (loadSkinDetail above), not a param: not a no-op
+  const tierNoop = applyTierParams(P, tier.flags).filter((sw) => sw !== 'detail');
   const output = new Output(renderer, samples, outputOptions(P, aa));
   if (lutJson) output.lut.load(lutJson);
   else state.warnings.push('no grade_lut.json: analytic grade + three AgX (blender/hero/grade.py --lut)');
@@ -717,6 +821,8 @@ async function main(): Promise<void> {
   output.dofAlways = tier.flags.dof === 'only';
   output.dofDebug = q.get('dofview') ?? '';
   if (q.get('passcheck') === '1') installPassCheck(output); // self-test of the pass hook (passcheck.ts)
+  // T17: separable screen-space SSS (ssss.ts) on the temporal paths; ?ssss=0 (or msaa) = the LUT
+  const ssss: SSSSHandle | null = ssssOK ? installSSSS(output, P) : null;
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
 
@@ -747,7 +853,11 @@ async function main(): Promise<void> {
   if (sceneAO && q.get('aoview') === 'normal') output.setDebugAO(sceneAO.normalTexture, true);
   const aaview = q.get('aaview');
   if (aaview === 'raw' || aaview === 'velocity' || aaview === 'hair') output.setDebugTemporal(aaview);
-  const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands), screenAO: sceneAO?.texture ?? null };
+  const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands), screenAO: sceneAO?.texture ?? null, skinDetail, ssss: !!ssss };
+  state.skinDetail = skinDetail
+    ? { materials: Object.fromEntries(Object.entries(skinDetail.materials).map(([k, v]) => [k, { pore_repeat: v.poreRepeat, micro_repeat: v.microRepeat, map: !!v.map }])), cavity: skinDetail.cavity, thick_dist_mm: skinDetail.thickDistMm }
+    : null;
+  if (!skinDetail && tier.flags.detail) state.warnings.push('no skin_detail.json: skin without detail tiles / cavity / transmission (pre-T17 build)');
   if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, aa === 'msaa');
@@ -976,6 +1086,7 @@ async function main(): Promise<void> {
     grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)',
     bounce: bounceTex ? { gain: P.get('bounce.gain'), irradiance: bounceJson?.irradiance ?? null } : null,
     passes: output.passList.map((p) => `${p.stage}:${p.name}${p.enabled === false ? ' (off)' : ''}`),
+    skin: { ssss: ssss ? ssss.info() : null, detail: state.skinDetail ?? null },
     tier: { name: tier.tier, flags: tier.flags, url_switches: tier.url, noop: tierNoop, lod: lodLoaded, glb: glbName(lodLoaded), gtao_resolution: sceneAO?.resolution ?? null, no_shadow: stage.noShadow },
     lighting: {
       ltc: stage.areaMode,
@@ -1109,7 +1220,7 @@ async function main(): Promise<void> {
     mon.start();
   }
   applyPassSwitches();
-  if (!output.passList.some((p) => p.name === 'ssss') && !hasParam(P, 'skin.ssss')) tierNoop.push('ssss');
+  if (tier.flags.ssss && !output.passList.some((p) => p.name === 'ssss')) tierNoop.push('ssss'); // T17: wanted, not installed (adapter / WebGL)
 
   // ------------------------------------------------------------------ loop
   state.phase = 'running';
