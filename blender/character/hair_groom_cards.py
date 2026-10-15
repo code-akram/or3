@@ -157,7 +157,8 @@ CARDS = {
                     "outer": 1.0, "flyone": 0.95},
     # specular scale per layer, in UV1 u ("strand"; the viewer multiplies both lobes by it): the
     # front locks are flat, unoccluded cards facing the camera and read as white ribbons at full
-    "layer_spec": {"front": 0.4, "under": 0.7},
+    # T20: front 0.4 -> 0.8 (fitted with the T20 lobes: the key-lit front falls sat at 0.7x Cycles)
+    "layer_spec": {"front": 0.8, "under": 0.7},
     "lock_sigma": 0.08,
     "top_lift": {"pct": 90, "max_m": 0.015},       # T15: 80 / 12 mm (the hero contour stood 1-2 mm outside)
     "material": {"roughness": 0.55, "specular": 0.25},
