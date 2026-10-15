@@ -8,7 +8,7 @@ The suit is being rebuilt as real tailoring: drafted panels, sewn and draped (nu
 | 2 | UVs from panels (grain), port the `suit_textures.py` marks | **done** |
 | 2b | item-1 review points 1–4 (back collar roll, vents visible, front quarters cutaway, pressed lapel edge) | **done** (point 5, the back skirt, done with item 3: the jacket over the made trousers) |
 | 3 | trousers, plus review point 5 (the jacket re-draped over them) | **done** |
-| 4 | waistcoat | |
+| 4 | waistcoat | **done** (open: the back neck stands off in profile, the shoulder-seam end points) |
 | 5 | shirt (collar band and fall to the `suit_neck.py` frame) | |
 | 6 | rigging (weights, Dem Bones, correctives); re-measure the armpit/cuff hinges | |
 | 7 | per-pose wrinkle maps | |
@@ -403,3 +403,83 @@ Run `20261015T015643Z-t13c-p5c`: the jacket's k5 draft and options, re-draped wi
 - **Side adjusters and the band's closure** (the extension and hook) are not built. In a three-piece suit the waistcoat covers the band, so they are left until the waistcoat (item 4) shows whether anything of the band is visible.
 - **LOD2 specks** (above) go to item 8: a single-sided outer sheet for LOD2, or decimation that keeps the shell's two layers apart.
 - **The final layering** (shirt, then trousers, then waistcoat, then jacket) is settled in items 4–5. The jacket is re-draped once more over the made waistcoat.
+
+## Item 4: the waistcoat
+
+Runs (base `20261014T205840Z-t15-a5`, over d5's made trousers via `--trousers-from`):
+
+- `20261015T023852Z-t13w-a8` is the final drape: clay frames, LODs.
+- `20261015T024450Z-t13w-a8det` is its determinism twin. X1, Xw and X2 hash the same: `495a1524`, `a52ad6fb`, `1361f041`.
+- `20261015T025525Z-t13w-a8b` is a8's drape made up again with the matte lining (`--from-run`). Its `beauty_*.png` are the Cycles frames.
+- `t13w-a1`…`a7` and `a9` were the way there (below).
+
+Gate pictures are in `data/build/t13/gate/phaseB/item4/`:
+
+- `beauty_sheet.png`: lofted | pattern.
+- `beauty_pattern_close_{v,point,wwelt,breast,wback,wside}.png`.
+- `grain_sheet.png` and `beauty_grain_close_{v,point}.png`.
+- `beauty_lod{1,2}_*.png`; the clay `pattern_*.png`; `pattern.png`.
+- `clay_back_neck.png` and `clay_profile_neck.png`: the open point below.
+
+### What I see (frames at 100 %, before the numbers)
+
+- **Front.** A single-breasted waistcoat with a V to 17 cm above the jacket's button. Four buttons are done up and the fifth left undone: its buttonhole shows as a corded slit on the left front, with no button showing. Below the last button the fronts cut away to two points with an inverted V between them, and the hem rises from the points to the side seams.
+  - Lower welts on both sides and a breast welt on the left.
+  - Pick stitching 6 mm in from the front edge, the V and the hem.
+  - A front dart from under the breast welt through the lower welt to just above the hem.
+  - The V's edge sits inside the lapels' line, over the shirt and tie.
+- **Back.** The back is lining (Cycles: a dark satin), cut from the block's back with a CB seam. It covers the trousers' band all round: the side and back hem are about 2.5 cm below the band top. The back neck is scooped and sits under the shirt collar, which shows above it all round.
+- **Grain.** The warp runs straight down each front, parallel to the button edge.
+- **Faults I can see:**
+  - **The back neck in profile** (`clay_profile_neck.png`). The back neck stands about 2 cm off the shirt collar behind the nape: the upper back bridges from the blades to the collar instead of lying in. The jacket's collar covers it once the jacket is on, but the jacket must go over it (item 8's layering). Tried: a closer neck point (`np_out` 1.0, run a9), which made no visible difference.
+  - **Small points at the shoulder seam's two ends**, a few millimetres each (`close_wback`, top corners): the 33° hinge in the numbers.
+  - **The lower welt bends slightly** where the dart runs under it. It is laid out with the dart closed, but the drape has a soft crease along the sewn dart.
+  - **The back lining follows the body closely** and shows the blades and spine. A real waistcoat back hangs a little freer; a back strap would also show. The strap is not built.
+
+### What was built
+
+- **`blender/character/suit_waistcoat_pattern.py`** (new): the waistcoat drafted from the jacket's block (`suit_pattern.draft`) with waistcoat options.
+  - Block options: chest ease 6 cm, waist 5 cm; the armhole 5 cm under the armpit; the shoulder ending 2.5 cm inside the acromion with no pad; the neck point 1.8 cm out.
+  - Suppression: CB 0.28, back/side 0.50, front dart 0.22, none at the side front.
+  - The block's side body and front become one front panel, so the waistcoat has the classic two pieces: a front with a fisheye dart, and a lining back.
+  - Points, V and buttons are placed from the trousers' band top (`band_top_z`) and the jacket's button.
+  - Notches: buttons, buttonholes, welts.
+  - Because the front and back come from the jacket's block, the jacket's `Placer` and `build_cloth` place and sew them unchanged.
+- **The drape** (`suit_spike.py --waistcoat`, `main_waistcoat`):
+  - `drape_xpbd` now takes a list of button pairs (`C["buttons"]`); the jacket keeps its one.
+  - Colliders: shirt, tie, and the made trousers.
+  - **Holds.** Stage 1 holds the shoulder seams and the hem where they were placed; stage 2 holds the shoulders only, lightly. Without holds, stage 1 slid the whole waistcoat 5 cm up (a2). Holding the back neck rippled it (a6, 83° at the CB) or pinched it (a5, 69°).
+  - **The draft's fixes.**
+    - The hem is cut 2.5 cm lower than the block's straight drop (`hang_comp_cm`): the sewn waistcoat hangs that much higher, measured in a3–a5.
+    - The back neck is scooped 3 cm at the CB: level with the neck point, it rode 4.6 cm up the shirt collar (a7).
+- **`blender/character/suit_waistcoat_detail.py`** (new): the made waistcoat.
+  - Shell: the fronts 2.0 mm thick (wool, canvas, lining), the back 0.8 mm of lining, with half-round turned edges everywhere.
+  - Welts: laid out with the dart closed (`_dart_warp`); patched straight over the dart, a1's welt broke in two at it.
+  - Buttons: four 15 mm buttons on the left front.
+  - Marks: seams and dart, pick stitching, the buttonholes' corded lips.
+  - Its own atlas (`t13w_*`), with a twill lining (rough 0.55) in place of the jacket's satin, which read as black chrome across the back.
+- `suit_beauty.py --garment waistcoat` gives the waistcoat's Cycles frames over the made trousers.
+
+### Numbers (a8 / a8b)
+
+| | value |
+|---|---|
+| draft | half chest 55.2 cm, half waist 41.4; side hem drafted at z 1.104, points 1.044, top button 1.329 m; CB 47.6 cm; side seam 28.6 / 28.6; shoulder 12.8 / 12.2 (back eased) |
+| where it hangs | hem z 1.065 (points) to 1.134 (back); the band top is at 1.159. Top button 1.33 |
+| seams after stage 1 | gap mean 0.51 mm, p95 1.73, max 4.15. The hem hold slows the sewing; it reaches the 40 extra frames allowed |
+| strain against the flat pattern | mean 1.6 %, p99 11.4 % |
+| inside the body, shirt, tie or trousers | 0; 0 vertices pushed |
+| left front over the right at the buttons | 3.8–4.9 mm |
+| buttons and welts over the drape | buttons min +1.32 mm, welts +0.38, 0 below |
+| hinges over 20° | 12: shoulder 6 (34° max, at the neck end), CB 4 (30°, the back neck), side 2 (23°, the underarm) |
+| texel density | shell 0.94 / 0.99 / 1.04 (p05 / median / p95); welts 0.94 / 0.98 / 1.14; LOD1 0.84 / 1.00 / 1.24; LOD2 0.78 / 0.99 / 1.29; atlas 0.28 mm/px |
+| tris | LOD0 **22,456** (shell 16,128, welts 3,024, buttons 3,304); LOD1 8,982; LOD2 3,368 |
+| determinism | a8 and a8det: X1, Xw and X2 hashes equal |
+| checks | `npm run build` ok; containment 73/73; provenance audit 0 errors, 0 warnings |
+
+### What is left in item 4's scope
+
+- The back neck's stand-off in profile, and the shoulder seam's end points.
+- The back strap and buckle (they show only with the jacket off).
+- The welt's slight bend at the dart.
+- The jacket re-draped over the made waistcoat (and the made trousers): it goes with item 5, once the shirt is made, so the jacket drapes over the final layers once.
