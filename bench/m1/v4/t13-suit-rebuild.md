@@ -862,3 +862,46 @@ Gate sheets, in `data/build/t13/gate/phaseB/item6c/`:
    - the A/B engine frame of `lookdev t13c-made1` (made suit forced in);
    - the LOD choice, with T24;
    - then the extras: four-in-hand tie, collar-fall tabs, atlas packing ≥ 70 %, rever UV roll, lapel sheen patch, LOD2 specks, waistcoat shoulder points and welt bend, the 60k gameplay LOD1, and the NOTES update.
+
+### Pickup list, revised after the coordinator's decisions (do these in this order)
+
+1. **Fix the sim faults at the source, then re-run the 35 sims** (`suit_spike.sh ... -- --posed <q7>`).
+   - The walk sleeve hole: shirt shows through the upper arm in the row-5 poses of `posed_sheet_0`.
+   - The front-overlap tear with the knee raised (row 4).
+   - Cuffs crumpled in nearly every pose, with blobs at the wrist when the arms are out. Look at the collisions between the sleeve, the shirt cuff and the hand. Try cuff stiffness, the cuff-to-wrist distance, and self-collision there.
+   - The grainy, stippled patch on the left front in the arm-raised poses (row 3, columns 1 and 3).
+   - Shirt patches poking through the sleeves (row 2).
+   - When the 35 sims are re-run, send main a progress note with the new sheets.
+2. **Penetration: cull first, then wrap-bind.** Gate: 0 runtime jacket vertices inside, in every pose.
+   - Delete the shirt and waistcoat faces the jacket hides in all 35 poses.
+   - Keep:
+     - the collar;
+     - the front V;
+     - the shirt cuff, about 1.5 cm past the sleeve;
+     - anything visible when the front opens.
+   - Wrap-bind what is left near the jacket to the jacket's runtime. The cull also cuts triangles.
+3. **Collar band: 10–17 mm in at least 32 of 35 poses.**
+   - Pin the shirt collar band to the neck frame, or constrain it there, or add a pose-driven corrective.
+   - Fix the jacket neck riding up when the arms come forward. This is a sim fault.
+   - Report the poses that still miss.
+4. **Budget: character LOD0 ≤ 190k (cap), target ≤ 170k.**
+   - Get there by culling hidden faces (item 2).
+   - Jacket LOD1 at hero distance only if it holds up at 100 % in the close-up and half-body views. Show that A/B if it is used.
+5. **The body hash does not match.**
+   - The full build's captured body hashes to `03b724119b2a` (`lookdev 20261015T074544Z-t13c-made1`, `notes.suit.body_hash`). The spike's hashes to `f7053e02ea3b`.
+   - So the A/B build found no cache record and stayed lofted. It does show the new cloth path on the lofted suit.
+   - The spike's `capture_body` runs create, edit_base, rig.add and suit.add. The build also runs head_parts and hair.add before suit.add, and maybe with a different config.
+   - Find which step changes the body. Then either drape the made suit on the build's body, or make the hash ignore what the suit never touches. Then rebuild the A/B and take its engine frame (port 8795).
+6. **Keep the default lofted until the guards pass.**
+   - The skirt keeps the follow bones with fitted gains; the chest and side are left to the correctives. This is accepted.
+   - Twin determinism: compare c1det's `hash` with c1's (`dc4d2b86` / `ed9d8562` / `203a6b81`). Add `--twin posed=<run>` to `suit_made_cache.py`.
+7. **Item 8 extras:**
+   - four-in-hand tie;
+   - collar-fall tabs;
+   - atlas packing ≥ 70 %;
+   - rever UV roll;
+   - lapel sheen patch;
+   - LOD2 specks;
+   - waistcoat shoulder points and welt bend;
+   - the 60k gameplay LOD1, with T24;
+   - the NOTES update.
