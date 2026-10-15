@@ -214,7 +214,7 @@ unset DATA
 
 echo "== pre-commit hook (throwaway repo)"
 G="$T/repo"
-mkdir -p "$G/tools/hooks" "$G/pipeline/likeness" "$G/bench/m1/v3" "$G/provenance" "$G/web/public" "$G/docs" "$G/bench/m0/img"
+mkdir -p "$G/tools/hooks" "$G/pipeline/likeness" "$G/bench/m1/v3" "$G/provenance" "$G/web/public" "$G/docs" "$G/bench/m0/img" "$G/bench/ref/plates"
 cp "$REPO/tools/hooks/pre-commit" "$REPO/tools/hooks/check_staged.py" "$REPO/tools/hooks/binary_policy.py" "$G/tools/hooks/"
 cp "$REPO/pipeline/likeness/containment.py" "$G/pipeline/likeness/"
 git -C "$G" init -q
@@ -252,6 +252,9 @@ try_commit refuse "flac"                                "docs/take.flac"        
 try_commit refuse "opus"                                "docs/take.opus"          'OggS'
 try_commit refuse "mp4"                                 "docs/clip.mp4"           'x'
 try_commit pass   "svg is not a raster"                 "web/public/icon.svg"     '<svg/>'
+# blind-test plates (bench/m1/plates.py): the whole dir is local only, images and sidecars alike
+try_commit refuse "plate photo under bench/ref/plates"  "bench/ref/plates/p1.jpg" 'JFIF'
+try_commit refuse "plate crop sidecar (text) in plates" "bench/ref/plates/p1.jpg.crop.json" '{"box": [0, 0, 10]}'
 try_commit pass   "allowlisted legacy m0 image"         "bench/m0/img/chunk-kabukicho-alley.png" 'PNG'
 
 echo "== provenance/audit.py --check-files (repo-wide binary policy, catches --no-verify)"

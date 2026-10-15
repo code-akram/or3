@@ -174,9 +174,10 @@ export function fallbackStage(model: THREE.Object3D): EngineStage {
       light_specs: {
         key: { color: [1.755, 0.849, 0.271], ratio: 1, size: [0.3, 0.3], az: 55, el: 30, dist: 1.5 },
         wrap: { color: [1.755, 0.849, 0.271], ratio: 0.25, size: [1.5, 1.5], az: 35, el: 10, dist: 2 },
-        rim: { color: [1, 0.06, 0.42], ratio: 2.2, size: [0.3, 1.5], az: -125, el: 20, dist: 1.5 },
-        kicker: { color: [0.02, 0.85, 0.8], ratio: 1.2, size: [0.3, 1.2], az: 135, el: 15, dist: 1.6 },
-        fill: { color: [0.55, 0.7, 1], ratio: 0.08, size: [2, 2], az: -55, el: -5, dist: 2.5 },
+        // T25 (rig.py HERO_LIGHTS / shots.RIMS): rims at or below the key; the fill is the set's bounce (4,800 K)
+        rim: { color: [1, 0.06, 0.42], ratio: 1, size: [0.3, 1.5], az: -125, el: 20, dist: 1.5 },
+        kicker: { color: [0.02, 0.85, 0.8], ratio: 0.7, size: [0.3, 1.2], az: 135, el: 15, dist: 1.6 },
+        fill: { color: [1.241, 0.957, 0.719], ratio: 0.15, size: [3, 2.5], az: -60, el: -20, dist: 2.5 },
       },
       shots: {},
     },

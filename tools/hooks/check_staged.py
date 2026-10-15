@@ -7,6 +7,8 @@ Refuses, for every added, copied, modified or renamed path in the index:
   * a binary raster, array, mesh, audio or video file anywhere in the repo, unless its exact path is
     in the allowlist in tools/hooks/binary_policy.py (reports link to private/ or data/ instead;
     `git add -f` does not bypass this, so a deliberate override is an allowlist edit in the same commit);
+  * anything under bench/ref/plates/ (the blind-test photographs of bench/m1/plates.py and their
+    crop sidecars: local only, gitignored);
   * a .json / .jsonl blob carrying likeness content as pipeline/likeness/containment.py defines it:
     a "fan" key at any depth or a string naming private/likeness/ (e.g. a fan build's stats config
     copied into provenance/mesh.jsonl). Malformed JSON is checked for those markers as text.
@@ -37,9 +39,13 @@ ALLOWED = [re.compile(p) for p in (
     r"^bench/m1/v\d+/[^/]+\.md$",           # track briefs and reports (text only)
 )]
 TEXT_MARKERS = re.compile(r'"fan"\s*:|' + re.escape(containment.MARKER))
+# Blind-test plates (bench/m1/plates.py): photographs and their sidecars stay local, whatever the type
+PLATES = "bench/ref/plates/"
 
 
 def problems(path):
+    if path.startswith(PLATES):
+        yield "blind-test plate dir (local only; licence records go in provenance/plates.jsonl)"
     if NAMED.search(path) and not any(a.match(path) for a in ALLOWED):
         yield "likeness-named path outside the allowlist"
     why = binary_policy.binary_problem(path)
