@@ -282,6 +282,7 @@ def shot(ch, name, rules, groups_of):
         "subject": gl(cam["subject"]), "aim": gl(cam["aim"]),
         "eyes": {"l": gl(ch.eyes()[0]), "r": gl(ch.eyes()[1])},
         "exposure": rig.HERO_EXPOSURE + spec.get("ev", 0.0),
+        "rim_key": {k: round(v, 4) for k, v in rig.rim_key_ratios(spec.get("lights")).items()},
         "gaze": gz,
         "skipped": ["set", "haze", "rain", "beads"],
         "lights": lights,
@@ -341,6 +342,7 @@ def main(argv):
         "hero": {
             "e_key": rig.HERO_E, "exposure": rig.HERO_EXPOSURE, "look": rig.HERO_LOOK,
             "eye_diffuse": rig.EYE_DIFFUSE,
+            "rim_max": rig.RIM_MAX,
             "grade": {k: G[k] for k in ("slope", "offset", "power", "saturation", "black_lift",
                                         "vignette_ev", "wb_kelvin")}
             | {"wb_rgb": blackbody(G["wb_kelvin"]) if G.get("wb_kelvin") else [1.0, 1.0, 1.0]},

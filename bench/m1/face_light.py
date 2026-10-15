@@ -45,10 +45,20 @@ def read(path):
         sys.exit(f"face_light: cannot read {path}")
     spec = i.spec()
     a = np.asarray(i.read_image(format="float"), dtype=np.float64)
-    i.close()
     names = list(spec.channelnames)
     if a.ndim == 2:
         a = a[..., None]
+    # a stage multilayer EXR keeps the object index in its own part (subimage)
+    k = 1
+    while i.seek_subimage(k, 0):
+        sn = list(i.spec().channelnames)
+        if any("Object Index" in n or "IndexOB" in n for n in sn):
+            b = np.asarray(i.read_image(format="float"), dtype=np.float64)
+            a = np.concatenate([a, b if b.ndim == 3 else b[..., None]], -1)
+            names += sn
+            break
+        k += 1
+    i.close()
 
     def ch(suffixes):
         for s in suffixes:
@@ -60,7 +70,7 @@ def read(path):
     if None in (r, g, b):
         r, g, b = 0, 1, 2
     rgb = a[..., [r, g, b]]
-    m = ch(["IndexOB.X", "IndexOB.V", "IndexOB"])
+    m = ch(["Object Index.X", "IndexOB.X", "IndexOB.V", "IndexOB"])
     al = ch(["Combined.A", "A"])
     mask = (a[..., m] > 0.5) if m is not None else (a[..., al] >= 0.99) if al is not None else None
     return rgb, mask
@@ -122,7 +132,7 @@ def cmd_lights(a):
 
 
 def cmd_frame(a):
-    rgb, _ = read(a.file)
+    rgb, mask = read(a.file)
     if a.kind == "standard":
         rgb = srgb_decode(rgb) / 2.0 ** a.exposure
     elif a.kind == "display":
@@ -133,6 +143,9 @@ def cmd_frame(a):
     b = boxes(lum, s, off)
     res = {"file": os.path.abspath(a.file), "kind": a.kind, "scale": s, "boxes": b,
            "cheek_lit_shadow": b["lit"] / max(b["shadow"], 1e-9)}
+    if mask is not None and mask.any() and not mask.all():
+        # the character's tonal floor (the object index of a stage EXR): how dark its dark side goes
+        res["character_percentiles"] = {f"p{q}": float(np.percentile(lum[mask], q)) for q in (5, 10, 25, 50, 90)}
     out(res, a.json)
     print(f"{os.path.basename(a.file)}: cheek lit:shadow {res['cheek_lit_shadow']:.2f} "
           f"(lit {b['lit']:.4f}, shadow {b['shadow']:.4f}; {a.kind})")

@@ -13,22 +13,29 @@ shift (rule of thirds; + moves the subject left), exposure offset (EV), and
 the grade's painterly strength. Shifts are fractions of the frame
 height (vertical sensor fit): shift_y -0.16 puts the aim point at the upper third. Light tuples: (colour or K, ratio, (w, h) m,
 azimuth deg from the camera axis (+ = camera-left), elevation deg, distance).
+T25 rules: no rim above its shot's key (rig.RIM_MAX, rig.rim_key_ratios), and
+twins only on hair (scalp by default, beard opt-in) apart from the sign shot's
+cloth twin.
 """
 
 from hero.rig import KEY_K
 from hero.sets import NEON
 
 LAND = (1920, 1080)
-# Stronger neon rims for the hero shots than the shared rig (1.4 / 0.8): in
-# the set the rims must also beat the sign spill to separate hair and suit.
-RIMS = {"rim": (NEON["magenta"], 2.2, (0.3, 1.5), -125.0, 20.0, 1.5),
-        "kicker": (NEON["teal"], 1.2, (0.3, 1.2), 135.0, 15.0, 1.6)}
+# The neon rims of the alley shots: the sets' magenta and teal, at or below
+# the key (rig.RIM_MAX, T25). They were 2.2 / 1.2 so the rims would beat the
+# sign spill; that made every portrait a rim-lit one, with the magenta rim
+# out-shining the key on the shadow cheek. The separation of the dark hair
+# and suit from the set now comes from the rims at key level plus the set
+# fill (rig.HERO_LIGHTS "fill").
+RIMS = {"rim": (NEON["magenta"], 1.0, (0.3, 1.5), -125.0, 20.0, 1.5),
+        "kicker": (NEON["teal"], 0.7, (0.3, 1.2), 135.0, 15.0, 1.6)}
 POSTER = (1152, 2048)
-# The suit under the RIMS (bust, back, walk): a cloth twin of the rim and
-# kicker at 30 % saturation, 0.75 energy, so the black jacket's rim side
-# reads black, not plum, and the kicker leaves no cyan glint (rig.twin_plan).
-# Per light, so the flagged cool fill keeps lighting the suit as it did.
-CLOTH_TWIN = {"cloth": {"rim": (0.3, 0.75), "kicker": (0.3, 0.75)}}
+# T25: no cloth twin under the RIMS any more (bust, back, walk; it was a
+# cloth twin of the rim and kicker at 30 % saturation, 0.75 energy): the
+# jacket takes the neon's own colour, as cloth does in a photograph. The
+# sign shot keeps its cloth twin (T3: a black suit under a magenta key read
+# purple) as the one non-hair twin.
 
 SHOTS = {
     # 1. Rain portrait: 85 mm head and shoulders, 3/4, f/2 on the near eye.
@@ -37,6 +44,8 @@ SHOTS = {
                      lights=dict(RIMS), ev=0.0),
     # 2. Under the sign: 50 mm full body, camera at 1.1 m; the magenta sign
     # above-right is the key, the teal sign across the street 0.5, sodium 0.3.
+    # Its cloth twin (30 % saturation, 0.75 energy on every saturated light)
+    # is the one non-hair twin left (T3: the suit read purple under the key).
     "sign": dict(cam="lens=50,az=20,h=1.1,aim=body,frame=3.4,f=4", pose="stand", res=POSTER, shift=0.0,
                  shift_y=0.06, flag=("eye",),
                  haze=0.012, rain=2200,
@@ -46,20 +55,20 @@ SHOTS = {
                          "rim": (NEON["magenta"], 0.9, (0.3, 1.5), -125.0, 20.0, 1.5),
                          "wrap": None},
                  twin={"cloth": (0.3, 0.75)}, ev=0.5),
-    # 3. Profile, teal: 100 mm bust profile; teal rim 0.9 from behind the
-    # face, amber key 0.3. The silhouette shot. The rim sits at az 160 (20 deg
-    # off the back axis, not 40): at 140 it reached the forward-facing cheek
-    # plane through the gap under the hair and blew out to a pale blob below
-    # the eye; at 160 it grazes the nose, brow and beard edge only. The skin
-    # gets a softer twin (70 % saturation, 0.8 energy) so the brow ridge
-    # holds a teal line, not a cyan streak.
+    # 3. Profile, teal: 100 mm bust profile; teal rim from behind the face,
+    # amber key from the front. The silhouette shot. The rim sits at az 160
+    # (20 deg off the back axis, not 40): at 140 it reached the forward-facing
+    # cheek plane through the gap under the hair and blew out to a pale blob
+    # below the eye; at 160 it grazes the nose, brow and beard edge only.
+    # T25: rim 2.5 / key 0.3 -> 0.6 / 0.6 (rims <= key) and the skin twin
+    # dropped (it only tamed the 2.5 rim's cyan streak on the brow); the beard
+    # keeps its hair twin (T3's teal beard edge); ev 0.4 -> -0.4 for the 2x key.
     "profile": dict(cam="lens=100,az=90,el=0,aim=head,frame=0.6,f=2.8", pose="stand_profile", res=LAND,
                     shift=0.12, haze=0.01, rain=500, beads=35,
-                    lights={"key": (KEY_K, 0.3, (0.3, 0.3), 40.0, 25.0, 1.5), "wrap": None,
-                            "rim": (NEON["teal"], 2.5, (0.3, 1.5), 160.0, 15.0, 1.4),
-                            "kicker": (NEON["magenta"], 0.35, (0.3, 1.2), -135.0, 20.0, 1.6)},
-                    twin={"skin": {"rim": (0.7, 0.8), "kicker": (0.7, 0.8)},
-                          "beard": {"rim": (0.4, 1.0), "kicker": (0.4, 1.0)}}, ev=0.4),
+                    lights={"key": (KEY_K, 0.6, (0.3, 0.3), 40.0, 25.0, 1.5), "wrap": None,
+                            "rim": (NEON["teal"], 0.6, (0.3, 1.5), 160.0, 15.0, 1.4),
+                            "kicker": (NEON["magenta"], 0.3, (0.3, 1.2), -135.0, 20.0, 1.6)},
+                    twin={"beard": {"rim": (0.4, 1.0), "kicker": (0.4, 1.0)}}, ev=-0.4),
     # 4. The draw: 35 mm full body, camera at 1.2 m, az 20 (Track H: at az 5
     # the muzzle points down the lens and the gun reads as a dark square);
     # bladed high-ready holding the pistol two-handed (poses.HOLD); a hard
@@ -74,7 +83,9 @@ SHOTS = {
     # 5. Hands and cuff: 100 mm, the right hand at the left cuff, shoe and
     # trouser break in frame (a tall frame from the cuff to the floor).
     "hands": dict(cam="lens=100,az=28,h=0.8,aim=cuff_feet,frame=1.45,f=5.6", pose="cuff", res=POSTER, shift=0.0,
-                  shift_y=0.1, haze=0.006, rain=0, lights={"key": (KEY_K, 0.8, (0.3, 0.3), 55.0, 30.0, 1.5)}, ev=0.0),
+                  shift_y=0.1, haze=0.006, rain=0,
+                  lights={"key": (KEY_K, 0.8, (0.3, 0.3), 55.0, 30.0, 1.5),
+                          "rim": ((1.0, 0.18, 0.55), 0.8, (0.3, 1.5), -125.0, 20.0, 1.5)}, ev=0.0),   # rim <= key
     # 6. Eye close-up: 135 mm from 0.73 m, eyes and brow, gaze 5 deg off
     # camera; the base (skin-direction) key, eye light 0.3. f/8 focused 6 mm in
     # front of the near cornea (~14 mm in focus: far cornea -3 mm to +13 mm,
@@ -86,15 +97,14 @@ SHOTS = {
                 lights={"eye": (6500, 0.3, (0.05, 0.05), 0.0, 0.0, None)}, ev=0.0),
     # brief: bust 3/4, back 3/4 (hair and suit back), walk.
     "bust": dict(cam="lens=50,az=35,el=3,aim=chest,frame=0.95,f=2.8", pose="stand", res=LAND, shift=-0.12,
-                 shift_y=0.1, haze=0.008, rain=500, beads=35, gaze=0.0, neon=0.6, lights=dict(RIMS), twin=CLOTH_TWIN,
-                 ev=0.0),
+                 shift_y=0.1, haze=0.008, rain=500, beads=35, gaze=0.0, neon=0.6, lights=dict(RIMS), ev=0.0),
     # back: from behind, the magenta rim lands on the broad back of the jacket
-    # (plum, not black) and the teal kicker on the near elbow (a cyan glint);
-    # the suit gets a cloth twin of both at 30 % saturation, 0.75 energy.
+    # and the teal kicker on the near elbow, in their own colours (T25: no
+    # cloth twin; the rims are at key level now, not 2.2 / 1.2).
     "back": dict(cam="lens=50,az=150,el=4,aim=chest,frame=1.15,f=2.8", pose="stand", res=LAND, shift=0.1, shift_y=0.1,
-                 haze=0.008, rain=500, beads=35, lights=dict(RIMS), twin=CLOTH_TWIN, ev=0.2),
+                 haze=0.008, rain=500, beads=35, lights=dict(RIMS), ev=0.2),
     "walk": dict(cam="lens=35,az=-35,h=1.0,aim=body,frame=2.4,f=5.6", pose="walk", res=LAND, shift=-0.1,
-                 haze=0.012, rain=1600, lights=dict(RIMS), twin=CLOTH_TWIN, ev=0.0),
+                 haze=0.012, rain=1600, lights=dict(RIMS), ev=0.0),
 }
 ORDER = ["portrait", "sign", "profile", "draw", "hands", "eye", "bust", "back", "walk"]
 # shots that get a 100 % crop with --crop close (preview renders at 50 %)
