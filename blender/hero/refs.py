@@ -13,9 +13,12 @@
     dof     the bokeh reference: the parity portrait twice, DoF on (the hero camera: f/2, 7 blades,
             focus on the near cornea) and off, as a 100 % border crop around the head;
             dof.json with the thin-lens CoC predicted at the visible ear.
+    lights  T25: the parity portrait's 100 % head crop (HEAD_CROP) with every rig light, then one light (and
+            its twins) at a time, scene-linear, alpha = the character -> exr/lights_<tag>.exr, lights.json;
+            bench/m1/face_light.py measures rim / key and the cheek's lit : shadow from them.
 
     blender -b -t 6 --factory-startup --python-exit-code 1 --python blender/hero/refs.py -- \\
-        --in RUN/character.blend --out DIR --mode chart|bounce|dof [--samples N] [--lights key,fill (chart)]
+        --in RUN/character.blend --out DIR --mode chart|bounce|dof|lights [--samples N] [--lights key,fill (chart, lights)]
 
 (run Cycles inside `flock /tmp/or3-cycles.lock`). Never writes next to the input .blend.
 """
@@ -534,13 +537,50 @@ def mode_dof(ch, out, samples):
     return rec
 
 
+# ------------------------------------------------------------------ lights
+HEAD_CROP = (766, 74, 540, 540)   # x, y, w, h in the 1920 x 1080 portrait: T19's 100 % head crop
+
+
+def mode_lights(ch, out, samples, only=None):
+    """T25: the parity portrait's head crop (HEAD_CROP, 100 %) once with every rig light and once per
+    light (each with its twins), scene-linear, film transparent so alpha is the character mask (the
+    floor is out of the crop). bench/m1/face_light.py measures them (rim / key, cheek lit : shadow)."""
+    spec, cam, settings, made, _ = setup_portrait(ch, "void", parity=True, dof=False, samples=samples)
+    sc = bpy.context.scene
+    sc.render.film_transparent = True
+    x, y, w, h = HEAD_CROP
+    border = (x / RES[0], (x + w) / RES[0], 1 - (y + h) / RES[1], 1 - y / RES[1])
+    names = sorted({n.split("_")[0] for n in made})
+    tags = ["all"] + [n for n in names if not only or n in only]
+    os.makedirs(os.path.join(out, "exr"), exist_ok=True)
+    rec = {"version": 1, "shot": SHOT, "crop": list(HEAD_CROP), "res": list(RES), "lights": {},
+           "exposure": rig.HERO_EXPOSURE + spec.get("ev", 0.0), "samples": sc.cycles.samples,
+           "rig": {n: {"power_w": round(o.data.energy, 4), "color": [round(c, 4) for c in o.data.color],
+                       "use_temperature": bool(o.data.use_temperature),
+                       "kelvin": o.data.temperature if o.data.use_temperature else None,
+                       "size": [round(o.data.size, 3), round(o.data.size_y, 3)]} for n, o in made.items()},
+           "note": "void set, parity settings (1 px filter, no haze/rain/beads/wet, DoF off); exr/lights_<tag>.exr "
+                   "is the head crop with only that light and its twins (all: every light)"}
+    for tag in tags:
+        for n, o in made.items():
+            o.hide_render = not (tag == "all" or n.split("_")[0] == tag)
+        exr = os.path.join(out, "exr", f"lights_{tag}.exr")
+        s = render_exr(exr, RES, border)
+        rec["lights"][tag] = {"exr": f"exr/lights_{tag}.exr", "render_s": s,
+                              "members": sorted(n for n in made if tag == "all" or n.split("_")[0] == tag)}
+        with open(os.path.join(out, "lights.json"), "w") as f:
+            json.dump(rec, f, indent=1)
+        print(f"[refs] lights {tag}: {s} s", flush=True)
+    return rec
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="refs.py")
     ap.add_argument("--in", dest="inp", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--mode", choices=["chart", "bounce", "dof", "probe"], required=True)
+    ap.add_argument("--mode", choices=["chart", "bounce", "dof", "lights", "probe"], required=True)
     ap.add_argument("--samples", type=int, default=0)
-    ap.add_argument("--lights", help="chart: only these rig lights, e.g. key,fill (per-light decomposition)")
+    ap.add_argument("--lights", help="chart / lights: only these rig lights, e.g. key,fill (per-light decomposition)")
     a = ap.parse_args(argv)
     out = os.path.abspath(a.out)
     if os.path.dirname(os.path.abspath(a.inp)) == out:
@@ -564,6 +604,8 @@ def main(argv):
         mode_bounce(ch, out, a.samples or 1024)
     elif a.mode == "dof":
         mode_dof(ch, out, a.samples or 512)
+    elif a.mode == "lights":
+        mode_lights(ch, out, a.samples or 128, a.lights.split(",") if a.lights else None)
     else:
         spec, cam, settings, made, _ = setup_portrait(ch, "void", parity=True, dof=True)
         ear, how = ear_point(ch, cam)
