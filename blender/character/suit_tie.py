@@ -33,6 +33,7 @@ DEFAULTS = {
     "wrap_step_m": 0.0016, "crease_m": 0.0005, "creases": 3,
     "blade_w_exit_m": 0.030, "blade_w_m": 0.078, "blade_full_at_m": 0.40, "blade_t_m": 0.0035,
     "blade_convex_m": 0.0010, "dimple_m": 0.0045, "dimple_len_m": 0.065, "clear_m": 0.0012,
+    "ceil_clear_m": 0.0015, "t_min_m": 0.0012,
     "rows_knot": 26, "cols_knot": 36, "row_m": 0.008, "front_pts": 14, "end_pts": 4,
 }
 
@@ -79,12 +80,13 @@ def knot(front, band_y, z_top, P):
     return V, UV
 
 
-def blade(front, z0, z_tip, P):
+def blade(front, z0, z_tip, P, ceil=None):
     """The blade as rings (a flattened stadium: front, right edge, back, left edge) from z0 down to
-    the point. Returns (rings (r, m, 3), UV (r, m, 2), tip point, tip uv)."""
+    the point. ceil(x, z) -> y of what lies over the blade (the waistcoat's inside), or None: under
+    it the blade is pressed to the room there is (a tie under a buttoned waistcoat lies flat).
+    Returns (rings (r, m, 3), UV (r, m, 2), tip point, tip uv)."""
     nf, ne = P["front_pts"], P["end_pts"]
     t = P["blade_t_m"]
-    r_ = 0.5 * t
     L = z0 - z_tip
     nrow = max(8, int(math.ceil(L / P["row_m"])))
     rings, uvs = [], []
@@ -98,18 +100,31 @@ def blade(front, z0, z_tip, P):
         to_tip = z - z_tip
         if to_tip < tip_len:
             w = max(2 * to_tip, 2.2 * r_)
+        xs = np.linspace(-0.5 * w, 0.5 * w, 7)
+        fy = [front(float(x), z) for x in xs]
+        t_ = t
+        conv_k = 1.0
+        dim_k = 1.0
+        if ceil is not None:
+            cy = [ceil(float(x), z) for x in xs]
+            room = [f_ - c_ for f_, c_ in zip(fy, cy) if c_ is not None]
+            if room:
+                # under the waistcoat: thickness, crown and dimple pressed into the room there is
+                avail = min(room) - P["clear_m"] - P["ceil_clear_m"]
+                t_ = float(np.clip(avail, P["t_min_m"], t))
+                conv_k = dim_k = t_ / t
+        r_ = 0.5 * t_
         half = max(0.5 * w - r_, 0.0005)
-        dim = P["dimple_m"] * float(_ss(1 - dd / P["dimple_len_m"])) if dd > 0 else P["dimple_m"]
+        dim = (P["dimple_m"] * float(_ss(1 - dd / P["dimple_len_m"])) if dd > 0 else P["dimple_m"]) * dim_k
         # the lying surface: the most forward point of the shirt across the blade (an interlined blade
         # bridges the placket), then the blade's back clear of it
-        xs = np.linspace(-0.5 * w, 0.5 * w, 7)
-        yb = min(front(float(x), z) for x in xs) - P["clear_m"] - r_
+        yb = min(fy) - P["clear_m"] - r_
         pts, us = [], []
         # front: x from -half to +half
         for j in range(nf + 1):
             s = -1 + 2 * j / nf
             x = s * half
-            conv = P["blade_convex_m"] * (1 - s * s)
+            conv = P["blade_convex_m"] * conv_k * (1 - s * s)
             dimple = dim * max(0.0, 1 - abs(s) * 1.25) ** 1.5 - 0.35 * dim * s * s   # the V back, the edges forward
             pts.append((x, yb - r_ - conv + dimple, z))
             us.append(x)
@@ -135,7 +150,7 @@ def blade(front, z0, z_tip, P):
     return rings, np.array(uvs), tip
 
 
-def build(front, band_y, z_top, z_tip, opts=None, uv_per_m=1.0, uv_origin=(0.5, 0.5)):
+def build(front, band_y, z_top, z_tip, opts=None, uv_per_m=1.0, uv_origin=(0.5, 0.5), ceil=None):
     """front(x, z) -> y of the surface under the tie; band_y(z) -> y of the collar band's front at the
     centre (the knot's back). Returns V (n, 3), faces (list of index tuples), corner UVs (per face, per
     corner), face tags (0 knot, 1 blade)."""
@@ -144,7 +159,7 @@ def build(front, band_y, z_top, z_tip, opts=None, uv_per_m=1.0, uv_origin=(0.5, 
     Kv, Kuv = knot(front, band_y, z_top, P)
     z_kb = z_top - P["knot_h_m"]
     # the blade starts inside the knot (its top hidden in it) and runs to the point
-    Bv, Buv, tip = blade(front, z_kb + 0.012, z_tip, P)
+    Bv, Buv, tip = blade(front, z_kb + 0.012, z_tip, P, ceil)
     V, F, UVc, tags = [], [], [], []
 
     def add(p):

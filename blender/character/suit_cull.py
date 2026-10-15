@@ -50,7 +50,7 @@ def bvh_of(meshes):
     return BVHTree.FromPolygons(V, F)
 
 
-def visible(P, N, bvh, dirs, todo, eps=0.0015, reach=0.6, zmin=None):
+def visible(P, N, bvh, dirs, todo, eps=0.0015, reach=0.6, zmin=None, esc=None):
     """For points P (n, 3) with unit outward normals N: True where some ray in the cone (dirs, local
     frame) misses every occluder in bvh within reach. Only points in `todo` are tested. zmin: no
     camera views from further below the horizontal than that (a ray's z under zmin is not tried:
@@ -66,6 +66,8 @@ def visible(P, N, bvh, dirs, todo, eps=0.0015, reach=0.6, zmin=None):
                 continue
             if bvh.ray_cast(Vector(o), Vector(w), reach)[0] is None:
                 out[i] = True
+                if esc is not None:          # the world direction it escaped along (diagnostics)
+                    esc[i] = w
                 break
     return out
 
