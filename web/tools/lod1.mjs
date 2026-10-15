@@ -126,6 +126,8 @@ for (const node of doc.getRoot().listNodes()) {
       }
       indices = out;
       row.error = +err.toFixed(5);
+      // meshopt error is relative to the primitive extent: in mm (glTF metres)
+      row.error_mm = +(err * MeshoptSimplifier.getScale(Float32Array.from(pos), 3) * 1000).toFixed(2);
     }
     row.after = indices.length / 3;
     if (row.after !== before) setIndicesCompact(prim, indices);
