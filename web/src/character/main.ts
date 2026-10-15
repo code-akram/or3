@@ -1252,7 +1252,13 @@ async function main(): Promise<void> {
         `${tier.tier} tier  ${state.backend}  ${w}x${h}  dpr ${dpr}  ${output.aa === 'msaa' ? `MSAA ${samples}x` : output.aa === 'taau' ? `TAAU x${output.scale}` : 'TRAA'}${output.dofOn ? '  DoF' : ''}${output.lut.info ? '  LUT grade' : ''}`,
         `frame p50 ${st.frame.p50.toFixed(1)} ms  p95 ${st.frame.p95.toFixed(1)} ms  (${st.frame.fps.toFixed(0)} fps)`,
         `draws ${st.draw_calls}  tris ${(st.triangles_rendered / 1000).toFixed(1)}k (model ${(tris / 1000).toFixed(1)}k)  lights ${st.lights}`,
-        `textures ${tex.count}  ~${st.texture_mb_est} MB uncompressed RGBA8+mips`,
+        `textures ${tex.count}  GPU ${st.texture_memory.material_mb} MB maps + ${st.texture_memory.target_mb} MB targets  (~${st.texture_mb_est} MB as RGBA8+mips)`,
+        ...(q.get('texcheck') === '1'
+          ? texAudit
+              .report()
+              .materials.filter((r) => r.pass === 'main' && r.fragment >= 12)
+              .map((r) => `${r.fragment > 16 ? '! ' : ''}${r.material}: ${r.fragment} sampled textures (limit 16)`)
+          : []),
         `load ${state.load!.load_ms} ms (${state.load!.glb_mb} MB GLB)  setup ${state.load!.setup_ms} ms  first frame ${st.first_frame_ms} ms`,
         `view ${viewName}  rig ${rigName}  pose ${poseName} ${amount.toFixed(2)}`,
         `correctives ${wts || 'none'}`,

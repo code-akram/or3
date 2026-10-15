@@ -8,9 +8,10 @@
 // counted once, from its generated shader (`: texture_` declarations in the fragment and vertex WGSL, not
 // storage textures) with the texture names from its bindings. The count is always on (one regex per new
 // pipeline): a state over the limit is a dev assertion, a console error and a viewer warning naming the
-// material, the object and the count. `?texcheck=1` puts the full table (every material, its maximum over
-// its pipelines, the textures by name) in the HUD panel and in stats().texture_audit (so a capture's
-// <prefix>shots.json carries it); __viewer.textureAudit() returns it any time.
+// material, the object and the count. `?texcheck=1` lists the materials at 12 or more in the HUD and puts
+// the full table (every material, its maximum over its pipelines, the textures by name) in
+// stats().texture_audit, so a capture's <prefix>shots.json carries it; __viewer.textureAudit() returns it
+// any time.
 import type * as THREE from 'three/webgpu';
 
 export interface TexAuditRow {
@@ -21,6 +22,9 @@ export interface TexAuditRow {
   fragment: number;
   vertex: number;
   samplers: number;
+  /** size of the fragment WGSL (a complexity proxy) and its loops */
+  fragment_chars: number;
+  fragment_loops: number;
   textures: string[];
 }
 
@@ -41,7 +45,10 @@ function textureName(t: any): string {
   const img = t.image ?? {};
   const size = img.width && img.height ? ` ${img.width}x${img.height}${t.isDataArrayTexture || t.isArrayTexture ? `x${img.depth}` : ''}` : '';
   const kind = t.isDepthTexture ? 'depth' : t.isRenderTargetTexture ? 'rt' : t.isCompressedTexture ? 'ktx2' : t.isDataArrayTexture ? 'array' : t.isCubeTexture ? 'cube' : t.isData3DTexture ? '3d' : t.isDataTexture ? 'data' : 'tex';
-  return `${t.name || '(unnamed)'} [${kind}${size}]`;
+  // unnamed data textures (LUTs) by element type and id, so duplicates of one table show as such
+  const type = t.type === 1015 ? ' f32' : t.type === 1016 ? ' f16' : '';
+  const id = t.name ? '' : ` #${String(t.uuid ?? t.id ?? '').slice(0, 6)}`;
+  return `${t.name || '(unnamed)'} [${kind}${size}${type}]${id}`;
 }
 
 export class TextureAudit {
@@ -76,6 +83,8 @@ export class TextureAudit {
       fragment: (frag.match(TEX_DECL) ?? []).length,
       vertex: (vert.match(TEX_DECL) ?? []).length,
       samplers: (frag.match(SAMPLER_DECL) ?? []).length,
+      fragment_chars: frag.length,
+      fragment_loops: (frag.match(/\bfor\s*\(/g) ?? []).length,
       textures: names,
     };
     this.rows.push(row);
