@@ -289,8 +289,8 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
 
 /** skin_detail.json (blender/character/skin_tex.write_detail_sidecars), as loaded by main.ts. */
 export interface SkinDetail {
-  pore: THREE.Texture;
-  micro: THREE.Texture;
+  /** layer 0 the pore tile, layer 1 the micro tile (one binding: the fragment stage's 16 sampled textures) */
+  tiles: THREE.Texture;
   /** skin material name -> its detail map (R pore weight, G micro weight, B inside AO) and repeats */
   materials: Record<string, { map: THREE.Texture | null; poreRepeat: number; microRepeat: number }>;
   poreCells: number;
@@ -337,8 +337,8 @@ export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
       };
       const uvP = uv().mul(dm.poreRepeat);
       const uvM = uv().mul(dm.microRepeat);
-      const tp = texture(dt.pore, uvP);
-      const tm = texture(dt.micro, uvM);
+      const tp = texture(dt.tiles, uvP).depth(0);
+      const tm = texture(dt.tiles, uvM).depth(1);
       const fP = fadeOf(uvP, dt.poreCells);
       const fM = fadeOf(uvM, dt.microCells);
       const wP = det.r.mul(k).mul(P.u('skin.poreNormal'));

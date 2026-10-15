@@ -112,6 +112,45 @@ async function loadWeave(base: string): Promise<WeaveSidecar | null> {
 
 /** skin_detail.json (T17, blender/character/skin_tex.write_detail_sidecars): the pore and micro tiles
  * (tiled, mipmapped), the per-part detail maps (region weights, thickness) and the ORM cavity flag. */
+/** T17: same-size RGB(A) PNGs as the layers of one DataArrayTexture (raw values: no colour conversion,
+ * no premultiply; rows top first = v 0, as loadTexture's flipY false), repeat-wrapped, mipmapped. */
+async function loadTileArray(urls: string[]): Promise<THREE.DataArrayTexture | null> {
+  try {
+    const bmps = await Promise.all(
+      urls.map(async (u) => {
+        const r = await fetch(u);
+        if (!r.ok) throw new Error(u);
+        return createImageBitmap(await r.blob(), { colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+      }),
+    );
+    const w = bmps[0]!.width;
+    const h = bmps[0]!.height;
+    if (bmps.some((b) => b.width !== w || b.height !== h)) return null;
+    const data = new Uint8Array(w * h * 4 * bmps.length);
+    const cx = new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+    if (!cx) return null;
+    bmps.forEach((b, i) => {
+      cx.clearRect(0, 0, w, h);
+      cx.drawImage(b, 0, 0);
+      data.set(cx.getImageData(0, 0, w, h).data, i * w * h * 4);
+      b.close();
+    });
+    const t = new THREE.DataArrayTexture(data, w, h, bmps.length);
+    t.format = THREE.RGBAFormat;
+    t.type = THREE.UnsignedByteType;
+    t.colorSpace = THREE.NoColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.anisotropy = 8;
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.needsUpdate = true;
+    return t;
+  } catch {
+    return null;
+  }
+}
+
 async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
   interface J {
     tiles: { pore: string; micro: string };
@@ -124,14 +163,10 @@ async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
   }
   const j = await fetchJson<J>(base + 'skin_detail.json');
   if (!j) return null;
-  const [pore, micro] = await Promise.all([loadTexture(base + j.tiles.pore), loadTexture(base + j.tiles.micro)]);
-  if (!pore || !micro) return null;
-  for (const t of [pore, micro]) {
-    t.wrapS = t.wrapT = THREE.RepeatWrapping;
-    t.anisotropy = 8;
-    t.generateMipmaps = true;
-    t.minFilter = THREE.LinearMipmapLinearFilter;
-  }
+  // the two tiles as one 2-layer array texture: one sampled-texture binding, not two (WebGPU allows 16
+  // per fragment stage; with T19's lights and shadow maps the skin was at 17: black frames)
+  const tiles = await loadTileArray([base + j.tiles.pore, base + j.tiles.micro]);
+  if (!tiles) return null;
   const materials: SkinDetail['materials'] = {};
   await Promise.all(
     Object.entries(j.materials).map(async ([name, m]) => {
@@ -142,8 +177,7 @@ async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
   );
   const mc = j.micro_cells;
   return {
-    pore,
-    micro,
+    tiles,
     materials,
     poreCells: j.pore_cells,
     microCells: mc.length ? mc.reduce((a, b) => a + b, 0) / mc.length : 23,
