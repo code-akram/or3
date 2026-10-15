@@ -4,7 +4,7 @@ _SwiftShader only: every engine frame here is WebGPU in headless Chromium on the
 
 ## The pictures (`data/build/t17/gate/`)
 
-The final run is **a8**: main at `5900412` (T19 lighting, T20 hair v5) merged in, then built.
+The final run is **a8**: main at `5900412` (T19 lighting, T20 hair v5) merged in, then built; main at `b661a16` (T24 tiers) merged after it (see the notes).
 
 - `head_triptych.png` (100 %): **engine before | engine after (`t17-a8`) | Cycles after (`t17-a8` hero `portrait_crop`)**.
   - The engine frames are the `portrait` view, which uses the hero portrait camera and shot lights, cut to Cycles' crop window (960 × 540 at (556, 98) of 1920 × 1080).
@@ -144,6 +144,10 @@ Engine still times for a8 (24 TRAA frames each, load average about 30): portrait
   - It uses the unshadowed light colour, gated by thickness, and the lids over the eyeball are masked out.
   - Shadow-map thickness (Jimenez's version) is the proper fix.
 - ArcFace was not run (`private/`).
+- **T24 merge (main `b661a16`, after the a8 renders).**
+  - T17's `ssss` / `detail` switches are now T24's tier flags: hero 1 / 1, gameplay 0 / 1, and the URL wins.
+  - The SSSS colour-attachment limit is added to the texture limits T24 requests.
+  - A `closeup:hero` re-render on the merged engine (`m24_closeup_hero.png`, hero tier, `scene:ssss` installed, no tier no-ops) differs from the a8 frame by 0.3/255 on average, so the a8 metrics stand.
 
 ## Run dirs
 
