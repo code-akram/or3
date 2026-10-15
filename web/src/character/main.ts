@@ -43,7 +43,7 @@ import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, 
 import { FrameStats, textureBytes } from './hud';
 import { ContactShadows } from './contact';
 import { PassProfiler } from './profile';
-import { TIERS, applyTierParams, gameplayCamera, noShadowList, resolveTier, type ResolvedTier, type TierName } from './tiers';
+import { TIERS, applyTierParams, gameplayCamera, hasParam, noShadowList, resolveTier, type ResolvedTier, type TierName } from './tiers';
 import { PerfMonitor, newSession, perfOverlay } from './perf';
 
 /** The stage views plus T24's gameplay framing (tiers.ts gameplayCamera, injected into the stage data). */
@@ -1050,7 +1050,7 @@ async function main(): Promise<void> {
     mon.start();
   }
   applyPassSwitches();
-  if (!output.passList.some((p) => p.name === 'ssss')) tierNoop.push('ssss');
+  if (!output.passList.some((p) => p.name === 'ssss') && !hasParam(P, 'skin.ssss')) tierNoop.push('ssss');
 
   // ------------------------------------------------------------------ loop
   state.phase = 'running';

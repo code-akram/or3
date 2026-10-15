@@ -103,7 +103,7 @@ export function resolveTier(q: URLSearchParams): ResolvedTier {
   return { tier, flags, url };
 }
 
-function hasParam(P: ParamStore, path: string): boolean {
+export function hasParam(P: ParamStore, path: string): boolean {
   try {
     P.get(path);
     return true;
@@ -135,6 +135,7 @@ export function applyTierParams(P: ParamStore, f: TierFlags): string[] {
   // T17 (not merged at T24): no-ops until the params exist
   if (hasParam(P, 'skin.ssss')) P.set('skin.ssss', f.ssss);
   if (hasParam(P, 'skin.detailNormal')) P.set('skin.detailNormal', f.detail);
+  else noop.push('detail');
   return noop;
 }
 
