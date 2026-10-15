@@ -1222,9 +1222,12 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
     const orig = nm.setupLightingModel.bind(nm);
     const opts = {
       specOcclusion: specOcc && role !== 'hair' && role !== 'facial' && role !== 'lash',
-      rectDiffuseAO: role === 'eye' || role === 'generic',
+      rectDiffuseAO: role === 'generic',
       // the models whose rect diffuse is three's LTC (the skin and hair models take rectAsPoint's F)
-      ltcDiffuse: role === 'eye' || role === 'generic' || role === 'cloth' || role === 'shirt',
+      ltcDiffuse: role === 'generic' || role === 'cloth' || role === 'shirt',
+      // the eye's diffuse (refracted iris, limbus, sclera; its own direct AO) is in direct(): under the
+      // rects from their point equivalent, as the skin's
+      rectDiffuseAsPoint: role === 'eye',
     };
     nm.setupLightingModel = ((b: unknown) => withSharedLighting((orig as unknown as (x: unknown) => THREE.LightingModel)(b), P, screen, opts)) as typeof nm.setupLightingModel;
   };

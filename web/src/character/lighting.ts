@@ -270,6 +270,15 @@ export function rectFormFactor(c: N, hw: N, hh: N, p: N): N {
   return F.dot(c.sub(p)).lessThan(0).select(F.negate(), F);
 }
 
+/** A rect light as a point light for models without an LTC form (see materials/index.ts rectAsPoint):
+ * the direction F/|F|, the intensity of a plane facing it, pi L |F|; zero behind the emitter. */
+export function rectPoint(c: N, hw: N, hh: N, color: N): { L: N; color: N } {
+  const F = rectFormFactor(c, hw, hh, positionView);
+  const front = hw.cross(hh).dot(c.sub(positionView)).greaterThan(0); // shines along local -z
+  const f = F.length();
+  return { L: F.div(f.max(1e-8)), color: color.mul(front.select(f.mul(Math.PI), float(0))) };
+}
+
 /** Exact horizon-clipped form factor of the sphere cap equivalent to vector form factor F (|F| = sin^2
  * sigma, F.n = |F| cos theta) on normal n: Snyder 1996 in Frostbite's illuminanceSphereOrDisk form / pi. */
 export function clippedSphereFF(F: N, n: N): N {
@@ -301,9 +310,21 @@ export function withSharedLighting(
   model: THREE.LightingModel,
   P: ParamStore,
   screen: N | null,
-  opts: { specOcclusion: boolean; rectDiffuseAO?: boolean; ltcDiffuse?: boolean },
+  opts: { specOcclusion: boolean; rectDiffuseAO?: boolean; ltcDiffuse?: boolean; rectDiffuseAsPoint?: boolean },
 ): THREE.LightingModel {
   const m = model as unknown as Wrappable;
+  if (opts.rectDiffuseAsPoint && m.directRectArea && m.direct) {
+    // a model whose own diffuse lives in direct() (the eye: the refracted iris, the limbus, the sclera
+    // wrap) keeps it under rect lights too: the rect's LTC specular from its directRectArea, the diffuse
+    // from direct() at the rect's point equivalent (rectPoint; direct()'s own specular dropped)
+    const origR = m.directRectArea;
+    const origD = m.direct;
+    m.directRectArea = (input: any, builder?: any) => {
+      origR.call(model, { ...input, reflectedLight: { ...input.reflectedLight, directDiffuse: vec3(0).toVar() } }, builder);
+      const pt = rectPoint(input.lightPosition, input.halfWidth, input.halfHeight, input.lightColor);
+      origD.call(model, { ...input, lightDirection: pt.L, lightColor: pt.color, reflectedLight: { ...input.reflectedLight, directSpecular: vec3(0).toVar() } }, builder);
+    };
+  }
   if (opts.ltcDiffuse && m.directRectArea) {
     // three's LTC diffuse x exact / fitted clipped form factor (see the header); before the AO wrap below
     const orig = m.directRectArea;
