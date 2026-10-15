@@ -11,7 +11,9 @@
 #
 # Everything is read from and written to RUN_DIR only (a private fan run dir stays private).
 # Env: ENGINE_CPUS (taskset CPU list for the browser, default 0-3; the machine is shared),
-#      ENGINE_BACKEND (auto|webgpu|webgl2, default auto: WebGPU on SwiftShader, WebGL2 fallback),
+#      ENGINE_BACKEND (auto|webgpu|webgl2, default auto: WebGPU, WebGL2 fallback),
+#      ENGINE_GPU (GPU1: swiftshader|hw, default swiftshader; hw = the iGPU, adapter-checked, under
+#        /tmp/or3-gpu.lock; read by engine_shots.mjs, see bench/m1/v4/gpu1-hw-backend.md),
 #      ENGINE_SIZE (look-dev views, default 1024), ENGINE_PORTRAIT (default 1920x1080),
 #      ENGINE_VIEWS (default front,three_quarter,profile,closeup,portrait,closeup:hero),
 #      ENGINE_BOUNCE (T16: a set_bounce.json from blender/hero/refs.py --mode bounce, copied into RUN),
@@ -58,4 +60,4 @@ command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
   || { echo "engine shots failed: $LOG" >&2; exit 1; }
 # the newest <prefix>shots.json (game_shots.json, or <tier>_shots.json with --tier / --prefix)
 SHOTS="$(ls -t "$RUN"/*shots.json | head -n 1)"
-echo "-> $SHOTS ($(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['backend'])" "$SHOTS"))"
+echo "-> $SHOTS ($(python3 -I -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get('backend'), 'on', d.get('adapter_line') or d.get('gpu', 'swiftshader'))" "$SHOTS"))"

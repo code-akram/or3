@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Engine frames for a character build: serves the web character viewer (web/dist) and ONE build dir
-// on loopback, drives headless Chromium (Playwright; WebGPU on SwiftShader, WebGL2 fallback) and
-// writes game_<view>.png + game_shots.json into that build dir.
+// on loopback, drives headless Chromium (Playwright; WebGPU on SwiftShader or on the GPU, WebGL2 fallback)
+// and writes game_<view>.png + game_shots.json into that build dir.
 //
 //   node bench/m1/engine_shots.mjs --build RUN_DIR [--views front,three_quarter,profile,closeup,portrait,closeup:hero]
 //        [--size 1024] [--portrait 1920x1080] [--backend auto|webgpu|webgl2] [--port 8796] [--timeout 600]
@@ -23,6 +23,7 @@
 // --tt-warmup frames (default 24) of turning before the first written frame, so the history is in its
 // steady state as in the live viewer.
 //   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8796] [--selftest] [--query 'tiers=hero,gameplay']
+//        [--gpu hw] [--perf N] [--viewport WxH] (GPU1, --selftest only: perf-loop frames, default 3; page size, default 640x360)
 //        Device capture (the M4 Air): serve only, no browser. Open the printed URL on the device (through
 //        `ssh -N -L 8796:127.0.0.1:8796 <this host>`); the page renders every view on its own GPU and POSTs
 //        the frames and a summary back; the server writes them into RUN_DIR (whitelisted names only,
@@ -31,6 +32,15 @@
 //        (stills, a 2 s turntable, the perf loop) as <tier>_*.png / <tier>_tt/ / <tier>_shots.json /
 //        <tier>_perf.json (bench/m1/v4/air-session.md).
 //   --tier hero|gameplay (T24): the quality tier for the headless shots (= --query tier=X --prefix X_; X_shots.json)
+//   --gpu swiftshader|hw (GPU1; env ENGINE_GPU, default swiftshader): SwiftShader on the CPU, or the real GPU
+//        (native Vulkan, the Raphael iGPU here). hw checks the adapter (vendor amd, never SwiftShader; it fails
+//        otherwise), holds the exclusive lock /tmp/or3-gpu.lock for the browser session (one hw session at a
+//        time; SwiftShader runs stay unlocked), fails on a lost device, and records `gpu` + `adapter` in
+//        <prefix>shots.json and in every shot. bench/gpu_backend.mjs, bench/m1/v4/gpu1-hw-backend.md.
+//   --texlimit 16|N|adapter (GPU1, default 16): the viewer's ?texlimit, the per-stage sampled-texture limit it
+//        requests. 16 is WebGPU's default device (SwiftShader's limit too), so a material over 16 textures fails
+//        on the 48-texture iGPU as it does on a 16-texture device; `adapter` = T24's adapter maximum. --serve
+//        (the Air URL) never adds it; --serve --selftest does. A texlimit in --query wins.
 //
 // Containment: the server exposes only web/dist-viewer and RUN_DIR (under /asset/), bound to 127.0.0.1, and
 // every output file goes into RUN_DIR. For a fan build RUN_DIR is the private run dir, so nothing
@@ -44,6 +54,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { png, receiveUpload } from '../../web/upload-sink.mjs';
+import { acquireGpuLock, adapterLine, checkAdapter, chromiumArgs, gpuMode, probeAdapter } from '../gpu_backend.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const repo = resolve(here, '..', '..');
@@ -83,6 +94,8 @@ const tierArg = opt('tier', null); // T24 quality tier: hero | gameplay
 let extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/B only)
 if (tierArg) extraQuery = `tier=${encodeURIComponent(tierArg)}${extraQuery ? '&' + extraQuery : ''}`;
 const outPrefix = opt('prefix', tierArg ? `${tierArg}_` : 'game_');
+const gpu = gpuMode(argv); // GPU1: swiftshader | hw
+const texlimit = opt('texlimit', '16'); // GPU1: the viewer's ?texlimit for headless runs
 const poseArg = opt('pose', null); // debug preset for every view (e.g. arms_up), else the view's own
 const dist = join(repo, 'web', opt('dist', 'dist-viewer'));
 const BASIS = join(repo, 'web', 'node_modules', 'three', 'examples', 'jsm', 'libs', 'basis');
@@ -193,17 +206,8 @@ function npy(raw, shape) {
 }
 
 // ------------------------------------------------------------------ browser
-const ARGS = [
-  // bench/headless-check.mjs: WebGPU on SwiftShader needs Vulkan-on-SwiftShader and no Vulkan surface
-  '--enable-unsafe-webgpu',
-  '--enable-unsafe-swiftshader',
-  '--enable-features=Vulkan',
-  '--use-vulkan=swiftshader',
-  '--use-angle=swiftshader',
-  '--use-webgpu-adapter=swiftshader',
-  '--disable-vulkan-surface',
-  '--renderer-process-limit=1',
-];
+// bench/gpu_backend.mjs: SwiftShader (Vulkan on the CPU, no Vulkan surface) or native Vulkan on the GPU
+const ARGS = chromiumArgs(gpu, ['--renderer-process-limit=1']);
 
 async function run(backend) {
   const browser = await chromium.launch({ headless: true, channel: 'chromium', args: ARGS });
@@ -211,20 +215,30 @@ async function run(backend) {
   try {
     const page = await browser.newPage({ viewport: { width: 256, height: 256 } });
     page.on('console', (m) => log.push(`${m.type()}: ${m.text()}`.slice(0, 300)));
+    page.__log = log;
+    page.on('crash', () => log.push('pageerror: page crashed (GPU process exited?)'));
     page.on('pageerror', (e) => log.push(`pageerror: ${e.message}`.slice(0, 300)));
     // name the URL behind a bare "Failed to load resource" console error
     page.on('response', (r) => {
       if (r.status() >= 400) log.push(`http ${r.status()}: ${r.url().replace(/^http:\/\/127\.0\.0\.1:\d+/, '')}`.slice(0, 300));
     });
     page.setDefaultTimeout(timeoutS * 1000);
-    const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1' });
+    const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1', texlimit });
     if (backend === 'webgl2') q.set('gl', '1');
     for (const [k, v] of new URLSearchParams(extraQuery)) q.set(k, v);
     const t0 = Date.now();
     await page.goto(`http://127.0.0.1:${port}/character.html?${q}`, { waitUntil: 'load' });
+    // GPU1: the adapter this page gets (the viewer's request); hw fails here on a software fallback
+    const adapter = await probeAdapter(page);
+    if (gpu === 'hw') checkAdapter(gpu, adapter);
+    console.error(`[engine_shots] ${adapterLine(gpu, adapter)}`);
     await page.waitForFunction(() => window.__viewerState?.ready || window.__viewerState?.phase === 'error', null, { timeout: timeoutS * 1000, polling: 500 });
     const st = await page.evaluate(() => window.__viewerState);
     if (st.phase === 'error') throw new Error(`viewer error: ${st.error}`);
+    if (gpu === 'hw' && backend === 'webgpu') {
+      if (st.backend !== 'webgpu') throw new Error(`[gpu hw] the viewer fell back to ${st.backend}`);
+      checkAdapter(gpu, st.adapter);
+    }
     const bootMs = Date.now() - t0;
     const shots = [];
     // the portrait twice: game_portrait.png without post (the parity frame, compared with
@@ -239,8 +253,9 @@ async function run(backend) {
       const px = Buffer.from(r.b64, 'base64');
       if (px.length !== w * h * 4) throw new Error(`${v}: got ${px.length} bytes for ${w}x${h}`);
       await writeFile(join(build, name), png(w, h, px));
-      shots.push({ view: v, rig, post, file: name, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
-      console.error(`[engine_shots] ${backend} ${name} ${w}x${h}: ${Date.now() - t} ms`);
+      lostCheck(log);
+      shots.push({ view: v, rig, post, file: name, gpu, res: [w, h], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, triangles: r.triangles, lights: r.lights, pose: poseArg, weights: r.weights });
+      console.error(`[engine_shots] ${backend}/${gpu} ${name} ${w}x${h}: ${Date.now() - t} ms`);
     }
     const turntable = ttSeconds > 0 ? await captureTurntable(page, backend) : null;
     const stats = await page.evaluate(() => window.__viewer.stats());
@@ -259,7 +274,7 @@ async function run(backend) {
       const px = Buffer.from(r.b64, 'base64');
       await writeFile(join(build, `${outPrefix}balls.png`), png(bw, bh, px));
       balls = { file: `${outPrefix}balls.png`, res: [bw, bh], render_ms: r.ms, wall_ms: Date.now() - t, draw_calls: r.draw_calls, warnings: sb.warnings };
-      console.error(`[engine_shots] ${backend} balls ${bw}x${bh}: ${Date.now() - t} ms`);
+      console.error(`[engine_shots] ${backend}/${gpu} balls ${bw}x${bh}: ${Date.now() - t} ms`);
     }
     let chart = null;
     if (wantChart) {
@@ -277,20 +292,19 @@ async function run(backend) {
       const rl = await page.evaluate(([w, h]) => window.__viewer.captureChart(w, h, true), [cw, ch]);
       await writeFile(join(build, `${outPrefix}chart_linear.npy`), npy(Buffer.from(rl.b64, 'base64'), [ch, cw, 4]));
       chart = { file: `${outPrefix}chart.png`, linear: `${outPrefix}chart_linear.npy`, res: [cw, ch], render_ms: r.ms, frames: r.frames, grade: r.grade, lights: r.lights, wall_ms: Date.now() - t, warnings: sc.warnings };
-      console.error(`[engine_shots] ${backend} chart ${cw}x${ch}: ${Date.now() - t} ms`);
+      console.error(`[engine_shots] ${backend}/${gpu} chart ${cw}x${ch}: ${Date.now() - t} ms`);
     }
-    const adapter = await page.evaluate(async () => {
-      try {
-        const a = await navigator.gpu?.requestAdapter();
-        return a ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null;
-      } catch {
-        return null;
-      }
-    });
-    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, turntable, balls, chart, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
+    lostCheck(log);
+    return { ok: true, backend: st.backend, gpu, adapter, adapter_line: adapterLine(gpu, adapter), viewer_adapter: st.adapter ?? null, limits: st.limits ?? null, texlimit: q.get('texlimit'), boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, turntable, balls, chart, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
   } finally {
     await browser.close();
   }
+}
+
+/** GPU1: a lost device (or a crashed GPU process) fails the run instead of writing black frames. */
+function lostCheck(log) {
+  const l = log.find((x) => /device (was )?lost|Device Lost|GPU process (crashed|exited)|context lost|page crashed/i.test(x));
+  if (l) throw new Error(`[gpu ${gpu}] device lost: ${l}`);
 }
 
 // ------------------------------------------------------------------ turntable (T10)
@@ -332,7 +346,8 @@ async function captureTurntable(page, backend) {
     for (let k = 0; k < L.length; k++) L[k] = 0.2126 * px[k * 4] + 0.7152 * px[k * 4 + 1] + 0.0722 * px[k * 4 + 2];
     lumas.push(L);
     frames.push({ file, deg: +deg.toFixed(3), render_ms: r.ms });
-    console.error(`[engine_shots] ${backend} turntable ${i + 1}/${n} ${deg.toFixed(2)} deg: ${r.ms} ms`);
+    if (page.__log) lostCheck(page.__log);
+    console.error(`[engine_shots] ${backend}/${gpu} turntable ${i + 1}/${n} ${deg.toFixed(2)} deg: ${r.ms} ms`);
   }
   const noise = [];
   for (let i = 1; i + 1 < n; i++) {
@@ -345,7 +360,7 @@ async function captureTurntable(page, backend) {
   const ff = spawnSync('ffmpeg', ['-loglevel', 'error', '-y', '-framerate', String(ttFps), '-i', join(dir, 'frame_%03d.png'), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '12', join(build, `${outPrefix}turntable.mp4`)]);
   if (ff.status === 0) video = `${outPrefix}turntable.mp4`;
   const mean = noise.reduce((x, y) => x + y, 0) / Math.max(1, noise.length);
-  return { view: v, rig, stem, seconds: ttSeconds, fps: ttFps, aa: aaMode, hz: temporal ? ttHz : ttFps, warmup: temporal ? ttWarmup : 0, deg_per_s: TT_DEG_PER_S, res: [ttSize, ttSize], frames, dir: `${outPrefix}turntable`, video, temporal_noise: noise, temporal_noise_mean: +mean.toFixed(4), wall_ms: Date.now() - t0 };
+  return { view: v, rig, stem, gpu, seconds: ttSeconds, fps: ttFps, aa: aaMode, hz: temporal ? ttHz : ttFps, warmup: temporal ? ttWarmup : 0, deg_per_s: TT_DEG_PER_S, res: [ttSize, ttSize], frames, dir: `${outPrefix}turntable`, video, temporal_noise: noise, temporal_noise_mean: +mean.toFixed(4), wall_ms: Date.now() - t0 };
 }
 
 if (serveMode) {
@@ -353,36 +368,61 @@ if (serveMode) {
   for (const [k, v] of new URLSearchParams(extraQuery)) q.set(k, v);
   const url = `http://127.0.0.1:${port}/character.html?${q}`;
   console.log(`[engine_shots] serving ${build} on 127.0.0.1:${port}; open on the device:\n  ${url}`);
+  let selftestAdapter = null;
   if (argv.includes('--selftest')) {
-    // stands in for the Air: the same URL in local headless Chromium (SwiftShader), short perf loop
-    const browser = await chromium.launch({ headless: true, channel: 'chromium', args: ARGS });
-    const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
-    page.on('pageerror', (e) => console.error(`pageerror: ${e.message}`.slice(0, 300)));
-    page.setDefaultTimeout(timeoutS * 1000);
-    await page.goto(`${url}&perf=3`, { waitUntil: 'load' });
-    await Promise.race([uploadFinished, new Promise((_, rej) => setTimeout(() => rej(new Error('selftest timeout')), timeoutS * 1000))]);
-    await browser.close();
+    // stands in for the Air: the same URL in local headless Chromium (--gpu: SwiftShader or the iGPU), short
+    // perf loop (--perf N frames, default 3), with --texlimit (default 16) unless the query has one
+    const lock = await acquireGpuLock(gpu, { tag: 'selftest' });
+    try {
+      const browser = await chromium.launch({ headless: true, channel: 'chromium', args: ARGS });
+      const [vw, vh] = opt('viewport', '640x360').split('x').map(Number); // GPU1: the canvas of the perf loop
+      const page = await browser.newPage({ viewport: { width: vw, height: vh } });
+      page.on('pageerror', (e) => console.error(`pageerror: ${e.message}`.slice(0, 300)));
+      page.on('console', (m) => {
+        if (/device (was )?lost|Device Lost/i.test(m.text())) console.error(`[gpu ${gpu}] ${m.text()}`.slice(0, 300));
+      });
+      page.setDefaultTimeout(timeoutS * 1000);
+      const tl = new URLSearchParams(extraQuery).has('texlimit') ? '' : `&texlimit=${encodeURIComponent(texlimit)}`;
+      await page.goto(`${url}&perf=${encodeURIComponent(opt('perf', '3'))}${tl}`, { waitUntil: 'load' });
+      selftestAdapter = await probeAdapter(page);
+      if (gpu === 'hw') checkAdapter(gpu, selftestAdapter);
+      console.error(`[engine_shots] selftest ${adapterLine(gpu, selftestAdapter)}`);
+      await Promise.race([uploadFinished, new Promise((_, rej) => setTimeout(() => rej(new Error('selftest timeout')), timeoutS * 1000))]);
+      await browser.close();
+    } finally {
+      await lock.release();
+    }
   } else {
     await uploadFinished;
   }
   server.close();
-  console.log(JSON.stringify({ ok: true, device_capture: true, uploaded }, null, 1));
+  console.log(JSON.stringify({ ok: true, device_capture: true, uploaded, ...(selftestAdapter ? { gpu, adapter: selftestAdapter } : {}) }, null, 1));
   process.exit(0);
 }
 
-const result = { build, when: new Date().toISOString(), attempts: [] };
+const result = { build, when: new Date().toISOString(), gpu, attempts: [] };
 let ok = null;
-for (const b of backendWanted === 'auto' ? ['webgpu', 'webgl2'] : [backendWanted]) {
-  try {
-    ok = await run(b);
-    break;
-  } catch (e) {
-    result.attempts.push({ backend: b, error: String(e?.message ?? e).slice(0, 2000) });
-    console.error(`[engine_shots] ${b} failed: ${String(e?.message ?? e).slice(0, 300)}`);
+const lock = await acquireGpuLock(gpu, { tag: 'engine_shots' }); // hw: one GPU session at a time
+result.gpu_lock_wait_ms = lock.waited_ms;
+const wall0 = Date.now();
+try {
+  for (const b of backendWanted === 'auto' ? ['webgpu', 'webgl2'] : [backendWanted]) {
+    try {
+      ok = await run(b);
+      break;
+    } catch (e) {
+      result.attempts.push({ backend: b, gpu, error: String(e?.message ?? e).slice(0, 2000) });
+      console.error(`[engine_shots] ${b}/${gpu} failed: ${String(e?.message ?? e).slice(0, 300)}`);
+      // hw: a wrong adapter or a lost device is not something the WebGL2 fallback should paper over
+      if (gpu === 'hw' && /\[gpu hw\]/.test(String(e?.message ?? e))) break;
+    }
   }
+} finally {
+  await lock.release();
 }
+result.wall_ms = Date.now() - wall0;
 server.close();
 Object.assign(result, ok ?? { ok: false });
 await writeFile(join(build, `${outPrefix}shots.json`), JSON.stringify(result, null, 1));
-console.log(JSON.stringify({ ok: result.ok, backend: result.backend, shots: (result.shots ?? []).map((s) => s.file), verify: result.verify }, null, 1));
+console.log(JSON.stringify({ ok: result.ok, backend: result.backend, gpu, adapter: result.adapter_line ?? null, shots: (result.shots ?? []).map((s) => s.file), verify: result.verify }, null, 1));
 process.exit(result.ok ? 0 : 1);

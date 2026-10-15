@@ -277,8 +277,11 @@ def engine_sheet(a):
             rows.append(f"[r{len(rows)}]")
     st = gs.get("stats", {})
     ver = gs.get("verify", {})
-    head = (f"engine vs EEVEE vs Cycles   {os.path.basename(run)}   backend {gs.get('backend')} "
-            f"({(gs.get('adapter') or {}).get('description') or '-'})   {gs.get('browser', '')}\n"
+    ad = gs.get("adapter") or {}
+    # GPU1: which GPU made the frames (gpu: swiftshader | hw; runs before GPU1 were all SwiftShader)
+    head = (f"engine vs EEVEE vs Cycles   {os.path.basename(run)}   backend {gs.get('backend')} on "
+            f"{gs.get('gpu', 'swiftshader')} ({ad.get('vendor') or '-'} {ad.get('architecture') or ''}"
+            f"{', ' + ad['description'] if ad.get('description') else ''})   {gs.get('browser', '')}\n"
             f"load {gs.get('load', {}).get('load_ms')} ms ({gs.get('load', {}).get('glb_mb')} MB GLB)   "
             f"tris {st.get('tris_model')}   draws {[s.get('draw_calls') for s in gs.get('shots', [])]}   "
             f"textures {st.get('textures')} ~{st.get('texture_mb_est')} MB   "

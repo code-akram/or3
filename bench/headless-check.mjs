@@ -4,6 +4,8 @@
 // that the WASM worker thread ticks, and that telemetry reaches the bench server.
 //
 //   node bench/headless-check.mjs [--seconds 20] [--port 8788] [--shot capture.ppm] [--query k=v]
+//        [--gpu swiftshader|hw]  (GPU1; env ENGINE_GPU, default swiftshader): hw = the real GPU, adapter checked,
+//        under the exclusive /tmp/or3-gpu.lock (bench/gpu_backend.mjs)
 //
 // Frame numbers from this machine are NOT representative of the M4 Air.
 import { spawn } from 'node:child_process';
@@ -11,6 +13,7 @@ import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { acquireGpuLock, adapterLine, checkAdapter, chromiumArgs, gpuMode, probeAdapter } from './gpu_backend.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const argv = process.argv.slice(2);
@@ -31,23 +34,16 @@ let serverLog = '';
 server.stdout.on('data', (d) => (serverLog += d));
 await new Promise((r) => setTimeout(r, 500));
 
-const result = { ok: false, checks: {}, notes: [] };
+const gpu = gpuMode(argv);
+const result = { ok: false, gpu, checks: {}, notes: [] };
+const lock = await acquireGpuLock(gpu, { tag: 'headless-check' });
 const browser = await chromium.launch({
   headless: true,
   channel,
   // Found by trial (Chromium 156, no GPU, no X): without Vulkan-on-SwiftShader plus
   // --disable-vulkan-surface the WebGPU canvas swap chain cannot allocate its shared image and the
-  // device is lost on first present ("Instance dropped in popErrorScope").
-  args: [
-    '--enable-unsafe-webgpu',
-    '--enable-unsafe-swiftshader',
-    '--enable-features=Vulkan',
-    '--use-vulkan=swiftshader',
-    '--use-angle=swiftshader',
-    '--use-webgpu-adapter=swiftshader',
-    '--disable-vulkan-surface',
-    '--enable-precise-memory-info',
-  ],
+  // device is lost on first present ("Instance dropped in popErrorScope"). hw: native Vulkan, same surface rule.
+  args: chromiumArgs(gpu, ['--enable-precise-memory-info']),
 });
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -61,6 +57,9 @@ try {
   const h = resp.headers();
   result.checks.coop = h['cross-origin-opener-policy'];
   result.checks.coep = h['cross-origin-embedder-policy'];
+  result.adapter = await probeAdapter(page);
+  result.adapterLine = adapterLine(gpu, result.adapter);
+  if (gpu === 'hw') checkAdapter(gpu, result.adapter);
 
   await page.waitForFunction(() => ['running', 'error'].includes(window.__boot?.phase), null, { timeout: 60000 });
   const t0 = Date.now();
@@ -114,6 +113,7 @@ try {
 } finally {
   await browser.close();
   server.kill();
+  await lock.release();
 }
 console.log(JSON.stringify(result, null, 2));
 process.exit(result.ok ? 0 : 1);

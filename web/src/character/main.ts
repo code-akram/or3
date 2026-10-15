@@ -72,8 +72,22 @@ interface ViewerState {
   skinDetail?: unknown;
   gaze?: unknown;
   warnings: string[];
-  /** T24: the device limit that decides whether the live hero portrait compiles (eyes bind 18 textures) */
-  limits?: { max_sampled_textures_per_stage: number };
+  /** T24: the device limit that decides whether the live hero portrait compiles (eyes bind 18 textures).
+   * GPU1: max_sampled_textures_per_stage / max_samplers_per_stage = what the viewer requested (after
+   * ?texlimit), adapter_* = what the adapter offers, device / device_samplers = what the device granted.
+   * three binds a sampler per texture, so the eyes need 18 of both; adapters commonly offer 16 samplers
+   * (RADV and SwiftShader both do) even when they offer 48 textures. */
+  limits?: {
+    max_sampled_textures_per_stage: number;
+    max_samplers_per_stage?: number;
+    texlimit?: string;
+    adapter_max?: number | undefined;
+    adapter_samplers?: number | undefined;
+    device?: number | undefined;
+    device_samplers?: number | undefined;
+  };
+  /** GPU1: the WebGPU adapter the viewer requested (vendor / architecture / description), for the capture logs */
+  adapter?: { vendor?: string | undefined; architecture?: string | undefined; description?: string | undefined; device?: string | undefined } | null;
 }
 const state: ViewerState = { phase: 'start', ready: false, warnings: [] };
 
@@ -92,15 +106,24 @@ function assetBase(): string {
   return `/asset/${a === '.' || a === '' ? '' : a + '/'}`;
 }
 
-/** T24: per-stage texture / sampler limits above the WebGPU default (16) when the adapter has them. */
+/** T24: per-stage texture / sampler limits above the WebGPU default (16) when the adapter has them.
+ * GPU1: `?texlimit=N` caps the request at N (16 = WebGPU's default device, as on SwiftShader and on any
+ * adapter without the raised limit), so a material over budget fails on a 48-texture GPU the same way;
+ * the headless captures pass texlimit=16 (bench/m1/engine_shots.mjs). Absent or `adapter`: the adapter's
+ * own limit, capped at 48 (T24; the Air session). Also records the adapter for the capture logs. */
 async function adapterTextureLimits(): Promise<Record<string, number>> {
   try {
-    const gpu = (navigator as unknown as { gpu?: { requestAdapter(o?: unknown): Promise<{ limits: Record<string, number> } | null> } }).gpu;
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter(o?: unknown): Promise<{ limits: Record<string, number>; info?: Record<string, string> } | null> } }).gpu;
     const a = await gpu?.requestAdapter({ powerPreference: 'high-performance' });
+    const i = a?.info;
+    state.adapter = a ? { vendor: i?.vendor, architecture: i?.architecture, description: i?.description, device: i?.device } : null;
+    const tl = q.get('texlimit') ?? 'adapter';
+    const cap = tl === 'adapter' ? 48 : Math.min(48, Math.max(16, Number(tl) || 16));
+    state.limits = { max_sampled_textures_per_stage: 16, texlimit: tl, adapter_max: a?.limits.maxSampledTexturesPerShaderStage, adapter_samplers: a?.limits.maxSamplersPerShaderStage };
     const out: Record<string, number> = {};
     for (const k of ['maxSampledTexturesPerShaderStage', 'maxSamplersPerShaderStage']) {
       const v = a?.limits[k];
-      if (typeof v === 'number' && v > 16) out[k] = Math.min(v, 48);
+      if (typeof v === 'number' && v > 16 && cap > 16) out[k] = Math.min(v, cap);
     }
     return out;
   } catch {
@@ -541,7 +564,7 @@ async function deviceCapture(api: CaptureApi, tier: ResolvedTier, mon: PerfMonit
   } catch {
     adapter = null;
   }
-  const head = { session, tier: tier.tier, flags: tier.flags, url_switches: tier.url, when: new Date().toISOString(), user_agent: navigator.userAgent, backend: state.backend, adapter, dpr: devicePixelRatio, canvas: [canvas.width, canvas.height] };
+  const head = { session, tier: tier.tier, flags: tier.flags, url_switches: tier.url, when: new Date().toISOString(), user_agent: navigator.userAgent, backend: state.backend, adapter, limits: state.limits, dpr: devicePixelRatio, canvas: [canvas.width, canvas.height] };
   const perfJson = { ...head, view: `${pv}:${prig}`, stats: api.stats(), perf: { ...loop, synced } };
   if (tiered) await post(`${prefix}perf.json`, JSON.stringify(perfJson), { 'content-type': 'application/json' });
   const d = (x: { p50: number; p95: number } | null, k: 'p50' | 'p95') => (x ? x[k] : null);
@@ -738,9 +761,12 @@ async function main(): Promise<void> {
   if (mrtOK) limits.maxColorAttachmentBytesPerSample = Math.min(mrtBytes, 64);
   const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || perfLive || q.get('timestamps') === '1', requiredLimits: limits });
   await renderer.init();
-  state.limits = { max_sampled_textures_per_stage: limits.maxSampledTexturesPerShaderStage ?? 16 };
-  if (!forceWebGL && (limits.maxSampledTexturesPerShaderStage ?? 16) < 18 && tier.tier === 'hero' && q.get('capture') !== '1')
-    state.warnings.push('adapter allows 16 sampled textures per shader stage: the live hero portrait needs 18 (eyes); add &shadows=key,rim,kicker');
+  const granted = (renderer.backend as unknown as { device?: { limits?: { maxSampledTexturesPerShaderStage?: number; maxSamplersPerShaderStage?: number } } }).device?.limits;
+  const texLim = limits.maxSampledTexturesPerShaderStage ?? 16;
+  const smpLim = limits.maxSamplersPerShaderStage ?? 16;
+  state.limits = { ...state.limits, max_sampled_textures_per_stage: texLim, max_samplers_per_stage: smpLim, device: granted?.maxSampledTexturesPerShaderStage, device_samplers: granted?.maxSamplersPerShaderStage };
+  if (!forceWebGL && Math.min(texLim, smpLim) < 18 && tier.tier === 'hero' && q.get('capture') !== '1')
+    state.warnings.push(`device allows ${texLim} sampled textures and ${smpLim} samplers per shader stage: the live hero portrait needs 18 of each (eyes); add &shadows=key,rim,kicker`);
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
   const ssssOK = wantSSSS && isWebGPU && mrtOK;

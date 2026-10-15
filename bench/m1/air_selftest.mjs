@@ -1,22 +1,29 @@
 #!/usr/bin/env node
 // Stand-in for the Air (T24): drive a device-capture URL (?capture=1&upload=1[&tiers=...]) in local
-// headless Chromium on SwiftShader, through every tier's page load, until the page reports `uploaded`
+// headless Chromium (SwiftShader, or the iGPU with --gpu hw), through every tier's page load, until the page reports `uploaded`
 // (or an error), and print the console errors and page errors seen on the way. Use it against the Vite
 // dev server (npm run dev, or `npx vite --port 8797` for a test) to check the upload round trip of
-// bench/m1/v4/air-session.md without the Mac. SwiftShader timings are not the Air's.
+// bench/m1/v4/air-session.md without the Mac. SwiftShader timings are not the Air's, and neither are the
+// iGPU's (--gpu hw: a 2-CU Raphael iGPU; bench/m1/v4/gpu1-hw-backend.md).
 //
 //   node bench/m1/air_selftest.mjs --url 'http://127.0.0.1:8797/character.html?...&capture=1&upload=1' [--timeout 3600]
-//        [--viewport 640x360]
+//        [--viewport 640x360] [--gpu swiftshader|hw] [--texlimit 16|N|adapter|url]
+//   --gpu (GPU1; env ENGINE_GPU, default swiftshader): hw = the real GPU, adapter checked (fails on a software
+//        fallback), the browser session under the exclusive /tmp/or3-gpu.lock (bench/gpu_backend.mjs).
+//   --texlimit (GPU1, default 16): appended as the viewer's ?texlimit unless the URL has one (`url` = append
+//        nothing). 16 = WebGPU's default device, so an over-budget material fails on the 48-texture iGPU as on
+//        a 16-texture device; `adapter` emulates a device that grants its maximum (T24's behaviour, the Air URL).
 //   node bench/m1/air_selftest.mjs --live 60 --url '...character.html?...&perf=1': the overlay runs S seconds, then "save"
 // Run it under taskset on the shared machine.
 import { chromium } from 'playwright';
+import { acquireGpuLock, adapterLine, checkAdapter, chromiumArgs, gpuMode, probeAdapter } from '../gpu_backend.mjs';
 
 const argv = process.argv.slice(2);
 const opt = (n, d) => {
   const i = argv.indexOf(`--${n}`);
   return i >= 0 ? argv[i + 1] : d;
 };
-const url = opt('url', null);
+let url = opt('url', null);
 if (!url || !/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
   console.error('usage: air_selftest.mjs --url http://127.0.0.1:PORT/character.html?...&capture=1&upload=1 [--timeout S]');
   process.exit(2);
@@ -24,10 +31,15 @@ if (!url || !/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
 const timeoutS = Number(opt('timeout', 3600));
 const liveS = Number(opt('live', 0)); // --live S: the ?perf=1 overlay instead of a capture
 const [vw, vh] = opt('viewport', '640x360').split('x').map(Number);
-const ARGS = ['--enable-unsafe-webgpu', '--enable-unsafe-swiftshader', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-angle=swiftshader', '--use-webgpu-adapter=swiftshader', '--disable-vulkan-surface', '--renderer-process-limit=1'];
+const gpu = gpuMode(argv);
+const texlimit = opt('texlimit', '16');
+if (texlimit !== 'url' && !new URL(url).searchParams.has('texlimit')) url += `${url.includes('?') ? '&' : '?'}texlimit=${encodeURIComponent(texlimit)}`;
+const ARGS = chromiumArgs(gpu, ['--renderer-process-limit=1']);
+const lock = await acquireGpuLock(gpu, { tag: 'air_selftest' });
 const browser = await chromium.launch({ headless: true, channel: 'chromium', args: ARGS });
 const errors = [];
 const pages = [];
+let adapter = null;
 let result = { ok: false };
 try {
   const page = await browser.newPage({ viewport: { width: vw, height: vh } });
@@ -45,6 +57,9 @@ try {
   });
   const t0 = Date.now();
   await page.goto(url, { waitUntil: 'load' });
+  adapter = await probeAdapter(page);
+  if (gpu === 'hw') checkAdapter(gpu, adapter);
+  console.error(`[air_selftest] ${adapterLine(gpu, adapter)}`);
   let st = null;
   if (liveS > 0) {
     // the ?perf=1 overlay: run, then "save" (POST /upload/live_perf.json) and wait for its answer
@@ -80,6 +95,9 @@ try {
   result = { ok: false, failure: String(e?.message ?? e).slice(0, 600), console_errors: errors };
 } finally {
   await browser.close();
+  await lock.release();
 }
+result = { gpu, adapter, ...result };
+if (errors.some((e) => /device (was )?lost|Device Lost/i.test(e))) result.ok = false;
 console.log(JSON.stringify(result, null, 1));
 process.exit(result.ok ? 0 : 1);
