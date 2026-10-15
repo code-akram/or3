@@ -39,6 +39,10 @@ from . import export, head_refine, skin_tex
 
 DEFAULTS = {
     "segments": 48, "rings": 36, "tex_px": 1024,
+    # T18 tried 1.3 (the hero's, anatomical: cornea radius ~7.9 mm): read40's eye-band box is
+    # anchored on the cornea apex (lookdev_render.read_test), so the 0.9 mm shorter apex moved the
+    # box one 48-px column into the lid skin, 0.827 -> 0.775 for the same frame. Kept at 2.2 so the
+    # gate measures what it measured before; the engine refraction fits whatever cornea ships.
     "cornea_bulge_mm": 2.2, "cornea_deg": 34.0,
     # Real-size iris and pupil (mm) on the fitted sphere: they override the
     # *_deg values; the cornea edge sits cornea_margin_deg past the limbus.
@@ -47,16 +51,37 @@ DEFAULTS = {
     # Eyes converge on a point this far ahead of the eye midpoint (m); 0 = parallel.
     "converge_m": 1.2,
     "pupil_deg": 9.0, "iris_deg": 30.0, "limbus_deg": 2.5,
-    "iris": "#4a2e1a", "iris_inner": "#20120a", "iris_outer": "#2e1d10", "collarette": "#8e5e33",
+    # T18: the iris -30 % saturation (HSV, sRGB) and -15 % value: was #4a2e1a / #20120a / #2e1d10 /
+    # #8e5e33, which read amber in both renderers (checkpoint 3 §2.4); fibre gain 0.95 -> 0.75
+    "iris": "#3f2e22", "iris_inner": "#1b130e", "iris_outer": "#271d15", "collarette": "#795c43",
+    "fibre_gain": 0.75,
     "outer_mix": 0.6, "limbus_frac": 0.12, "limbal_dark": 0.55,
     "sclera": "#bdab9d", "sclera_back": "#86675f", "vein": "#a2423a", "vein_amount": 0.8,
     "redness": 0.45, "sclera_corner": 0.30,
+    # T18 sclera gradient: darker and warmer toward both canthi (|cos phi| ** corner_pow) from
+    # canthus_from_deg past the limbus, and a little toward the lids (the sclera is brightest
+    # beside the limbus, where it is seen face-on; a porcelain band read doll-like)
+    "canthus_dark": 0.6, "canthus_pow": 1.4, "canthus_from_deg": 2.0, "canthus_to_deg": 20.0,
+    "canthus_tint": [0.93, 0.80, 0.76], "lid_band_dark": 0.05,
+    # T18 relief (normal map, eyes_normal: tangent space on the polar UV, x = +u, y = +v):
+    # iris fibres / crypts / collarette ridge and the raised conjunctival vessels (mm)
+    "normal": True, "fibre_mm": 0.045, "crypt_mm": 0.06, "collarette_mm": 0.05, "vein_mm": 0.025,
+    "normal_max_slope": 0.6,
     # Lid occlusion baked into the eye (the game's eye-occlusion shell): darker
     # within *_mm of the upper / lower lid, from rays cast against the body.
     "lid_occlusion": True, "lid_probe_mm": 4.0,
     "lid_occl_upper": 0.6, "lid_occl_upper_mm": 1.5, "lid_occl_lower": 0.3, "lid_occl_lower_mm": 0.8,
     "rough_iris": 0.08, "rough_sclera": 0.32, "specular": 0.5,
     "seed": 5,
+    # T18 game parts (exported, skinned to the head; hidden in the Cycles hero, which has its own):
+    # a lid-occlusion shell per lid (a strip on the globe from under the lid margin into the
+    # aperture, alpha gradient; the upper one carries the lash root shadow), the tear meniscus
+    # along the lower lid and the caruncle, from the same lid map as the hero parts (hero() below)
+    "game_parts": {"enabled": True, "shell_cols": 16, "shell_lift_mm": 0.1, "shell_under_mm": 0.6,
+                   "shell_upper_mm": 2.4, "shell_lower_mm": 1.1, "shell_alpha": 0.45,
+                   "shell_upper_k": 1.0, "shell_lower_k": 0.55, "root_shadow": 0.45,
+                   "meniscus_mm": 0.15, "meniscus_step": 3, "meniscus_sides": 4, "meniscus_alpha": 0.6,
+                   "meniscus": "#b98e86", "caruncle": "#a57a72"},
 }
 
 
@@ -312,9 +337,10 @@ def lid_maps(b, body, eye_obj, spheres_local, axes_local, cfg):
 
 # --- texture ----------------------------------------------------------------------------------
 
-def texture(c, lids=None):
+def texture(c, lids=None, relief=None, radius_m=0.012):
     """Albedo (linear, without lid occlusion), roughness, and the lid
-    occlusion factor per texel (1 = open)."""
+    occlusion factor per texel (1 = open). relief: an (n, n, 3) array filled
+    with the tangent-space normal map (T18; see normal_from_height)."""
     n = c["tex_px"]
     seed = int(c["seed"])
     H = skin_tex.HEX
@@ -336,7 +362,7 @@ def texture(c, lids=None):
         fib = fbm(U * 140, ri * 6 + side * 7, 140, seed + 11, 3)           # radial fibres
         fib2 = fbm(U * 60, ri * 3, 60, seed + 23, 2)
         crypt = fbm(U * 90, ri * 14, 90, seed + 31, 3)
-        iris = lin(H(c["iris"]))[None, None] * (0.55 + 0.95 * fib + 0.25 * fib2)[..., None]
+        iris = lin(H(c["iris"]))[None, None] * (0.55 + c.get("fibre_gain", 0.95) * fib + 0.25 * fib2)[..., None]
         inner = lin(H(c["iris_inner"]))
         outer = lin(H(c["iris_outer"]))
         coll = lin(H(c["collarette"]))
@@ -374,6 +400,13 @@ def texture(c, lids=None):
         # corners (nasal and temporal) darker and warmer
         corner = np.abs(np.cos(phi)) ** 3 * ss(idg + 6, idg + 22, theta)
         scl *= (1 + (corner * c["sclera_corner"])[..., None] * (np.array((0.97, 0.84, 0.81), np.float32) - 1))
+        # T18: the canthus gradient (both corners, wider and deeper than the corner tint above) and a
+        # light darkening toward the lids (|sin phi|: above and below the iris)
+        if c.get("canthus_dark", 0.0) > 0:
+            cg = np.abs(np.cos(phi)) ** c["canthus_pow"] * ss(idg + c["canthus_from_deg"], idg + c["canthus_to_deg"], theta)
+            tint = np.asarray(c["canthus_tint"], np.float32)
+            scl *= 1 - (cg * c["canthus_dark"])[..., None] * (1 - 0.55 * tint)[None, None]
+            scl *= (1 - c.get("lid_band_dark", 0.0) * np.abs(np.sin(phi)) ** 2 * ss(idg + 2, idg + 12, theta))[..., None]
         # compose
         in_iris = ss(idg + 0.4, idg - 0.4, theta)
         col = iris * in_iris[..., None] + scl * (1 - in_iris)[..., None]
@@ -386,7 +419,34 @@ def texture(c, lids=None):
         if lids is not None:
             lm = lids[side]
             occl[:, cols] = lm.sample(lm.occlusion(c), np.radians(theta), phi)
+        if relief is not None:
+            # height (mm): iris fibres up, crypts down, the collarette ridge; raised vessels on the
+            # sclera; none in the pupil (the polar map's slopes blow up at the pole)
+            h_iris = (c["fibre_mm"] * (fib - 0.5) * 2 - c["crypt_mm"] * cr + c["collarette_mm"] * cw) \
+                * ss(pd + 0.3, pd + 1.5, theta)
+            h = h_iris * in_iris + c["vein_mm"] * vein * (1 - in_iris)
+            relief[:, cols] = normal_from_height(h * 0.001, V, radius_m, np.radians(idg), c["normal_max_slope"])
     return np.clip(out, 0, 1), np.clip(rough, 0.02, 1), occl
+
+
+def normal_from_height(h, V, radius_m, iris_rad, max_slope):
+    """Tangent-space normal (0..1 encoded) of a height field h (m) on one eye's half of the polar
+    map: x along +u (phi, periodic), y along +v (v = sqrt(theta / pi), away from the front pole).
+    Arc lengths: d(phi) at rho = R sin(theta) (the iris plane's radius under the cornea, the sphere's
+    parallel outside), d(theta) as R cos(theta) dtheta on the iris plane and R dtheta on the sphere."""
+    n_v, n_u = h.shape
+    th = V * V * math.pi
+    dth = 2 * math.pi * V / n_v                      # dtheta per row (dtheta/dv / n)
+    dphi = 2 * math.pi / n_u
+    ds_u = np.maximum(radius_m * np.sin(th) * dphi, 1e-7)
+    ds_v = np.maximum(radius_m * dth * np.where(th < iris_rad, np.cos(th), 1.0), 1e-7)
+    gu = (np.roll(h, -1, 1) - np.roll(h, 1, 1)) / (2 * ds_u)
+    gv = np.gradient(h, axis=0) / ds_v
+    gu = np.clip(gu, -max_slope, max_slope)
+    gv = np.clip(gv, -max_slope, max_slope)
+    nrm = np.stack([-gu, -gv, np.ones_like(gu)], -1)
+    nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
+    return (nrm * 0.5 + 0.5).astype(np.float32)
 
 
 # --- stage ------------------------------------------------------------------------------------
@@ -473,10 +533,12 @@ def build(b):
     if cfg.get("lid_occlusion", True) and body is not None:
         lids = lid_maps(b, body, new, local_spheres, local_axes, cfg)
     # texture + material
-    alb, rough, occl = texture(cfg, lids)
+    relief = np.zeros((cfg["tex_px"], cfg["tex_px"], 3), np.float32) if cfg.get("normal") else None
+    alb, rough, occl = texture(cfg, lids, relief, radius_m)
     out_dir = b.out_dir if (rcfg.get("skin") or {}).get("save_maps") else None
     ia = skin_tex.make_image("eyes_albedo", alb * occl[..., None], True, out_dir)
     io = skin_tex.make_image("eyes_orm", np.stack([occl, rough, np.zeros_like(rough)], -1), False, out_dir)
+    inm = skin_tex.make_image("eyes_normal", relief, False, out_dir) if relief is not None else None
     mat = bpy.data.materials.new("eyes_hq")
     mat.use_nodes = True
     nt = mat.node_tree
@@ -493,6 +555,8 @@ def build(b):
     if "Coat Weight" in p.inputs:
         p.inputs["Coat Weight"].default_value = 0.5   # render-side gloss; glTF clearcoat extension
         p.inputs["Coat Roughness"].default_value = 0.03
+    if inm is not None:
+        _normal_map(nt, inm, p)
     new.data.materials.append(mat)
     # swap
     b.export_objs = [o for o in b.export_objs if o is not old] + [new]
@@ -509,10 +573,209 @@ def build(b):
             ap[side] = {"upper_mm": round(r * math.sin(up), 2), "lower_mm": round(-r * math.sin(lo), 2),
                         "iris_r_mm": round(cfg["iris_mm"] / 2, 2)}
         notes["aperture"] = ap
+    parts = []
+    if lids is not None and (cfg.get("game_parts") or {}).get("enabled", True):
+        parts = game_parts(b, new, local_spheres, lids, cfg)
+        notes["game_parts"] = {o.name: sum(len(f.vertices) - 2 for f in o.data.polygons) for o in parts}
     b.notes["eyes"] = notes
     b.eye_hero = {"obj": new.name, "spheres": local_spheres, "axes": local_axes, "lids": lids,
-                  "cfg": cfg, "albedo": alb, "occl": occl, "rough": rough}
+                  "cfg": cfg, "albedo": alb, "occl": occl, "rough": rough, "normal": inm,
+                  "game_parts": [o.name for o in parts]}
     return notes
+
+
+def _normal_map(nt, image, p, strength=1.0):
+    """Tangent-space normal map on the eye UV into the Principled normal (glTF normalTexture)."""
+    t = nt.nodes.new("ShaderNodeTexImage")
+    t.image = image
+    t.interpolation = "Linear"
+    nm = nt.nodes.new("ShaderNodeNormalMap")
+    nm.space = "TANGENT"
+    nm.uv_map = "UVMap"
+    nm.inputs["Strength"].default_value = strength
+    nt.links.new(t.outputs["Color"], nm.inputs["Color"])
+    nt.links.new(nm.outputs["Normal"], p.inputs["Normal"])
+    return nm
+
+
+# --- T18 game parts: lid shell, meniscus, caruncle ----------------------------------------------
+
+def _rgba_image(name, rgba, out_dir=None):
+    """Packed sRGB RGBA image from linear rgb + alpha (h, w, 4)."""
+    import os
+    h, w = rgba.shape[:2]
+    img = bpy.data.images.new(name, w, h, alpha=True)
+    img.colorspace_settings.name = "sRGB"
+    px = np.empty((h, w, 4), np.float32)
+    px[..., :3] = skin_tex.linear_to_srgb(rgba[..., :3])
+    px[..., 3] = rgba[..., 3]
+    img.pixels.foreach_set(px.ravel())
+    if out_dir:
+        img.filepath_raw = os.path.join(out_dir, name + ".png")
+        img.file_format = "PNG"
+        img.save()
+    img.pack()
+    return img
+
+
+def _smooth_ring(x, k=2):
+    """Circular moving average (k cells each side) of a per-phi array."""
+    return np.mean([np.roll(x, d) for d in range(-k, k + 1)], axis=0)
+
+
+def meniscus_points(c, r, lm, outer_r, inset_m=0.00015, lift_m=0.00008, step=1):
+    """The tear meniscus line along the lower lid (eye-local points), shared by hero and game."""
+    pts = []
+    for j, ph in enumerate(lm.ph):
+        if math.sin(ph) > -0.25 or j % step:
+            continue
+        k = np.arange(j - 2, j + 3) % len(lm.ph)
+        th = float(np.mean(lm.boundary[k])) - inset_m / r
+        pts.append((ph, lm.direction(th, ph) * (outer_r(r, th) + lift_m)))
+    pts.sort(key=lambda t: t[0])
+    return [np.asarray(c) + p for _, p in pts]
+
+
+def caruncle_frame(c, r, lm, side, hc):
+    """(centre, 3x3 scale-rotation) of the caruncle ellipsoid at the inner canthus."""
+    c = np.asarray(c)
+    nasal_x = -np.sign(c[0]) if abs(c[0]) > 1e-6 else (-1.0 if side == 0 else 1.0)
+    th, ph = lm.canthus((nasal_x, 0.0, 0.0))
+    th += math.radians(hc["caruncle_deg"])
+    d = lm.direction(th, ph)
+    pos = c + d * (r + hc["caruncle_mm"][2] * 0.0005)
+    tang_h = np.cross(lm.ez, d)
+    tang_h /= np.linalg.norm(tang_h)
+    tang_v = np.cross(d, tang_h)
+    M = np.stack([tang_h * hc["caruncle_mm"][0] * 0.001, tang_v * hc["caruncle_mm"][1] * 0.001,
+                  d * hc["caruncle_mm"][2] * 0.001], 1)
+    return pos, M
+
+
+def shell_texture(gp, w=128, h=64, seed=7):
+    """Lid-shell alpha (rgb black): v 0..0.5 the lower lid, 0.5..1 the upper; within each half,
+    0 = under the lid, 0.25 = the margin, 1 = the inner edge. Contact occlusion from the margin
+    inward; on the upper half a lash root shadow band broken into clumps along u. Alpha is capped
+    at shell_alpha (0.45: under the engine AO prepass's 0.5 test, so the shell never occludes).
+    Rows are bottom-up (Blender image order): row 0 is v = 0."""
+    ss = skin_tex.smoothstep
+    u = (np.arange(w) + 0.5) / w
+    out = np.zeros((h, w, 4), np.float32)
+    for half, k in ((0, gp["shell_lower_k"]), (1, gp["shell_upper_k"])):
+        rows = slice(half * h // 2, (half + 1) * h // 2)
+        v = (np.arange(h // 2) + 0.5) / (h // 2)
+        V, U = np.meshgrid(v, u, indexing="ij")
+        a = k * (1 - ss(0.25, 1.0, V)) ** 1.6
+        if half == 1 and gp.get("root_shadow", 0) > 0:
+            clump = fbm(U * 24, np.zeros_like(U), 24, seed, 2)
+            band = skin_tex.gauss(V - 0.36, 0.09) * (0.55 + 0.9 * (clump - 0.5)) * gp["root_shadow"]
+            a = 1 - (1 - a) * (1 - np.clip(band, 0, 1))
+        a = a * ss(0.0, 0.12, U) * ss(1.0, 0.88, U)       # fade at the canthi
+        out[rows, :, 3] = np.clip(a, 0, 1) * gp["shell_alpha"]
+    return out
+
+
+def game_parts(b, eye_obj, spheres, lids, cfg):
+    """Lid shells, meniscus and caruncle as exported meshes (see DEFAULTS["game_parts"])."""
+    gp = dict(DEFAULTS["game_parts"])
+    gp.update(cfg.get("game_parts") or {})
+    hc = dict(HERO)
+    hc.update(cfg.get("hero") or {})
+    prof = {}
+
+    def surf_r(r, th):
+        if r not in prof:
+            prof[r] = bulge_profile(r, cfg["cornea_bulge_mm"] * 0.001, cfg["cornea_deg"])
+        a, l = prof[r](th)
+        return math.hypot(a, l)
+
+    def build_shell(bm, uvl, dl, gi):
+        cols = int(gp["shell_cols"])
+        lift = gp["shell_lift_mm"] * 0.001
+        # rows across the shell: under the lid, the margin, then fine steps inward (the upper shell
+        # rides the cornea bulge, where a single chord dips under the surface and the shell vanishes)
+        vrows = (0.0, 0.25, 0.4, 0.55, 0.7, 0.85, 1.0)
+        for (c, r), lm in zip(spheres, lids):
+            bnd = _smooth_ring(lm.boundary, 3)
+            for lid in ("lower", "upper"):
+                sgn = 1.0 if lid == "upper" else -1.0
+                # the lid's span of phi, short of the canthi
+                phs = np.linspace(math.radians(8), math.radians(172), cols) * sgn
+                width = gp[f"shell_{lid}_mm"] * 0.001 / r
+                under = gp["shell_under_mm"] * 0.001 / r
+                v0 = 0.5 if lid == "upper" else 0.0
+                grid = []
+                for ph in phs:
+                    phw = ph % (2 * math.pi)
+                    th_b = float(np.interp(phw, lm.ph, bnd, period=2 * math.pi))
+                    row = []
+                    for vr in vrows:
+                        th = th_b + under * (0.25 - vr) / 0.25 if vr < 0.25 else th_b - width * (vr - 0.25) / 0.75
+                        th = max(th, math.radians(1.0))
+                        vv = bm.verts.new(Vector(np.asarray(c) + lm.direction(th, phw) * (surf_r(r, th) + lift)))
+                        vv[dl][gi] = 1.0
+                        row.append(vv)
+                    grid.append(row)
+                for i in range(cols - 1):
+                    for k in range(len(vrows) - 1):
+                        q = [grid[i][k], grid[i + 1][k], grid[i + 1][k + 1], grid[i][k + 1]]
+                        uvs = [(i / (cols - 1), vrows[k]), ((i + 1) / (cols - 1), vrows[k]),
+                               ((i + 1) / (cols - 1), vrows[k + 1]), (i / (cols - 1), vrows[k + 1])]
+                        f = bm.faces.new(q)
+                        f.smooth = True
+                        for lp, (uu, vr) in zip(f.loops, uvs):
+                            lp[uvl].uv = (uu, v0 + 0.5 * vr)
+        outward(bm, [cc for cc, _ in spheres])
+
+    def build_meniscus(bm, uvl, dl, gi):
+        for (c, r), lm in zip(spheres, lids):
+            pts = meniscus_points(c, r, lm, surf_r, step=int(gp["meniscus_step"]))
+            if len(pts) > 3:
+                _tube(bm, pts, gp["meniscus_mm"] * 0.001, int(gp["meniscus_sides"]), dl, gi)
+
+    def build_caruncle(bm, uvl, dl, gi):
+        for side, ((c, r), lm) in enumerate(zip(spheres, lids)):
+            pos, M = caruncle_frame(c, r, lm, side, hc)
+            res = bmesh.ops.create_uvsphere(bm, u_segments=10, v_segments=6, radius=1.0)
+            for v in res["verts"]:
+                v.co = Vector(pos + M @ np.array(v.co))
+                v[dl][gi] = 1.0
+            for f in {f for v in res["verts"] for f in v.link_faces}:
+                f.smooth = True
+
+    out_dir = b.out_dir if ((b.cfg["head"].get("refine") or {}).get("skin") or {}).get("save_maps") else None
+    shell = _hero_mesh("Human.eye_lidshell_export", eye_obj, build_shell)
+    m, nt, p = _principled("eye_lidshell")
+    t = nt.nodes.new("ShaderNodeTexImage")
+    t.image = _rgba_image("eye_lidshell_alpha", shell_texture(gp), out_dir)
+    t.extension = "EXTEND"
+    p.inputs["Base Color"].default_value = (0, 0, 0, 1)
+    p.inputs["Roughness"].default_value = 1.0
+    p.inputs["Specular IOR Level"].default_value = 0.0
+    nt.links.new(t.outputs["Alpha"], p.inputs["Alpha"])
+    m["alpha_blend"] = 1                      # export.fix_alpha keeps the link: glTF alphaMode BLEND
+    m.surface_render_method = "BLENDED"
+    shell.data.materials.append(m)
+
+    men = _hero_mesh("Human.eye_meniscus_export", eye_obj, build_meniscus)
+    m, nt, p = _principled("eye_meniscus")
+    p.inputs["Base Color"].default_value = (*skin_tex.srgb_to_linear(skin_tex.HEX(gp["meniscus"])), 1.0)
+    p.inputs["Roughness"].default_value = 0.05
+    p.inputs["Specular IOR Level"].default_value = 0.6
+    p.inputs["Alpha"].default_value = gp["meniscus_alpha"]
+    m["alpha_blend"] = 1
+    m.surface_render_method = "BLENDED"
+    men.data.materials.append(m)
+
+    car = _hero_mesh("Human.eye_caruncle_export", eye_obj, build_caruncle)
+    m, nt, p = _principled("eye_caruncle")
+    p.inputs["Base Color"].default_value = (*skin_tex.srgb_to_linear(skin_tex.HEX(gp["caruncle"])), 1.0)
+    p.inputs["Roughness"].default_value = 0.3
+    car.data.materials.append(m)
+
+    parts = [shell, men, car]
+    b.export_objs += parts
+    return parts
 
 
 # --- hero (Cycles only; hero_only collection, after the GLB export) ----------------------------
@@ -705,7 +968,13 @@ def hero(b):
     p.inputs["Subsurface Weight"].default_value = hc["eyeball_sss"]
     p.inputs["Subsurface Radius"].default_value = (1.0, 0.45, 0.3)
     p.inputs["Subsurface Scale"].default_value = 0.0015
+    if data.get("normal") is not None:      # T18: iris fibres / crypts and the conjunctival vessels
+        _normal_map(nt, data["normal"], p, hc.get("normal_strength", 1.0))
     ball.data.materials.append(m)
+    for name in data.get("game_parts") or []:   # T18: the game shell / meniscus / caruncle stay in the GLB
+        o = bpy.data.objects.get(name)
+        if o is not None:
+            o.hide_render = True
 
     m, nt, p = _principled("eye_cornea_hero")
     p.inputs["Base Color"].default_value = (1, 1, 1, 1)
