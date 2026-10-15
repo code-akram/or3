@@ -200,8 +200,10 @@ export const DEFAULT_PARAMS = {
     /** The caustic on the iris side away from the light. */
     causticGain: 0.25,
     scleraWrap: 0.15,
-    /** The hero rig's camera catchlight lights the diffuse at this share (Blender: diffuse 0.3). */
-    eyeLightDiffuse: 0.3,
+    /** The hero rig's camera catchlight lights the eye's diffuse at this share (punctual path only; the
+     * LTC rect path is full). T19: 1, as Cycles renders it: Blender's diffuse_factor 0.3 on that light is
+     * EEVEE-only (the per-light grey chart: full diffuse = 1.02x Cycles' eye-only chart). */
+    eyeLightDiffuse: 1,
     /** 1 = cornea specular against each light's Blender rectangle (LTC), so catchlights take its shape. */
     catchlightRect: 1,
     /** Lid shell (eye_lidshell) opacity scale over its baked alpha; the tear meniscus specular. */

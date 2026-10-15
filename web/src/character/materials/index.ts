@@ -523,7 +523,7 @@ export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number
 //   cornea   GGX against the emitter's rectangle (LTC) for every light that carries its Blender
 //            size (stage.ts userData.rect), so catchlights take the softbox / strip shape; the
 //            point-GGX lobe stays for lights without one
-//   eye light the Blender rig's camera catchlight lights the diffuse at eye.eyeLightDiffuse (0.3)
+//   eye light the Blender rig's camera catchlight lights the diffuse at eye.eyeLightDiffuse (T19: 1, as Cycles)
 
 let ltcLib: { LTC_HALF_1: THREE.DataTexture; LTC_HALF_2: THREE.DataTexture } | null = null;
 function ltcTextures(): { l1: N; l2: N } {
