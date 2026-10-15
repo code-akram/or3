@@ -20,6 +20,7 @@ import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
 import { temporalFrame } from '../temporal';
+import { rectFormFactor, screenTerm, withSharedLighting } from '../lighting';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, cameraWorldMatrix, exp, log, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, varying, vec2, vec3, vec4, vertexColor } = TSL as any;
@@ -54,18 +55,22 @@ interface RectInput {
   ltc_2: N;
 }
 
-/** A rect light (three's LTC path, ?area=rims|all) as the point light the custom terms (skin SSS
- * diffuse, cloth sheen + fuzz) understand: direction to the centre and the intensity of a small
- * Lambertian emitter, I = L A cos(theta_light), over d^2. The LTC keeps the specular; three's stock
- * directRectArea has no sheen and knows nothing of these terms, so without this they vanish. */
+/** A rect light (three's LTC path) as the point light the custom terms (skin SSS diffuse, cloth sheen +
+ * fuzz, the hair lobes) understand. T19: the rect's VECTOR FORM FACTOR F (the sum of its edge terms,
+ * Arvo 1994 / Heitz 2016): a Lambert receiver of normal n gets E = pi L (F . n) from the whole rect
+ * (horizon unclipped), so the point equivalent is the direction F/|F| at the intensity of a plane facing
+ * it, pi L |F|, exact for a big emitter close by. (T6 took the centre direction and L A cos / d^2, which
+ * is the small-emitter limit: the hero fill (2 m square at 2.5 m) came out 24 % and the wrap 16 % hot.)
+ * Zero behind the emitter (it shines along its local -z). The LTC keeps the specular. */
 function rectAsPoint(i: RectInput): { L: N; color: N } {
-  const toL = i.lightPosition.sub(positionView);
-  const d2 = toL.dot(toL).max(1e-4);
-  const L = toL.normalize();
+  const c = i.lightPosition;
+  const F = rectFormFactor(c, i.halfWidth, i.halfHeight, positionView);
+  const toL = c.sub(positionView);
   const n = i.halfWidth.cross(i.halfHeight);
-  const area = n.length().mul(4);
-  const cosL = n.normalize().dot(L).max(0); // shines along local -z: the lit side has L along +z
-  return { L, color: i.lightColor.mul(area).mul(cosL).div(d2) };
+  const front = n.dot(toL).greaterThan(0); // shines along local -z: the lit side has toL along +z
+  const f = F.length();
+  const dir = F.div(f.max(1e-8)); // rectFormFactor orients F toward the light
+  return { L: dir, color: i.lightColor.mul(front.select(f.mul(Math.PI), float(0))) };
 }
 
 export type Role = 'skin' | 'hair' | 'facial' | 'lash' | 'eye' | 'eyeshell' | 'eyewet' | 'cloth' | 'shirt' | 'generic';
@@ -558,7 +563,7 @@ export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number
 //   cornea   GGX against the emitter's rectangle (LTC) for every light that carries its Blender
 //            size (stage.ts userData.rect), so catchlights take the softbox / strip shape; the
 //            point-GGX lobe stays for lights without one
-//   eye light the Blender rig's camera catchlight lights the diffuse at eye.eyeLightDiffuse (0.3)
+//   eye light the Blender rig's camera catchlight lights the diffuse at eye.eyeLightDiffuse (T19: 1, as Cycles)
 
 let ltcLib: { LTC_HALF_1: THREE.DataTexture; LTC_HALF_2: THREE.DataTexture } | null = null;
 function ltcTextures(): { l1: N; l2: N } {
@@ -1260,6 +1265,24 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
         return new GenericMaterial(src, P, side.screenAO);
     }
   };
+  // T19 shared light terms (lighting.ts): specular occlusion from the GTAO term on every model but the
+  // hair cards' (their fibre lobes keep the strand occlusion, T10), and the direct-diffuse AO on the rect
+  // path of the eye and generic models (the others apply it in their own directRectArea)
+  const screen = screenTerm(side.screenAO);
+  const specOcc = (P.get('light.specOcclusion') as number) > 0;
+  const shared = (nm: THREE.MeshPhysicalNodeMaterial, role: Role): void => {
+    const orig = nm.setupLightingModel.bind(nm);
+    const opts = {
+      specOcclusion: specOcc && role !== 'hair' && role !== 'facial' && role !== 'lash',
+      rectDiffuseAO: role === 'generic',
+      // the models whose rect diffuse is three's LTC (the skin and hair models take rectAsPoint's F)
+      ltcDiffuse: role === 'generic' || role === 'cloth' || role === 'shirt',
+      // the eye's diffuse (refracted iris, limbus, sclera; its own direct AO) is in direct(): under the
+      // rects from their point equivalent, as the skin's
+      rectDiffuseAsPoint: role === 'eye',
+    };
+    nm.setupLightingModel = ((b: unknown) => withSharedLighting((orig as unknown as (x: unknown) => THREE.LightingModel)(b), P, screen, opts)) as typeof nm.setupLightingModel;
+  };
   root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh) return;
@@ -1268,6 +1291,7 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
       let nm = byName.get(s.name);
       if (!nm) {
         nm = make(s);
+        shared(nm, roles.get(s.name)!);
         byName.set(s.name, nm);
       }
       return nm;

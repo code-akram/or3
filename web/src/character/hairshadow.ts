@@ -23,9 +23,10 @@
 import type * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import type { ParamStore } from './materials/params';
+import { depthLoad } from './lighting';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { Fn, float, ivec2, exp, max, reference, renderGroup, perspectiveDepthToViewZ, interleavedGradientNoise, vogelDiskSample, screenCoordinate, texture } = TSL as any;
+const { Fn, float, ivec2, exp, max, reference, renderGroup, perspectiveDepthToViewZ, interleavedGradientNoise, vogelDiskSample, screenCoordinate } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -50,7 +51,7 @@ export function deepHairFilter(P: ParamStore): N {
       const p = shadowCoord.xy.mul(mapSize).add(vogelDiskSample(i, TAPS, phi).mul(radius));
       const ip = ivec2(p.floor()).clamp(ivec2(0, 0), hi);
       // textureLoad: no sampler (the depth texture carries a comparison sampler for three's PCF)
-      const d = texture(depthTexture).load(ip).r;
+      const d = depthLoad(depthTexture, ip).r;
       const zo = perspectiveDepthToViewZ(d, near, far).negate();
       acc = acc.add(exp(max(zr.sub(zo).sub(bias), float(0)).mul(density).negate()));
     }
