@@ -17,9 +17,14 @@
 //      instead of shadowed LTC rects) &pcss=0 (PCF) &contact=0 (no key contact shadows) &specocc=0 (no GTAO
 //      specular occlusion) &sharemaps=0 (a shadow map per twin) &eyeall=0 (the eye light on the eyes only)
 //      &timestamps=1 (trackTimestamp: __viewer.profile() per-pass GPU times; on with upload)
-//      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
-//      the page renders every view itself and POSTs the frames + timings to the loopback server of
-//      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
+//      T24 quality tiers (tiers.ts, every switch documented there): &tier=hero|gameplay, each switch on the
+//      URL wins over the tier (&tier=gameplay&gtao=0); &view=gameplay (&gpdist=3): the third-person framing
+//      at 2.5-4 m; &perf=1: the frame-time overlay (perf.ts: frame / GPU p50 p95, per-pass ms; "save" uploads)
+//      &capture=1&upload=1[&tiers=hero,gameplay&views=...&size=1024&portrait=1920x1080&perf=600&tt=2]:
+//      device capture (the Air): the page renders every view itself and POSTs the frames + timings to
+//      /upload/ (the dev server's sink -> data/build/air/<session>/, or `engine_shots.mjs --serve`); with
+//      tiers, per tier the stills, a 2 s turntable and the perf loop, then the next tier
+//      (bench/m1/v4/air-session.md; t6-engine-parity.md "Air capture")
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
@@ -38,6 +43,11 @@ import { Stage, VIEWS, applyCamera, fallbackStage, type EngineStage, type Gaze, 
 import { FrameStats, textureBytes } from './hud';
 import { ContactShadows } from './contact';
 import { PassProfiler } from './profile';
+import { TIERS, applyTierParams, gameplayCamera, hasParam, noShadowList, resolveTier, type ResolvedTier, type TierName } from './tiers';
+import { PerfMonitor, newSession, perfOverlay } from './perf';
+
+/** The stage views plus T24's gameplay framing (tiers.ts gameplayCamera, injected into the stage data). */
+const VIEWS_ALL = [...VIEWS, 'gameplay'] as const;
 
 const q = new URLSearchParams(location.search);
 const hud = document.getElementById('hud') as HTMLDivElement;
@@ -58,6 +68,8 @@ interface ViewerState {
   sssLutMs?: number;
   gaze?: unknown;
   warnings: string[];
+  /** T24: the device limit that decides whether the live hero portrait compiles (eyes bind 18 textures) */
+  limits?: { max_sampled_textures_per_stage: number };
 }
 const state: ViewerState = { phase: 'start', ready: false, warnings: [] };
 
@@ -74,6 +86,22 @@ function assetBase(): string {
   const a = (q.get('asset') ?? 'lookdev/latest').replace(/^\/+|\/+$/g, '');
   if (a.split('/').some((s) => s === '..') || /[\\:]/.test(a)) fatal(`bad asset path: ${a}`);
   return `/asset/${a === '.' || a === '' ? '' : a + '/'}`;
+}
+
+/** T24: per-stage texture / sampler limits above the WebGPU default (16) when the adapter has them. */
+async function adapterTextureLimits(): Promise<Record<string, number>> {
+  try {
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter(o?: unknown): Promise<{ limits: Record<string, number> } | null> } }).gpu;
+    const a = await gpu?.requestAdapter({ powerPreference: 'high-performance' });
+    const out: Record<string, number> = {};
+    for (const k of ['maxSampledTexturesPerShaderStage', 'maxSamplersPerShaderStage']) {
+      const v = a?.limits[k];
+      if (typeof v === 'number' && v > 16) out[k] = Math.min(v, 48);
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 async function fetchJson<T>(url: string): Promise<T | null> {
@@ -276,85 +304,183 @@ interface BallsJson {
 /** ?scene=balls: the shader-ball parity scene (blender/lookdev_render.py --shader-balls): the balls GLB
  * with the character's materials, the look-dev studio lights, the Blender camera, Standard view. */
 /** Device capture (?capture=1&upload=1): the page drives the views itself on this device's GPU and
- * POSTs each frame (raw RGBA8 rows; the server writes the PNG) and a summary to /upload/ on the
- * serving origin (engine_shots.mjs --serve, which accepts only these names and writes only into its
- * one run dir). Then a timed loop of the portrait at the canvas size for frame / GPU times. */
-async function deviceCapture(
-  api: { capture: (v: ViewName, r: RigName, w: number, h: number, pose?: string, post?: boolean, angleDeg?: number) => Promise<{ b64: string; ms: number; draw_calls: number; triangles: number }>; stats: () => unknown; setView: (v: ViewName, r: RigName) => void },
-  renderer: THREE.WebGPURenderer,
-  drawCanvas: () => void,
-): Promise<void> {
+ * POSTs each frame (raw RGBA8 rows or a PNG; web/upload-sink.mjs writes the PNG) and a summary to /upload/
+ * on the serving origin (the Vite dev server's sink -> data/build/air/<session>/, or engine_shots.mjs
+ * --serve -> its run dir; the sink accepts only whitelisted names and writes only into that directory).
+ * T24: with ?tiers=hero,gameplay every tier is a page load of its own (the switches are read at setup):
+ * stills, a 2 s turntable, the rAF-paced perf loop (perf.ts) and T19's synced per-pass profile ->
+ * <tier>_*.png, <tier>_tt/, <tier>_perf.json, <tier>_shots.json; then the next tier; the last page posts
+ * session.json. Without tiers or tier: the T6 names (game_*.png, game_shots.json) and session.json. */
+interface CaptureApi {
+  capture: (v: ViewName, r: RigName, w: number, h: number, pose?: string, post?: boolean, angleDeg?: number, opts?: { frames?: number; keep?: boolean }) => Promise<{ b64: string; ms: number; draw_calls: number; triangles: number }>;
+  advance: (angleDeg: number, w: number, h: number) => boolean;
+  stats: () => unknown;
+  setView: (v: ViewName, r: RigName) => void;
+  profile: (view: ViewName, rig: RigName, w: number, h: number, frames?: number, warmup?: number, post?: boolean) => Promise<unknown>;
+}
+
+const TIER_VIEWS: Record<TierName, string> = { hero: 'portrait,closeup:hero,gameplay:hero', gameplay: 'gameplay:hero,three_quarter,closeup:hero' };
+const TIER_PERF_VIEW: Record<TierName, string> = { hero: 'portrait:hero', gameplay: 'gameplay:hero' };
+const TIER_TT_VIEW: Record<TierName, string> = { hero: 'closeup:hero', gameplay: 'gameplay:hero' };
+
+/** ?tiers=hero,gameplay: the device-capture chain (T24). */
+function captureChain(): TierName[] {
+  return (q.get('tiers') ?? '').split(',').filter((t): t is TierName => t in TIERS);
+}
+
+async function deviceCapture(api: CaptureApi, tier: ResolvedTier, mon: PerfMonitor, drawCanvas: () => void): Promise<void> {
+  const chain = captureChain();
+  const tiered = chain.length > 0 || q.get('tier') !== null;
+  const session = q.get('session') ?? newSession();
+  const prefix = tiered ? `${tier.tier}_` : 'game_';
+  const viewOk = (v: string) => (VIEWS_ALL as readonly string[]).includes(v.split(':')[0]!);
   // a view is `name` (its own rig) or `name:hero` (T10: closeup:hero, the hero rig around the head)
-  const views = (q.get('views') ?? 'front,three_quarter,profile,closeup,portrait,closeup:hero').split(',').filter((v) => (VIEWS as readonly string[]).includes(v.split(':')[0]!));
+  const views = (q.get('views') ?? (tiered ? TIER_VIEWS[tier.tier] : 'front,three_quarter,profile,closeup,portrait,closeup:hero')).split(',').filter(viewOk);
   const size = Number(q.get('size') ?? 1024);
   const [pw, ph] = (q.get('portrait') ?? '1920x1080').split('x').map(Number) as [number, number];
+  const files: string[] = [];
   const post = async (name: string, body: BodyInit, headers: Record<string, string> = {}) => {
-    const r = await fetch(`/upload/${name}`, { method: 'POST', body, headers });
+    const r = await fetch(`/upload/${name}?session=${encodeURIComponent(session)}`, { method: 'POST', body, headers });
     if (!r.ok) throw new Error(`upload ${name}: ${r.status}`);
+    files.push(name);
+  };
+  const decode = (b64: string) => Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+  // frames go up as PNG where the browser can encode one (the host is remote: ~5x fewer bytes than RGBA)
+  const postFrame = async (name: string, px: Uint8Array<ArrayBuffer>, w: number, h: number) => {
+    if (typeof OffscreenCanvas !== 'undefined') {
+      const oc = new OffscreenCanvas(w, h);
+      const c2 = oc.getContext('2d');
+      if (c2) {
+        c2.putImageData(new ImageData(new Uint8ClampedArray(px.buffer, px.byteOffset, px.byteLength), w, h), 0, 0);
+        return post(name, await oc.convertToBlob({ type: 'image/png' }), { 'content-type': 'image/png' });
+      }
+    }
+    return post(name, px, { 'x-width': String(w), 'x-height': String(h), 'content-type': 'application/octet-stream' });
+  };
+  const spec = (s: string): [ViewName, RigName, string] => {
+    const [v, rr] = s.split(':') as [ViewName, string | undefined];
+    const own: RigName = v === 'portrait' ? 'hero' : 'neutral';
+    const rig: RigName = rr === 'hero' || rr === 'neutral' ? rr : own;
+    return [v, rig, `${v}${rig !== own ? `_${rig}` : ''}`];
   };
   const shots: unknown[] = [];
   state.phase = 'uploading';
-  for (const spec of views) {
-    const [v, rr] = spec.split(':') as [ViewName, string | undefined];
-    const own: RigName = v === 'portrait' ? 'hero' : 'neutral';
-    const rig: RigName = rr === 'hero' || rr === 'neutral' ? rr : own;
+  // ---- stills
+  for (const sv of views) {
+    const [v, rig, stem] = spec(sv);
     for (const withPost of v === 'portrait' && rig === 'hero' ? [false, true] : [false]) {
       const [w, h] = v === 'portrait' ? [pw, ph] : [size, size];
       const t = performance.now();
       const r = await api.capture(v, rig, w, h, undefined, withPost);
-      const bin = Uint8Array.from(atob(r.b64), (ch) => ch.charCodeAt(0));
-      const name = `game_${v}${rig !== own ? `_${rig}` : ''}${withPost ? '_beauty' : ''}.png`;
-      await post(name, bin, { 'x-width': String(w), 'x-height': String(h), 'content-type': 'application/octet-stream' });
+      const name = `${prefix}${stem}${withPost ? '_beauty' : ''}.png`;
+      await postFrame(name, decode(r.b64), w, h);
       shots.push({ view: v, rig, post: withPost, file: name, res: [w, h], render_ms: r.ms, wall_ms: Math.round(performance.now() - t), draw_calls: r.draw_calls, triangles: r.triangles });
-      hud.textContent = `uploaded ${name}`;
+      hud.textContent = `[${session}] ${tier.tier}: uploaded ${name}`;
     }
   }
-  // timed loop: the portrait at the canvas size, frame time (rAF to rAF) and GPU time (timestamp query)
-  const nPerf = Number(q.get('perf') ?? 120);
-  const frameMs: number[] = [];
-  const gpuMs: number[] = [];
-  api.setView('portrait', 'hero');
-  let last = performance.now();
-  for (let i = 0; i < nPerf; i++) {
-    await new Promise((res) => requestAnimationFrame(res));
+  // ---- turntable (T10's: the model turns at 20 deg/s; temporal history at tthz, every (tthz / ttfps)-th kept)
+  const ttSec = Number(q.get('tt') ?? (tiered ? 2 : 0));
+  let turntable: unknown = null;
+  if (ttSec > 0) {
+    const [v, rig, stem] = spec(q.get('ttview') ?? TIER_TT_VIEW[tier.tier]);
+    const fps = Number(q.get('ttfps') ?? 24);
+    const hz = Number(q.get('tthz') ?? 48);
+    const tts = Number(q.get('ttsize') ?? 640);
+    const warm = Number(q.get('ttwarm') ?? 24);
+    const sub = Math.max(1, Math.round(hz / fps));
+    const n = Math.max(3, Math.round(ttSec * fps));
+    const step = 20 / (fps * sub);
+    const t0 = performance.now();
+    await api.capture(v, rig, tts, tts, undefined, false, -warm * step, { frames: 1 });
+    for (let k = warm - 1; k >= 1; k--) api.advance(-k * step, tts, tts);
+    const lumas: Float32Array[] = [];
+    const frames: { file: string; deg: number; render_ms: number }[] = [];
+    for (let i = 0; i < n; i++) {
+      const deg = (i / fps) * 20;
+      for (let k = sub - 1; k >= 1; k--) api.advance(deg - k * step, tts, tts);
+      const r = await api.capture(v, rig, tts, tts, undefined, false, deg, { keep: true, frames: 1 });
+      const px = decode(r.b64);
+      const L = new Float32Array(tts * tts);
+      for (let k = 0; k < L.length; k++) L[k] = 0.2126 * px[k * 4]! + 0.7152 * px[k * 4 + 1]! + 0.0722 * px[k * 4 + 2]!;
+      lumas.push(L);
+      const file = `${prefix}tt/frame_${String(i).padStart(3, '0')}.png`;
+      await postFrame(file, px, tts, tts);
+      frames.push({ file, deg: +deg.toFixed(3), render_ms: r.ms });
+      hud.textContent = `[${session}] ${tier.tier}: turntable ${i + 1}/${n}`;
+    }
+    const noise: number[] = [];
+    for (let i = 1; i + 1 < lumas.length; i++) {
+      const [a, b, c] = [lumas[i - 1]!, lumas[i]!, lumas[i + 1]!];
+      let s = 0;
+      for (let k = 0; k < b.length; k++) s += Math.abs(a[k]! - 2 * b[k]! + c[k]!);
+      noise.push(+(s / b.length).toFixed(4));
+    }
+    const mean = noise.length ? +(noise.reduce((x, y) => x + y, 0) / noise.length).toFixed(4) : null;
+    turntable = { view: v, rig, stem, seconds: ttSec, fps, hz, warmup: warm, res: [tts, tts], frames, temporal_noise: noise, temporal_noise_mean: mean, wall_ms: Math.round(performance.now() - t0) };
+  }
+  // ---- perf: the tier's perf view at the canvas size, rAF paced (perf.ts), then T19's synced per-pass profile
+  const nPerf = Number(q.get('perfn') ?? q.get('perf') ?? 600);
+  const [pv, prig] = spec(q.get('perfview') ?? (tiered ? TIER_PERF_VIEW[tier.tier] : 'portrait:hero'));
+  api.setView(pv, prig);
+  hud.textContent = `[${session}] ${tier.tier}: perf loop (${nPerf} frames at ${canvas.width}x${canvas.height})`;
+  const raf = () => new Promise<number>((res) => requestAnimationFrame(res));
+  for (let i = 0; i < Math.min(30, nPerf); i++) {
+    await raf();
     drawCanvas();
-    try {
-      const g = await renderer.resolveTimestampsAsync('render');
-      if (typeof g === 'number' && g > 0) gpuMs.push(g);
-    } catch {
-      /* no timestamp-query on this adapter */
-    }
-    const now = performance.now();
-    if (i > 0) frameMs.push(now - last);
-    last = now;
   }
-  const pct = (a: number[], p: number) => (a.length ? +[...a].sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(p * a.length))]!.toFixed(2) : null);
+  mon.start();
+  for (let i = 0; i < nPerf; i++) {
+    const now = await raf();
+    const t = performance.now();
+    drawCanvas();
+    mon.frame(now, performance.now() - t);
+  }
+  await mon.flush();
+  mon.stop();
+  const loop = mon.report();
+  const nSync = Number(q.get('syncn') ?? (nPerf >= 60 ? 30 : Math.max(2, nPerf)));
+  hud.textContent = `[${session}] ${tier.tier}: synced per-pass profile (${nSync} frames)`;
+  const synced = await api.profile(pv, prig, canvas.width, canvas.height, nSync, 2, true);
   let adapter: unknown = null;
   try {
-    const a = await (navigator as unknown as { gpu?: { requestAdapter: () => Promise<{ info: Record<string, string> } | null> } }).gpu?.requestAdapter();
-    adapter = a ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description } : null;
+    const a = await (navigator as unknown as { gpu?: { requestAdapter: () => Promise<{ info: Record<string, string>; features: Set<string>; limits: Record<string, number> } | null> } }).gpu?.requestAdapter();
+    adapter = a ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description, timestamp_query: a.features.has('timestamp-query'), max_sampled_textures_per_stage: a.limits.maxSampledTexturesPerShaderStage } : null;
   } catch {
     adapter = null;
   }
+  const head = { session, tier: tier.tier, flags: tier.flags, url_switches: tier.url, when: new Date().toISOString(), user_agent: navigator.userAgent, backend: state.backend, adapter, dpr: devicePixelRatio, canvas: [canvas.width, canvas.height] };
+  const perfJson = { ...head, view: `${pv}:${prig}`, stats: api.stats(), perf: { ...loop, synced } };
+  if (tiered) await post(`${prefix}perf.json`, JSON.stringify(perfJson), { 'content-type': 'application/json' });
+  const d = (x: { p50: number; p95: number } | null, k: 'p50' | 'p95') => (x ? x[k] : null);
   const summary = {
     ok: true,
     device_capture: true,
-    when: new Date().toISOString(),
-    user_agent: navigator.userAgent,
-    backend: state.backend,
-    adapter,
-    dpr: devicePixelRatio,
+    ...head,
     load: state.load,
     verify: state.verify,
     warnings: state.warnings,
     hair_maps: state.hairMaps,
     stats: api.stats(),
     shots,
-    perf: { frames: frameMs.length, canvas: [canvas.width, canvas.height], frame_ms_p50: pct(frameMs, 0.5), frame_ms_p95: pct(frameMs, 0.95), gpu_ms_p50: pct(gpuMs, 0.5), gpu_ms_p95: pct(gpuMs, 0.95), gpu_samples: gpuMs.length },
+    turntable,
+    // the T6 keys (frame / GPU p50 p95), then the T24 report (in <tier>_perf.json, or inline for game_)
+    perf: { frames: loop.frames, canvas: [canvas.width, canvas.height], frame_ms_p50: d(loop.frame_ms, 'p50'), frame_ms_p95: d(loop.frame_ms, 'p95'), gpu_ms_p50: d(loop.gpu_ms, 'p50'), gpu_ms_p95: d(loop.gpu_ms, 'p95'), gpu_samples: loop.gpu_ms?.n ?? 0, file: tiered ? `${prefix}perf.json` : null, report: tiered ? undefined : perfJson.perf },
   };
-  await post('game_shots.json', JSON.stringify(summary, null, 1), { 'content-type': 'application/json' });
+  await post(`${prefix}shots.json`, JSON.stringify(summary), { 'content-type': 'application/json' });
+  // ---- the next tier (a fresh page: the switches are read at setup), or the end of the session
+  const i = chain.indexOf(tier.tier);
+  if (i >= 0 && i + 1 < chain.length) {
+    const u = new URL(location.href);
+    u.searchParams.set('tier', chain[i + 1]!);
+    u.searchParams.set('session', session);
+    state.phase = 'next tier';
+    hud.textContent = `[${session}] ${tier.tier} done; loading ${chain[i + 1]}`;
+    location.replace(u.toString());
+    return;
+  }
+  await post('session.json', JSON.stringify({ session, tiers: chain.length ? chain : [tier.tier], last_page: { tier: tier.tier, perf: summary.perf, files } }), { 'content-type': 'application/json' });
   state.phase = 'uploaded';
-  hud.textContent = `done: ${shots.length} frames uploaded; frame p50 ${summary.perf.frame_ms_p50} ms, GPU p50 ${summary.perf.gpu_ms_p50} ms`;
+  hud.textContent = `done (session ${session}): ${shots.length} frames uploaded; frame p50 ${summary.perf.frame_ms_p50} ms, GPU p50 ${summary.perf.gpu_ms_p50} ms`;
 }
 
 async function mainBalls(): Promise<void> {
@@ -495,8 +621,26 @@ async function main(): Promise<void> {
   const base = assetBase();
   const forceWebGL = q.get('gl') === '1';
   const upload = q.get('capture') === '1' && q.get('upload') === '1';
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || q.get('timestamps') === '1' });
+  // T24: a capture chain starts at its first tier, in one session
+  const chain = captureChain();
+  if (upload && chain.length && !q.get('tier')) {
+    const u = new URL(location.href);
+    u.searchParams.set('tier', chain[0]!);
+    u.searchParams.set('session', q.get('session') ?? newSession());
+    location.replace(u.toString());
+    return;
+  }
+  const tier = resolveTier(q);
+  const perfLive = q.get('perf') === '1' && q.get('capture') !== '1';
+  // T24: the hero portrait's eye shader binds 18 textures in the live view (5 PCSS depth maps + contact +
+  // bounce env + its own maps), over WebGPU's default 16 per stage; ask for what the adapter offers
+  // (Chrome 146+: up to 48 on capable GPUs). SwiftShader offers 16: there the live hero portrait fails.
+  const limits = forceWebGL ? {} : await adapterTextureLimits();
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || perfLive || q.get('timestamps') === '1', requiredLimits: limits });
   await renderer.init();
+  state.limits = { max_sampled_textures_per_stage: limits.maxSampledTexturesPerShaderStage ?? 16 };
+  if (!forceWebGL && (limits.maxSampledTexturesPerShaderStage ?? 16) < 18 && tier.tier === 'hero' && q.get('capture') !== '1')
+    state.warnings.push('adapter allows 16 sampled textures per shader stage: the live hero portrait needs 18 (eyes); add &shadows=key,rim,kicker');
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // Output encodes sRGB itself
@@ -505,7 +649,7 @@ async function main(): Promise<void> {
   renderer.shadowMap.type = THREE.PCFShadowMap; // r186 WebGPU: PCF with per-light radius (PCFSoft is gone)
   const dpr = Number(q.get('dpr') ?? Math.min(devicePixelRatio, 2));
   renderer.setPixelRatio(dpr);
-  const aa = aaMode();
+  const aa: AAMode = tier.flags.aa;
   const samples = aa === 'msaa' ? 4 : 1;
   const tInit = performance.now();
 
@@ -518,10 +662,19 @@ async function main(): Promise<void> {
   // served at /basis/ (engine_shots.mjs from three's examples/jsm/libs/basis)
   const useKTX2 = q.get('ktx2') === '1';
   if (useKTX2) loader.setKTX2Loader(new KTX2Loader().setTranscoderPath('/basis/').detectSupport(renderer));
-  const glbP = loader.loadAsync(base + (useKTX2 ? 'character.ktx2.glb' : 'character.glb'), (e) => {
+  // T24: the gameplay tier's LOD1 (web/tools/lod1.mjs, export.lod1); LOD0 when the build has none
+  const glbName = (lod: number) => `character${lod ? '.lod1' : ''}${useKTX2 ? '.ktx2' : ''}.glb`;
+  const onProgress = (e: ProgressEvent) => {
     progress.loaded = e.loaded;
     progress.total = e.total;
-    hud.textContent = `loading character.glb ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;
+    hud.textContent = `loading ${glbName(tier.flags.lod)} ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`;
+  };
+  let lodLoaded = tier.flags.lod ? 1 : 0;
+  const glbP = loader.loadAsync(base + glbName(lodLoaded), onProgress).catch((e: unknown) => {
+    if (!lodLoaded) throw e;
+    lodLoaded = 0;
+    state.warnings.push(`no ${glbName(1)}: LOD0 (build with --lod1 or run web/tools/lod1.mjs)`);
+    return loader.loadAsync(base + glbName(0), onProgress);
   });
   const [gltf, rules, stageData, paramJson, weave, curvHead, curvHands, lutJson, bounceJson] = await Promise.all([
     glbP,
@@ -544,12 +697,13 @@ async function main(): Promise<void> {
     }
   }
   const P = new ParamStore(overrides);
-  applyLightFlags(P);
+  // T24: the tier's switches (tiers.ts; the URL's own switches already folded in) into the params
+  const tierNoop = applyTierParams(P, tier.flags);
   const output = new Output(renderer, samples, outputOptions(P, aa));
   if (lutJson) output.lut.load(lutJson);
   else state.warnings.push('no grade_lut.json: analytic grade + three AgX (blender/hero/grade.py --lut)');
-  output.dofOn = q.get('dof') !== '0' && !!(P.get('dof.on') as number);
-  output.dofAlways = q.get('dof') === 'only';
+  output.dofOn = tier.flags.dof !== '0' && !!(P.get('dof.on') as number);
+  output.dofAlways = tier.flags.dof === 'only';
   output.dofDebug = q.get('dofview') ?? '';
   if (q.get('passcheck') === '1') installPassCheck(output); // self-test of the pass hook (passcheck.ts)
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
@@ -575,7 +729,8 @@ async function main(): Promise<void> {
   const poser = new Poser(rt);
   const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 200);
   // T10: GTAO at half resolution (ao.ts) instead of the baked direct-AO stand-in; ?gtao=0 or ao.gtao 0 = off
-  const sceneAO = q.get('gtao') !== '0' && (P.get('ao.gtao') as number) ? new SceneAO(renderer, camera, model, P) : null;
+  const sceneAO = tier.flags.gtao && (P.get('ao.gtao') as number) ? new SceneAO(renderer, camera, model, P) : null;
+  if (sceneAO) sceneAO.resolution = tier.flags.aores; // T24: half (hero) or quarter (gameplay) resolution
   output.ao = sceneAO;
   if (sceneAO && q.get('aoview') === '1') output.setDebugAO(sceneAO.texture);
   if (sceneAO && q.get('aoview') === 'normal') output.setDebugAO(sceneAO.normalTexture, true);
@@ -593,7 +748,10 @@ async function main(): Promise<void> {
       m.envMapIntensity = 0;
     }
   }
-  const stage = new Stage(stageData ?? fallbackStage(model), scene, mats.byName, P);
+  const stageAll = stageData ?? fallbackStage(model);
+  // T24: the gameplay framing (third person, gpdist m) as one more look-dev camera
+  stageAll.lookdev.cameras.gameplay = gameplayCamera(stageAll, Number(q.get('gpdist') ?? 3));
+  const stage = new Stage(stageAll, scene, mats.byName, P);
   stage.areaMode = lightAreaMode(P);
   // T19: screen-space contact shadows of the key, a 'pre' pass on the GTAO prepass (contact.ts); the key's
   // shadow node multiplies by it
@@ -604,9 +762,15 @@ async function main(): Promise<void> {
   }
   const profiler = new PassProfiler(renderer, passLabel(stage));
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
-  stage.deepHair = q.get('hairshadow') !== '0' && !!(P.get('hair.deepShadow') as number);
-  stage.shadowFill = q.get('fillshadow') !== '0';
-  stage.noShadow = (q.get('noshadow') ?? '').split(',').filter(Boolean);
+  stage.deepHair = !!tier.flags.hairshadow && !!(P.get('hair.deepShadow') as number);
+  stage.shadowFill = !!tier.flags.fillshadow;
+  // T24 ?shadows=key (gameplay): every other light unshadowed; plus T19's ?noshadow= A/B list
+  stage.noShadow = [...new Set([...(q.get('noshadow') ?? '').split(',').filter(Boolean), ...noShadowList(tier.flags.shadows, stageAll)])];
+  // T24: passes the tier switches (T17's 'ssss' when it lands; T19's contact is only built when on)
+  const passSwitch: Record<string, number> = { ssss: tier.flags.ssss, contact: tier.flags.contact };
+  const applyPassSwitches = () => {
+    for (const p of output.passList) if (p.name in passSwitch) (p as { enabled?: boolean }).enabled = !!passSwitch[p.name];
+  };
   if (q.get('lights')) stage.only = q.get('lights')!.split(','); // debug: per-light parity (hair_test --parity-lights)
   const gaze = new EyeGaze(model, (m) => {
     const mm = Array.isArray(m.material) ? m.material[0] : m.material;
@@ -615,7 +779,7 @@ async function main(): Promise<void> {
   const tSetup = performance.now();
 
   // ------------------------------------------------------------------ view / pose state
-  let viewName = (VIEWS as readonly string[]).includes(q.get('view') ?? '') ? (q.get('view') as ViewName) : 'front';
+  let viewName = (VIEWS_ALL as readonly string[]).includes(q.get('view') ?? '') ? (q.get('view') as ViewName) : 'front';
   let rigName: RigName = q.get('rig') === 'hero' ? 'hero' : q.get('rig') === 'neutral' ? 'neutral' : viewName === 'portrait' ? 'hero' : 'neutral';
   let poseName = q.get('pose') ?? (viewName === 'portrait' ? 'stand' : 'rest');
   let amount = Number(q.get('amount') ?? 1);
@@ -729,7 +893,7 @@ async function main(): Promise<void> {
     panel.append(l);
     return s;
   };
-  sel('view', VIEWS, viewName, (v) => setView(v as ViewName, rigName));
+  sel('view', VIEWS_ALL, viewName, (v) => setView(v as ViewName, rigName));
   sel('rig', ['neutral', 'hero'], rigName, (v) => setView(viewName, v as RigName));
   sel('pose', ['stand', ...Object.keys(PRESETS)], poseName, (v) => {
     poseName = v;
@@ -794,13 +958,14 @@ async function main(): Promise<void> {
     texture_mb_est: +(tex.bytes / 1e6).toFixed(1),
     lights: stage.lightCount(),
     shadow_maps: stage.shadowMapCount(),
-    gtao: sceneAO ? { half_res: true, last_ms: Math.round(sceneAO.lastMs) } : null,
+    gtao: sceneAO ? { half_res: sceneAO.resolution === 0.5, resolution: sceneAO.resolution, last_ms: Math.round(sceneAO.lastMs) } : null,
     hair_shadow: stage.deepHair ? 'deep (hair twins)' : 'binary',
     aa: output.aa === 'msaa' ? { mode: 'msaa', samples: output.samples, hair: 'alpha to coverage' } : { mode: output.aa, scale: output.aa === 'taau' ? output.scale : 1, hair: `hashed (coverage ${P.get('aa.hairCoverage')})`, still_frames: P.get('aa.stillFrames') },
     dof: output.dofOn ? { thin_lens: true, full_res: !!(P.get('dof.fullRes') as number), radius_scale: P.get('dof.radiusScale') } : null,
     grade: output.lut.info ? { lut: output.lut.info } : 'analytic (CDL + three AgX)',
     bounce: bounceTex ? { gain: P.get('bounce.gain'), irradiance: bounceJson?.irradiance ?? null } : null,
-    passes: output.passList.map((p) => `${p.stage}:${p.name}`),
+    passes: output.passList.map((p) => `${p.stage}:${p.name}${p.enabled === false ? ' (off)' : ''}`),
+    tier: { name: tier.tier, flags: tier.flags, url_switches: tier.url, noop: tierNoop, lod: lodLoaded, glb: glbName(lodLoaded), gtao_resolution: sceneAO?.resolution ?? null, no_shadow: stage.noShadow },
     lighting: {
       ltc: stage.areaMode,
       pcss: !!(P.get('light.pcss') as number),
@@ -897,6 +1062,21 @@ async function main(): Promise<void> {
   };
   (window as unknown as { __viewer: typeof api }).__viewer = api;
 
+  // ------------------------------------------------------------------ perf (T24, perf.ts)
+  const mon = new PerfMonitor(profiler);
+  if (perfLive) {
+    const session = q.get('session') ?? newSession();
+    perfOverlay(
+      mon,
+      () => `${tier.tier} tier  ${output.aa}${output.aa === 'taau' ? ` x${output.scale}` : ''}  ${canvas.width}x${canvas.height}  view ${viewName}:${rigName}  maps ${stage.shadowMapCount()}  lod ${lodLoaded}`,
+      () => ({ session, tier: tier.tier, flags: tier.flags, view: `${viewName}:${rigName}`, canvas: [canvas.width, canvas.height], user_agent: navigator.userAgent, stats: statsNow() }),
+      session,
+    );
+    mon.start();
+  }
+  applyPassSwitches();
+  if (!output.passList.some((p) => p.name === 'ssss') && !hasParam(P, 'skin.ssss')) tierNoop.push('ssss');
+
   // ------------------------------------------------------------------ loop
   state.phase = 'running';
   let last = performance.now();
@@ -910,8 +1090,10 @@ async function main(): Promise<void> {
     const [w, h] = size();
     const t = performance.now();
     output.render(scene, camera, w, h, null);
+    const cpuMs = performance.now() - t;
+    if (perfLive) mon.frame(now, cpuMs);
     if (!firstFrameMs) {
-      firstFrameMs = performance.now() - t;
+      firstFrameMs = cpuMs;
       state.ready = true;
     }
     if (Math.floor(now / 250) !== Math.floor((now - dt * 1000) / 250)) {
@@ -921,7 +1103,7 @@ async function main(): Promise<void> {
         .map(([k, v]) => `${k} ${v.toFixed(2)}`)
         .join('  ');
       hud.textContent = [
-        `${state.backend}  ${w}x${h}  dpr ${dpr}  ${output.aa === 'msaa' ? `MSAA ${samples}x` : output.aa === 'taau' ? `TAAU x${output.scale}` : 'TRAA'}${output.dofOn ? '  DoF' : ''}${output.lut.info ? '  LUT grade' : ''}`,
+        `${tier.tier} tier  ${state.backend}  ${w}x${h}  dpr ${dpr}  ${output.aa === 'msaa' ? `MSAA ${samples}x` : output.aa === 'taau' ? `TAAU x${output.scale}` : 'TRAA'}${output.dofOn ? '  DoF' : ''}${output.lut.info ? '  LUT grade' : ''}`,
         `frame p50 ${st.frame.p50.toFixed(1)} ms  p95 ${st.frame.p95.toFixed(1)} ms  (${st.frame.fps.toFixed(0)} fps)`,
         `draws ${st.draw_calls}  tris ${(st.triangles_rendered / 1000).toFixed(1)}k (model ${(tris / 1000).toFixed(1)}k)  lights ${st.lights}`,
         `textures ${tex.count}  ~${st.texture_mb_est} MB uncompressed RGBA8+mips`,
@@ -941,7 +1123,7 @@ async function main(): Promise<void> {
     firstFrameMs = performance.now() - t;
     state.ready = true;
     hud.textContent = 'capture mode';
-    if (upload) await deviceCapture(api, renderer, () => output.render(scene, camera, canvas.width, canvas.height, null));
+    if (upload) await deviceCapture(api, tier, mon, () => output.render(scene, camera, canvas.width, canvas.height, null));
     return;
   }
   renderer.setAnimationLoop(frame);

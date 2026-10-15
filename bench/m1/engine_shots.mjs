@@ -22,11 +22,15 @@
 // must be a multiple of it) with the in-between frames rendered into the history but not written, after
 // --tt-warmup frames (default 24) of turning before the first written frame, so the history is in its
 // steady state as in the live viewer.
-//   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8796] [--selftest]
+//   node bench/m1/engine_shots.mjs --build RUN_DIR --serve [--port 8796] [--selftest] [--query 'tiers=hero,gameplay']
 //        Device capture (the M4 Air): serve only, no browser. Open the printed URL on the device (through
 //        `ssh -N -L 8796:127.0.0.1:8796 <this host>`); the page renders every view on its own GPU and POSTs
-//        the frames and a summary back; the server writes them into RUN_DIR (whitelisted names only) and
-//        exits after game_shots.json. --selftest drives the same URL from local headless Chromium.
+//        the frames and a summary back; the server writes them into RUN_DIR (whitelisted names only,
+//        web/upload-sink.mjs) and exits after session.json (T24: the page's last upload). --selftest drives
+//        the same URL from local headless Chromium. With tiers (T24) the page captures each tier in turn
+//        (stills, a 2 s turntable, the perf loop) as <tier>_*.png / <tier>_tt/ / <tier>_shots.json /
+//        <tier>_perf.json (bench/m1/v4/air-session.md).
+//   --tier hero|gameplay (T24): the quality tier for the headless shots (= --query tier=X --prefix X_; X_shots.json)
 //
 // Containment: the server exposes only web/dist-viewer and RUN_DIR (under /asset/), bound to 127.0.0.1, and
 // every output file goes into RUN_DIR. For a fan build RUN_DIR is the private run dir, so nothing
@@ -38,8 +42,8 @@ import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { deflateSync, crc32 } from 'node:zlib';
 import { chromium } from 'playwright';
+import { png, receiveUpload } from '../../web/upload-sink.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const repo = resolve(here, '..', '..');
@@ -75,8 +79,10 @@ const [pw, ph] = opt('portrait', '1920x1080').split('x').map(Number);
 const backendWanted = opt('backend', 'auto');
 const port = Number(opt('port', 8796));
 const timeoutS = Number(opt('timeout', 900));
-const extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/B only)
-const outPrefix = opt('prefix', 'game_');
+const tierArg = opt('tier', null); // T24 quality tier: hero | gameplay
+let extraQuery = opt('query', ''); // extra viewer URL params, URL-encoded (A/B only)
+if (tierArg) extraQuery = `tier=${encodeURIComponent(tierArg)}${extraQuery ? '&' + extraQuery : ''}`;
+const outPrefix = opt('prefix', tierArg ? `${tierArg}_` : 'game_');
 const poseArg = opt('pose', null); // debug preset for every view (e.g. arms_up), else the view's own
 const dist = join(repo, 'web', opt('dist', 'dist-viewer'));
 const BASIS = join(repo, 'web', 'node_modules', 'three', 'examples', 'jsm', 'libs', 'basis');
@@ -111,7 +117,7 @@ const MIME = {
   '.glb': 'model/gltf-binary',
 };
 // From the build dir only what the viewer reads.
-const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|grade_lut\.json|set_bounce\.json|chart\.(glb|json))$/;
+const ASSET_OK = /^(character\.glb|character\.ktx2\.glb|character\.lod1\.glb|character\.lod1\.ktx2\.glb|character\.rig\.json|character\.stats\.json|engine_stage\.json|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_curvature\.png|grade_lut\.json|set_bounce\.json|chart\.(glb|json))$/;
 
 async function serve(req, res) {
   const url = new URL(req.url, 'http://local');
@@ -146,8 +152,6 @@ function send(res, code) {
 }
 // ------------------------------------------------------------------ device upload (--serve)
 const serveMode = argv.includes('--serve');
-const UPLOAD_OK = /^game_(front|three_quarter|profile|closeup|closeup_hero|portrait|portrait_beauty)\.png$|^game_shots\.json$/;
-const MAX_UPLOAD = 4096 * 4096 * 4;
 let uploadDone = null;
 const uploadFinished = new Promise((r) => (uploadDone = r));
 const uploaded = [];
@@ -155,31 +159,13 @@ const uploaded = [];
 async function receive(req, res) {
   const url = new URL(req.url, 'http://local');
   const name = decodeURIComponent(url.pathname.slice('/upload/'.length));
-  if (!serveMode || !UPLOAD_OK.test(name)) return send(res, 403);
-  const chunks = [];
-  let n = 0;
-  for await (const c of req) {
-    n += c.length;
-    if (n > MAX_UPLOAD) return send(res, 413);
-    chunks.push(c);
-  }
-  const body = Buffer.concat(chunks);
-  if (name.endsWith('.png')) {
-    const w = Number(req.headers['x-width']);
-    const h = Number(req.headers['x-height']);
-    if (!(w > 0 && h > 0 && w <= 4096 && h <= 4096) || body.length !== w * h * 4) return send(res, 400);
-    await writeFile(join(build, name), png(w, h, body));
-  } else {
-    const j = JSON.parse(body.toString('utf8'));
-    j.build = build;
-    j.received = new Date().toISOString();
-    j.uploaded = [...uploaded];
-    await writeFile(join(build, name), JSON.stringify(j, null, 1));
-  }
+  if (!serveMode) return send(res, 403);
+  const r = await receiveUpload(req, name, build, { build });
+  if (r.status !== 200) return send(res, r.status);
   uploaded.push(name);
-  console.error(`[engine_shots] received ${name} (${body.length} bytes)`);
+  console.error(`[engine_shots] received ${name} (${r.bytes} bytes)`);
   send(res, 200);
-  if (name === 'game_shots.json') uploadDone(name);
+  if (name === 'session.json') uploadDone(name);
 }
 
 const server = createServer((req, res) => {
@@ -192,35 +178,6 @@ await new Promise((r, rej) => {
   server.once('error', (e) => rej(new Error(`[engine_shots] cannot listen on 127.0.0.1:${port}: ${e.code} (try --port)`)));
   server.listen(port, '127.0.0.1', r);
 });
-
-// ------------------------------------------------------------------ PNG (RGB8, no deps)
-function png(w, h, rgba) {
-  const raw = Buffer.alloc((w * 3 + 1) * h);
-  for (let y = 0; y < h; y++) {
-    raw[y * (w * 3 + 1)] = 0;
-    for (let x = 0; x < w; x++) {
-      const s = (y * w + x) * 4;
-      const d = y * (w * 3 + 1) + 1 + x * 3;
-      raw[d] = rgba[s];
-      raw[d + 1] = rgba[s + 1];
-      raw[d + 2] = rgba[s + 2];
-    }
-  }
-  const chunk = (type, data) => {
-    const len = Buffer.alloc(4);
-    len.writeUInt32BE(data.length);
-    const td = Buffer.concat([Buffer.from(type), data]);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(crc32(td) >>> 0);
-    return Buffer.concat([len, td, crc]);
-  };
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(w, 0);
-  ihdr.writeUInt32BE(h, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 2;
-  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw, { level: 6 })), chunk('IEND', Buffer.alloc(0))]);
-}
 
 /** A float32 .npy (little endian, C order) of raw bytes with this shape. */
 function npy(raw, shape) {
@@ -255,6 +212,10 @@ async function run(backend) {
     const page = await browser.newPage({ viewport: { width: 256, height: 256 } });
     page.on('console', (m) => log.push(`${m.type()}: ${m.text()}`.slice(0, 300)));
     page.on('pageerror', (e) => log.push(`pageerror: ${e.message}`.slice(0, 300)));
+    // name the URL behind a bare "Failed to load resource" console error
+    page.on('response', (r) => {
+      if (r.status() >= 400) log.push(`http ${r.status()}: ${r.url().replace(/^http:\/\/127\.0\.0\.1:\d+/, '')}`.slice(0, 300));
+    });
     page.setDefaultTimeout(timeoutS * 1000);
     const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1' });
     if (backend === 'webgl2') q.set('gl', '1');
