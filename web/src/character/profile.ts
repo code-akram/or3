@@ -90,7 +90,9 @@ export class PassProfiler {
       const m = /:f(\d+)$/.exec(uid);
       if (!m) continue;
       const f = Number(m[1]);
-      const lab = this.labels.get(uid) ?? 'other';
+      const lab = this.labels.get(uid);
+      // unlabelled: a pass rendered before live(true) (stills, turntable, loading), not part of the loop
+      if (lab === undefined) continue;
       this.labels.delete(uid);
       const rec = out.get(f) ?? {};
       rec[lab] = (rec[lab] ?? 0) + ms;
