@@ -3,12 +3,15 @@
 One script every track renders its evidence with, so all tracks judge under
 the same light (bench/m1/v2/direction.md §5):
 
-  hero       the base rig: amber 3,000 K key (0.8 m square, 1.5 m, 40 deg
-             camera-left, 25 deg up) 1.0; magenta rim strip behind-right 0.7;
-             teal kicker behind-left 0.4; cool fill 0.08; 10 cm eye light at
-             the camera 0.12. Near-black world, dark floor, optional haze.
-             The rig is placed relative to the camera (a cinematic cheat), so
-             every view is lit the same way.
+  hero       the base rig (HERO_LIGHTS; T25 retune, bench/m1/v4/t25-cycles-target.md):
+             amber 3,000 K key 1.0 (0.3 m square, 1.5 m, 55 deg camera-left,
+             30 deg up) and its soft wrap; a magenta rim strip behind-right and
+             a teal kicker behind-left, both at or below the key (RIM_MAX); a
+             dim, wide set fill from the shadow side and below (the alley's
+             bounce: 4,800 K, 3 x 2.5 m); a 5 cm eye light at the camera.
+             Near-black world, dark floor, optional haze. The rig is placed
+             relative to the camera (a cinematic cheat), so every view is lit
+             the same way.
   turntable  the honesty light: 5,600 K three-point (key 1.0 at 45 deg
              camera-left / 30 deg up, fill 0.3, rim 0.5), an 18 % grey
              cyclorama, no haze, no grade, no depth of field.
@@ -79,8 +82,6 @@ EYE_DIFFUSE = 0.3                    # the eye light is mostly a catchlight (EEV
 TT_E = 4.0
 TT_EXPOSURE = 0.0
 
-# Deviation from direction §5: rim 1.4 and kicker 0.8 (not 0.7 / 0.4); at the
-# spec ratios the rims did not separate the hair edge from the black.
 # name: (colour or temperature K, ratio, shape (w, h m), azimuth deg from the
 # camera axis (+ = camera-left), elevation deg, distance m)
 # bench/m1/v2/skin-direction.md (binding, supersedes §5 where they differ):
@@ -89,15 +90,37 @@ TT_EXPOSURE = 0.0
 # magenta rim grazing the jaw and cheek edge, a hard 5 cm eye light. The key
 # stays §5's amber 3,000 K; the grade's 3,900 K white point (HERO_WB) makes it
 # read warm, not orange.
+# T25 (bench/m1/v4/t25-cycles-target.md), toward photographic:
+#   * no rim brighter than the key: a rim's ratio is at most RIM_MAX x its
+#     shot's key ratio (was rim 1.4, kicker 0.8 here and 2.2 / 1.2 in
+#     shots.RIMS: the magenta rim lit the key's shadow cheek about as brightly
+#     as the key lit the lit one, and its highlights out-shone the key's);
+#   * the fill is the set's bounce: a dim, wide, low source on the shadow
+#     side at the alley's bounce colour (refs.py --mode bounce measures r:g:b
+#     1.24 : 1 : 0.82 facing the camera, a ~4,800 K blackbody, so it is a
+#     Kelvin light and never twinned), so the shadow side holds detail (cheek
+#     lit:shadow <= 8:1) where the old cool 0.08 fill left it near black.
 KEY_K = 3000
+RIM_MAX = 1.0                      # rim ratio / key ratio, at most (rim_key_ratios)
+RIM_NAMES = ("rim", "kicker", "top")
 HERO_LIGHTS = {
     "key":     (KEY_K, 1.00, (0.3, 0.3), 55.0, 30.0, 1.5),
     "wrap":    (KEY_K, 0.25, (1.5, 1.5), 35.0, 10.0, 2.0),
-    "rim":     ((1.0, 0.18, 0.55), 1.40, (0.3, 1.5), -125.0, 20.0, 1.5),
-    "kicker":  ((0.1, 0.8, 0.9), 0.80, (0.3, 1.2), 135.0, 15.0, 1.6),
-    "fill":    ((0.55, 0.7, 1.0), 0.08, (2.0, 2.0), -55.0, -5.0, 2.5),
+    "rim":     ((1.0, 0.18, 0.55), 1.00, (0.3, 1.5), -125.0, 20.0, 1.5),
+    "kicker":  ((0.1, 0.8, 0.9), 0.70, (0.3, 1.2), 135.0, 15.0, 1.6),
+    "fill":    (4800, 0.15, (3.0, 2.5), -60.0, -20.0, 2.5),
     "eye":     (6500, 0.08, (0.05, 0.05), 0.0, 0.0, None),   # at the camera
 }
+
+
+def rim_key_ratios(lights=None):
+    """{rim name: ratio / key ratio} for a shot's light overrides on HERO_LIGHTS (T25: each <= RIM_MAX)."""
+    spec = dict(HERO_LIGHTS)
+    spec.update(lights or {})
+    key = spec.get("key")
+    if not key or key[1] <= 0:
+        return {}
+    return {n: spec[n][1] / key[1] for n in RIM_NAMES if spec.get(n) and spec[n][1] > 0}
 TT_LIGHTS = {
     "key":  (5600, 1.0, (1.2, 1.2), 45.0, 30.0, 2.5),
     "fill": (5600, 0.3, (2.0, 2.0), -60.0, 5.0, 3.0),
@@ -323,9 +346,15 @@ def receivers(ch):
 # Which lights get which twins (twin_plan):
 #   hair   every saturated hero light (key, fill, rim, kicker, top, ...) at
 #          HAIR_RIM_SAT, when HAIR_RIM is on (hero.sh --no-hair-rim).
-#   props  every saturated hero light at PROP_SAT (the pistol slide).
-#   cloth, skin, beard
-#          opt-in per shot (the shot spec's `twin`).
+#   beard  opt-in per shot (the shot spec's `twin`): facial hair, the same
+#          wet-coat mirror as the scalp hair (the profile's teal beard edge).
+#   props, cloth, skin
+#          opt-in per shot, and since T25 used by no shot but the sign (its
+#          cloth twin: the suit under the magenta sign key). Everything else
+#          takes the light's own colour, as a photograph would: the twins on
+#          skin, suit and pistol were part of why the hero read as a render
+#          (bench/m1/v4/t25-cycles-target.md). PROP_SAT is the props twin's
+#          saturation when a shot asks for one.
 # The set's practicals (sign spill lights) get no twins unless a shot asks
 # for them under the light name "practicals".
 HAIR_RIM = True
@@ -410,15 +439,14 @@ TWIN_GROUPS = {"hair": hair_objects, "beard": beard_objects, "props": prop_objec
 
 def twin_plan(name, twin=None, practical=False):
     """The twins one saturated light gets: [(group, saturation fraction,
-    energy factor)]. Defaults: hair (HAIR_RIM_SAT, if HAIR_RIM) and props
-    (PROP_SAT) on every hero light, nothing on a practical. `twin` is the
-    shot's {group: value}; value (fraction, factor) applies to every
+    energy factor)]. Default: hair only (HAIR_RIM_SAT, if HAIR_RIM) on every
+    hero light, nothing on a practical (T25: no default props twin). `twin`
+    is the shot's {group: value}; value (fraction, factor) applies to every
     saturated hero light, {light name: (fraction, factor)} to the named ones
     ("practicals" = every saturated set spill light), and None (plain or per
     light) drops that group's default twin."""
     plan = {}
     if not practical:
-        plan["props"] = (PROP_SAT, 1.0)
         if HAIR_RIM:
             plan["hair"] = (HAIR_RIM_SAT, 1.0)
     for g, val in (twin or {}).items():

@@ -3,6 +3,11 @@
 # commercial sound libraries, model weights.
 /private/
 
+# Blind-test lighting/material plates (bench/m1/plates.py, checkpoint-3 §3.2): photographs kept
+# locally, never committed (tools/hooks/check_staged.py refuses the whole dir); licence records
+# go in provenance/plates.jsonl
+/bench/ref/plates/
+
 # Large downloaded source data (fetched by scripts, not committed)
 /data/raw/
 /data/vendor/
