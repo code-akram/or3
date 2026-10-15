@@ -1,4 +1,4 @@
-// Sampled-texture budget per shader stage (T18b). WebGPU's default maxSampledTexturesPerShaderStage is
+// Sampled-texture AND sampler budget per shader stage (T18b). WebGPU's default maxSampledTexturesPerShaderStage is
 // 16, and SwiftShader (and possibly the Air) offers no more: a pipeline that binds 17 fails to compile and
 // its mesh does not draw (T24: the hero eye bound 18 under the hero rig's 5 PCSS maps). This audit records
 // every render object a frame draws (scene MRT, shadow maps, the AO prepass, the hair prepass twins) and
@@ -20,6 +20,10 @@ export interface TextureUse {
   pass: string;
   fragment: number;
   vertex: number;
+  /** samplers bound in the fragment / vertex stage (WebGPU's maxSamplersPerShaderStage is 16 too, and
+   * real adapters that offer more sampled textures keep it at 16: the coordinator's AMD Vulkan check) */
+  fragmentSamplers: number;
+  vertexSamplers: number;
   /** the fragment stage's textures, by binding name */
   names: string[];
 }
@@ -28,21 +32,31 @@ export interface TextureAudit {
   limit: number;
   max_fragment: number;
   max_vertex: number;
+  max_fragment_samplers: number;
+  max_vertex_samplers: number;
   over: TextureUse[];
   /** per material: the worst pipeline (most fragment textures) it was drawn with */
   materials: TextureUse[];
 }
 
 /** Count the sampled textures of one render object's pipeline per stage. */
-function countOf(ro: any): { fragment: number; vertex: number; names: string[] } {
+function countOf(ro: any): { fragment: number; vertex: number; fragmentSamplers: number; vertexSamplers: number; names: string[] } {
   const state = ro.getNodeBuilderState();
   let fragment = 0;
   let vertex = 0;
+  let fragmentSamplers = 0;
+  let vertexSamplers = 0;
   const names: string[] = [];
   for (const group of state.bindings ?? []) {
     for (const b of group.bindings ?? []) {
-      if (!b.isSampledTexture) continue;
       const vis = b.visibility ?? 0;
+      // a sampler binding (NodeSampler; three's SampledTexture also extends Sampler, so exclude textures)
+      if (b.isSampler && !b.isSampledTexture) {
+        if (vis & FRAGMENT) fragmentSamplers++;
+        if (vis & VERTEX) vertexSamplers++;
+        continue;
+      }
+      if (!b.isSampledTexture) continue;
       if (vis & FRAGMENT) {
         fragment++;
         names.push(String(b.texture?.name || b.name || '?'));
@@ -50,7 +64,7 @@ function countOf(ro: any): { fragment: number; vertex: number; names: string[] }
       if (vis & VERTEX) vertex++;
     }
   }
-  return { fragment, vertex, names };
+  return { fragment, vertex, fragmentSamplers, vertexSamplers, names };
 }
 
 function passName(ro: any): string {
@@ -105,14 +119,17 @@ export class TextureBudget {
     for (const u of all) {
       const k = u.material;
       const w = worst.get(k);
-      if (!w || u.fragment > w.fragment || (u.fragment === w.fragment && u.vertex > w.vertex)) worst.set(k, u);
+      const sc = (x: TextureUse) => Math.max(x.fragment, x.fragmentSamplers);
+      if (!w || sc(u) > sc(w) || (sc(u) === sc(w) && u.fragment > w.fragment)) worst.set(k, u);
     }
-    const materials = [...worst.values()].sort((a, b) => b.fragment - a.fragment || a.material.localeCompare(b.material));
+    const materials = [...worst.values()].sort((a, b) => Math.max(b.fragment, b.fragmentSamplers) - Math.max(a.fragment, a.fragmentSamplers) || a.material.localeCompare(b.material));
     return {
       limit,
       max_fragment: Math.max(0, ...all.map((u) => u.fragment)),
       max_vertex: Math.max(0, ...all.map((u) => u.vertex)),
-      over: all.filter((u) => u.fragment > limit || u.vertex > limit),
+      max_fragment_samplers: Math.max(0, ...all.map((u) => u.fragmentSamplers)),
+      max_vertex_samplers: Math.max(0, ...all.map((u) => u.vertexSamplers)),
+      over: all.filter((u) => u.fragment > limit || u.vertex > limit || u.fragmentSamplers > limit || u.vertexSamplers > limit),
       materials,
     };
   }

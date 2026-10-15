@@ -431,10 +431,10 @@ async function runTexcheck() {
           await page.waitForTimeout(500);
           // the session audit holds every pipeline since the page loaded (the first 64 px frame included)
           const ses = a.session ?? { max_fragment: a.max_fragment, over: [], materials: [] };
-          const sizeErr = errors.filter((e) => /sampled textures/.test(e));
+          const sizeErr = errors.filter((e) => /number of (sampled textures|samplers) \(\d+\)/.test(e));
           runs.push({ variant: variant || '(default)', view: spec, post, ...a, over: [...a.over, ...ses.over], console_errors: [...new Set(errors)].slice(0, 10), texture_limit_errors: sizeErr.length, wall_ms: Date.now() - t });
-          const top = a.materials.slice(0, 3).map((m) => `${m.material} ${m.fragment}`).join(', ');
-          console.error(`[engine_shots] texcheck ${variant || '(default)'} ${spec}${post ? ' beauty' : ''}: max ${a.max_fragment} frag (session ${ses.max_fragment}) / ${a.max_vertex} vert (${a.shadow_maps} maps; ${top}), ${a.over.length + ses.over.length} over, ${errors.length} console errors (${sizeErr.length} texture-limit)`);
+          const top = a.materials.slice(0, 3).map((m) => `${m.material} ${m.fragment}t/${m.fragmentSamplers}s`).join(', ');
+          console.error(`[engine_shots] texcheck ${variant || '(default)'} ${spec}${post ? ' beauty' : ''}: max ${a.max_fragment} tex / ${a.max_fragment_samplers} samplers frag (session ${ses.max_fragment} / ${ses.max_fragment_samplers}) / ${a.max_vertex} vert (${a.shadow_maps} maps; ${top}), ${a.over.length + ses.over.length} over, ${errors.length} console errors (${sizeErr.length} texture-limit)`);
         }
         await page.close();
       }
@@ -448,8 +448,11 @@ async function runTexcheck() {
   // per material, the worst over every run
   const worst = {};
   for (const r of runs)
-    for (const m of [...r.materials, ...(r.session?.materials ?? [])]) if (!worst[m.material] || m.fragment > worst[m.material].fragment) worst[m.material] = { ...m, variant: r.variant, view: r.view, post: r.post };
-  const out = { build, when: new Date().toISOString(), limit: 16, ok: over.length === 0 && limitErrors === 0, max_fragment: Math.max(0, ...runs.map((r) => Math.max(r.max_fragment, r.session?.max_fragment ?? 0))), over, texture_limit_errors: limitErrors, worst_per_material: Object.values(worst).sort((a, b) => b.fragment - a.fragment), runs };
+    for (const m of [...r.materials, ...(r.session?.materials ?? [])]) {
+      const sc = (x) => Math.max(x.fragment, x.fragmentSamplers ?? 0);
+      if (!worst[m.material] || sc(m) > sc(worst[m.material])) worst[m.material] = { ...m, variant: r.variant, view: r.view, post: r.post };
+    }
+  const out = { build, when: new Date().toISOString(), limit: 16, ok: over.length === 0 && limitErrors === 0, max_fragment: Math.max(0, ...runs.map((r) => Math.max(r.max_fragment, r.session?.max_fragment ?? 0))), max_fragment_samplers: Math.max(0, ...runs.map((r) => Math.max(r.max_fragment_samplers ?? 0, r.session?.max_fragment_samplers ?? 0))), over, texture_limit_errors: limitErrors, worst_per_material: Object.values(worst).sort((a, b) => b.fragment - a.fragment), runs };
   await writeFile(join(build, `${outPrefix}texcheck.json`), JSON.stringify(out, null, 1));
   console.log(JSON.stringify({ ok: out.ok, max_fragment: out.max_fragment, over: over.length, worst: out.worst_per_material.slice(0, 6).map((m) => `${m.material}: ${m.fragment} (${m.variant} ${m.view})`) }, null, 1));
   return out.ok;
