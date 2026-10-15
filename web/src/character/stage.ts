@@ -25,6 +25,15 @@
 // diffuse (light.eyeAll), as Cycles renders it: Cycles ignores the light's diffuse_factor 0.3 (the per-light
 // grey chart measures 1.06 x the full-diffuse prediction), and T5-T16 linked it to the eyes only, which
 // left the chart 2-11/255 low in G / B and the face without its frontal fill (t16-aa-post.md §3).
+//
+// L2 (bench/m1/v4/l2-lighting.md §1): FLOOR CLIP. An emitter that reaches below the floor plane is clipped to
+// its part above it (light.floorClip): for any receiver above the floor, the floor hides the part of the
+// emitter below its plane, which neither the LTC form factor nor a point-proxy shadow map can know. T25's
+// fill (3 x 2.5 m at el -20, 2.5 m out) reaches 0.27 m below the floor: unclipped, its grey-chart patches ran
+// 10-13 % hot (8 % of it this clip; Cycles' floor hides the rest of the difference from the world's lower
+// hemisphere, see hemiGround). The rect keeps its radiance (power scales with the kept area); exact for a rect
+// with a horizontal edge (every rig light: Blender aims them with track_quat(-Z, Y), local X level), the
+// clip of the more vertical axis otherwise.
 import * as THREE from 'three/webgpu';
 import { lights as lightsNodeOf } from 'three/tsl';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
@@ -192,6 +201,27 @@ export function around(subject: THREE.Vector3, cam: THREE.Vector3, az: number, e
   const dx = c.x * Math.cos(a) - c.y * Math.sin(a);
   const dy = c.x * Math.sin(a) + c.y * Math.cos(a);
   return new THREE.Vector3(subject.x + dx * Math.cos(e) * dist, subject.y + Math.sin(e) * dist, subject.z - dy * Math.cos(e) * dist);
+}
+
+/** L2 floor clip: the part of a w x h emitter (world centre p, orientation q; local X = width, local Y =
+ * height) above the plane y = floorY, as a rect: the new centre, size and the kept area fraction. Clipped
+ * along whichever local axis is steeper (exact when the other one is level); null = nothing below. */
+export function clipToFloor(p: THREE.Vector3, q: THREE.Quaternion, w: number, h: number, floorY: number): { p: THREE.Vector3; w: number; h: number; frac: number } | null {
+  const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+  const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+  const low = p.y - Math.abs(ax.y) * w * 0.5 - Math.abs(ay.y) * h * 0.5;
+  if (low >= floorY) return null;
+  const useY = Math.abs(ay.y) >= Math.abs(ax.y);
+  const a = useY ? ay : ax;
+  const L = useY ? h : w;
+  if (Math.abs(a.y) < 1e-6) return p.y >= floorY ? null : { p: p.clone(), w, h, frac: 0 }; // level emitter
+  // y(t) = p.y + t a.y along the axis, t in [-L/2, L/2]; keep y >= floorY
+  const t0 = (floorY - p.y) / a.y;
+  const [lo, hi] = a.y > 0 ? [Math.max(-L / 2, t0), L / 2] : [-L / 2, Math.min(L / 2, t0)];
+  if (hi <= lo) return { p: p.clone(), w, h, frac: 0 };
+  const Lk = hi - lo;
+  const c = p.clone().addScaledVector(a, (lo + hi) / 2);
+  return useY ? { p: c, w, h: Lk, frac: Lk / L } : { p: c, w: Lk, h, frac: Lk / L };
 }
 
 export interface ViewSetup {
@@ -509,8 +539,10 @@ export class Stage {
     fl.color.setRGB(fa[0]!, fa[1]!, fa[2]!);
     fl.roughness = hero ? 0.45 : this.data.lookdev.floor.roughness;
     const sphere = this.frameSphere();
-    for (const s of specs) {
-      if (this.only && !this.only.includes(s.name.replace(/_(hair|cloth|skin|props|beard)$/, ''))) continue;
+    const floorClip = this.param('light.floorClip', 1) > 0;
+    for (const s0 of specs) {
+      if (this.only && !this.only.includes(s0.name.replace(/_(hair|cloth|skin|props|beard)$/, ''))) continue;
+      let s = s0;
       const size = Math.max(s.size[0] ?? 0.3, s.size[1] ?? 0.3);
       const d = v3(s.position).distanceTo(v3(s.target));
       let l: THREE.SpotLight | THREE.RectAreaLight;
@@ -531,8 +563,6 @@ export class Stage {
         l = sp;
       }
       // the emitter rect (contact.ts marches toward it): size and world orientation, both paths
-      l.userData.rectW = Math.max(s.size[0] ?? 0.3, 1e-3);
-      l.userData.rectH = Math.max(s.size[1] ?? s.size[0] ?? 0.3, 1e-3);
       if ((l as THREE.RectAreaLight).isRectAreaLight) l.userData.rectQuat = l.quaternion.clone();
       else {
         const o = new THREE.Object3D();
@@ -542,6 +572,21 @@ export class Stage {
         o.rotateY(Math.PI);
         l.userData.rectQuat = o.quaternion.clone();
       }
+      // L2: the part of the emitter above the floor (see the header); same radiance, the kept area's power
+      const clip = floorClip ? clipToFloor(v3(s.position), l.userData.rectQuat as THREE.Quaternion, Math.max(s.size[0] ?? 0.3, 1e-3), Math.max(s.size[1] ?? s.size[0] ?? 0.3, 1e-3), this.floor.position.y) : null;
+      if (clip) {
+        s = { ...s, position: clip.p.toArray(), size: [Math.max(clip.w, 1e-3), Math.max(clip.h, 1e-3)], power_w: s.power_w * clip.frac };
+        l.position.copy(clip.p);
+        if ((l as THREE.RectAreaLight).isRectAreaLight) {
+          const r = l as THREE.RectAreaLight;
+          r.width = Math.max(clip.w, 1e-3);
+          r.height = Math.max(clip.h, 1e-3);
+          if (clip.frac <= 0) r.intensity = 0;
+        } else l.intensity *= clip.frac;
+        l.userData.floorClip = +clip.frac.toFixed(4);
+      }
+      l.userData.rectW = Math.max(s.size[0] ?? 0.3, 1e-3);
+      l.userData.rectH = Math.max(s.size[1] ?? s.size[0] ?? 0.3, 1e-3);
       // T18: the Blender emitter's rectangle (the eye material's cornea reflects it, LTC), placed as
       // rectLight() would place a RectAreaLight here
       l.userData.rect = { w: s.size[0] ?? 0.3, h: s.size[1] ?? s.size[0] ?? 0.3, quaternion: s.quaternion && this.view?.name === 'portrait' ? s.quaternion : null };
@@ -553,7 +598,106 @@ export class Stage {
       }
       this.lights.push({ light: l, spec: s });
     }
+    // L2: the hemisphere's lower half is the floor (see floorGround)
+    if (this.param('light.floorBounce', 1) > 0) {
+      const g = this.floorGround(world, fa, fl.roughness, sphere.c);
+      this.hemi.groundColor.setRGB(g[0]! / lw, g[1]! / lw, g[2]! / lw);
+      this.groundRadiance = g;
+    } else this.groundRadiance = null;
     this.link(hero);
+  }
+
+  /** L2: the ground radiance the hemisphere light gives (null: the T19 uniform world). */
+  groundRadiance: number[] | null = null;
+
+  /** L2 FLOOR GROUND: the radiance of the hemisphere light's lower half. The world is a sphere of radiance
+   * Lw only above the floor; below it a receiver sees the floor, which Cycles renders (the hero's void floor
+   * of albedo 0.03, the look-dev studio's 0.08): its Lambert bounce of the rig's lights and its specular
+   * reflection of the world. Before L2 the hemisphere's ground was the sky, so the world under-lit nothing and
+   * the floor bounced nothing: a vertical chart patch got 1.0 of the world where Cycles' world-only chart
+   * gives 0.58, and the shader balls missed Cycles' 4.5-8.6 % floor bounce (the full-rig skin ball 0.896).
+   *  - world: Lw x the floor's reflectance as a vertical receiver sees it, rho (1 - Es) + Es with Es the
+   *    GGX directional albedo (Karis' fit, F0 0.04) at the floor's view angle, cos^2-weighted over the lower
+   *    hemisphere; past the floor's edge the world itself;
+   *  - lights: rho / pi x each light's irradiance on the floor (the emitter rect integrated, after the floor
+   *    clip; the character's own shadow on the floor is not taken), averaged over the floor as a downward
+   *    receiver at the frame's centre sees it (equal view-factor rings out to 95 %).
+   * Uniforms only: no texture or sampler on any material. light.floorBounce 0 (?floorbounce=0): T19. */
+  private floorGround(world: number[], albedo: number[], rough: number, c: THREE.Vector3): number[] {
+    const fy = this.floor.position.y;
+    const H = Math.max(0.05, c.y - fy);
+    const half = (this.data.lookdev.floor.size ?? 60) / 2;
+    // Karis' analytic DFG fit: the GGX directional albedo at N.V = mu (F0 0.04)
+    const es = (mu: number): number => {
+      const r = [-rough + 1, -0.0275 * rough + 0.0425, -0.572 * rough + 1.04, 0.022 * rough - 0.04];
+      const a004 = Math.min(r[0]! * r[0]!, Math.pow(2, -9.28 * mu)) * r[0]! + r[1]!;
+      return Math.min(1, Math.max(0, 0.04 * (-1.04 * a004 + r[2]!) + 1.04 * a004 + r[3]!));
+    };
+    const rho = albedo.map((a) => Math.min(1, Math.max(0, a)));
+    const phiEdge = Math.atan(H / half);
+    const reff = [0, 0, 0];
+    const N = 256;
+    let wsum = 0;
+    for (let i = 0; i < N; i++) {
+      const phi = ((i + 0.5) / N) * (Math.PI / 2); // below the horizon
+      const w = Math.cos(phi) ** 2;
+      wsum += w;
+      const e = es(Math.sin(phi));
+      for (let k = 0; k < 3; k++) reff[k]! += w * (phi < phiEdge ? 1 : rho[k]! * (1 - e) + e);
+    }
+    const g = world.map((lw, k) => lw * (reff[k]! / wsum));
+    // the lights' Lambert bounce: floor points on equal view-factor rings around the frame centre
+    const pts: THREE.Vector3[] = [];
+    const rings = 8;
+    const az = 12;
+    for (let i = 0; i < rings; i++) {
+      const u = ((i + 0.5) / rings) * 0.95;
+      const R = H * Math.sqrt(u / (1 - u));
+      for (let j = 0; j < az; j++) {
+        const a = ((j + (i % 2) * 0.5) / az) * Math.PI * 2;
+        pts.push(new THREE.Vector3(c.x + R * Math.cos(a), fy, c.z + R * Math.sin(a)));
+      }
+    }
+    const E = [0, 0, 0];
+    const n = 6;
+    for (const { light, spec } of this.lights) {
+      if (/_(hair|cloth|skin|props|beard)$/.test(spec.name) || !Stage.reachesGroup(spec.receivers, 'other')) continue;
+      const w = Math.max(spec.size[0] ?? 0.3, 1e-3);
+      const h = Math.max(spec.size[1] ?? spec.size[0] ?? 0.3, 1e-3);
+      const q = light.userData.rectQuat as THREE.Quaternion;
+      const ax = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+      const ay = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+      const shine = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
+      const p0 = light.position;
+      const L = spec.power_w / (Math.PI * w * h); // radiance (the clipped rect keeps it)
+      const dA = (w * h) / (n * n);
+      let e = 0;
+      const x = new THREE.Vector3();
+      const d = new THREE.Vector3();
+      for (const fp of pts) {
+        for (let a = 0; a < n; a++)
+          for (let b = 0; b < n; b++) {
+            x.copy(p0).addScaledVector(ax, ((a + 0.5) / n - 0.5) * w).addScaledVector(ay, ((b + 0.5) / n - 0.5) * h);
+            if (x.y <= fy) continue;
+            d.subVectors(x, fp);
+            const r2 = d.lengthSq();
+            d.normalize();
+            const ce = -shine.dot(d); // the emitter's cosine toward the floor point
+            if (ce <= 0 || d.y <= 0) continue;
+            e += (L * ce * d.y * dA) / r2;
+          }
+      }
+      e /= pts.length;
+      for (let k = 0; k < 3; k++) E[k]! += e * (spec.color[k] ?? 1);
+    }
+    return g.map((v, k) => v + (rho[k]! / Math.PI) * E[k]!);
+  }
+
+  /** Does a light with these receivers reach this group? */
+  private static reachesGroup(r: StageLight['receivers'], g: string): boolean {
+    if (!r || r.mode === 'all') return true;
+    const hit = r.groups.includes(g);
+    return r.mode === 'include' ? hit : !hit;
   }
 
   /** Light linking (rig.py twins): per material, the lights whose receivers include its group (the
@@ -581,13 +725,17 @@ export class Stage {
     return this.lights.length;
   }
 
-  describeLights(): { name: string; type: string; intensity: number; shadow: boolean | string }[] {
-    return this.lights.map(({ light }) => ({
+  describeLights(): { name: string; type: string; intensity: number; shadow: boolean | string; floor_clip?: number; ground?: number[] }[] {
+    const out: { name: string; type: string; intensity: number; shadow: boolean | string; floor_clip?: number; ground?: number[] }[] = this.lights.map(({ light }) => ({
       name: light.name,
       type: light.type,
       intensity: +light.intensity.toFixed(3),
       shadow: light.castShadow ? ((light.userData.shadowLabel as string | undefined) ?? true) : false,
+      ...(light.userData.floorClip !== undefined ? { floor_clip: light.userData.floorClip as number } : {}),
     }));
+    // L2: the world hemisphere and its floor ground (radiance; null = the T19 uniform world)
+    out.push({ name: 'world', type: 'HemisphereLight', intensity: +this.hemi.intensity.toFixed(5), shadow: false, ...(this.groundRadiance ? { ground: this.groundRadiance.map((v) => +v.toPrecision(4)) } : {}) });
+    return out;
   }
 
   /** Shadow maps rendered per frame (each a pass over the casters): one per spot proxy (T19). */

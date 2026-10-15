@@ -258,6 +258,8 @@ function applyLightFlags(P: ParamStore): void {
     ['specocc', 'light.specOcclusion'],
     ['sharemaps', 'light.shareMaps'],
     ['eyeall', 'light.eyeAll'],
+    ['floorclip', 'light.floorClip'],
+    ['floorbounce', 'light.floorBounce'],
   ];
   for (const [k, path] of flag) if (q.get(k) === '0' || q.get(k) === '1') P.set(path, Number(q.get(k)));
 }
@@ -803,6 +805,8 @@ async function main(): Promise<void> {
   // T24: the tier's switches (tiers.ts; the URL's own switches already folded in) into the params
   // T17's detail switch is load-time (loadSkinDetail above), not a param: not a no-op
   const tierNoop = applyTierParams(P, tier.flags).filter((sw) => sw !== 'detail');
+  if (q.get('floorclip') === '0') P.set('light.floorClip', 0); // L2 A/B (the other light switches are tier flags)
+  if (q.get('floorbounce') === '0') P.set('light.floorBounce', 0);
   const output = new Output(renderer, samples, outputOptions(P, aa));
   if (lutJson) output.lut.load(lutJson);
   else state.warnings.push('no grade_lut.json: analytic grade + three AgX (blender/hero/grade.py --lut)');
@@ -865,7 +869,7 @@ async function main(): Promise<void> {
   stage.areaMode = lightAreaMode(P);
   // T19: screen-space contact shadows of the key, a 'pre' pass on the GTAO prepass (contact.ts); the key's
   // shadow node multiplies by it
-  const contact = sceneAO && (P.get('light.contact') as number) > 0 ? new ContactShadows(sceneAO, P, () => stage.keyLight()) : null;
+  const contact = sceneAO && (P.get('light.contact') as number) > 0 ? new ContactShadows(sceneAO, P, () => stage.keyLight(), renderer) : null;
   if (contact) {
     output.addPass(contact);
     stage.contactNode = contact.node;

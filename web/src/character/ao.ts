@@ -56,7 +56,8 @@ export class SceneAO {
   constructor(
     private readonly renderer: THREE.WebGPURenderer,
     camera: THREE.Camera,
-    private readonly root: THREE.Object3D,
+    /** the character (the scene passed to render() is what the prepass draws) */
+    readonly root: THREE.Object3D,
     private readonly P: ParamStore,
   ) {
     const depth = new THREE.DepthTexture(1, 1);
@@ -103,7 +104,11 @@ export class SceneAO {
     this.node.samples.value = this.P.get('ao.samples') as number;
     const restore: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
     const hidden: THREE.Object3D[] = [];
-    this.root.traverse((o) => {
+    // L2: every mesh of the scene, not only the character's: the stage floor drew its lit material here
+    // (its shaded colour went into the normal target under the feet, and binding the key's contact term
+    // before the contact pass had rendered its target made the first render recreate that texture under
+    // the floor's bind group: "Destroyed texture [contact shadows] used in a submit" on every live frame)
+    scene.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
       if (o.userData.hairPrepass) {

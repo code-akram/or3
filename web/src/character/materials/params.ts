@@ -324,6 +324,11 @@ export const DEFAULT_PARAMS = {
     /** (setup) the eye light reaches every material, as in Cycles (which ignores the light's diffuse
      * factor 0.3: the grey chart measures it at full diffuse); 0 = T5-T16, the eyes only. */
     eyeAll: 1,
+    /** (setup) L2: emitters are clipped to their part above the floor plane (stage.ts clipToFloor); 0 = whole. */
+    floorClip: 1,
+    /** (setup) L2: the hemisphere light's ground is the floor (its bounce of the lights, its reflection of the
+     * world; stage.ts floorGround); 0 = T19's uniform world (ground = sky). */
+    floorBounce: 1,
     /** (setup) twins sample their parent's depth map (one map per light); 0 = a map per twin (T10). */
     shareMaps: 1,
     /** (setup) shadow map size of every light, and the frame sphere's margin (fitShadow). */

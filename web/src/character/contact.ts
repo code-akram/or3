@@ -21,6 +21,13 @@
 // and the key's shadow node is not a material property it watches): "Destroyed texture [contact shadows]
 // used in a submit" on canvas frames after a capture at another size. Growing past CAP (rare) swaps in a
 // larger target and forces that refresh.
+//
+// L2: the target is also initialised as a render target (renderer.initRenderTarget) when it is made, before
+// any material can bind it. A texture bound by a material before its target's first render is created as a
+// plain texture; that first render then destroys and recreates it (three's updateRenderTarget sees a new
+// size), and the bind group that holds the old one goes on submitting it. The live hero portrait on a real
+// GPU did that from the first frame (the stage floor bound the key's contact term in the GTAO prepass,
+// ao.ts), 2 errors a frame for the whole session.
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import type { SceneAO } from './ao';
@@ -67,7 +74,9 @@ export class ContactShadows implements OutputPass {
     private readonly ao: SceneAO,
     private readonly P: ParamStore,
     private readonly keyLight: () => THREE.Light | null,
+    private readonly renderer: THREE.WebGPURenderer | null = null,
   ) {
+    this.prime(this.rt);
     this.texNode = texture(this.rt.texture, screenUV.mul(this.uvScale).min(this.uvMax));
     this.node = mix(float(1), this.texNode.r, this.on);
     const m = new THREE.NodeMaterial();
@@ -160,6 +169,11 @@ export class ContactShadows implements OutputPass {
     this.lastMs = performance.now() - t;
   }
 
+  /** L2: allocate the target's GPU texture as a render target now (see the header). */
+  private prime(rt: THREE.RenderTarget): void {
+    this.renderer?.initRenderTarget(rt);
+  }
+
   private static target(w: number, h: number): THREE.RenderTarget {
     const rt = new THREE.RenderTarget(w, h, { depthBuffer: false, type: THREE.UnsignedByteType, format: THREE.RedFormat });
     rt.texture.name = 'contact shadows';
@@ -172,6 +186,7 @@ export class ContactShadows implements OutputPass {
     console.warn(`contact shadows: target grows to ${n}x${n} (prepass ${w}x${h})`);
     this.retired.push(this.rt);
     this.rt = ContactShadows.target(n, n);
+    this.prime(this.rt);
     this.texNode.value = this.rt.texture;
     scene.traverse((o) => {
       const m = (o as THREE.Mesh).material;
