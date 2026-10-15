@@ -63,7 +63,10 @@ DEFAULTS = {
                                   # out over the shirt collar (calibrated on spike sim2: placed/drafted 1.26)
     "pad_cm": 1.2,                # shoulder pad at the shoulder point (the runner builds the volume)
     "length_frac": 0.475,         # nape-to-hem = this x nape height (the classic rule is 0.5)
-    "suppression": {"cb": 0.22, "back_side": 0.43, "side_front": 0.35},   # shares of the waist suppression
+    "suppression": {"cb": 0.22, "back_side": 0.43, "side_front": 0.35, "front_dart": 0.0},   # shares of the waist suppression
+    # the front dart (a fisheye, sewn): from below the chest to the hip pocket line, at this
+    # share of the way from the side seam to the centre front
+    "front_dart": {"x_frac": 0.5, "top_below_chest_cm": 4.0, "pocket_below_waist_cm": 8.0},
     "cb_seat_frac": 0.8,          # CB seam in at seat and hem, x its waist value
     "hem_flare_cm": 1.0,          # half hem wider than the half seat
     "button_ext_cm": 2.0,         # button extension past CF
@@ -76,8 +79,21 @@ DEFAULTS = {
     "roll_past_np_cm": 2.0,       # roll line crosses the shoulder line this far past the neck point
     "collar": {"stand_cm": 3.0, "fall_cm": 4.2, "end_width_cm": 4.0, "spread": 1.22},
     "sleeve": {"head_ease_cm": 3.0, "pitch_cm": 2.0, "bend_deg": 25.0, "bend_zone_cm": 5.0, "cuff_slant_cm": 1.2,
-               "under_offset_cm": 3.0, "hind_offset_cm": 1.5, "end_above_wrist_cm": 1.0},
+               "elbow_extra_cm": 1.0, "under_offset_cm": 3.0, "hind_offset_cm": 1.5, "end_above_wrist_cm": 1.0},
     "seam_allowance_cm": 1.0,     # drawn on the pattern sheet; the sim sews on the sew lines
+    # pocket, button and buttonhole placement (marked on the pattern; the runner builds them on
+    # the drape). Hip pockets: straight, the front dart ends in the pocket line, the front end
+    # this far in front of the dart; breast welt on the wearer's left only, rising to the side;
+    # the buttonhole's eye just past CF (the button sits on CF), the slit running to the side;
+    # kissing cuff buttons beside the hind seam (the sleeve vent)
+    "details": {
+        "hip_pocket": {"front_past_dart_cm": 6.0, "width_cm": 16.0, "flap_cm": 5.5, "jet_cm": 0.5,
+                       "side_clear_cm": 1.0},
+        "breast_welt": {"width_cm": 10.0, "height_cm": 2.4, "rise_cm": 1.5, "front_past_dart_cm": 2.5,
+                        "below_chest_cm": 2.0},
+        "buttonhole": {"length_cm": 2.4, "eye_past_cf_cm": 0.3},
+        "cuff_buttons": {"n": 4, "diam_cm": 1.5, "first_above_cuff_cm": 3.0, "from_seam_cm": 1.4},
+    },
 }
 
 
@@ -470,9 +486,12 @@ class Panel:
     """A closed outline of named edges (each an open polyline, cm, in order,
     end of one = start of the next), internal lines and notches."""
 
-    def __init__(self, name, edges, lines=None, notches=None, mirror=True, kind=None):
+    def __init__(self, name, edges, lines=None, notches=None, mirror=True, kind=None, inner=None):
         self.name = name
         self.edges = [(n, np.asarray(p, float)) for n, p in edges]
+        # inner edges: open polylines inside the panel that are sewn (a dart's two legs); the
+        # mesher cuts out what lies between a dart's legs
+        self.inner = {n: np.asarray(p, float) for n, p in (inner or {}).items()}
         self.lines = {k: np.asarray(v, float) for k, v in (lines or {}).items()}
         self.notches = {k: np.asarray(v, float) for k, v in (notches or {}).items()}
         self.mirror = mirror
@@ -482,7 +501,17 @@ class Panel:
                 raise ValueError(f"{name}: edge {n0} does not meet {n1} ({a[-1]} vs {b[0]})")
 
     def edge(self, n):
+        if n in self.inner:
+            return self.inner[n]
         return next(p for k, p in self.edges if k == n)
+
+    def dart_holes(self):
+        """Closed polygons between each dart's legs (<name>_b and <name>_f, bottom to top)."""
+        out = []
+        for n in self.inner:
+            if n.endswith("_b") and n[:-2] + "_f" in self.inner:
+                out.append(join(self.inner[n], self.inner[n[:-2] + "_f"][::-1]))
+        return out
 
     def outline(self):
         return join(*[p for _, p in self.edges])[:-1]
@@ -634,7 +663,18 @@ class Draft:
                 items.append('<polyline points="%s" fill="none" stroke="#b33" stroke-width="0.12" '
                              'stroke-dasharray="1,0.5"/>' % " ".join(f"{a:.2f},{b:.2f}" for a, b in q))
             for k, v in p.notches.items():
-                items.append(f'<circle cx="{v[0] + dx:.2f}" cy="{v[1] + dy:.2f}" r="0.45" fill="#36c"/>')
+                v = np.atleast_2d(v)
+                if len(v) == 2 and k in ("hip_pocket", "breast_welt", "buttonhole"):
+                    # a pocket mouth / buttonhole: the line itself
+                    items.append('<polyline points="%s" fill="none" stroke="#36c" stroke-width="0.25"/>'
+                                 % " ".join(f"{a_ + dx:.2f},{b_ + dy:.2f}" for a_, b_ in v))
+                    continue
+                for q in v:
+                    items.append(f'<circle cx="{q[0] + dx:.2f}" cy="{q[1] + dy:.2f}" r="0.45" fill="#36c"/>')
+            for k, l in p.inner.items():
+                q = l + (dx, dy)
+                items.append('<polyline points="%s" fill="none" stroke="#222" stroke-width="0.12"/>'
+                             % " ".join(f"{a_:.2f},{b_:.2f}" for a_, b_ in q))
             c = p.outline().mean(0) + (dx, dy)
             items.append(f'<text x="{c[0]:.1f}" y="{c[1]:.1f}" font-size="2.2" text-anchor="middle" '
                          f'font-family="sans-serif">{p.name}</text>')
@@ -815,6 +855,34 @@ def draft(M, opts=None):
     t_fp = arclen(arm_fu) * 0.62 / arclen(arm_f)
     arm_fu, arm_fl = split_at(arm_f, t_fp)
     Rg, t_rg = seg_intersect(B, R0, gorge)
+    # front dart: a fisheye from below the chest to the hip pocket line
+    fd = o["front_dart"]
+    w_d = sup.get("front_dart", 0.0) * tw
+    inner_f = {}
+    if w_d > 1e-3:
+        x_d = x_sf + fd["x_frac"] * (Gc - x_sf)
+        y_t, y_b = Yc + fd["top_below_chest_cm"], yw + fd["pocket_below_waist_cm"]
+        yy = np.linspace(y_b, y_t, 33)
+        hwd = np.where(yy >= yw, np.sin(0.5 * np.pi * np.clip((y_b - yy) / (y_b - yw), 0, 1)),
+                       np.sin(0.5 * np.pi * np.clip((yy - y_t) / (yw - y_t), 0, 1))) * w_d / 2
+        inner_f = {"dart_b": np.stack([x_d - hwd, yy], 1), "dart_f": np.stack([x_d + hwd, yy], 1)}
+    # pockets and the buttonhole (pattern marks: the runner builds them on the drape)
+    dt = o["details"]
+    x_dl = x_sf + fd["x_frac"] * (Gc - x_sf)
+    y_p = yw + fd["pocket_below_waist_cm"]
+    hp = dt["hip_pocket"]
+    x_pf = x_dl + hp["front_past_dart_cm"]
+    x_side = float(np.interp(y_p, side_f[:, 1], side_f[:, 0]))
+    x_pb = max(x_pf - hp["width_cm"], x_side + hp["side_clear_cm"])
+    bw = dt["breast_welt"]
+    x_wf = x_dl + bw["front_past_dart_cm"]
+    x_wb = x_wf - bw["width_cm"]
+    y_wf = Yc + bw["below_chest_cm"]
+    bh = dt["buttonhole"]
+    x_eye = Gc + bh["eye_past_cf_cm"]
+    marks = {"hip_pocket": [(x_pb, y_p), (x_pf, y_p)],
+             "breast_welt": [(x_wb, y_wf - bw["rise_cm"]), (x_wf, y_wf)],
+             "buttonhole": [(x_eye, y_btn), (x_eye - bh["length_cm"], y_btn)]}
     lapel_panels = []
     if o.get("split_lapel"):
         # spike 2: the lapel is not simulated. The front ends at the roll line (break -> where
@@ -825,7 +893,8 @@ def draft(M, opts=None):
         front = Panel("front", [("side", side_f), ("hem", hem_f), ("front", front_e), ("roll", roll_e),
                                 ("gorge", g_body), ("shoulder", shoulder_f),
                                 ("armhole_upper", arm_fu), ("armhole_lower", arm_fl)],
-                      notches={"button": (Gc, y_btn), "break": B, "front_pitch": arm_fu[-1]})
+                      notches={"button": (Gc, y_btn), "break": B, "front_pitch": arm_fu[-1], **marks},
+                      inner=inner_f)
         lapel_panels = [Panel("lapel", [("roll", roll_e[::-1]), ("lapel", lapel), ("lapel_top", lapel_top),
                                         ("gorge", g_lap)])]
     else:
@@ -868,7 +937,7 @@ def draft(M, opts=None):
     AH = arclen(arm_b) + arclen(scye_s) + arclen(arm_f)
     Wb = M["bicep"] * cm + E["bicep"]
     Wc = M["wrist"] * cm + E["cuff"]
-    We = 0.5 * (Wb + Wc) + 1.0
+    We = 0.5 * (Wb + Wc) + Sv.get("elbow_extra_cm", 1.0)
     up = M["upperarm_len"] * cm + o["shoulder_out_cm"]
     SL = up + M["forearm_len"] * cm - Sv["end_above_wrist_cm"]
     uc = 1.0
@@ -939,9 +1008,22 @@ def draft(M, opts=None):
     hind_top[-1, 1] = cuff_v(uh0)
     cuff_top = cuff_line(uf0, uh0)
     fore_top, hind_top, cuff_top = bend(fore_top), bend(hind_top), bend(cuff_top)
+    cbo = o["details"]["cuff_buttons"]
+    hs = hind_top[::-1]                      # cuff end first
+    sh = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(hs, axis=0), axis=1))]
+    cuff_btn = []
+    for k in range(int(cbo["n"])):
+        d = cbo["first_above_cuff_cm"] + k * cbo["diam_cm"]
+        q = np.array([np.interp(d, sh, hs[:, 0]), np.interp(d, sh, hs[:, 1])])
+        tg = np.array([np.interp(d + 0.5, sh, hs[:, 0]), np.interp(d + 0.5, sh, hs[:, 1])]) - q
+        tg /= np.linalg.norm(tg)
+        nrm = np.array([tg[1], -tg[0]])
+        if nrm[0] < 0:                       # into the top sleeve (+u, toward the fore seam)
+            nrm = -nrm
+        cuff_btn.append(q + nrm * cbo["from_seam_cm"])
     top = Panel("top_sleeve", [("cap_back", cap_back), ("cap_front", cap_front), ("fore", fore_top),
                                ("cuff", cuff_top), ("hind", hind_top[::-1])],
-                notches={"crown": crown, "elbow": (seam_u(uh0, v_el), v_el)})
+                notches={"crown": crown, "elbow": (seam_u(uh0, v_el), v_el), "cuff_buttons": cuff_btn})
     # under sleeve in its own u' (u for the front part, u + width for the back part)
     ua = np.linspace(uf0, Wb / 2, 16)
     ubk = np.linspace(-Wb / 2, uh0, 16)
@@ -979,6 +1061,8 @@ def draft(M, opts=None):
     ]
     if lapel_panels:
         seams.append({"name": "roll", "a": [("front", "roll", False)], "b": [("lapel", "roll", True)]})
+    if inner_f:
+        seams.append({"name": "front_dart", "a": [("front", "dart_b", False)], "b": [("front", "dart_f", False)]})
     frame = {"Gc": Gc, "Gw": Gw, "Gs": Gs, "Gh": Gh, "Yc": Yc, "Zc": Zc, "Zn": Zn, "Znpj": Znpj, "Zh": Zh,
              "kb": kb, "kf": kf, "ysc": ysc, "yw": yw, "ys": ys, "yh": yh, "y_btn": y_btn, "sigma": sig,
              "x_bp": x_bp, "x_fp": x_fp, "x_bs": x_bs, "x_sf": x_sf, "sp3": sp3.tolist(), "np3": np3.tolist(),

@@ -37,6 +37,7 @@ done
 [[ -s "$BASE/character.blend" ]] || { echo "no character.blend in $BASE" >&2; exit 2; }
 OUT="$DATA/build/suit_spike/$(date -u +%Y%m%dT%H%M%SZ)-$LABEL"
 mkdir -p "$OUT"
+echo "$BASE" > "$OUT/base.txt"
 echo "== suit spike $LABEL base=$(basename "$BASE") out=$OUT loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
 nice -n 10 blender -b -t "${THREADS:-4}" --factory-startup --python-exit-code 1 \
   --python "$REPO/bench/m1/v4/suit_spike.py" -- \
@@ -45,11 +46,17 @@ nice -n 10 blender -b -t "${THREADS:-4}" --factory-startup --python-exit-code 1 
   --config "$CONFIG" --base-blend "$BASE/character.blend" --out-dir "$OUT" "$@" \
   > "$OUT/spike.log" 2>&1 || { echo "spike failed: $OUT/spike.log" >&2; grep -v '^\[INFO\|^\[DEBUG' "$OUT/spike.log" | tail -30 >&2; exit 1; }
 grep '^\[spike\]' "$OUT/spike.log" || true
-# A/B sheets: lofted (left) vs pattern (right), one row per view
+# A/B sheets: lofted (left) vs pattern (right), one row per view; the main sheet's columns
+# are labelled
+FONT=/usr/share/fonts/noto/NotoSans-Bold.ttf
+[[ -f "$FONT" ]] || FONT=""
+lab() { magick "$1" ${FONT:+-font "$FONT"} -gravity NorthWest -fill white -pointsize 34 -annotate +18+12 "$2 | $3" "$4"; }
 if command -v magick >/dev/null && [[ -f "$OUT/pattern_front.png" ]]; then
   rows=()
   for v in front three_quarter profile back; do
-    magick "$OUT/lofted_$v.png" "$OUT/pattern_$v.png" +append "$OUT/_ab_$v.png"; rows+=("$OUT/_ab_$v.png")
+    lab "$OUT/lofted_$v.png" lofted "$v" "$OUT/_abl_$v.png"
+    lab "$OUT/pattern_$v.png" pattern "$v" "$OUT/_abp_$v.png"
+    magick "$OUT/_abl_$v.png" "$OUT/_abp_$v.png" +append "$OUT/_ab_$v.png"; rows+=("$OUT/_ab_$v.png")
   done
   magick "${rows[@]}" -append -resize 50% "$OUT/ab_sheet.png"
   if [[ -f "$OUT/pattern_bent_front.png" ]]; then
@@ -66,7 +73,7 @@ if command -v magick >/dev/null && [[ -f "$OUT/pattern_front.png" ]]; then
     done
     magick "${rows[@]}" -append -resize 75% "$OUT/closeup_sheet.png"
   fi
-  rm -f "$OUT"/_ab_*.png "$OUT"/_abb_*.png "$OUT"/_abc_*.png
+  rm -f "$OUT"/_ab_*.png "$OUT"/_abl_*.png "$OUT"/_abp_*.png "$OUT"/_abb_*.png "$OUT"/_abc_*.png
   rsvg-convert -w 1400 -b white "$OUT/pattern.svg" -o "$OUT/pattern.png" 2>/dev/null || true
 fi
 echo "$OUT"

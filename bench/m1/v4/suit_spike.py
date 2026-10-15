@@ -52,6 +52,7 @@ ap.add_argument("--base-blend", required=True)
 ap.add_argument("--out-dir", required=True)
 ap.add_argument("--measure-only", action="store_true")
 ap.add_argument("--no-render", action="store_true")
+ap.add_argument("--no-clay", action="store_true", help="spike 2: no clay renders (textures and spike.blend still made)")
 ap.add_argument("--place-only", action="store_true", help="stop after placing the panels (render them)")
 ap.add_argument("--opts", default="", help="JSON override for the spike options (or @file.json)")
 ap.add_argument("--from-run", default="", help="spike 2: reuse this run's drape (drape2.npz); rever + renders only")
@@ -358,6 +359,23 @@ def mesh_panel(D, name, pts_by_edge, h):
         edges += [(a, b) for a, b in zip(ids, ids[1:])]
         roll_ids = ids
         lines["roll"] = np.array([verts[i] for i in ids])
+    # inner edges (dart legs): constrained polylines; what lies between a dart's legs is cut out
+    holes = P.dart_holes() if hasattr(P, "dart_holes") else []
+    for e in getattr(P, "inner", {}):
+        q = pts_by_edge[(name, e)]
+        prev = None
+        for j, pq in enumerate(q):
+            hit = [k for k in range(nb, len(verts)) if abs(verts[k][0] - pq[0]) + abs(verts[k][1] - pq[1]) < 1e-7]
+            if hit:
+                k = hit[0]
+            else:
+                k = len(verts)
+                verts.append(tuple(pq))
+            where[(e, j)] = k
+            if prev is not None and prev != k:
+                edges.append((prev, k))
+            prev = k
+        lines[e] = np.array(q)
     # interior lattice
     lo, hi = loop.min(0), loop.max(0)
     dy = h * math.sqrt(3) / 2
@@ -373,6 +391,10 @@ def mesh_panel(D, name, pts_by_edge, h):
         far = _dist_polyline(grid, loop, closed=True) > 0.55 * h
         if "roll" in lines:
             far &= _dist_polyline(grid, lines["roll"]) > 0.45 * h
+        for e in getattr(P, "inner", {}):
+            far &= _dist_polyline(grid, lines[e]) > 0.45 * h
+        for hp in holes:
+            far &= ~_pip(grid, hp)
         grid = grid[far]
     verts += [tuple(p) for p in grid]
     vs = [Vector((x, y)) for x, y in verts]
@@ -388,6 +410,8 @@ def mesh_panel(D, name, pts_by_edge, h):
     for f in quads:   # fan anything that is not a triangle
         for a in range(1, len(f) - 1):
             T = np.vstack([T, [f[0], f[a], f[a + 1]]])
+    for hp in holes:   # the dart's cut-out
+        T = T[~_pip(V[T].mean(1), hp)]
     where = {k: remap[i] for k, i in where.items()}
     roll_ids = [remap[i] for i in roll_ids]
     return V, T, where, roll_ids
@@ -951,6 +975,23 @@ def keep_geometry(C, X, name, weld=True, smooth=0):
 VIEWS = {"front": (0.0, -1), "three_quarter": (35.0, -1), "profile": (90.0, -1), "back": (180.0, -1)}
 
 
+def stage_rig(sc):
+    """The render camera and the three area lights (az, el about the camera, energy, size)."""
+    cam = bpy.data.objects.get("spike_cam")
+    if cam is None:
+        cam = bpy.data.objects.new("spike_cam", bpy.data.cameras.new("spike_cam"))
+        sc.collection.objects.link(cam)
+        for nm, (az, el, en, sz) in {"key": (-40, 35, 90, 1.2), "fill": (55, 10, 25, 2.0),
+                                      "rim": (160, 30, 50, 1.0)}.items():
+            L = bpy.data.objects.new(f"spike_{nm}", bpy.data.lights.new(f"spike_{nm}", "AREA"))
+            L.data.energy, L.data.size = en, sz
+            if hasattr(L.data, "shadow_maximum_resolution"):
+                L.data.shadow_maximum_resolution = 0.0002   # finer shadow maps: the rim shadows alias
+            sc.collection.objects.link(L)
+            L["az"], L["el"] = az, el
+    return cam
+
+
 def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=1.15, az_override=None,
                  cam_dz=0.15):
     sc = bpy.context.scene
@@ -985,16 +1026,7 @@ def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=
     sc.world.use_nodes = True
     sc.world.node_tree.nodes["Background"].inputs[0].default_value = (0.05, 0.05, 0.055, 1)
     sc.world.node_tree.nodes["Background"].inputs[1].default_value = 1.0
-    cam = bpy.data.objects.get("spike_cam")
-    if cam is None:
-        cam = bpy.data.objects.new("spike_cam", bpy.data.cameras.new("spike_cam"))
-        sc.collection.objects.link(cam)
-        for nm, (az, el, en, sz) in {"key": (-40, 35, 90, 1.2), "fill": (55, 10, 25, 2.0),
-                                      "rim": (160, 30, 50, 1.0)}.items():
-            L = bpy.data.objects.new(f"spike_{nm}", bpy.data.lights.new(f"spike_{nm}", "AREA"))
-            L.data.energy, L.data.size = en, sz
-            sc.collection.objects.link(L)
-            L["az"], L["el"] = az, el
+    cam = stage_rig(sc)
     cam.data.type = "ORTHO"
     cam.data.ortho_scale = scale
     sc.camera = cam
@@ -1048,17 +1080,30 @@ SPIKE = {
 # --- spike 2 (T13): two-stage weld, hull back collider, modelled rever --------------------------
 
 SPIKE2 = {
+    "details": True,             # the made jacket (blender/character/suit_detail.py); a dict overrides
+    "lods": [0.4, 0.15],         # LOD1, LOD2 decimate ratios of the made jacket
+    "textures": True,            # UVs from the pattern + the wool atlas (character/suit_made_tex.py); a dict overrides
     "v2": True,
     "h_cm": 1.2,                      # finer than spike 1: a fold at the elbow crook needs it
     # the draft for the XPBD drape: the neckline at the neck's own length (spike 1's 1.15
     # made up for Blender's placed-shape rest), more waist, the sleeve 2 cm above the wrist
-    "draft": {"split_lapel": True, "neck_scale": 1.0, "waist_min_frac": 0.82,
-              "sleeve": {"end_above_wrist_cm": 2.0}},
+    # phase B review: hem at the crotch line (0.44 x nape height), a front dart and more side
+    # suppression, the skirt straight below the hip (no flare), a 13.4 cm half cuff, a squarer
+    # padded shoulder
+    "draft": {"split_lapel": True, "neck_scale": 1.0, "waist_min_frac": 0.82, "length_frac": 0.44,
+              "hem_flare_cm": 0.0, "pad_cm": 1.5, "shoulder_drop_deg": 1.0,
+              "suppression": {"cb": 0.22, "back_side": 0.40, "side_front": 0.25, "front_dart": 0.13},
+              "ease": {"cuff": 11.0},
+              "sleeve": {"end_above_wrist_cm": 2.0, "elbow_extra_cm": 0.0}},
+    "pad_cm": 1.5,
+    # the hem and the cuffs are turned up 4 cm (two layers and the hem canvas): stiffer
+    # (not the cuffs: flat-rest bending in a stiff band round a 4 cm tube opens it into a bell)
+    "canvas_bands": {"hem_cm": 4.0, "cuff_cm": 0.0},
     "sew_frames": 30,                 # stage 1: unwelded, flat rest, sewing springs, no gravity
     "gravity_ramp": 10, "settle_frames": 35,      # stage 2: welded, sewn rest, gravity
     "rest_smooth": {"rings": 2, "iters": 6},      # stage-2 rest: the seam band relaxed
     "pin_neck": 0.0,                  # pin weight on the neckline in stage 2 (0 = off)
-    "hull": {"alpha_back": 0.75, "z_lo_below_hem_m": 0.05, "z_hi_m": None},
+    "hull": {"alpha_back": 0.55, "z_lo_below_hem_m": 0.05, "z_hi_m": None},
     "push": {"clear_m": 0.0015, "smooth_iters": 3},
     "bent": None,
     "rever": {},
@@ -1419,12 +1464,15 @@ def push_out(X, T, L, clear, iters):
         np.add.at(Nv, T[:, k], fn)
     Nv /= np.maximum(np.linalg.norm(Nv, axis=1, keepdims=True), 1e-12)
     for i, p in enumerate(X):
-        if L.signed(p)[0] >= 0:
-            continue
+        if L.signed(p)[0] >= 0 or not L.covered(p):
+            continue            # outside, or a misreading beside a garment's edge (no ray hit)
+        p0 = p
         for _ in range(20):
             p = p + Nv[i] * 0.001
             if L.signed(p)[0] >= clear:
                 break
+        else:
+            p = p0              # 2 cm out and still 'inside': not a crevice; leave it
         X[i] = p
         moved_any[i] = True
     return X, int(moved_any.sum())
@@ -1536,13 +1584,54 @@ XPBD = {
     "drape_frames": 45, "gravity_ramp": 8,
     "button_gap_m": 0.004, "layer_gap_m": 0.003,
     "sew_close_m": 0.002, "sew_extra_max": 40,
+    "neck_fair_iters": 60,                            # fair the neckline hold targets (0 = as placed)
     "neck_hold_k": 30.0,                              # N/m: the collar and the neck tape hold the neckline
+    "neck_hold_k2": 30.0, "neck_hold2_fair": False,   # stage 2
     "sdf_h": 0.006,
     # self-contact (the elbow crook and the underarm fold onto themselves otherwise): vertices
     # closer than self_r repel unless within self_excl of each other on the placed garment
     "self_r": 0.010, "self_excl": 0.025,
     "kb_sleeve": 6e-5,
 }
+
+
+def neck_targets(C, Xm, wm0, iters=60):
+    """Fair hold targets for the neckline, by weld group: per side, the chain CB -> NP (back
+    neck) -> roll crossing (front gorge, reversed), Taubin-smoothed with its ends fixed, then
+    re-spaced along the smoothed line in proportion to the pattern's arc length."""
+    out = {}
+    if iters <= 0:
+        return out
+    for suf in ("", "_r"):
+        ids, s = [], []
+        acc = 0.0
+        for pn, e, rev in (("back" + suf, "neck", False), ("front" + suf, "gorge", True)):
+            if (pn, e) not in C["pts"]:
+                continue
+            Pp = C["pts"][(pn, e)]
+            js = list(range(len(Pp)))[::-1] if rev else list(range(len(Pp)))
+            for k, j in enumerate(js):
+                g = int(wm0[C["gid"][(pn, e, j)]])
+                if k > 0:
+                    acc += float(np.linalg.norm(Pp[j] - Pp[js[k - 1]]))
+                if ids and ids[-1] == g:
+                    continue
+                ids.append(g)
+                s.append(acc)
+        if len(ids) < 4:
+            continue
+        Q = Xm[ids].copy()
+        for it in range(2 * iters):
+            lam = 0.5 if it % 2 == 0 else -0.53
+            Q[1:-1] += lam * (0.5 * (Q[:-2] + Q[2:]) - Q[1:-1])
+        # re-space by the pattern's arc length
+        seg = np.linalg.norm(np.diff(Q, axis=0), axis=1)
+        cq = np.r_[0.0, np.cumsum(seg)]
+        f = np.array(s) / max(s[-1], 1e-9) * cq[-1]
+        R = np.c_[[np.interp(f, cq, Q[:, k]) for k in range(3)]].T
+        for g, r in zip(ids, R):
+            out[g] = r
+    return out
 
 
 def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
@@ -1570,6 +1659,9 @@ def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
     lay = layer_sets(C)
     if lay is not None:
         S.layers = [(lay[0], lay[1], P["layer_gap_m"])]
+    # the button pair: the left front's button point stays in front of the right's (a plain
+    # distance constraint let the right front come through: run t13b-d2, 13.5 mm)
+    S.layer_force = [(np.array([bl]), np.array([br]), P["button_gap_m"])]
     # the placed garment, each sewn group at its mean (the reference for holds and self-contact)
     wm0, nw0 = weld_map(n0, C["sew"])
     Xm = np.zeros((nw0, 3))
@@ -1582,9 +1674,14 @@ def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
         S.self_ref, S.self_r, S.self_excl, S.self_skip = Xm[wm0], P["self_r"], P["self_excl"], skip0
     if neck is not None and P["neck_hold_k"] > 0:
         # hold the neckline where it was placed (a sewn corner at its pair's mean, so the
-        # hold and the seam agree): the collar and the neck tape hold it in a real jacket
+        # hold and the seam agree): the collar and the neck tape hold it in a real jacket.
+        # The placement can step where the back wraps into the shoulder: the targets are the
+        # placed line smoothed and spaced as on the pattern (a taped neckline is a fair curve)
         S.hold_idx = np.nonzero(neck)[0]
-        S.hold_pos = Xm[wm0[S.hold_idx]]
+        tgt = neck_targets(C, Xm, wm0, P["neck_fair_iters"])
+        stats["_neck_tgt"] = tgt
+        S.hold_pos = np.array([tgt.get(int(wm0[i]), Xm[wm0[i]]) for i in S.hold_idx])
+        stats["neck_hold_moved_mm"] = round(float(np.abs(S.hold_pos - Xm[wm0[S.hold_idx]]).max()) * 1000, 1)
         S.hold_k = P["neck_hold_k"]
     k0, k1 = P["sew_k"]
     nf = P["sew_frames"]
@@ -1624,14 +1721,22 @@ def drape_xpbd(C, O, sdf, canvas, stats, neck=None):
     S2.sdf = sdf
     if lay is not None:
         S2.layers = [(np.unique(wm[lay[0]]), np.unique(wm[lay[1]]), P["layer_gap_m"])]
+    S2.layer_force = [(np.array([int(wm[bl])]), np.array([int(wm[br])]), P["button_gap_m"])]
     if P["self_r"] > 0:
         skip2 = np.zeros(nw, bool)
         skip2[wm[skip0]] = True
         S2.self_ref, S2.self_r, S2.self_excl, S2.self_skip = Xm, P["self_r"], P["self_excl"], skip2
     if neck is not None and P["neck_hold_k"] > 0:
-        S2.hold_idx = np.unique(wm[np.nonzero(neck)[0]])
-        S2.hold_pos = Xw[S2.hold_idx].copy()
-        S2.hold_k = P["neck_hold_k"]
+        # where stage 1 left it (holding stage 2 to the fair line instead, firmer, crumples the
+        # collar ends: run t13b-j4); neck_hold2_fair switches that back on
+        tgt = stats.pop("_neck_tgt", {})
+        tgt = tgt if P["neck_hold2_fair"] else {}
+        hold = {}
+        for i in np.nonzero(neck)[0]:
+            hold[int(wm[i])] = tgt.get(int(wm0[i]), Xw[wm[i]])
+        S2.hold_idx = np.array(sorted(hold), int)
+        S2.hold_pos = np.array([hold[k] for k in S2.hold_idx])
+        S2.hold_k = P["neck_hold_k2"]
     gr = P["gravity_ramp"]
     S2.run(P["drape_frames"], P["fps"], P["substeps"], g_of=lambda f: 9.81 * min(1.0, (f + 1) / gr),
            ksew_of=lambda f: k1)
@@ -1663,7 +1768,83 @@ CLOSE = {"close_34": (35.0, (0.0, 0.0, 1.42), 0.62), "close_back": (180.0, (0.0,
          # looking up into the left armpit from the front, below
          "close_armpit": (25.0, (0.22, 0.0, 1.36), 0.22, -2.4),
          # the left cuff and forearm from behind (the hind seam)
-         "close_cuff": (120.0, (0.47, -0.12, 1.14), 0.30)}
+         "close_cuff": (120.0, (0.47, -0.12, 1.14), 0.30),
+         # the wearer's left lapel edge, from the front
+         "close_lapel": (10.0, (0.07, -0.12, 1.42), 0.16),
+         # the back of the collar (stand, fall, the centre back)
+         "close_collar_back": (160.0, (0.0, 0.05, 1.57), 0.24, 0.05)}
+
+
+DETAIL_CLOSE = {
+    # the wearer's left hip pocket, breast welt, front button and buttonhole, cuff buttons, vent
+    "close_pocket": (20.0, (0.12, -0.12, 1.02), 0.24),
+    "close_welt": (15.0, (0.10, -0.12, 1.36), 0.20),
+    "close_button": (5.0, (0.0, -0.13, 1.125), 0.10),
+    "close_cuff_btn": (110.0, (0.47, -0.12, 1.12), 0.18),
+    "close_vent": (165.0, (0.10, 0.08, 0.98), 0.32),
+    "close_hem_edge": (35.0, (0.06, -0.10, 0.95), 0.18, -0.25),
+}
+
+
+def render_detail_close(out_dir, tag, show):
+    for v, (az, tgt, sc_, *dz) in DETAIL_CLOSE.items():
+        render_views(out_dir, tag, show, [v], target=tgt, scale=sc_, az_override=az,
+                     cam_dz=dz[0] if dz else 0.15)
+
+
+def set_parts(ob, part):
+    """Store the made jacket's part tag (0 wool, 1 lining, 2 edge, 3 button) as a face
+    attribute (materials come later: T13 item 2)."""
+    a = ob.data.attributes.new("part", "INT", "FACE")
+    a.data.foreach_set("value", [int(x) for x in part])
+
+
+def detail_clearance(X, T, det):
+    """How far each detail stands off the drape (mm): min, p01 of the signed distance of the
+    pockets' and buttons' vertices to the draped outside (negative = sunk in)."""
+    from mathutils.bvhtree import BVHTree
+    bvh = BVHTree.FromPolygons([tuple(p) for p in X], [tuple(int(i) for i in t) for t in T])
+    out = {}
+    for k in ("pockets", "buttons", "buttonhole"):
+        if det.get(k) is None:
+            continue
+        d = []
+        for p in det[k][0]:
+            loc, nor, _, dd = bvh.find_nearest(Vector(p))
+            if loc is None or dd > 0.03:
+                continue
+            d.append(float(np.dot(np.asarray(p) - np.array(loc), np.array(nor))))
+        d = np.array(d) * 1000
+        out[k] = {"min": round(float(d.min()), 2), "p01": round(float(np.percentile(d, 1)), 2),
+                  "below_0": int((d < 0).sum()), "n": int(len(d))}
+    return out
+
+
+def make_lods(obs, ratios):
+    """LOD1/LOD2: the made jacket joined and collapse-decimated. Returns {k: (object, tris)}."""
+    out = {}
+    for k, r in enumerate(ratios, start=1):
+        cps = []
+        for ob in obs:
+            if k >= 2 and ob.name.endswith(("buttonhole",)):
+                continue                       # LOD2 drops the buttonhole cord
+            c = ob.copy()
+            c.data = ob.data.copy()
+            bpy.context.scene.collection.objects.link(c)
+            cps.append(c)
+        with bpy.context.temp_override(active_object=cps[0], selected_editable_objects=cps,
+                                       selected_objects=cps):
+            bpy.ops.object.join()
+        j = cps[0]
+        j.name = f"spike_jacket_lod{k}"
+        m = j.modifiers.new("dec", "DECIMATE")
+        m.ratio = float(r)
+        dg = bpy.context.evaluated_depsgraph_get()
+        me2 = bpy.data.meshes.new_from_object(j.evaluated_get(dg))
+        j.modifiers.clear()
+        j.data = me2
+        out[k] = (j, int(sum(len(p.vertices) - 2 for p in me2.polygons)))
+    return out
 
 
 def render_close(out_dir, tag, show):
@@ -1713,6 +1894,14 @@ def main_v2(O):
             dn = _dist_polyline(I["V"], nk)
             sl = slice(I["base"], I["base"] + len(I["V"]))
             canvas[sl] = np.maximum(canvas[sl], 1.0 - sp.smoothstep(dn / O["canvas"]["neck_band_cm"]))
+        bands = O.get("canvas_bands")
+        if v2 and bands:
+            e = {"back": "hem", "side": "hem", "front": "hem", "top_sleeve": "cuff", "under_sleeve": "cuff"}.get(I["kind"])
+            if e is not None:
+                w_cm = bands["cuff_cm" if e == "cuff" else "hem_cm"]
+                dh = _dist_polyline(I["V"], D.geom(n).edge(e))
+                sl = slice(I["base"], I["base"] + len(I["V"]))
+                canvas[sl] = np.maximum(canvas[sl], 1.0 - sp.smoothstep((dh - w_cm) / 1.5 + 1.0))
     # the neckline (for the optional stage-2 pin)
     neck = np.zeros(n0, bool)
     for (pn, e, j), g in C["gid"].items():
@@ -1875,14 +2064,55 @@ def main_v2(O):
         stats["rever"]["inside_under_ray"] = len(cov)
         stats["rever"]["inside_under_ray_at"] = [[round(float(cv[i, 0]), 1), round(float(cv[i, 1]), 1)] for i in cov[:12]]
     cov3 = [p for p in X3 if real.covered(p)]
+    # inside by both rules (the nearest face says inside and a ray says covered)
+    stats["inside_both"] = int(sum(1 for p in cov3 if real.signed(p)[0] < -0.0005))
     stats["inside_after_push_ray"] = len(cov3)
     stats["inside_after_push_ray_at"] = [[round(float(c), 3) for c in p] for p in cov3[:12]]
     if O.get("debug_rever"):
         np.savez_compressed(os.path.join(A.out_dir, "rever_dbg.npz"), chart_V=rinfo["chart_V"], chart_T=rinfo["chart_T"],
                             sheet_X=rinfo["sheet_X"], **rinfo["debug"])
     tick("rever", t)
-    jk = mesh_object("spike_jacket_body", X3, Tw)
     rv = mesh_object("spike_jacket_rever", Vr, Fr)
+    from character import suit_made_tex
+    suit_made_tex.set_uv(rv, rinfo["uv"], rinfo["tag"])
+    set_parts(rv, np.zeros(len(Fr), int))
+    det_obs = []
+    uv_obs, uv_marks, uv_tags = {"rever": rv}, {"rever": rinfo["marks"]}, {"rever": rinfo["tags"]}
+    if O.get("details"):
+        # the made jacket: shell with turned edges and lining, pockets, vents, buttons
+        t = time.perf_counter()
+        from character import suit_detail
+        dst = {}
+        det = suit_detail.build(C, D, wm, X3, Tw, O["details"] if isinstance(O["details"], dict) else None, dst)
+        Vs_, Fs_, ps_, us_, ts_ = det["shell"]
+        jk = mesh_object("spike_jacket_body", Vs_, Fs_)
+        set_parts(jk, ps_)
+        suit_made_tex.set_uv(jk, us_, ts_)
+        uv_obs["shell"] = jk
+        for k in ("pockets", "buttons", "buttonhole"):
+            if det.get(k) is not None:
+                ob_ = mesh_object(f"spike_jacket_{k}", det[k][0], det[k][1])
+                set_parts(ob_, det[k][2])
+                if det[k][3] is not None:
+                    suit_made_tex.set_uv(ob_, det[k][3], det[k][4])
+                    uv_obs[k] = ob_
+                det_obs.append(ob_)
+        uv_marks.update(det["_uv"]["marks"])
+        uv_tags.update(det["_uv"]["tags"])
+        dst["clearance_mm"] = detail_clearance(X3, Tw, det)
+        stats["detail"] = dst
+        parts_ = {k: v for k, v in det.items() if v is not None and not k.startswith("_")}
+        np.savez_compressed(os.path.join(A.out_dir, "made.npz"),
+                            **{f"{k}_V": v[0] for k, v in parts_.items()},
+                            **{f"{k}_F": np.array([list(f) + [-1] * (4 - len(f)) for f in v[1]]) for k, v in parts_.items()},
+                            **{f"{k}_part": v[2] for k, v in parts_.items()},
+                            **{f"{k}_uv": np.array([list(np.ravel(u)) + [0.0] * (8 - np.size(u)) for u in v[3]])
+                               for k, v in parts_.items() if v[3] is not None},
+                            **{f"{k}_tag": v[4] for k, v in parts_.items() if v[4] is not None})
+        tick("details", t)
+    else:
+        jk = mesh_object("spike_jacket_body", X3, Tw)
+    stats["made_tris"] = sum(len(p.vertices) - 2 for ob_ in [jk, rv] + det_obs for p in ob_.data.polygons)
     stats["kept_tris"] = int(len(Tw)) + sum(len(f) - 2 for f in Fr)
     stats["body_tris"] = int(len(Tw))
     stats["rever_tris"] = sum(len(f) - 2 for f in Fr)
@@ -1898,6 +2128,14 @@ def main_v2(O):
     print(json.dumps({k: stats[k] for k in ("stage1_gap_mm", "inside_after_push", "kept_tris")}, indent=1), flush=True)
     for nm, v in stats["crease_final"].items():
         print(f"[spike] crease {nm}: {v}", flush=True)
+    made_mats = None
+    if O.get("textures"):
+        # the wool atlas and the materials: before the LODs (their copies carry the atlas UVs);
+        # assigned after the clay renders, which take the slots
+        t = time.perf_counter()
+        made_mats, stats["textures"] = suit_made_tex.bake(uv_obs, uv_marks, uv_tags, suit.DEFAULTS,
+                                                          O["textures"] if isinstance(O["textures"], dict) else None)
+        tick("textures", t)
     if A.no_render:
         return
     t = time.perf_counter()
@@ -1907,15 +2145,32 @@ def main_v2(O):
     under = [body.name] + [base[k].name for k in ("shirt", "waistcoat", "trousers", "shoes", "tie") if k in base]
     base["jacket"].hide_viewport = False
     bpy.context.scene.frame_set(1)
-    render_views(A.out_dir, "lofted", under + [base["jacket"].name], list(VIEWS))
-    render_views(A.out_dir, "pattern", under + [jk.name, rv.name], list(VIEWS))
-    render_close(A.out_dir, "lofted", under + [base["jacket"].name])
-    render_close(A.out_dir, "pattern", under + [jk.name, rv.name])
+    pat = [jk.name, rv.name] + [o_.name for o_ in det_obs]
+    if not A.no_clay:
+        render_views(A.out_dir, "lofted", under + [base["jacket"].name], list(VIEWS))
+        render_views(A.out_dir, "pattern", under + pat, list(VIEWS))
+        render_close(A.out_dir, "lofted", under + [base["jacket"].name])
+        render_close(A.out_dir, "pattern", under + pat)
+        if det_obs:
+            render_detail_close(A.out_dir, "pattern", under + pat)
+    if O.get("lods"):
+        lods = make_lods([jk, rv] + det_obs, O["lods"])
+        stats["lod_tris"] = {k: v[1] for k, v in lods.items()}
+        for k, (ob_, _) in lods.items():
+            if not A.no_clay:
+                render_views(A.out_dir, f"lod{k}", under + [ob_.name], ["front", "three_quarter"])
     if O.get("debug_rever"):
         render_close(A.out_dir, "rever", [body.name, rv.name])
         render_close(A.out_dir, "jbody", [body.name, jk.name])
         render_views(A.out_dir, "rever", [body.name, rv.name], ["front", "back"], target=(0, 0, 1.4), scale=0.7)
     tick("render", t)
+    if made_mats is not None:
+        # kept in spike.blend for the beauty frames (suit_beauty.py), the LODs too
+        lod_obs = [ob_ for k, (ob_, _) in sorted(lods.items())] if O.get("lods") else []
+        suit_made_tex.assign([jk, rv] + det_obs + lod_obs, made_mats)
+        side_ = made_mats[0]["suit_atlas_side_m"]
+        stats["textures"]["uv_lod"] = {ob_.name: suit_made_tex.uv_stats(ob_, side_) for ob_ in lod_obs}
+    stage_rig(bpy.context.scene)              # (--no-clay: the beauty frames need the camera and lights)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(A.out_dir, "spike.blend"), compress=True)
     with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
         stats["timings_s"] = T
