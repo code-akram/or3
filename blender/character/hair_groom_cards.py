@@ -121,7 +121,7 @@ CARDS = {
     # T20: baked directional hair occlusion per card vertex for the gameplay tier (no deep shadow):
     # transmittance through the groom's strand density along +-x, +-y, +-z (glTF axes), voxels of
     # voxel_m, optical depth = strand projected area per voxel area x `k`; stored as its L1 fit
-    # (mean, gradient) in two extra UV sets (TEXCOORD_2 = (mean, gx), TEXCOORD_3 = (gy, gz))
+    # (mean, gradient), 6 bits each, packed in TEXCOORD_1 y (see dir_occlusion)
     "dir_occlusion": {"enabled": True, "voxel_m": 0.004, "k": 0.15, "strand_d_m": 0.00008},
     # T20: under cards clear of the neck: in the hanging part the centreline rides the members'
     # `pct` percentile along the outward (radial) normal, not their mean (a lock wrapping the neck
@@ -1292,7 +1292,7 @@ def dir_occlusion(obj, E, oc):
     transmittance exp(-tau) through the groom's strands toward +-x, +-y, +-z, tau summed over a voxel grid
     of the strands' projected area (segment length x diameter / voxel area, x k) from the vertex's voxel
     (half of it) outward. Stored as the L1 fit in glTF axes: UV `occ_a` = (mean, gx), `occ_b` = (gy, gz),
-    occlusion(L) ~ clamp(mean + g.L) (exported TEXCOORD_2 / TEXCOORD_3)."""
+    occlusion(L) ~ clamp(mean + g.L) (packed in the strand UV v, TEXCOORD_1 y)."""
     me = obj.data
     a = oc["voxel_m"]
     P = E.reshape(-1, 3)
@@ -1326,11 +1326,20 @@ def dir_occlusion(obj, E, oc):
     gz = 0.5 * (T[(1, -1)] - T[(1, 1)])
     li = np.empty(len(me.loops), np.int32)
     me.loops.foreach_get("vertex_index", li)
-    act = me.uv_layers.active_index
-    for name, u, v in (("occ_a", mean, gx), ("occ_b", gy, gz)):
-        lay = me.uv_layers.get(name) or me.uv_layers.new(name=name)
-        lay.data.foreach_set("uv", np.stack([u[li], v[li]], 1).astype(np.float32).ravel())
-    me.uv_layers.active_index = act
+    # packed into the "strand" UV v (TEXCOORD_1 y; u is the layer's specular scale, the viewer reads no v):
+    # 6 bits each, mean + 64 gx' + 4096 gy' + 262144 gz' (g' = (g + 1) / 2), an integer < 2^24 that float32
+    # holds exactly. Two more UV sets took the hair mesh to 10 vertex attributes, over WebGPU's 8 vertex
+    # buffers (the pipeline failed and the frame went black). The viewer decodes it in the vertex stage.
+    def q(x):
+        return np.clip(np.round(x * 63.0), 0, 63)
+    packed = (q(mean) + 64.0 * q(0.5 * gx + 0.5) + 4096.0 * q(0.5 * gy + 0.5)
+              + 262144.0 * q(0.5 * gz + 0.5))
+    lay = me.uv_layers["strand"]
+    uvs = np.empty(len(me.loops) * 2, np.float32)
+    lay.data.foreach_get("uv", uvs)
+    uvs = uvs.reshape(-1, 2)
+    uvs[:, 1] = packed[li]
+    lay.data.foreach_set("uv", uvs.ravel())
     return {"voxel_m": a, "k": oc["k"], "mean_p10_p50_p90": [round(float(np.percentile(mean, q)), 3) for q in (10, 50, 90)],
             "grid": [int(s) for s in shape]}
 

@@ -20,7 +20,7 @@ import { albedo, diffuseRamp } from './style';
 import { temporalFrame } from '../temporal';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, cameraWorldMatrix, exp, log, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, vec2, vec3, vec4, vertexColor } = TSL as any;
+const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, cameraWorldMatrix, exp, log, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, varying, vec2, vec3, vec4, vertexColor } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -441,7 +441,16 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
       const lc = log(cs);
       fibre = mix(tint, exp(lc.mul(lc).mul(P.u('hair.ttDepth')).negate()), P.u('hair.fibreTint'));
     }
-    const dirOcc: N | null = opts.dirOcc ? vec4(uv(2).x, uv(2).y, uv(3).x, uv(3).y) : null;
+    // T20 directional occlusion: 4 x 6 bits packed in the strand UV v (TEXCOORD_1 y, which the exporter writes as
+    // 1 - v), decoded per vertex (the packed integer does not survive interpolation; the decoded values do)
+    let dirOcc: N | null = null;
+    if (opts.dirOcc) {
+      const p0 = float(1).sub(uv(1).y).round();
+      const d = (x: N) => x.div(64).floor();
+      const p1 = d(p0), p2 = d(p1), p3 = d(p2);
+      const q = (x: N, y: N) => x.sub(y.mul(64)).div(63);
+      dirOcc = varying(vec4(q(p0, p1), q(p1, p2).mul(2).sub(1), q(p2, p3).mul(2).sub(1), p3.div(63).mul(2).sub(1)));
+    }
     this.nodes = { tangent: T, shiftOff, rough, specScale, tint, fibre, dirOcc, screen: screenAONode(opts.screenAO) };
     this.normalNode = null; // shade the card as a fibre bundle: the smooth proxy normal from the GLB
     this.roughnessNode = rough;
@@ -759,11 +768,16 @@ export interface MaterialSet {
 export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidecars, msaa: boolean): MaterialSet {
   const byName = new Map<string, THREE.MeshPhysicalNodeMaterial>();
   const roles = new Map<string, Role>();
-  // T20: hair materials whose meshes carry the baked directional occlusion (TEXCOORD_2 / _3)
+  // T20: hair materials whose meshes carry the baked directional occlusion, packed in TEXCOORD_1 y (older
+  // builds hold the card side there, +-1, so 1 - v is 0 or 2; a packed value is a 24-bit integer)
   const occ = new Set<string>();
   root.traverse((o) => {
     const m = o as THREE.Mesh;
-    if (!m.isMesh || !m.geometry.attributes.uv2 || !m.geometry.attributes.uv3) return;
+    const a = m.isMesh ? m.geometry.attributes.uv1 : undefined;
+    if (!a) return;
+    let packed = false;
+    for (let i = 0; i < a.count && !packed; i++) packed = 1 - a.getY(i) > 2.5;
+    if (!packed) return;
     for (const mt of Array.isArray(m.material) ? m.material : [m.material]) occ.add(mt.name);
   });
   const make = (src: Std): THREE.MeshPhysicalNodeMaterial => {

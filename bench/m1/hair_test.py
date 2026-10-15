@@ -903,6 +903,10 @@ def views_test(results):
     for view, (loc, tgt) in cams.items():
         hv_camera(f"hv_{view}", loc, tgt)
         save(os.path.join(OUT, f"hv_{view}_game.exr"), exr=True)
+    if "--views-game-only" in argv:
+        # T20: the game masks alone (no .blend, no Cycles): a quick silhouette loop against a kept
+        # hero mask of the same groom
+        return
     # Hero: the kept .blend, studio rig, same cameras.
     arm = open_blend()
     sc = bpy.context.scene
