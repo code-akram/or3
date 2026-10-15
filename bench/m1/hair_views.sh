@@ -34,7 +34,7 @@ PIN=()
 command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
 for pre in game_ lin_; do
   Q=(); [[ $pre == lin_ ]] && Q=(--query view_transform=standard)
-  flock "${ENGINE_LOCK:-/tmp/or3-engine-${ENGINE_PORT:-8798}.lock}" nice -n 10 "${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$VD" --views three_quarter,profile,front,closeup \
+  flock "${ENGINE_LOCK:-/tmp/or3-engine-${ENGINE_PORT:-8798}.lock}" nice -n 10 "${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$VD" --views three_quarter,profile,front,back,closeup \
     --size 1024 --port "${ENGINE_PORT:-8798}" --prefix "$pre" "${Q[@]}" >> "$HT/views_engine.log" 2>&1 \
     || { echo "engine shots failed: $HT/views_engine.log" >&2; tail -20 "$HT/views_engine.log" >&2; exit 1; }
 done

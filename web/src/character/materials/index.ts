@@ -555,6 +555,11 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
         .mul(mix(float(1), o.r, P.u('hair.bakedAO')))
         .mul(mix(float(1).sub(P.u('hair.depthAO')), float(1), a.a));
     }
+    // H2: the scalp cards' COLOR_0 alpha (per-card opacity, the hairline root fade) scales the coverage after the
+    // alpha test (the test stays on the map alpha, as the shadow pass and the T15 game mask see it), so a fade
+    // is a smooth stochastic / A2C ramp, not cut at alphaTest; a VEC3 COLOR_0 (older builds) reads alpha 1
+    this.vAlpha = opts.prefix === 'hair' && this.vertexColors && (P.get('hair.vertexAlpha') as number) > 0
+      ? vertexColor().a : null;
     this.colorNode = vec4(albedo(P, opts.prefix, col).mul(ao), c.a);
     this.vertexColors = false; // folded into colorNode above
     // flow (UV space) through the exported tangent frame (glTF: +Y = the image's up = +v in Blender)
@@ -602,8 +607,44 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     this.metalnessNode = float(0);
     this.side = THREE.DoubleSide;
     this.alphaTest = P.get(`${opts.prefix}.alphaTest`) as number;
-    if (opts.msaa) this.alphaToCoverage = true;
-    else this.setupHashedAlpha(c.a, P);
+    if (opts.msaa) {
+      this.alphaToCoverage = true;
+      this.msaaCover = P.get('aa.msaaHairCoverage') as number;
+    } else this.setupHashedAlpha(c.a, P);
+  }
+
+  /** H2: COLOR_0 alpha of the scalp cards (null = none / off) */
+  private readonly vAlpha: N | null;
+  /** H2: MSAA path, mix(A2C step, map alpha over the test, aa.msaaHairCoverage) (0 = three's own A2C) */
+  private msaaCover = 0;
+
+  /** H2, MSAA path: alpha-to-coverage from the same coverage the TRAA hash tests (setupHashedAlpha): the map
+   * alpha where it passes alphaTest, x the COLOR_0 alpha. three's A2C (NodeMaterial.setupDiffuseColor) writes
+   * smoothstep(alphaTest, alphaTest + fwidth, a): every strand texel over the test became a full sample set, so
+   * the sparse outer cards covered more than their strands (the MSAA side / back hair 1.24-1.27x Cycles, TRAA
+   * 1.11-1.12x). The alpha test is held off while three builds the colour (it would write its step), and the
+   * coverage is written after; the material keeps alphaTest for the shadow pass. */
+  override setupDiffuseColor(builder: unknown): void {
+    const sup = (THREE.MeshPhysicalNodeMaterial.prototype as unknown as { setupDiffuseColor(b: unknown): void }).setupDiffuseColor;
+    if (!this.alphaToCoverage || !(this.msaaCover > 0 || this.vAlpha)) {
+      sup.call(this, builder);
+      return;
+    }
+    const at = this.alphaTest;
+    this.alphaTest = 0;
+    try {
+      sup.call(this, builder);
+    } finally {
+      this.alphaTest = at;
+    }
+    const a = diffuseColor.a;
+    // three's A2C step, with the width floored (fwidth is 0 inside a card; see setupHashedAlpha)
+    const edge = smoothstep(float(0), float(1), a.sub(float(at)).div(fwidth(a).max(1e-4)));
+    let cov: N = mix(edge, a.mul(a.greaterThan(float(at)).select(float(1), float(0))), float(this.msaaCover));
+    if (this.vAlpha) cov = cov.mul(this.vAlpha);
+    cov = cov.clamp(0, 1);
+    diffuseColor.a.assign(cov);
+    cov.lessThanEqual(0.002).discard();
   }
 
   /** T16, the temporal-AA path (no MSAA): the cards' coverage is a stochastic per-pixel test against a
@@ -621,7 +662,8 @@ export class HairMaterial extends THREE.MeshPhysicalNodeMaterial {
     // returned 0 there, so whole card interiors failed the hash every frame (holes on the crown down to the
     // scalp, or to the background through the depth-prepass twins)
     const edge = smoothstep(float(0), float(1), a.sub(at).div(fwidth(a).max(1e-4)));
-    const cover = mix(edge, a, P.u('aa.hairCoverage'));
+    let cover: N = mix(edge, a, P.u('aa.hairCoverage'));
+    if (this.vAlpha) cover = cover.mul(this.vAlpha); // H2: COLOR_0 alpha
     const ign = interleavedGradientNoise(screenCoordinate.xy.add(temporalFrame.mod(64).mul(5.588238)));
     (this as unknown as { maskNode: N; maskShadowNode: N }).maskNode = cover.greaterThan(ign);
     (this as unknown as { maskNode: N; maskShadowNode: N }).maskShadowNode = bool(true);
@@ -653,7 +695,10 @@ export function addHairDepthPrepass(root: THREE.Object3D, P: ParamStore): number
     if (!dm) {
       dm = new THREE.MeshBasicNodeMaterial();
       const src = hm as unknown as Std;
-      const a = src.map ? texture(src.map).a : float(1);
+      // H2: x the COLOR_0 alpha (per-card opacity, the hairline root fade), as the card's own coverage (white
+      // when the geometry has no COLOR_0)
+      const va = (P.get('hair.vertexAlpha') as number) > 0 ? vertexColor().a : float(1);
+      const a = src.map ? texture(src.map).a.mul(va) : va;
       const depth = hm.anisoMap ? texture(hm.anisoMap).a : float(1);
       // discard thin texels and the back of the card: what is left is the opaque front of each lock
       dm.opacityNode = a.mul(smoothstep(P.u('hair.prepassDepth').sub(0.05), P.u('hair.prepassDepth'), depth));

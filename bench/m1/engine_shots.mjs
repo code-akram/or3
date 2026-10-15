@@ -66,6 +66,10 @@ const ttSize = Number(opt('tt-size', 640));
 const ttHz = Number(opt('tt-hz', ttFps));
 const ttWarmup = Number(opt('tt-warmup', 24));
 const wantChart = argv.includes('--chart');
+// H2: --texcount records every WebGPU render pipeline's fragment-stage sampled textures (texture_* bindings in
+// its WGSL, so shadow maps, screen textures and LUTs count) into the shots JSON as `texcount` {pipeline label:
+// n}: WebGPU's default per-stage limit is 16, and a pipeline over it fails and draws nothing (black)
+const wantTexCount = argv.includes('--texcount');
 const TT_DEG_PER_S = 20; // main.ts turntable speed
 /** 'closeup:hero' -> [view, rig, file stem] (the default rig: hero for the portrait, else neutral) */
 function viewSpec(v) {
@@ -217,6 +221,35 @@ async function run(backend) {
       if (r.status() >= 400) log.push(`http ${r.status()}: ${r.url().replace(/^http:\/\/127\.0\.0\.1:\d+/, '')}`.slice(0, 300));
     });
     page.setDefaultTimeout(timeoutS * 1000);
+    if (wantTexCount) {
+      await page.addInitScript(() => {
+        const D = globalThis.GPUDevice?.prototype;
+        if (!D) return;
+        const mods = new WeakMap();
+        const out = (globalThis.__texcount = {});
+        const csm = D.createShaderModule;
+        D.createShaderModule = function (desc) {
+          const m = csm.call(this, desc);
+          mods.set(m, desc.code ?? '');
+          return m;
+        };
+        const count = (code, entry) => {
+          // the module's texture bindings (sampled: not texture_storage_*), all of which three's fragment modules use
+          const n = (code.match(/var\s+[A-Za-z_0-9]+\s*:\s*texture_(?!storage)[a-z_0-9]+/g) ?? []).length;
+          return { n, entry };
+        };
+        for (const name of ['createRenderPipeline', 'createRenderPipelineAsync']) {
+          const f = D[name];
+          D[name] = function (desc) {
+            try {
+              const fm = desc?.fragment?.module;
+              if (fm && mods.has(fm)) out[desc.label ?? `pipeline_${Object.keys(out).length}`] = count(mods.get(fm), desc.fragment.entryPoint).n;
+            } catch {}
+            return f.call(this, desc);
+          };
+        }
+      });
+    }
     const q = new URLSearchParams({ asset: '.', capture: '1', ui: '0', dpr: '1' });
     if (backend === 'webgl2') q.set('gl', '1');
     for (const [k, v] of new URLSearchParams(extraQuery)) q.set(k, v);
@@ -287,7 +320,8 @@ async function run(backend) {
         return null;
       }
     });
-    return { ok: true, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, turntable, balls, chart, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
+    const texcount = wantTexCount ? await page.evaluate(() => globalThis.__texcount ?? null) : undefined;
+    return { ok: true, texcount, backend: st.backend, adapter, boot_ms: bootMs, load: st.load, verify: st.verify, warnings: st.warnings, hair_maps: st.hairMaps, hair_prepass: st.hairPrepass, gaze: st.gaze, stats, shots, turntable, balls, chart, browser: browser.version(), console: [...new Set(log)].slice(0, 40) };
   } finally {
     await browser.close();
   }

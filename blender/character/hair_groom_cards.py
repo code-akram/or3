@@ -117,6 +117,21 @@ CARDS = {
               "width_pct": 90, "pad_m": 0.0008, "length_pct": 95, "fade": 0.12, "lift_m": 0.0012,
               "twist_deg": [8.0, 50.0], "max_segments": 8, "curve": 0.25, "start": 1,
               "cells": 16, "cell_w": 32, "cell_rows": 2, "strand_px": 0.9},
+    # H2 (hair v5b): the front falls as groups of ~`group` strands (x group_jitter, so narrow and wider cards
+    # sit side by side) in `layers` depth layers (inner set in, outer stood off by inset_m), one narrow card
+    # per group (half-width <= max_halfwidth_m) twisted twist_deg (random sign) root to tip, run to the
+    # group's length_pct; per-card opacity `alpha` (COLOR_0 alpha), per-strand opacity strand_alpha in the
+    # cells. Cells: `cells` of cell_w px in cell_rows rows, in the two front columns. Replaces T9b's two
+    # crossing strips per fall and the falls' sub-clump cards, which read as flat dark strips at 100 %.
+    "front_groups": {"enabled": True, "group": 12, "group_jitter": [0.6, 1.5], "layers": 2, "inset_m": 0.0015,
+                     "max_halfwidth_m": 0.0025, "width_pct": 85, "pad_m": 0.0005, "length_pct": 98, "fade": 0.2,
+                     "twist_deg": [15.0, 75.0], "curve": 0.3, "alpha": [0.6, 1.0], "max_segments": 12, "start": 1,
+                     "cells": 16, "cell_w": 32, "cell_rows": 2, "strand_px": 0.8, "strand_alpha": [0.45, 1.0],
+                     "tip_alpha": 0.0, "tip_fade": 0.25},
+    # H2 root fade: cards rooted within near_m of the hairline (layers) fade in over len_m (x nearness,
+    # random per card) through COLOR_0 alpha, their root at >= root_w of the width (no wedge)
+    "root_fade": {"enabled": True, "layers": ["top", "mid", "outer", "frontg", "fly"], "near_m": [0.008, 0.035],
+                  "len_m": [0.01, 0.025], "root_w": 0.75, "floor": 0.0},
     # T20: per-card bent normals: the card's edge vertices lean `bend_deg` toward their side across the
     # card (a half-cylinder profile over the smooth proxy normal), so a card shades round, not flat
     "bend_deg": 55.0,
@@ -155,11 +170,11 @@ CARDS = {
     "ear_test": "box",
     "gap_m": 0.0012,                 # card vertices kept this far off the skin / suit (after GN)
     "layer_shade": {"under": 0.7, "mid": 0.88, "top": 1.0, "front": 0.85, "fly": 0.95, "hairline": 1.0,
-                    "outer": 1.0, "flyone": 0.95},
+                    "outer": 1.0, "flyone": 0.95, "frontg": 0.9},
     # specular scale per layer, in UV1 u ("strand"; the viewer multiplies both lobes by it): the
     # front locks are flat, unoccluded cards facing the camera and read as white ribbons at full
     # T20: front 0.4 -> 0.8 (fitted with the T20 lobes: the key-lit front falls sat at 0.7x Cycles)
-    "layer_spec": {"front": 0.8, "under": 0.7},
+    "layer_spec": {"front": 0.8, "frontg": 0.8, "under": 0.7},
     "lock_sigma": 0.08,
     "top_lift": {"pct": 90, "max_m": 0.015},       # T15: 80 / 12 mm (the hero contour stood 1-2 mm outside)
     "material": {"roughness": 0.55, "specular": 0.25},
@@ -357,6 +372,11 @@ def raster_clump(prof, cols, rng, W, H, ss, acfg, max_strands=None, k_end=None, 
         tip = np.clip((s - (1 - acfg["tip_fade"])) / acfg["tip_fade"], 0, 1)
         rad = (acfg["strand_px"] + (acfg["tip_px"] - acfg["strand_px"]) * tip) * acfg["strand_scale"]
         alpha = 1.0 - (1.0 - acfg["tip_alpha"]) * tip
+        sa = acfg.get("strand_alpha")
+        if sa:
+            # H2: per-strand opacity variation (a few strands near-solid, most part see-through), so a
+            # narrow card reads as separate fibres of different weight rather than one even strip
+            alpha = alpha * float(rng.uniform(sa[0], sa[1]))
         rs = acfg.get("root_stagger_m")
         if rs:
             # T20: each strand fades in from its own start over the first few mm (staggered roots): a
@@ -807,6 +827,51 @@ def build(b, frame, ccfg, g):
                 q.update(members=gm, kind="outer", layer="outer", uid=(int(p["uid"]), gi), length_m=float(arc))
                 outers.append(q)
 
+    # --- H2 front falls as strand groups: each fall split across (by the strands' mean offset along the
+    # fall's binormal) and in depth (layers) into groups of ~`group` strands, one narrow card per group
+    fg = cfg.get("front_groups") or {}
+    fronts = []
+    if fg.get("enabled"):
+        glen = {"pct": fg["length_pct"], "fade": fg["fade"]}
+        for pc in np.unique(prim[(kind == 2)]):
+            members = np.where((prim == pc) & (kind == 2))[0]
+            if len(members) < 10:
+                continue
+            p0 = clump_profile(frame, E, members, cloth_gap, 50, 0.0, cfg["min_halfwidth_m"])
+            ks = slice(2, None)
+            ub = ((E[members] - p0["C"][None]) * p0["B"][None]).sum(2)[:, ks].mean(1)
+            dn = ((E[members] - p0["C"][None]) * p0["N"][None]).sum(2)[:, ks].mean(1)
+            nl_ = max(1, int(fg.get("layers", 1)))
+            lay = np.zeros(len(members), int)
+            if nl_ > 1:
+                lay = np.clip(np.searchsorted(np.quantile(dn, np.linspace(0, 1, nl_ + 1)[1:-1]), dn, side="right"), 0, nl_ - 1)
+            gr = np.random.default_rng([acfg["seed"], 92, int(pc)])
+            for li in range(nl_):
+                mm = members[lay == li]
+                if len(mm) < 4:
+                    continue
+                order = mm[np.argsort(ub[lay == li], kind="stable")]
+                # uneven groups: sizes drawn round `group` (narrow and wider cards side by side)
+                sizes, left = [], len(order)
+                while left > 0:
+                    s_ = int(round(fg["group"] * gr.uniform(*fg.get("group_jitter", [1.0, 1.0]))))
+                    s_ = max(4, min(s_, left))
+                    if left - s_ < 4:
+                        s_ = left
+                    sizes.append(s_)
+                    left -= s_
+                for gi, gm in enumerate(np.split(order, np.cumsum(sizes)[:-1])):
+                    if len(gm) < 4:
+                        continue
+                    q = clump_profile(frame, E, gm, cloth_gap, fg["width_pct"], fg["pad_m"], cfg["min_halfwidth_m"] * 0.5,
+                                      fg["max_halfwidth_m"], length=glen, H=H[gm])
+                    # the inner layer set in toward the face, the outer one stood off it (layered clumps)
+                    off = fg["inset_m"] * (li - (nl_ - 1) * 0.5) * 2.0 / max(nl_ - 1, 1) if nl_ > 1 else -fg["inset_m"]
+                    q["C"] = q["C"] + q["N"] * off * nsmooth(0.0, 0.15, np.linspace(0, 1, len(q["C"])))[:, None]
+                    arc = np.linalg.norm(np.diff(q["C"], axis=0), axis=1).sum()
+                    q.update(members=gm, kind="front", layer="frontg", uid=(int(pc), li, gi), length_m=float(arc))
+                    fronts.append(q)
+
     # --- atlas: lock cells, under cells, fly cells, hairline cells
     W, Hh = acfg["size"]
     cw, ss = acfg["cell_w"], acfg["ss"]
@@ -839,6 +904,22 @@ def build(b, frame, ccfg, g):
             falls.append(members)
     falls.sort(key=len, reverse=True)
     front_names = []
+    frontg_cells = []        # H2: (name, length_m) of the front-group cells
+    if fronts:
+        # the front columns hold `cells` narrow cells (cell_w px, cell_rows rows) of representative groups
+        nco, ocw, orow = fg["cells"], fg["cell_w"], fg["cell_rows"]
+        if (nco // orow) * ocw > nfr * cw:
+            raise RuntimeError("hair_groom_cards: front-group cells do not fit the front columns")
+        by_len = sorted(fronts, key=lambda q: q["length_m"])
+        for i, q in enumerate([by_len[int(f * (len(by_len) - 1))] for f in np.linspace(0.03, 0.99, nco)]):
+            res, ns = raster_clump(q, cols[q["members"]], rng, ocw, Hh // orow, ss,
+                                   dict(acfg, strand_px=acfg["strand_px"] * fg["strand_px"],
+                                        strand_alpha=fg.get("strand_alpha"), tip_alpha=fg.get("tip_alpha", acfg["tip_alpha"]),
+                                        tip_fade=fg.get("tip_fade", acfg["tip_fade"])),
+                                   rough_cfg=cfg["roughness"], sids=sids[q["members"]])
+            put(f"frontg{i}", res, ns, nl * cw + (i // orow) * ocw, (i % orow) * (Hh // orow))
+            frontg_cells.append((f"frontg{i}", q["length_m"]))
+        falls = []           # the whole-fall cells are not drawn: the columns are the groups'
     for i, members in enumerate(falls[:nfr]):
         p = clump_profile(frame, E, members, cloth_gap, flc["width_pct"], flc["pad_m"], cfg["min_halfwidth_m"],
                           flc["max_halfwidth_m"])
@@ -846,7 +927,7 @@ def build(b, frame, ccfg, g):
                                rough_cfg=cfg["roughness"], sids=sids[members])
         put(f"front{i}", res, ns, (nl + i) * cw, 0)
         front_names.append(f"front{i}")
-    nl_all = nl + len(front_names)
+    nl_all = nl + (nfr if frontg_cells else len(front_names))
     under_reps = sorted(unders, key=lambda p: -len(p["members"]))[:acfg["under_cells"]]
     for i, p in enumerate(under_reps):
         res, ns = raster_clump(p, cols[p["members"]], rng, cw, Hh, ss, acfg, acfg["under_max_strands"],
@@ -962,14 +1043,17 @@ def build(b, frame, ccfg, g):
     # T20: every card draws its random choices (cell variant, flip, shade) from its own generator, keyed
     # by its clump / group / strand id, so a change to one layer's parameters does not reshuffle the
     # others (T15: +-0.02 IoU between builds came from the shared stream as much as from regrooms)
-    LAYER_CODE = {"under": 1, "front": 2, "sec": 3, "hairline": 4, "fly": 5, "outer": 6, "flyone": 7, "baby": 8}
+    LAYER_CODE = {"under": 1, "front": 2, "sec": 3, "hairline": 4, "fly": 5, "outer": 6, "flyone": 7, "baby": 8,
+                  "frontg": 9}
 
     def crng(layer, *uid):
         return np.random.default_rng([acfg["seed"], LAYER_CODE[layer], *[int(u) for u in uid]])
     bend_rows = []           # T20: (left, centre, right) vertex indices per card row, for the bent normals
 
+    rf = cfg.get("root_fade") or {}
+
     def add_card(p, cell, layer, r, path_from=0, halfwidth_m=None, k_end=None, max_seg=None, flip=False,
-                 twist=None, curve=None):
+                 twist=None, curve=None, alpha=1.0):
         C = p["C"][path_from:k_end]
         arc = np.concatenate([[0.0], np.cumsum(np.linalg.norm(np.diff(C, axis=0), axis=1))])
         total = arc[-1]
@@ -1002,6 +1086,19 @@ def build(b, frame, ccfg, g):
         if layer == "flyone":
             root_w, widen = 1.0, 0.12
         tip_w = cfg["tip_width"]
+        # H2 root fade (COLOR_0 alpha, the viewer's hair.vertexAlpha): a card rooted near the hairline fades
+        # in over its first fade_m instead of narrowing to a wedge (root_w 0.3 over the first third: the
+        # dark pointed teeth along the temple hairline at 100 %); its root keeps rf.root_w of its width
+        fade_m = None
+        if rf.get("enabled") and layer in rf["layers"]:
+            nr = 1 - smoothstep(rf["near_m"][0], rf["near_m"][1], d_root)
+            if nr > 0.01:
+                fade_m = float(r.uniform(*rf["len_m"])) * nr
+                root_w = max(root_w, rf["root_w"])
+                widen = min(widen, 0.12)
+        a_row = np.full(len(s), float(alpha))
+        if fade_m:
+            a_row = a_row * (rf.get("floor", 0.0) + (1 - rf.get("floor", 0.0)) * nsmooth(0.0, fade_m, s))
 
         def halfwidth(t, hw=hw, nrow=nrow):
             i = min(int(round(t * nrow)), nrow)
@@ -1015,8 +1112,8 @@ def build(b, frame, ccfg, g):
         sp = float(cfg["layer_spec"].get(layer, 1.0))
         made = []
 
-        def on_vert(v, t, hs=hs, nrow=nrow, sector=sector, x=x, sp=sp):
-            v[col] = (x, x, x, 1.0)
+        def on_vert(v, t, hs=hs, nrow=nrow, sector=sector, x=x, sp=sp, a_row=a_row):
+            v[col] = (x, x, x, float(a_row[min(int(round(t * nrow)), nrow)]))
             v[hang_l] = float(hs[min(int(round(t * nrow)), nrow)])
             v[sector_l] = sector
             made.append(len(bm.verts) - 1)    # appended last (no vertex is removed before finish)
@@ -1081,8 +1178,8 @@ def build(b, frame, ccfg, g):
         r = crng("under", *p["uid"])
         count("under", add_card(p, f"under{int(r.integers(len(under_reps)))}", "under", r, path_from=st,
                                 max_seg=uc["max_segments"], flip=bool(r.random() < 0.5)))
-    # front locks: all of a fall's strands, on the front cells
-    for pc in np.unique(prim[(kind == 2)]):
+    # front locks: all of a fall's strands, on the front cells (H2: replaced by the front groups)
+    for pc in (np.unique(prim[(kind == 2)]) if not frontg_cells else []):
         members = np.where((prim == pc) & (kind == 2))[0]
         if len(members) < 10:
             continue
@@ -1124,6 +1221,8 @@ def build(b, frame, ccfg, g):
         p["C"] = p["C"] + p["N"] * off[:, None]
         lifted.append(float(off.max()))
     for p in profs:
+        if p["kind"] == "front" and frontg_cells:
+            continue        # H2: the front falls' sub-clumps are the front groups' strands
         if p["kind"] != "front" and drop_ear(p, p["layer"]):
             continue
         r = crng("sec", p["uid"])
@@ -1142,9 +1241,26 @@ def build(b, frame, ccfg, g):
             t0, t1 = (math.radians(a) for a in oc["twist_deg"])
             sgn = 1.0 if r.random() < 0.5 else -1.0
             ph = float(r.uniform(0.0, 0.4))
+            oa = oc.get("alpha")
             count("outer", add_card(q, outer_cells[k][0], "outer", r, path_from=int(oc.get("start", 1)),
                                     max_seg=oc["max_segments"], flip=bool(r.random() < 0.5), curve=oc["curve"],
-                                    twist=lambda t, sgn=sgn, t0=t0, t1=t1, ph=ph: sgn * (ph + t0 + (t1 - t0) * t)))
+                                    twist=lambda t, sgn=sgn, t0=t0, t1=t1, ph=ph: sgn * (ph + t0 + (t1 - t0) * t),
+                                    alpha=float(r.uniform(*oa)) if oa else 1.0))
+    # H2 front groups: narrow twisted cards on the nearest-length front-group cells, per-card opacity
+    if frontg_cells:
+        fl_ = np.array([L_ for _, L_ in frontg_cells])
+        t0, t1 = (math.radians(a) for a in fg["twist_deg"])
+        for q in fronts:
+            r = crng("frontg", *q["uid"])
+            k = int(np.argmin(np.abs(fl_ - q["length_m"])))
+            k = int(np.clip(k + r.integers(-1, 2), 0, len(fl_) - 1))
+            sgn = 1.0 if r.random() < 0.5 else -1.0
+            tw = float(r.uniform(t0, t1))
+            ph = float(r.uniform(-0.3, 0.3))
+            count("frontg", add_card(q, frontg_cells[k][0], "frontg", r, path_from=int(fg.get("start", 1)),
+                                     max_seg=fg["max_segments"], flip=bool(r.random() < 0.5), curve=fg["curve"],
+                                     twist=lambda t, sgn=sgn, tw=tw, ph=ph: sgn * (ph + tw * t),
+                                     alpha=float(r.uniform(*fg["alpha"]))))
     # hairline cards
     for ig, gm in enumerate(hl_groups):
         p = clump_profile(frame, E, gm, cloth_gap, 90, 0.0008, hc["halfwidth_m"][0], hc["halfwidth_m"][1])
@@ -1234,7 +1350,8 @@ def build(b, frame, ccfg, g):
     cap_faces = sum(1 for f in bm.faces if f.material_index == 0)
     mcfg = cfg["material"]
     cap_mat = hsr.card_material("hair", cap_imgs, mcfg["roughness"], mcfg["specular"])
-    card_mat = hsr.card_material("hair_cards", imgs, mcfg["roughness"], mcfg["specular"])
+    card_mat = hsr.card_material("hair_cards", imgs, mcfg["roughness"], mcfg["specular"],
+                                 vertex_alpha=bool(rf.get("enabled") or frontg_cells or oc.get("alpha")))
     hsr.register_maps(b, cap_mat, cap_imgs)
     hsr.register_maps(b, card_mat, imgs)
     rows_idx = np.array(bend_rows, dtype=np.int64).reshape(-1, 3)

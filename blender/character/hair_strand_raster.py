@@ -266,10 +266,12 @@ def save_pngs(b, images, stem):
             f.write(image_png_bytes(img))
 
 
-def card_material(name, images, roughness=0.6, specular=0.25, vertex_color="lock"):
+def card_material(name, images, roughness=0.6, specular=0.25, vertex_color="lock", vertex_alpha=False):
     """Look-dev / EEVEE material for cards: albedo x COLOR_0 `vertex_color` (None: the
     albedo alone), alpha from the albedo (export.fix_alpha routes it to glTF MASK). The
-    data maps reach the GLB through export.pack_hair_maps, not through this node tree."""
+    data maps reach the GLB through export.pack_hair_maps, not through this node tree.
+    vertex_alpha (H2): the alpha is the albedo's x the colour attribute's, so the glTF
+    exporter writes COLOR_0 as VEC4 (the viewer's hair.vertexAlpha reads it)."""
     mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
@@ -293,7 +295,14 @@ def card_material(name, images, roughness=0.6, specular=0.25, vertex_color="lock
         nt.links.new(mix.outputs[2], bsdf.inputs["Base Color"])
     else:
         nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
-    nt.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+    if vertex_color and vertex_alpha:
+        am = nt.nodes.new("ShaderNodeMath")
+        am.operation = "MULTIPLY"
+        nt.links.new(tex.outputs["Alpha"], am.inputs[0])
+        nt.links.new(vc.outputs["Alpha"], am.inputs[1])
+        nt.links.new(am.outputs[0], bsdf.inputs["Alpha"])
+    else:
+        nt.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
     bsdf.inputs["Roughness"].default_value = roughness
     bsdf.inputs["Specular IOR Level"].default_value = specular
     for key in ("aniso", "orm"):

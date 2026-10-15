@@ -146,6 +146,9 @@ export const DEFAULT_PARAMS = {
     /** Per-strand roughness (ORM G) relative to this scales the lobe exponents by (ref / r)^2. */
     roughRef: 0.55,
     alphaTest: 0.32,
+    /** H2: scalp cards' coverage x COLOR_0 alpha (the baker's per-card opacity and the root fade of the cards
+     * rooted at the hairline, hair_groom_cards root_fade / front_groups); 0 = the map alpha alone (read at load) */
+    vertexAlpha: 1,
     /** Depth prepass for the scalp cards (materials.addHairDepthPrepass; read at load): depth-only
      * twins write where coverage > prepassAlpha and the strand depth (anisotropy A) > prepassDepth. */
     depthPrepass: 1,
@@ -281,6 +284,11 @@ export const DEFAULT_PARAMS = {
      * (bench/m1/v4/t16-aa-post.md): 1 is closer to Cycles on the closeup hair / beard / brows (1.00 / 0.94 /
      * 1.07 vs 1.04 / 0.90 / 0.78) and shimmers less on the turntable (3.47 vs 3.63; MSAA 6.08) */
     hairCoverage: 1,
+    /** H2, the MSAA path (?aa=msaa): alpha-to-coverage from the same coverage as the hash, mix(A2C step, map
+     * alpha, msaaHairCoverage) (read at load). 0 = three's A2C step at alphaTest (T10 / T16 / T20 MSAA). The
+     * step made every strand texel over alphaTest fully opaque, so the sparse outer cards covered 1.3-2x
+     * their strands' coverage and the rim-lit lengths read 1.24-1.27x Cycles (TRAA, map alpha: 1.11-1.12x). */
+    msaaHairCoverage: 1,
     /** current-frame weight floor (stock TRAA 0.05) and on hair pixels */
     minWeight: 0.05,
     hairMinWeight: 0.05,

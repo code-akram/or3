@@ -705,7 +705,8 @@ def parity_measure_part(results):
 # (the region's pure pixels, eroded 2 px, inside the eroded game mask), per view and pooled.
 HV_DIR = "views"
 HV_FRAME_H, HV_LENS, HV_DROP = 0.56, 85.0, 0.09
-HV_VIEWS = {"three_quarter": 40.0, "profile": 90.0, "front": 0.0}
+HV_VIEWS = {"three_quarter": 40.0, "profile": 90.0, "front": 0.0, "back": 180.0}   # H2: + back
+HV_POOL_SKIP = ("back",)        # H2: the pooled region tones stay over T15's four views (regions_pooled_all adds back)
 HV_ALPHA_TEST = 0.32            # web/src/character/materials/params.ts hair.alphaTest (read-only here)
 HV_REGIONS = ("crown", "side", "back", "front")
 HV_CODES = np.array([(1, 0, 0), (0, 1, 0), (0, 0, 1), (1, 1, 0)], dtype=np.float32)
@@ -892,6 +893,16 @@ def views_test(results):
                 nt.links.new(tx.outputs["Alpha"], gt.inputs[0])
                 nt.links.new(tx.outputs["Alpha"], mul.inputs[0])
                 nt.links.new(gt.outputs[0], mul.inputs[1])
+                if len(o.data.color_attributes) and "--views-no-vertex-alpha" not in argv:
+                    # H2: x the COLOR_0 alpha after the test (viewer hair.vertexAlpha: per-card opacity,
+                    # the hairline root fade); 1 on builds without it
+                    vc = nt.nodes.new("ShaderNodeVertexColor")
+                    vc.layer_name = o.data.color_attributes[0].name
+                    mv = nt.nodes.new("ShaderNodeMath")
+                    mv.operation = "MULTIPLY"
+                    nt.links.new(mul.outputs[0], mv.inputs[0])
+                    nt.links.new(vc.outputs["Alpha"], mv.inputs[1])
+                    mul = mv
                 nt.links.new(mul.outputs[0], mix.inputs[0])
             else:
                 mix.inputs[0].default_value = 1.0
@@ -971,6 +982,46 @@ def _png_write(path, rgb):
     bpy.data.images.remove(im)
 
 
+def _tip_line(M, k=2):
+    """H2: the hair's lower edge per image column, from a mask (rows bottom-up, Blender order) opened by a
+    (2k+1)^2 box at half cover (single strands drop out, the mass stays): (opened mask, lowest row per
+    column or -1)."""
+    acc = np.zeros(M.shape, np.float32)
+    for dy in range(-k, k + 1):
+        for dx in range(-k, k + 1):
+            acc += np.roll(np.roll(M.astype(np.float32), dy, 0), dx, 1)
+    D = acc / float((2 * k + 1) ** 2) >= 0.5
+    low = np.where(D.any(0), np.argmax(D, axis=0), -1)
+    return D, low
+
+
+def _length_cmp(H, G, px_m):
+    """H2: lengths of the game hair against the hero's at the bottom of the frame (the lengths over the
+    shoulder): over the columns whose hero tip line lies in the lowest third of the hero mask's height, the
+    game tip line's height above the hero's (m; + = the game hair ends higher, shorter), median / p75, the
+    share of those columns with no game hair, and the lowest opened-mask point of each (p1 row)."""
+    Dh, lh = _tip_line(H)
+    Dg, lg = _tip_line(G)
+    rows = np.nonzero(Dh.any(1))[0]
+    if not len(rows):
+        return None
+    top, bot = int(rows.max()), int(rows.min())
+    cut = bot + (top - bot) / 3.0
+    cols = np.flatnonzero((lh >= 0) & (lh <= cut))
+    if not len(cols):
+        return None
+    has = lg[cols] >= 0
+    d = (lg[cols][has] - lh[cols][has]) * px_m
+    rh = np.nonzero(Dh)[0]
+    rg = np.nonzero(Dg)[0]
+    return {"columns": int(len(cols)), "game_missing_share": round(float(1 - has.mean()), 3),
+            "tip_above_hero_m_median": round(float(np.median(d)), 4) if len(d) else None,
+            "tip_above_hero_m_p75": round(float(np.percentile(d, 75)), 4) if len(d) else None,
+            "tip_above_hero_m_mean": round(float(np.mean(d)), 4) if len(d) else None,
+            "lowest_p1_above_hero_m": round(float((np.percentile(rg, 1) - np.percentile(rh, 1)) * px_m), 4)
+            if len(rg) and len(rh) else None}
+
+
 def views_measure(results):
     d = os.path.join(OUT, HV_DIR)
     pre = opt("--engine-prefix", "lin_")   # another engine capture (e.g. a ?params= A/B): its own key
@@ -979,6 +1030,7 @@ def views_measure(results):
     out["engine_prefix"] = pre
     per_view, pool = {}, {r: {"n": 0, "ye": 0.0, "yc": 0.0, "e": np.zeros(3), "c": np.zeros(3)}
                           for r in HV_REGIONS}
+    pool_all = {r: {"n": 0, "ye": 0.0, "yc": 0.0, "e": np.zeros(3), "c": np.zeros(3)} for r in HV_REGIONS}
     for view in list(HV_VIEWS) + ["closeup"]:
         fh, fg = os.path.join(OUT, f"hv_{view}_hero.exr"), os.path.join(OUT, f"hv_{view}_game.exr")
         if not (os.path.exists(fh) and os.path.exists(fg)):
@@ -998,6 +1050,8 @@ def views_measure(results):
                 th[name] = {"iou": round(int((hh & gg).sum()) / max(int((hh | gg).sum()), 1), 4),
                             "game_only": int((gg & ~hh).sum()), "hero_only": int((hh & ~gg).sum())}
             rec["thirds"] = th
+        if view in ("profile", "back", "three_quarter"):
+            rec["length"] = _length_cmp(H, G, HV_FRAME_H / H.shape[0])
         # overlay: hero only red, game only green, both grey
         ov = np.zeros(H.shape + (3,), np.float32)
         ov[H & G] = 0.55
@@ -1036,28 +1090,32 @@ def views_measure(results):
                 r_.update({"engine_mean_lin": round(ye, 5), "engine_r_g": round(float(e[0] / max(e[1], 1e-9)), 3),
                            "lum_engine_over_cycles": round(ye / max(r_["cycles_mean_lin"], 1e-9), 3),
                            "rg_engine_over_cycles": round(float(e[0] / max(e[1], 1e-9)) / max(r_["cycles_r_g"], 1e-9), 3)})
-                p = pool[rname]
-                p["n"] += int(m.sum())
-                p["ye"] += float(luma(lin[m]).sum())
-                p["yc"] += float(luma(cyc[m]).sum())
-                p["e"] += e
-                p["c"] += c
+                for pl in ((pool, pool_all) if view not in HV_POOL_SKIP else (pool_all,)):
+                    p = pl[rname]
+                    p["n"] += int(m.sum())
+                    p["ye"] += float(luma(lin[m]).sum())
+                    p["yc"] += float(luma(cyc[m]).sum())
+                    p["e"] += e
+                    p["c"] += c
             regs[rname] = r_
         rec["regions"] = regs
         per_view[view] = rec
         print(f"[hair_test] views {view}: iou {rec['iou']} regions {regs}", flush=True)
-    pooled = {}
-    for rname, p in pool.items():
-        if p["n"] == 0:
-            continue
-        lum = (p["ye"] / p["n"]) / max(p["yc"] / p["n"], 1e-9)
-        rg = (p["e"][0] / max(p["e"][1], 1e-9)) / max(p["c"][0] / max(p["c"][1], 1e-9), 1e-9)
-        pooled[rname] = {"px": p["n"], "lum_engine_over_cycles": round(float(lum), 3),
-                         "rg_engine_over_cycles": round(float(rg), 3),
-                         "engine_r_g": round(float(p["e"][0] / max(p["e"][1], 1e-9)), 3),
-                         "cycles_r_g": round(float(p["c"][0] / max(p["c"][1], 1e-9)), 3),
-                         "within_15pct": bool(abs(lum - 1) <= 0.15 and abs(rg - 1) <= 0.15)}
-    out.update({"per_view": per_view, "regions_pooled": pooled,
+    def pooled_of(pl):
+        pooled = {}
+        for rname, p in pl.items():
+            if p["n"] == 0:
+                continue
+            lum = (p["ye"] / p["n"]) / max(p["yc"] / p["n"], 1e-9)
+            rg = (p["e"][0] / max(p["e"][1], 1e-9)) / max(p["c"][0] / max(p["c"][1], 1e-9), 1e-9)
+            pooled[rname] = {"px": p["n"], "lum_engine_over_cycles": round(float(lum), 3),
+                             "rg_engine_over_cycles": round(float(rg), 3),
+                             "engine_r_g": round(float(p["e"][0] / max(p["e"][1], 1e-9)), 3),
+                             "cycles_r_g": round(float(p["c"][0] / max(p["c"][1], 1e-9)), 3),
+                             "within_15pct": bool(abs(lum - 1) <= 0.15 and abs(rg - 1) <= 0.15)}
+        return pooled
+    pooled = pooled_of(pool)
+    out.update({"per_view": per_view, "regions_pooled": pooled, "regions_pooled_all": pooled_of(pool_all),
                 "iou_three_quarter": per_view.get("three_quarter", {}).get("iou"),
                 "iou_profile": per_view.get("profile", {}).get("iou"),
                 "method": "hero mask: scalp groom strands as emitters (Cycles, meshes holdout); game mask: GLB "
