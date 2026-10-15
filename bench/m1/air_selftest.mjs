@@ -31,8 +31,10 @@ const pages = [];
 let result = { ok: false };
 try {
   const page = await browser.newPage({ viewport: { width: vw, height: vh } });
+  // each error with the step the HUD showed last (which tier, which phase)
+  let lastHud = '';
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(`console: ${m.text()}`.slice(0, 300));
+    if (m.type() === 'error') errors.push(`console: ${m.text()}`.slice(0, 300) + (lastHud ? `  [at: ${lastHud.slice(0, 120)}]` : ''));
   });
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`.slice(0, 300)));
   page.on('response', (r) => {
@@ -48,7 +50,10 @@ try {
     // the ?perf=1 overlay: run, then "save" (POST /upload/live_perf.json) and wait for its answer
     await page.waitForFunction(() => window.__viewerState?.ready || window.__viewerState?.phase === 'error', null, { timeout: timeoutS * 1000, polling: 1000 });
     await new Promise((r) => setTimeout(r, liveS * 1000));
-    await page.getByRole('button', { name: 'save' }).click();
+    const pre = await page.evaluate(() => ({ phase: window.__viewerState?.phase, error: window.__viewerState?.error ?? null, warnings: window.__viewerState?.warnings ?? [] }));
+    if (pre.phase === 'error') throw new Error(`viewer error: ${String(pre.error).slice(0, 400)}`);
+    // a SwiftShader hero frame is ~10 s; the click's stability check needs two of them
+    await page.getByRole('button', { name: 'save' }).click({ timeout: timeoutS * 1000 });
     await page.waitForFunction(() => [...document.querySelectorAll('button')].some((b) => /^(saved|downloaded)/.test(b.textContent ?? '')), null, { timeout: timeoutS * 1000, polling: 1000 });
     const out = await page.evaluate(() => ({
       phase: window.__viewerState.phase,
@@ -67,9 +72,12 @@ try {
     } catch {
       continue; // navigating to the next tier
     }
+    if (st?.hud) lastHud = st.hud.split('\n')[0];
     if (st && (st.phase === 'uploaded' || st.phase === 'error')) break;
   }
   if (!liveS) result = { ok: st?.phase === 'uploaded' && errors.length === 0, phase: st?.phase ?? null, error: st?.error ?? null, hud: st?.hud ?? null, warnings: st?.warnings ?? [], seconds: Math.round((Date.now() - t0) / 1000), pages, console_errors: errors };
+} catch (e) {
+  result = { ok: false, failure: String(e?.message ?? e).slice(0, 600), console_errors: errors };
 } finally {
   await browser.close();
 }

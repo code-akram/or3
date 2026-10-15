@@ -68,6 +68,8 @@ interface ViewerState {
   sssLutMs?: number;
   gaze?: unknown;
   warnings: string[];
+  /** T24: the device limit that decides whether the live hero portrait compiles (eyes bind 18 textures) */
+  limits?: { max_sampled_textures_per_stage: number };
 }
 const state: ViewerState = { phase: 'start', ready: false, warnings: [] };
 
@@ -84,6 +86,22 @@ function assetBase(): string {
   const a = (q.get('asset') ?? 'lookdev/latest').replace(/^\/+|\/+$/g, '');
   if (a.split('/').some((s) => s === '..') || /[\\:]/.test(a)) fatal(`bad asset path: ${a}`);
   return `/asset/${a === '.' || a === '' ? '' : a + '/'}`;
+}
+
+/** T24: per-stage texture / sampler limits above the WebGPU default (16) when the adapter has them. */
+async function adapterTextureLimits(): Promise<Record<string, number>> {
+  try {
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter(o?: unknown): Promise<{ limits: Record<string, number> } | null> } }).gpu;
+    const a = await gpu?.requestAdapter({ powerPreference: 'high-performance' });
+    const out: Record<string, number> = {};
+    for (const k of ['maxSampledTexturesPerShaderStage', 'maxSamplersPerShaderStage']) {
+      const v = a?.limits[k];
+      if (typeof v === 'number' && v > 16) out[k] = Math.min(v, 48);
+    }
+    return out;
+  } catch {
+    return {};
+  }
 }
 
 async function fetchJson<T>(url: string): Promise<T | null> {
@@ -425,8 +443,8 @@ async function deviceCapture(api: CaptureApi, tier: ResolvedTier, mon: PerfMonit
   const synced = await api.profile(pv, prig, canvas.width, canvas.height, nSync, 2, true);
   let adapter: unknown = null;
   try {
-    const a = await (navigator as unknown as { gpu?: { requestAdapter: () => Promise<{ info: Record<string, string>; features: Set<string> } | null> } }).gpu?.requestAdapter();
-    adapter = a ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description, timestamp_query: a.features.has('timestamp-query') } : null;
+    const a = await (navigator as unknown as { gpu?: { requestAdapter: () => Promise<{ info: Record<string, string>; features: Set<string>; limits: Record<string, number> } | null> } }).gpu?.requestAdapter();
+    adapter = a ? { vendor: a.info.vendor, architecture: a.info.architecture, description: a.info.description, timestamp_query: a.features.has('timestamp-query'), max_sampled_textures_per_stage: a.limits.maxSampledTexturesPerShaderStage } : null;
   } catch {
     adapter = null;
   }
@@ -614,8 +632,15 @@ async function main(): Promise<void> {
   }
   const tier = resolveTier(q);
   const perfLive = q.get('perf') === '1' && q.get('capture') !== '1';
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || perfLive || q.get('timestamps') === '1' });
+  // T24: the hero portrait's eye shader binds 18 textures in the live view (5 PCSS depth maps + contact +
+  // bounce env + its own maps), over WebGPU's default 16 per stage; ask for what the adapter offers
+  // (Chrome 146+: up to 48 on capable GPUs). SwiftShader offers 16: there the live hero portrait fails.
+  const limits = forceWebGL ? {} : await adapterTextureLimits();
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload || perfLive || q.get('timestamps') === '1', requiredLimits: limits });
   await renderer.init();
+  state.limits = { max_sampled_textures_per_stage: limits.maxSampledTexturesPerShaderStage ?? 16 };
+  if (!forceWebGL && (limits.maxSampledTexturesPerShaderStage ?? 16) < 18 && tier.tier === 'hero' && q.get('capture') !== '1')
+    state.warnings.push('adapter allows 16 sampled textures per shader stage: the live hero portrait needs 18 (eyes); add &shadows=key,rim,kicker');
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // Output encodes sRGB itself
