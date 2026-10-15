@@ -13,7 +13,9 @@
 # 3. hair_test.py --parts views_measure -> RUN/hair_test/hair_test.json "views", hv_<view>_iou.png
 # Env: ENGINE_PORT (default 8798), ENGINE_LOCK (flock file serialising browsers on that port, default
 # /tmp/or3-engine-<port>.lock), ENGINE_CPUS (default 0-3), CYCLES_THREADS (default 6),
-# VIEWS_ARGS (extra hair_test.py options for the views render, e.g. "--views-lights key,fill,rim", T20).
+# VIEWS_ARGS (extra hair_test.py options for the views render, e.g. "--views-lights key,fill,rim", T20),
+# ENGINE_QUERY (H2: extra viewer URL params for both captures, URL-encoded, e.g. a shorter still:
+# 'params=%7B%22aa%22%3A%7B%22stillFrames%22%3A8%7D%7D'). H2 added the back view (az 180).
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 MEASURE=
@@ -33,7 +35,8 @@ npm run --prefix "$REPO/web" build:viewer --silent > "$HT/views_engine.log" 2>&1
 PIN=()
 command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
 for pre in game_ lin_; do
-  Q=(); [[ $pre == lin_ ]] && Q=(--query view_transform=standard)
+  QS="${ENGINE_QUERY:-}"; [[ $pre == lin_ ]] && QS="view_transform=standard${QS:+&$QS}"
+  Q=(); [[ -n "$QS" ]] && Q=(--query "$QS")
   flock "${ENGINE_LOCK:-/tmp/or3-engine-${ENGINE_PORT:-8798}.lock}" nice -n 10 "${PIN[@]}" node "$REPO/bench/m1/engine_shots.mjs" --build "$VD" --views three_quarter,profile,front,back,closeup \
     --size 1024 --port "${ENGINE_PORT:-8798}" --prefix "$pre" "${Q[@]}" >> "$HT/views_engine.log" 2>&1 \
     || { echo "engine shots failed: $HT/views_engine.log" >&2; tail -20 "$HT/views_engine.log" >&2; exit 1; }

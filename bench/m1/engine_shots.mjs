@@ -243,7 +243,11 @@ async function run(backend) {
           D[name] = function (desc) {
             try {
               const fm = desc?.fragment?.module;
-              if (fm && mods.has(fm)) out[desc.label ?? `pipeline_${Object.keys(out).length}`] = count(mods.get(fm), desc.fragment.entryPoint).n;
+              if (fm && mods.has(fm)) {
+                // the most any compile of this pipeline label bound (a material recompiles per light rig)
+                const k = desc.label ?? `pipeline_${Object.keys(out).length}`;
+                out[k] = Math.max(out[k] ?? 0, count(mods.get(fm), desc.fragment.entryPoint).n);
+              }
             } catch {}
             return f.call(this, desc);
           };

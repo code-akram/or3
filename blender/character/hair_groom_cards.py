@@ -105,7 +105,8 @@ CARDS = {
                  "cell_strands": 6, "cell_spread": 1.5, "cell_px": 1.0,
                  # T20: `single` one-strand fly-away cards (half-width single_hw_m, a one-strand cell drawn at
                  # single_px x the lock strand width and single_alpha), after the `count` multi-strand ones
-                 "single": 60, "single_hw_m": 0.0007, "single_px": 1.0, "single_alpha": 0.55,
+                 # H2: 60 -> 120 one-strand fly-aways (silhouette fibres off the mass)
+                 "single": 120, "single_hw_m": 0.0007, "single_px": 1.0, "single_alpha": 0.55,
                  "single_start": 0.2},
     # T20 hair v5 outer layer: narrow twisted cards over the top clumps, each from `group` strands of the
     # clump's outer part (offset along the outward normal above the `outer_pct` percentile), grouped
@@ -135,6 +136,8 @@ CARDS = {
     # T20: per-card bent normals: the card's edge vertices lean `bend_deg` toward their side across the
     # card (a half-cylinder profile over the smooth proxy normal), so a card shades round, not flat
     "bend_deg": 55.0,
+    # H2: mid / top cards twist up to this much root to tip (random sign and amount per card); null = flat
+    "sec_twist_deg": [0.0, 30.0],
     # T20: baked directional hair occlusion per card vertex for the gameplay tier (no deep shadow):
     # transmittance through the groom's strand density along +-x, +-y, +-z (glTF axes), voxels of
     # voxel_m, optical depth = strand projected area per voxel area x `k`; stored as its L1 fit
@@ -1228,7 +1231,16 @@ def build(b, frame, ccfg, g):
         r = crng("sec", p["uid"])
         cell = (front_names[int(r.integers(len(front_names)))] if p["kind"] == "front" and front_names
                 else lock_cell(p, r))
-        count(p["layer"], add_card(p, cell, p["layer"], r, flip=bool(r.random() < 0.5)))
+        flip = bool(r.random() < 0.5)
+        tw = None
+        st = cfg.get("sec_twist_deg")
+        if st and p["kind"] != "front":
+            # H2: a light twist per mid / top card (random sign and amount), so neighbouring locks do not lie
+            # in one plane and take one sheet of highlight
+            sg = 1.0 if r.random() < 0.5 else -1.0
+            amt = math.radians(float(r.uniform(*st)))
+            tw = (lambda t, sg=sg, amt=amt: sg * amt * t)
+        count(p["layer"], add_card(p, cell, p["layer"], r, flip=flip, twist=tw))
     # T20 outer layer: narrow twisted cards on the nearest-length outer cells
     if outer_cells:
         ol = np.array([L_ for _, L_ in outer_cells])
@@ -1349,9 +1361,11 @@ def build(b, frame, ccfg, g):
     bm.verts.layers.int.remove(sector_l)
     cap_faces = sum(1 for f in bm.faces if f.material_index == 0)
     mcfg = cfg["material"]
-    cap_mat = hsr.card_material("hair", cap_imgs, mcfg["roughness"], mcfg["specular"])
-    card_mat = hsr.card_material("hair_cards", imgs, mcfg["roughness"], mcfg["specular"],
-                                 vertex_alpha=bool(rf.get("enabled") or frontg_cells or oc.get("alpha")))
+    # H2: both materials read the COLOR_0 alpha (the cap's is 1): the glTF exporter writes one COLOR_0 per mesh and
+    # keeps the first material's use of it, so a cap reading colour only left the cards' alpha out (VEC3)
+    va = bool(rf.get("enabled") or frontg_cells or oc.get("alpha"))
+    cap_mat = hsr.card_material("hair", cap_imgs, mcfg["roughness"], mcfg["specular"], vertex_alpha=va)
+    card_mat = hsr.card_material("hair_cards", imgs, mcfg["roughness"], mcfg["specular"], vertex_alpha=va)
     hsr.register_maps(b, cap_mat, cap_imgs)
     hsr.register_maps(b, card_mat, imgs)
     rows_idx = np.array(bend_rows, dtype=np.int64).reshape(-1, 3)
