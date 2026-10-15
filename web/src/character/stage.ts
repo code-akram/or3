@@ -537,6 +537,9 @@ export class Stage {
         o.rotateY(Math.PI);
         l.userData.rectQuat = o.quaternion.clone();
       }
+      // T18: the Blender emitter's rectangle (the eye material's cornea reflects it, LTC), placed as
+      // rectLight() would place a RectAreaLight here
+      l.userData.rect = { w: s.size[0] ?? 0.3, h: s.size[1] ?? s.size[0] ?? 0.3, quaternion: s.quaternion && this.view?.name === 'portrait' ? s.quaternion : null };
       // shadows (T19): every shadowed light from its spot proxy's map, the twins from their parent's
       if (this.castsShadow(s)) {
         const label = this.attachShadow(l, s, sphere);
