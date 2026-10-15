@@ -12,6 +12,8 @@ in that panel's UV space:
     ("edge", [(u, v), ...])        a finished edge: rolled lip + topstitch inside it
     ("crease", [(u, v), ...])      a pressed crease ridge
     ("buttonhole", (u, v), length) a keyhole bar-tack
+    ("pick", [(u, v), ...], kw)    hand pick stitching: a dimple every pitch_m
+    ("ridge", [(u, v), ...], kw)   a raised line, kw height and width_m
     ("welt", [(u, v), ...])        a raised welt strip (pocket mouths)
     ("jet", [(u, v), (u, v)])      a jetted pocket: two narrow lips either side
                                    of a slit, bar-tacked at both ends
@@ -309,6 +311,18 @@ class Height:
         self.line(pts, self.ridge(height, lip_m * 2), lip_m * 2, offset_m=inside_sign * lip_m * 0.5)
         self.stitch(pts, pitch_m=0.006, offset_m=inside_sign * stitch_in_m, height=0.00035)
 
+    def pick(self, pts, pitch_m=0.006, r_m=0.0014, depth=0.0004):
+        """Pick stitching (hand, through the edge): a small dimple where each stitch pulls the
+        cloth in, one every pitch_m along the line."""
+        P = np.asarray(pts, float)
+        if len(P) < 2:
+            return
+        s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
+        for t in np.arange(0.5 * pitch_m, s[-1], pitch_m):
+            q = (np.interp(t, s, P[:, 0]), np.interp(t, s, P[:, 1]))
+            self.spot(q, r_m, -depth)
+            self.spot(q, 0.45 * r_m, 0.5 * depth)
+
     def crease(self, pts, height=0.0009, width_m=0.004):
         self.line(pts, self.ridge(height, width_m), width_m * 1.5)
 
@@ -538,7 +552,11 @@ def draw_marks(H, layout, marks, side):
         for mark in lst:
             kind, data = mark[0], mark[1]
             if kind == "seam":
-                H.seam([T(p) for p in data])
+                H.seam([T(p) for p in data], **(mark[2] if len(mark) > 2 else {}))
+            elif kind == "pick":
+                H.pick([T(p) for p in data], **(mark[2] if len(mark) > 2 else {}))
+            elif kind == "ridge":
+                H.line([T(p) for p in data], H.ridge(**mark[2]), mark[2]["width_m"] * 1.5)
             elif kind == "topstitch":
                 H.stitch([T(p) for p in data], **(mark[2] if len(mark) > 2 else {}))
             elif kind == "edge":
