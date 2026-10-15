@@ -2,9 +2,13 @@
 // Default root: <main checkout>/data/build (public builds). CHARACTER_ASSET_ROOT=<absolute dir>
 // replaces it with exactly that directory (e.g. one private fan run dir); the two are never served
 // together. The dev server binds 127.0.0.1 only (vite.config.ts server.host).
+// T24: POST /upload/<name>?session=<id> (device capture and the ?perf=1 overlay, upload-sink.mjs) writes
+// into <root>/air/<id>/ with the default root; with CHARACTER_ASSET_ROOT set, only into
+// CHARACTER_UPLOAD_DIR=<absolute dir>/<id>/ when that is given (no upload otherwise).
 import { execFileSync } from 'node:child_process';
 import { createReadStream, realpathSync, statSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
+import { SESSION, receiveUpload } from './upload-sink.mjs';
 
 /** Build inputs: both pages, or only the character viewer (VIEWER_ONLY=1, into dist-viewer/, so
  * bench/m1/engine_shots.sh needs neither the WASM core nor touches the spike page's dist/). */
@@ -36,6 +40,27 @@ export function characterAssets(here, headers) {
         root = realpathSync(join(dirname(common), 'data', 'build'));
       }
       server.config.logger.info(`[character-assets] /asset/ -> ${root}`);
+      const upOverride = process.env.CHARACTER_UPLOAD_DIR;
+      if (upOverride && !isAbsolute(upOverride)) throw new Error('CHARACTER_UPLOAD_DIR must be absolute');
+      const uploadRoot = upOverride ? resolve(upOverride) : override ? null : join(root, 'air');
+      server.config.logger.info(`[character-assets] /upload/ -> ${uploadRoot ? uploadRoot + '/<session>/' : 'off (CHARACTER_ASSET_ROOT without CHARACTER_UPLOAD_DIR)'}`);
+      server.middlewares.use('/upload', (req, res, next) => {
+        if (req.method !== 'POST') return next();
+        const [path, query] = (req.url ?? '/').split('?');
+        const session = new URLSearchParams(query ?? '').get('session') ?? '';
+        const fail = (code) => {
+          res.writeHead(code, { ...headers, 'content-type': 'text/plain' });
+          res.end(String(code));
+        };
+        if (!uploadRoot || !SESSION.test(session)) return fail(403);
+        const name = decodeURIComponent(path.replace(/^\/+/, ''));
+        receiveUpload(req, name, join(uploadRoot, session), { session })
+          .then((r) => {
+            if (r.status === 200) server.config.logger.info(`[character-assets] upload ${session}/${r.name} (${r.bytes} bytes)`);
+            fail(r.status);
+          })
+          .catch(() => fail(500));
+      });
       server.middlewares.use('/asset', (req, res, next) => {
         if (req.method !== 'GET' && req.method !== 'HEAD') return next();
         let file;
