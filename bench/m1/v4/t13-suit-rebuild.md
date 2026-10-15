@@ -4,8 +4,9 @@ The suit is being rebuilt as real tailoring: drafted panels, sewn and draped (nu
 
 | item | what | state |
 |---|---|---|
-| 1 | jacket detail, plus the phase A review fixes | **done** (this section) |
-| 2 | UVs from panels (grain), port the `suit_textures.py` marks | next |
+| 1 | jacket detail, plus the phase A review fixes | **done**, accepted (open points below, to be fixed before item 6) |
+| 2 | UVs from panels (grain), port the `suit_textures.py` marks | **done** |
+| 2b | item-1 review points 1–3 (back collar roll, vents visible, front quarters cutaway) | next, before item 6 |
 | 3 | trousers | |
 | 4 | waistcoat | |
 | 5 | shirt (collar band and fall to the `suit_neck.py` frame) | |
@@ -142,3 +143,100 @@ Everything is placed by draft marks: `suit_pattern.py` now carries notches `hip_
 - LOD2 should drop the lining under the outside rather than decimate both.
 - The hinges are re-measured after item 6.
 - The collar's seating on the post-T22 base: the frames above use the post-T22 body (13,380 verts), and the collar sits clear of the lofted shirt collar in `close_collar_back`. I have not yet checked T22's claim that the neck forms are zero under the collar. That check, and the seat against the rebuilt shirt collar, belong to item 5.
+
+### Item 1 review (coordinator): accepted, with open points
+
+Length, waist suppression, cuff taper and the shoulder line are accepted. Five open points remain. Points 1–3 are fixed before item 6, so that the bone fit uses the final shape:
+
+1. **Back collar.** It stands up like a band. A turned collar rolls over: the fall covers the stand, and the shirt collar shows 1–1.5 cm above it at the back neck.
+2. **Vents.** They are not visible on the back. The double side vents (22 cm, the back lapping the side body, 3.5 mm step) are in the geometry but do not read. They should read as closed and overlapped at rest.
+3. **Front quarters.** They run nearly straight down below the button. They need the usual rounded cutaway to the hem.
+4. **Lapel edge.** It reads as rounded and thick. It should be a crisper pressed edge, 3–4 mm.
+5. **Profile.** The skirt stands slightly off the seat. The back skirt should hang onto the seat at rest.
+
+## Item 2: UVs from the pattern, the wool atlas
+
+Runs (from j5's drape, base `20261014T205840Z-t15-a5`):
+
+- `20261014T235644Z-t13b-u6` is the final run: clay, the LODs, the textures in `spike.blend`, and Cycles beauty, grain and LOD frames.
+- `t13b-u2` is the first run with a 2048 atlas. `t13b-u3` (2048) and `t13b-u4k` (4096) are the resolution comparison.
+
+Gate pictures are in `data/build/t13/gate/phaseB/item2/`:
+
+- `beauty_sheet.png`: lofted | pattern.
+- `grain_sheet.png`: the pinstripe check.
+- `beauty_pattern_close_*.png`.
+- `beauty_lod{1,2}_*.png`.
+- `atlas_normal_1k.png`.
+- `cmp_2048_vs_4096_{button,lapel}.png`.
+
+### What I see (frames at 100 %, before the numbers)
+
+- **Grain** (`grain_*`: white lines every ½ in along the grain, red every 5 cm across).
+  - The lines run straight down the fronts, back and side bodies, and along the sleeves, with the cross lines level at chest and hem.
+  - The front dart shows as the lines converging under the welt, as it would on a striped cloth.
+  - The flaps and the welt are on the front's grain.
+  - The lapel facings carry their stripes parallel to the lapel edge. The top collar's run up the centre back.
+  - The stripes continue round the turned cuff and hem edges.
+  - The right and left halves are mirror images.
+- **Beauty** (`beauty_pattern_*`).
+  - From the front and ¾ the cloth reads as a fine worsted. The twill is visible from about 30 cm (the button and lapel close-ups) and runs diagonally to the grain.
+  - The seams read as pressed-open grooves with no stitching: CB, the back and side seams, shoulder, armhole, the sleeve seams and the front dart.
+  - The pick stitching shows as a row of small dimples 6 mm in from the fronts' edge below the break, the lapel edge, the notch, and the collar end and fall. It is visible in `close_button`, `close_lapel` and `close_collar_back`.
+  - The buttonhole cord shows its purl, as ridges across the cord.
+  - The lofted jacket in the same light reads the same tone; the pattern jacket's surface is cleaner.
+- **2048 against 4096** (`cmp_*`). At 2048 (0.76 mm/px) the pick stitches are soft 2–3 px blobs and the purl barely resolves. At 4096 (0.38 mm/px) they read as stitches. The made jacket bakes at 4096.
+- **LODs.** The textured LOD1 and LOD2 hold the same cloth and seams. The decimation shows only in the silhouette of LOD2's cuff buttons and pocket corners.
+- **Not right yet.**
+  - A grey mottled patch on the wearer's right lapel roll near the top (`close_lapel`, top left). It is the sheen catching the twill bump at grazing angles on the roll; it is in the 2048 run too.
+  - The rever's chart is 21 % short along q on the lapel roll, so the twill is a little finer over that 1 cm band (see the numbers). It cannot be seen at 30 cm.
+
+### What was built
+
+- **`suit_detail.shell_uv`** puts every face corner of the welded drape at its panel's flat pattern coordinates, in metres:
+  - The corner coordinates come from the unwelded triangle the face came from, so a seam vertex has one UV per panel.
+  - v runs up the panel (the grain). The right-hand copies are mirrored, so the twill has one handedness on the outside.
+  - Per panel, it checks that every outside face winds counter-clockwise in UV, and flips u where one does not.
+- **The `solid` and `thicken` rims** continue the panel UVs outward across the edge, round the half round (π r per rim), mitred at the corners. The lining and facing faces take the outside's UVs reversed.
+- **Pockets.** The flaps, jets and welt use the front's pattern coordinates, each as its own atlas rectangle.
+- **Buttonhole cord.** UVs run along and round the cord, ×4, so the purl gets texels.
+- **The rever** (`suit_rever.chart_uv`) is cut as a tailor cuts it:
+  - The top collar is one piece with its grain up the CB.
+  - Each lapel facing has its grain along the front edge.
+  - The pieces are split at the gorge seam line in the chart.
+- **Marks** (`suit_textures.draw_marks`, which gains seam kwargs and the kinds `pick` and `ridge`):
+  - every visible sewn edge and both dart legs: a pressed-open seam (a groove, no stitches);
+  - the gorge seam on both sides;
+  - pick stitching: 6 mm in, 6 mm pitch;
+  - the purl.
+- **`suit_made_tex`** (new) sets the UV layer and panel tags. Its bake step packs through `suit_textures.pack_group` and builds the materials:
+  - the weave and marks height into a 4096 normal;
+  - albedo and ORM at 2048 (`surface_maps`, with smoother pressed lapels and collar);
+  - the twill detail record and tile for the engine;
+  - the lining: black viscose twill, roughness 0.34.
+
+  Its assign step fills the material slots from the face's `part`. The bake runs before the LODs, so their copies carry the atlas UVs.
+- **The beauty script** keeps the run's own materials and adds the Cycles weave and the hero twill (the same as the lofted `suit_wool`). It also gained:
+  - `--grain`: the pinstripe check;
+  - `--lods`: textured LOD frames;
+  - the atlas PNGs.
+
+### Numbers
+
+| | value |
+|---|---|
+| atlas | 1.563 m square, 19 rectangles (10 panels, 3 rever pieces, 5 pocket patches, the cord), 144 marks; normal 4096 (**0.38 mm/px**), albedo and ORM 2048; bake 5.1 s |
+| texel density (UV area / 3D area per face; 1 = the flat panel) | shell p05 0.91, median **1.00**, p95 1.10 (the drape's own strain); pockets 0.96 / 1.00 / 1.12; rever 0.79 / 0.98 / 2.41 (along q at the lapel roll 0.79, the roll is tighter in 3D than in the chart; the p95 is the inner sheet and the rim near the taper); cord ×16 by design |
+| UV winding | all 10 panels and 3 rever pieces: outside faces 100 % counter-clockwise (no flips needed); the insides are the reversed copies (44 % of the shell's faces) |
+| LOD UVs | LOD1 0.80 / 1.02 / 1.47, LOD2 0.67 / 1.01 / 1.53 (the collapse decimation stretches a little at UV seams) |
+| atlas use | 47 % of the square is cloth: shelf packing of bounding rectangles, tapered panels |
+| geometry | `kept.npz` and `made.npz` are bit-identical to d4: item 2 changes no vertex |
+| tris | LOD0 61,594, LOD1 24,636, LOD2 9,181 (unchanged) |
+| guards | drape and inside counts as item 1 (same drape); `npm run build` ok; containment 73/73; provenance audit 0 errors, 0 warnings |
+
+### What is left in item 2's scope
+
+- **Atlas packing.** 47 % use is low. Packing the panel shapes, with 180° turns allowed (a 180° turn keeps the grain and the twill's hand), would reach about 65–70 %: about 0.32 mm/px at 4096, or room to drop to 2048 for the engine. Item 8 decides the engine's texture budget.
+- **The rever chart's roll** is 21 % short along q. A UV relax toward the 3D lengths would even out the twill there.
+- **The sheen patch** on the lapel roll (above).
+- **The trousers, waistcoat and shirt** get the same treatment in items 3–5. `shell_uv` and `solid` are panel-generic.
