@@ -195,7 +195,13 @@ async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
   // the two tiles as one 2-layer array texture: one sampled-texture binding, not two (WebGPU allows 16
   // per fragment stage; with T19's lights and shadow maps the skin was at 17: black frames)
   // T21: the stubble tile is layer 2 when the build has one (same size as the others)
-  const tiles = await loadTileArray([base + j.tiles.pore, base + j.tiles.micro, ...(j.tiles.stubble ? [base + j.tiles.stubble] : [])]);
+  let tiles = j.tiles.stubble ? await loadTileArray([base + j.tiles.pore, base + j.tiles.micro, base + j.tiles.stubble]) : null;
+  if (!tiles && j.tiles.stubble) {
+    // the stubble tile missing / unreadable: the T17 two-layer array, no stubble
+    console.warn(`skin detail: no stubble tile (${j.tiles.stubble})`);
+    delete j.tiles.stubble;
+  }
+  tiles ??= await loadTileArray([base + j.tiles.pore, base + j.tiles.micro]);
   if (!tiles) return null;
   const materials: SkinDetail['materials'] = {};
   await Promise.all(

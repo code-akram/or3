@@ -972,7 +972,9 @@ def paint_strands(lin, w, h, tri_pos, tri_uv, objs, sp):
             for q in range(len(uvs) - 1):
                 if uvs[q] is None or uvs[q + 1] is None:
                     continue
-                if math.hypot(uvs[q][0] - uvs[q + 1][0], uvs[q][1] - uvs[q + 1][1]) > 40:   # a UV seam
+                # a UV seam or a jump between islands: the segment's UV length far over its length on the skin
+                lim = 2.5 * seg[q] / max(texel_m, 1e-9) + 3.0
+                if math.hypot(uvs[q][0] - uvs[q + 1][0], uvs[q][1] - uvs[q + 1][1]) > lim:
                     continue
                 segs_a.append(uvs[q])
                 segs_b.append(uvs[q + 1])

@@ -160,7 +160,7 @@ if [[ "${ENGINE_SHOTS:-1}" == 1 && -s "$SRC_RUN/character.glb" && -f "$RUN/portr
   for f in "$SRC_RUN"/*; do
     [[ -f "$f" ]] || continue
     b="$(basename "$f")"
-    [[ "$b" =~ ^(character\.(glb|ktx2\.glb|rig\.json|stats\.json)|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_(curvature|detail)\.png|skin_detail\.json|skin_detail_(pore|micro)\.png|cycles_balls\.png|(front|three_quarter|profile|closeup)\.png)$ ]] || continue
+    [[ "$b" =~ ^(character\.(glb|ktx2\.glb|rig\.json|stats\.json)|material_params\.json|suit_detail\.json|suit_twill_detail\.png|shader_balls\.(glb|json)|skin_(head|hands)_(curvature|detail)\.png|skin_detail\.json|skin_detail_(pore|micro|stubble)\.png|cycles_balls\.png|(front|three_quarter|profile|closeup)\.png)$ ]] || continue
     ln -s "$(realpath "$f")" "$ENG/$b"
   done
   if "$REPO/bench/m1/engine_shots.sh" "$ENG"; then
