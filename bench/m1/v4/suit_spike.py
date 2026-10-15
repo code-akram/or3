@@ -98,6 +98,11 @@ def capture_body():
     rig.add(b)
     suit.add(b)
     src_me, names = b.suit_src
+    # the body hash the build looks the made suit up by (suit_made, suit.post)
+    from character import suit_made
+    os.makedirs(A.out_dir, exist_ok=True)
+    with open(os.path.join(A.out_dir, "body_hash.txt"), "w") as f:
+        f.write(suit_made.mesh_hash(src_me) + "\n")
     # drop the live human; keep only the captured mesh (with its vertex groups)
     for o in list(bpy.data.objects):
         bpy.data.objects.remove(o, do_unlink=True)
@@ -2389,6 +2394,9 @@ def main_v2(O):
     stats["options"] = {k: v for k, v in O.items() if not k.startswith("_")}
     np.savez_compressed(os.path.join(A.out_dir, "kept.npz"), X3=X3, Tw=Tw, Vr=Vr,
                         Fr=np.array([list(f) + [-1] * (4 - len(f)) for f in Fr]))
+    import hashlib
+    stats["hash"] = {k: hashlib.sha256(np.ascontiguousarray(v).tobytes()).hexdigest()[:8]
+                     for k, v in (("X1", X1), ("X2", X2), ("X3", np.asarray(X3)), ("Vr", np.asarray(Vr)))}
     with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
         json.dump(stats, f, indent=1, default=float)
     print(json.dumps({k: stats[k] for k in ("stage1_gap_mm", "inside_after_push", "kept_tris")}, indent=1), flush=True)

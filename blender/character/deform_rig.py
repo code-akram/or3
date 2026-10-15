@@ -557,7 +557,7 @@ def tuck(b, cfg):
     out = {}
     for inner, outers in c["outer"].items():
         o = _find(b, inner)
-        if o is None:
+        if o is None or o.get("made_suit"):
             continue
         bvhs = []
         for f in outers:
@@ -634,6 +634,12 @@ def run(b, cfg):
     arm = b.armature()
     skirt_meshes = [o for o in b.meshes() if any(k in o.name for k in cfg["skirt"]["meshes"])]
     pivots = skirt_pivots(arm, skirt_meshes, cfg["skirt"]) if skirt_meshes else None
+    if arm.get("made_skirt_pivots"):
+        # the made suit (suit_made): its weights and gains were fitted on the pivots the lofted
+        # jacket gave, recorded before the swap
+        pv = json.loads(arm["made_skirt_pivots"])
+        pivots = {tuple(k.split(":")): Vector(v) for k, v in pv.items()}
+        skirt_meshes = [o for o in skirt_meshes if not o.get("made_suit")] or skirt_meshes
     made = add_bones(arm, bool(skirt_meshes), pivots)
     names = bone_names(arm)
     out = {"bones_added": sorted(made), "bones_total": len(arm.data.bones), "meshes": {}}
@@ -642,6 +648,8 @@ def run(b, cfg):
             continue
         if not o.vertex_groups:
             continue
+        if o.get("made_suit"):
+            continue  # the made suit's weights were remapped by its rig run (suit_rig)
         sigma = None
         if o.name != "Human_export":
             sigma = next((v for k, v in cfg["garments"].items() if k in o.name), None)

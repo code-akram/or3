@@ -159,3 +159,77 @@ def raster(UVc, Fc, vals, px, pad=4):
 def encode(G2):
     """(px, px, 2) deltas -> uint8 RG codes."""
     return np.clip(np.round((0.5 + G2 / (2 * RANGE)) * 255), 0, 255).astype(np.uint8)
+
+
+def write_png(path, img):
+    """uint8 (h, w, c) image (c = 3 or 4) to an 8-bit PNG, row 0 at the top."""
+    import struct
+    import zlib
+    h, w, c = img.shape
+    raw = b"".join(b"\x00" + img[y].tobytes() for y in range(h))
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    hdr = struct.pack(">IIBBBBB", w, h, 8, 6 if c == 4 else 2, 0, 0, 0)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", hdr) + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
+def face_frames(V, F, UVc):
+    """Per-triangle tangent t (along +u) and bitangent b (along +v), orthonormalised against the
+    face normal; b keeps its own handedness (mirrored islands)."""
+    p0, p1, p2 = V[F[:, 0]], V[F[:, 1]], V[F[:, 2]]
+    e1, e2 = p1 - p0, p2 - p0
+    d1, d2 = UVc[:, 1] - UVc[:, 0], UVc[:, 2] - UVc[:, 0]
+    n = np.cross(e1, e2)
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+    r = d1[:, 0] * d2[:, 1] - d2[:, 0] * d1[:, 1]
+    r = np.where(np.abs(r) > 1e-14, 1.0 / np.where(np.abs(r) > 1e-14, r, 1.0), 0.0)
+    t = (e1 * d2[:, 1:2] - e2 * d1[:, 1:2]) * r[:, None]
+    b = (e2 * d1[:, 0:1] - e1 * d2[:, 0:1]) * r[:, None]
+    t = t - n * np.sum(t * n, 1, keepdims=True)
+    t /= np.maximum(np.linalg.norm(t, axis=1, keepdims=True), 1e-12)
+    b = b - n * np.sum(b * n, 1, keepdims=True) - t * np.sum(b * t, 1, keepdims=True)
+    b /= np.maximum(np.linalg.norm(b, axis=1, keepdims=True), 1e-12)
+    return t, b
+
+
+def blended_rot(W, Ms):
+    """Per-vertex blended 3x3 of the skinning matrices (n, 3, 3); W (n, B), Ms (B, 4, 4)."""
+    return np.einsum("nb,bij->nij", W, Ms[:, :3, :3])
+
+
+def part_deltas(V0, Ft, W, Ms_list, Ysim, Yrt):
+    """(K, n, 3) rest-space normal deltas, sim minus runtime, of one made part over the pose set."""
+    out = []
+    for M, ys, yr in zip(Ms_list, Ysim, Yrt):
+        R = blended_rot(W, M)
+        ns = rest_normals(R, vertex_normals(ys, Ft))
+        nr = rest_normals(R, vertex_normals(yr, Ft))
+        out.append(ns - nr)
+    return np.stack(out)
+
+
+def corner_values(G3, V0, Ft, UVc):
+    """Group maps (Gn, n, 3) -> per-triangle-corner tangent-space values (m, 3, 2 Gn)."""
+    t, b = face_frames(V0, Ft, UVc)
+    vals = []
+    for g in G3:
+        gv = g[Ft]                                        # (m, 3, 3)
+        vals += [np.sum(gv * t[:, None], 2), np.sum(gv * b[:, None], 2)]
+    return np.stack(vals, 2)
+
+
+def bake_material(UVc, vals, px, pad=6):
+    """Per-corner values (m, 3, 8) of every triangle using one material -> two RGBA uint8 maps
+    (groups 0 / 1 and 2 / 3), PNG row order (row 0 = v 1), and the island coverage."""
+    img, cov = raster(UVc, None, vals, px, pad)
+    img = img[::-1]
+    cov = cov[::-1]
+    maps = []
+    for i in range(0, img.shape[2], 4):
+        q = img[..., i:i + 4]
+        if q.shape[2] < 4:
+            q = np.concatenate([q, np.zeros(q.shape[:2] + (4 - q.shape[2],), q.dtype)], 2)
+        maps.append(np.clip(np.round((0.5 + q / (2 * RANGE)) * 255), 0, 255).astype(np.uint8))
+    return maps, float(cov.mean())

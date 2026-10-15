@@ -34,6 +34,10 @@ def post(b):
     note = {"weights": info}
     if cfg["correctives"] is not None:
         note["correctives"] = dcor.run(b, cfg["correctives"], rules)
+    run = b.armature().get("made_suit_run")
+    if run:   # the made suit's cones and fitted skirt gains (T13, suit_made)
+        from . import suit_made
+        note["made_suit"] = suit_made.apply_rules(rules, run)
     note["rules_path"] = drig.write_rules(b, rules)
     note["morphs"] = [m["name"] for m in rules["morphs"]]
     b.notes["deform"] = note

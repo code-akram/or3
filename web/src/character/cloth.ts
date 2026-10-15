@@ -20,7 +20,7 @@ import type { DirectInput, RectInput, Std, WeaveSidecar } from './materials/inde
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
-const { float, fwidth, normalMap, normalView, positionGeometry, positionViewDirection, smoothstep, texture, uniform, uv, vec2, vec3, vec4 } = TSL as any;
+const { faceDirection, float, fwidth, normalMap, normalView, normalViewGeometry, positionGeometry, positionViewDirection, smoothstep, texture, uniform, uv, vec2, vec3, vec4 } = TSL as any;
 
 export type ClothKind = 'wool' | 'silk' | 'lining' | 'shirt';
 
@@ -137,20 +137,34 @@ class SuitClothLightingModel extends THREE.PhysicalLightingModel {
     super(false, sheen);
   }
 
-  /** The fuzz: a retro rim of loose fibres, (1 - N.V)^power x a wrapped N.L, per cloth kind. */
+  /** The fuzz: a retro rim of loose fibres, (1 - N.V)^power x a wrapped N.L, per cloth kind, on the
+   *  interpolated geometric normal: on the weave-mapped normal it lit single silhouette pixels at full
+   *  strength (4-8 px > 200 on the wool ball per light), a sparkle the fibre halo should not have. */
   private fuzz(L: N, color: N): N {
     const k = `suitCloth.${this.kind}`;
-    const nv = normalView.dot(positionViewDirection).clamp();
+    const ng = normalViewGeometry.mul(faceDirection);
+    const nv = ng.dot(positionViewDirection).clamp();
     const rim = float(1).sub(nv).pow(this.P.u(`${k}.fuzzPower`));
     const wr = this.P.u(`${k}.fuzzWrap`);
-    const wrapNL = normalView.dot(L).add(wr).div(float(1).add(wr)).clamp();
+    const wrapNL = ng.dot(L).add(wr).div(float(1).add(wr)).clamp();
     return color.mul(this.P.u('cloth.fuzzColor')).mul(rim).mul(wrapNL).mul(this.P.u(`${k}.fuzzStrength`)).mul(1 / Math.PI);
+  }
+
+  /** The base specular's grazing falloff, 1 - specGraze x (1 - N.V)^specGrazePower: the silk's GGX
+   *  lobe at grazing (Fresnel to white) is about twice Cycles' under the rim light (T19: 2.20), with no
+   *  sheen or fuzz at all; a lower roughness or F0 would cost the key highlight instead. */
+  private graze(): N {
+    const k = `suitCloth.${this.kind}`;
+    const nv = normalView.dot(positionViewDirection).clamp();
+    return float(1).sub(float(1).sub(nv).pow(this.P.u(`${k}.specGrazePower`)).mul(this.P.u(`${k}.specGraze`))).clamp();
   }
 
   override direct(input: unknown, builder?: unknown): void {
     const { lightDirection: L, lightColor, reflectedLight, lightNode } = input as DirectInput;
     const diffuse = vec3(0).toVar();
-    super.direct({ ...(input as object), reflectedLight: { ...reflectedLight, directDiffuse: diffuse } } as never, builder as never);
+    const spec = vec3(0).toVar();
+    super.direct({ ...(input as object), reflectedLight: { ...reflectedLight, directDiffuse: diffuse, directSpecular: spec } } as never, builder as never);
+    reflectedLight.directSpecular.addAssign(spec.mul(this.graze()));
     reflectedLight.directDiffuse.addAssign(diffuse.mul(directOcclusion(this.P, this.ao, 'cloth.directAO', this.screen, lightNode?.light)));
     reflectedLight.directDiffuse.addAssign(this.fuzz(L, lightColor));
   }
@@ -158,7 +172,9 @@ class SuitClothLightingModel extends THREE.PhysicalLightingModel {
   override directRectArea(input: unknown, builder?: unknown): void {
     const i = input as RectInput;
     const diffuse = vec3(0).toVar();
-    super.directRectArea({ ...(i as object), reflectedLight: { ...i.reflectedLight, directDiffuse: diffuse } } as never, builder as never);
+    const spec = vec3(0).toVar();
+    super.directRectArea({ ...(i as object), reflectedLight: { ...i.reflectedLight, directDiffuse: diffuse, directSpecular: spec } } as never, builder as never);
+    i.reflectedLight.directSpecular.addAssign(spec.mul(this.graze()));
     i.reflectedLight.directDiffuse.addAssign(diffuse.mul(directOcclusion(this.P, this.ao, 'cloth.directAO', this.screen, i.lightNode?.light)));
     // the sheen (accumulated by the physical direct()) and the fuzz from the rect's point equivalent;
     // that call's own diffuse and specular are dropped (the LTC has them)

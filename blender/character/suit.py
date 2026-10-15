@@ -17,6 +17,7 @@ Options live in DEFAULTS and are overridden through the build config's
 "suit" section, e.g. {"suit": {"jacket": {"vents": "centre"}}}.
 """
 
+import json
 import os
 
 import bmesh
@@ -25,6 +26,7 @@ from mathutils import Vector
 
 from . import budgets, config
 from . import suit_build as sb
+from . import suit_made
 from . import (suit_drape, suit_folds, suit_hero, suit_inner, suit_jacket, suit_neck, suit_ops, suit_shoes,
                suit_textures, suit_trousers)
 
@@ -359,6 +361,8 @@ def post(b):
     shoes = next((x for x in b.meshes() if "shoes" in x.name), None)
     src_me, src_names = b.suit_src
     m = {"options": o}
+    body_h = suit_made.mesh_hash(src_me)
+    m["body_hash"] = body_h
 
     body = sb.Body(src_me, src_names, arm)
     stature = body.extent(body.bones, 2)[1]
@@ -484,6 +488,14 @@ def post(b):
             before, after = budgets.decimate(obj, lim)
             m["decimated"][obj.name] = {"before": before, "after": after}
 
+    if (o.get("made") or {}).get("enabled"):
+        # the made suit (T13): swapped in for the lofted garments when its cache record's guards pass
+        swapped, m["made"] = made_suit(b, o["made"], arm, body_h, {
+            "jacket": jacket, "shirt": shirt, "waistcoat": vest, "trousers": trousers, "buttons": buttons})
+        jacket = swapped.get("jacket", jacket)
+        shirt = swapped.get("shirt", shirt)
+        vest = swapped.get("waistcoat", vest)
+        trousers = swapped.get("trousers", trousers)
     garments = [x for x in (jacket, trousers, shirt, tie, vest, shoes) if x is not None]
     if o["hide_body"]:
         m["body_hide"] = hide_body(b, o, garments)
@@ -494,6 +506,33 @@ def post(b):
 
 def r(x, n=4):
     return round(x, n)
+
+
+def made_suit(b, M, arm, body_h, lofted):
+    """Look the made suit up by the body hash and swap it in when every guard passes (suit_made).
+    The skirt bones' pivots are taken from the lofted jacket first, as the made suit's rig run saw
+    them (deform_rig reads them back from the armature), then the lofted garments go."""
+    from . import deform_rig as drig
+    root = M.get("cache_dir") or suit_made.cache_root(suit_made.data_root())
+    rec = suit_made.lookup(root, body_h)
+    note = {"body_hash": body_h, "cache": root, "record": bool(rec), "swapped": False}
+    if rec is None:
+        note["failures"] = [f"no cache record for body {body_h}"]
+        return {}, note
+    ok, rep = suit_made.guards(rec, body_h)
+    note["guards"] = rep
+    note["failures"] = rep["failures"]
+    if not ok and not M.get("force"):
+        return {}, note
+    sk = config.merge({"weights": drig.DEFAULTS}, {"weights": (b.cfg["rig"].get("deform") or {}).get("weights") or {}})
+    sk = sk["weights"]["skirt"]
+    piv = drig.skirt_pivots(arm, [lofted["jacket"]], sk)
+    arm["made_skirt_pivots"] = json.dumps({f"{s}:{sec}": list(v) for (s, sec), v in piv.items()})
+    arm["made_suit_run"] = rec["runs"]["posed"]
+    made = suit_made.swap(b, PART, lofted, rec, arm)
+    note["swapped"] = sorted(made)
+    note["posed_run"] = rec["runs"]["posed"]
+    return made, note
 
 
 # --- drape pins (suit_drape) ----------------------------------------------------------------

@@ -245,13 +245,16 @@ export const DEFAULT_PARAMS = {
   },
   /** T13 suit cloth path (cloth.ts): per-kind grazing response, fitted per light on the shader balls
    * (bench/m1/v4/cloth_balls.py), and the pose-blended wrinkle normals. on = 0: the T6 ClothMaterial. */
+  // T13 item 7 (cloth.ts): wool and silk fitted on T19's balls per light, net of the world, against
+  // Cycles (bench/m1/v4/cloth_balls.py fit; data/build/t13/balls/cloth_fit.json); lining and shirt
+  // have no ball and keep the T6 sheen
   suitCloth: {
     on: 1,
     wrinkleStrength: 1.0,
-    wool: { sheenScale: 0.15, fuzzStrength: 0.15, fuzzPower: 3.0, fuzzWrap: 1.0 },
-    silk: { sheenScale: 0.15, fuzzStrength: 0.15, fuzzPower: 3.0, fuzzWrap: 1.0 },
-    lining: { sheenScale: 0.15, fuzzStrength: 0.08, fuzzPower: 3.0, fuzzWrap: 1.0 },
-    shirt: { sheenScale: 0.15, fuzzStrength: 0.12, fuzzPower: 3.0, fuzzWrap: 1.0 },
+    wool: { specGraze: 0.08, specGrazePower: 3.0, sheenScale: 0.01, fuzzStrength: 0.37, fuzzPower: 3.0, fuzzWrap: 1.0 },
+    silk: { specGraze: 0.8, specGrazePower: 1.5, sheenScale: 0.16, fuzzStrength: 0.0, fuzzPower: 3.0, fuzzWrap: 1.0 },
+    lining: { specGraze: 0.0, specGrazePower: 3.0, sheenScale: 0.15, fuzzStrength: 0.08, fuzzPower: 3.0, fuzzWrap: 1.0 },
+    shirt: { specGraze: 0.0, specGrazePower: 3.0, sheenScale: 0.15, fuzzStrength: 0.12, fuzzPower: 3.0, fuzzWrap: 1.0 },
   },
   /** T16 temporal AA (output.ts, temporal.ts; ?aa=traa|taau|msaa at load). */
   aa: {

@@ -109,6 +109,8 @@ ATTACH = {"buttons": "jacket"}
 def part(o):
     if o.name == "Human_export":
         return "body"
+    if o.get("made_suit"):
+        return None  # the made suit carries its own pose-space correctives (suit_made)
     for k in ("shirt", "waistcoat", "jacket", "trousers", "tie", "buttons"):
         if f"suit_{k}" in o.name:
             return k
