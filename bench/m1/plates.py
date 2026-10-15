@@ -183,8 +183,8 @@ def grey_tile(tile, rng):
 
 
 # ------------------------------------------------------------------ plates and records
-def load_records():
-    p = manifest_path()
+def load_records(p=None):
+    p = p or manifest_path()
     out = {}
     if not os.path.exists(p):
         return out
@@ -205,9 +205,9 @@ def sha256(path):
     return h.hexdigest()
 
 
-def plate_status(plates_dir):
+def plate_status(plates_dir, manifest=None):
     """[(file, ok, reason)] for every image file in the plate dir."""
-    recs = load_records()
+    recs = load_records(manifest)
     out = []
     if not os.path.isdir(plates_dir):
         return out
@@ -230,7 +230,7 @@ def plate_status(plates_dir):
 
 
 def cmd_check(a):
-    st = plate_status(a.plates)
+    st = plate_status(a.plates, a.manifest)
     if not st:
         print(f"plates: no plate files in {a.plates}")
         return 0
@@ -305,7 +305,7 @@ def cmd_sheet(a):
     if a.slots not in (3, 4):
         sys.exit("plates: --slots is 3 or 4 (6 tiles: engine, Cycles, plates, and with 3 plates one more "
                  "placeholder or render variant)")
-    st = plate_status(a.plates)
+    st = plate_status(a.plates, a.manifest)
     usable = [p for p, ok, _ in st if ok]
     skipped = [(os.path.basename(p), why) for p, ok, why in st if not ok]
     for f, why in skipped:
@@ -387,6 +387,7 @@ def main(argv=None):
     s.add_argument("--engine", required=True, help="engine hero frame [@x,y] (tile cut at 100 %%)")
     s.add_argument("--cycles", required=True, help="Cycles hero frame [@x,y] (tile cut at 100 %%)")
     s.add_argument("--plates", default=default_plates())
+    s.add_argument("--manifest", default=None, help="plate licence records (default provenance/plates.jsonl)")
     s.add_argument("--slots", type=int, default=4, help="plate slots per sheet (3 or 4)")
     s.add_argument("--sheets", type=int, default=6)
     s.add_argument("--tile", type=int, default=540)
@@ -397,6 +398,7 @@ def main(argv=None):
     s.add_argument("--out", default=None)
     c = sub.add_parser("check", help="every plate file has an accepted public-domain record")
     c.add_argument("--plates", default=default_plates())
+    c.add_argument("--manifest", default=None, help="plate licence records (default provenance/plates.jsonl)")
     r = sub.add_parser("record", help="print a provenance line for a plate file")
     r.add_argument("file")
     r.add_argument("--author", required=True)
