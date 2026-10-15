@@ -125,6 +125,8 @@ def write_glb(b, out):
         export_morph=morph, export_morph_normal=morph, export_yup=True, export_apply=False,
         export_tangents=True, export_image_format="AUTO")
     pack_hair_maps(b, out)
+    from . import skin_tex
+    skin_tex.pack_orm(b, out)  # T17: the skin ORM's blue (specular cavity) back into the GLB
     write_sidecars(b, out)
 
 
@@ -294,6 +296,40 @@ def ktx2(b, out):
     rec["bytes"] = os.path.getsize(dst)
     rec["seconds"] = round(time.perf_counter() - t, 1)
     b.notes["ktx2"] = rec
+    return rec
+
+
+def lod1(b, out):
+    """LOD1 for the gameplay tier (T24, checkpoint-3 §5.2: ~60k tris, cap 65k): web/tools/lod1.mjs
+    simplifies every primitive to its target with meshoptimizer and drops the scalp hair's fly-away
+    cards (by atlas cell, from this build's hair stats) -> <stem>.lod1.glb, and from the KTX2 copy
+    (when export.ktx2 ran first) <stem>.lod1.ktx2.glb, the gate asset. Needs the web/ node deps."""
+    import subprocess
+    import tempfile
+    import time
+    repo = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    tool = os.path.join(repo, "web", "tools", "lod1.mjs")
+    stem = out[:-4]
+    t = time.perf_counter()
+    rec = {}
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump({"hair": b.notes.get("hair", {})}, f)
+        stats = f.name
+    try:
+        for src, dst in ((out, stem + ".lod1.glb"), (stem + ".ktx2.glb", stem + ".lod1.ktx2.glb")):
+            if not os.path.exists(src):
+                continue
+            r = subprocess.run(["node", tool, src, dst, "--stats", stats], capture_output=True, text=True)
+            if r.returncode != 0:
+                raise RuntimeError(f"lod1 failed ({os.path.basename(src)}): {(r.stdout + r.stderr)[-2000:]}")
+            one = json.loads(r.stdout.strip().splitlines()[-1])
+            rec[os.path.basename(dst)] = {"tris": one["tris"], "budget": one["budget"], "bytes": os.path.getsize(dst),
+                                          "primitives": {f"{p['node']}/{p['material']}": [p["before"], p["after"]]
+                                                         for p in one["primitives"]}}
+    finally:
+        os.unlink(stats)
+    rec["seconds"] = round(time.perf_counter() - t, 1)
+    b.notes["lod1"] = rec
     return rec
 
 

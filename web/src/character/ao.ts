@@ -50,6 +50,8 @@ export class SceneAO {
   private readonly triggerRT = new THREE.RenderTarget(1, 1, { depthBuffer: false });
   private readonly swaps = new Map<THREE.Material, THREE.MeshBasicNodeMaterial>();
   lastMs = 0;
+  /** T24 quality tiers: the prepass + GTAO size as a fraction of the frame (0.5 half, 0.25 quarter res) */
+  resolution = 0.5;
 
   constructor(
     private readonly renderer: THREE.WebGPURenderer,
@@ -91,11 +93,11 @@ export class SceneAO {
     return m;
   }
 
-  /** Depth + normal prepass and GTAO at half of w x h (call before the scene pass). */
+  /** Depth + normal prepass and GTAO at `resolution` (half) of w x h (call before the scene pass). */
   render(scene: THREE.Scene, camera: THREE.Camera, w: number, h: number): void {
     const t = performance.now();
-    const hw = Math.max(1, w >> 1);
-    const hh = Math.max(1, h >> 1);
+    const hw = Math.max(1, Math.floor(w * this.resolution));
+    const hh = Math.max(1, Math.floor(h * this.resolution));
     if (this.prepass.width !== hw || this.prepass.height !== hh) this.prepass.setSize(hw, hh);
     this.node.size = [hw, hh];
     this.node.samples.value = this.P.get('ao.samples') as number;

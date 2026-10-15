@@ -14,6 +14,13 @@
 //
 // The key light's shadow node multiplies by it (stage.ts), so it darkens the key's diffuse and specular
 // on every material but the hair (whose key twin has the deep hair shadow).
+//
+// T24: the target is allocated once (CAP², R8) and each frame renders into its top-left w x h (viewport);
+// the scene samples it through a UV scale. A resize used to rt.setSize(), which destroys the GPU texture
+// while the materials' bind groups still hold it (three re-binds only on a full refresh of a render object,
+// and the key's shadow node is not a material property it watches): "Destroyed texture [contact shadows]
+// used in a submit" on canvas frames after a capture at another size. Growing past CAP (rare) swaps in a
+// larger target and forces that refresh.
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import type { SceneAO } from './ao';
@@ -33,7 +40,13 @@ export class ContactShadows implements OutputPass {
   readonly stage = 'pre' as const;
   readonly order = 10;
   enabled = true;
-  readonly rt = new THREE.RenderTarget(1, 1, { depthBuffer: false, type: THREE.UnsignedByteType });
+  static CAP = 2048;
+  rt = ContactShadows.target(ContactShadows.CAP, ContactShadows.CAP);
+  /** T24: the sampled texture node, the scale from screen UV to the used rect, and the last texel's centre */
+  private readonly texNode: N;
+  private readonly uvScale = uniform(new THREE.Vector2(1, 1));
+  private readonly uvMax = uniform(new THREE.Vector2(1, 1));
+  private readonly retired: THREE.RenderTarget[] = [];
   /** 1 once the pass has run with a key light (the shadow node reads white before) */
   private readonly on = uniform(0);
   /** the contact term at this fragment (1 = lit), for the key's shadow node */
@@ -55,8 +68,8 @@ export class ContactShadows implements OutputPass {
     private readonly P: ParamStore,
     private readonly keyLight: () => THREE.Light | null,
   ) {
-    this.rt.texture.name = 'contact shadows';
-    this.node = mix(float(1), texture(this.rt.texture, screenUV).r, this.on);
+    this.texNode = texture(this.rt.texture, screenUV.mul(this.uvScale).min(this.uvMax));
+    this.node = mix(float(1), this.texNode.r, this.on);
     const m = new THREE.NodeMaterial();
     m.name = 'contact shadows';
     m.fragmentNode = this.shader();
@@ -117,7 +130,12 @@ export class ContactShadows implements OutputPass {
     const src = this.ao.depthTexture.image as { width: number; height: number };
     const w = Math.max(1, src.width);
     const h = Math.max(1, src.height);
-    if (this.rt.width !== w || this.rt.height !== h) this.rt.setSize(w, h);
+    if (w > this.rt.width || h > this.rt.height) this.grow(ctx.scene, w, h);
+    const W = this.rt.width;
+    const H = this.rt.height;
+    this.rt.viewport.set(0, 0, w, h);
+    this.uvScale.value.set(w / W, h / H);
+    this.uvMax.value.set((w - 0.5) / W, (h - 0.5) / H);
     const cam = ctx.camera;
     this.proj.value.copy(this.ao.prepassProjection);
     this.projInv.value.copy(this.ao.prepassProjectionInverse);
@@ -142,7 +160,27 @@ export class ContactShadows implements OutputPass {
     this.lastMs = performance.now() - t;
   }
 
+  private static target(w: number, h: number): THREE.RenderTarget {
+    const rt = new THREE.RenderTarget(w, h, { depthBuffer: false, type: THREE.UnsignedByteType, format: THREE.RedFormat });
+    rt.texture.name = 'contact shadows';
+    return rt;
+  }
+
+  /** A larger target: the old one stays alive (a bind group may still hold it) until dispose(). */
+  private grow(scene: THREE.Scene, w: number, h: number): void {
+    const n = Math.max(w, h, this.rt.width, this.rt.height);
+    console.warn(`contact shadows: target grows to ${n}x${n} (prepass ${w}x${h})`);
+    this.retired.push(this.rt);
+    this.rt = ContactShadows.target(n, n);
+    this.texNode.value = this.rt.texture;
+    scene.traverse((o) => {
+      const m = (o as THREE.Mesh).material;
+      for (const x of Array.isArray(m) ? m : m ? [m] : []) x.needsUpdate = true;
+    });
+  }
+
   dispose(): void {
+    for (const r of this.retired.splice(0)) r.dispose();
     this.rt.dispose();
   }
 }

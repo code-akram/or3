@@ -37,6 +37,11 @@ DEFAULTS = {
     # roughness offsets per (object key, tag label): the pressed lapel facings and top collar
     "panel_rough": {("rever", "lapel"): -0.10, ("rever", "lapel_r"): -0.10, ("rever", "collar"): -0.05},
     "name": "t13",               # material and image name prefix (the trousers bake "t13t")
+    # the cloth: "wool" (suiting: the twill and the engine's tiled detail), or "shirt" (a white
+    # cotton poplin: suit.DEFAULTS materials "shirt", WEAVE "shirt"; the inside the same cloth,
+    # white buttons)
+    "cloth": "wool",
+    "shirt_button": {"albedo": 0.78, "rough": 0.22, "spec": 0.5, "coat": 0.5, "coat_rough": 0.08},
 }
 
 
@@ -123,7 +128,8 @@ def bake(objs, marks, tags, suit_o, opts=None):
     obs = list(objs.values())
     side, layout = st.pack_group(obs, o["px"])
     H = st.Height(o["px"], side, seed=o["seed"])
-    H.weave(st.WEAVE["wool"])
+    cloth = o["cloth"]
+    H.weave(st.WEAVE[cloth])
     flat = {}
     for k, d in marks.items():
         if k in objs:
@@ -132,18 +138,22 @@ def bake(objs, marks, tags, suit_o, opts=None):
     st.draw_marks(H, layout, flat, side)
     nm = o["name"]
     img = H.normal_image(f"{nm}_wool_normal", slope=o["slope"])
-    spec = suit_o["materials"]["wool"]
-    wool = st.material(f"{nm}_wool", **spec)
+    spec = suit_o["materials"][cloth]
+    wool = st.material(f"{nm}_{cloth}", **spec)
     st.attach_normal_map(wool, img, strength=1.0)
     wool["suit_atlas_side_m"] = side
-    detail = st.detail_record(wool, side, st.WEAVE["wool"])
+    detail = st.detail_record(wool, side, st.WEAVE[cloth]) if st.WEAVE[cloth].get("detail") else None
     S = dict(suit_o["surface"])
     S["panel_rough"] = {f"{objs[k].name}:{t}": v for (k, lab), v in o["panel_rough"].items() if k in objs
                         for t, l2 in tags.get(k, {}).items() if l2 == lab}
-    ai, oi, surf = st.surface_maps(H, layout, side, spec, S, f"{nm}_wool")
+    ai, oi, surf = st.surface_maps(H, layout, side, spec, S, f"{nm}_{cloth}")
     st.attach_surface(wool, ai, oi)
-    lining = st.material(f"{nm}_lining", **o["lining"])
-    button = st.material(f"{nm}_button", **suit_o["materials"]["button"])
+    if cloth == "shirt":
+        lining = wool                         # the inside is the same cloth
+        button = st.material(f"{nm}_button", **o["shirt_button"])
+    else:
+        lining = st.material(f"{nm}_lining", **o["lining"])
+        button = st.material(f"{nm}_button", **suit_o["materials"]["button"])
     for m in (wool, lining, button):
         m.use_fake_user = True                # the clay renders take the slots for a while
     _, gmax = st.twill_tile(slope=o["slope"])
