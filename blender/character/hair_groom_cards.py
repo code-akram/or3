@@ -90,7 +90,8 @@ CARDS = {
     # T15: mid / top / under cards run to the `pct` (`under_pct`) percentile of their strands' lengths,
     # not their mean (clump_profile `length`); null = T9
     # (a3: 92 / 85 / 0.1 ended more of the cell's strands before the card end and lost the tips' coverage)
-    "length": {"pct": 80, "under_pct": 70, "fade": 0.12},
+    # T20: 80 -> 90 (with the outer cards to 95): the back lengths over the shoulder ended short of the hero's
+    "length": {"pct": 90, "under_pct": 70, "fade": 0.12},
     "segment_m": 0.024, "min_segments": 4, "max_segments": 16,
     "min_halfwidth_m": 0.0015, "width_pct": 90, "width_pad_m": 0.0015,
     "tip_width": 0.7, "curve": 0.3, "root_w": [0.3, 0.85], "root_w_m": [0.005, 0.025],
@@ -103,7 +104,7 @@ CARDS = {
                  "cell_strands": 6, "cell_spread": 1.5, "cell_px": 1.0,
                  # T20: `single` one-strand fly-away cards (half-width single_hw_m, a one-strand cell drawn at
                  # single_px x the lock strand width and single_alpha), after the `count` multi-strand ones
-                 "single": 70, "single_hw_m": 0.0007, "single_px": 1.0, "single_alpha": 0.55,
+                 "single": 60, "single_hw_m": 0.0007, "single_px": 1.0, "single_alpha": 0.55,
                  "single_start": 0.2},
     # T20 hair v5 outer layer: narrow twisted cards over the top clumps, each from `group` strands of the
     # clump's outer part (offset along the outward normal above the `outer_pct` percentile), grouped
@@ -112,8 +113,8 @@ CARDS = {
     # root to tip. Cells: `cells` representative groups (by length) baked `cell_w` px wide in `cell_rows`
     # rows of the atlas height.
     "outer": {"enabled": True, "group": 10, "per_clump": 2, "outer_pct": 45, "max_halfwidth_m": 0.004,
-              "width_pct": 90, "pad_m": 0.0008, "length_pct": 88, "fade": 0.12, "lift_m": 0.0012,
-              "twist_deg": [8.0, 50.0], "max_segments": 12, "curve": 0.25, "start": 1,
+              "width_pct": 90, "pad_m": 0.0008, "length_pct": 95, "fade": 0.12, "lift_m": 0.0012,
+              "twist_deg": [8.0, 50.0], "max_segments": 8, "curve": 0.25, "start": 1,
               "cells": 16, "cell_w": 32, "cell_rows": 2, "strand_px": 0.9},
     # T20: per-card bent normals: the card's edge vertices lean `bend_deg` toward their side across the
     # card (a half-cylinder profile over the smooth proxy normal), so a card shades round, not flat
@@ -168,7 +169,7 @@ CARDS = {
     # ~5 mm ahead of the hero's 50 % coverage edge at the temples)
     "cap": {"size": 1024, "ss": 2, "data_scale": 2, "strand_px": 0.9, "max_dist_m": 0.03,
             "strands": 24000, "core": [0.55, 0.95], "density_r_m": 0.004, "shade": 0.8,
-            "skin_mm": 0.0, "edge_alpha": [0.0, 0.75], "phys_alpha": True},
+            "skin_mm": 0.0, "edge_alpha": [0.0, 0.75], "phys_alpha": True, "pull_m": [0.003, 0.012]},
 }
 
 smoothstep = hair_clumps.smoothstep
@@ -561,6 +562,23 @@ def bake_cap(frame, g, E, bm, uv, cfg, cols_main, rng, sids):
     up = hsr.blur(up, 2)
     core = nsmooth(cc["core"][0], cc["core"][1], up)
     cov = np.clip(r["cov"] + core * (1 - r["cov"]), 0, 1)
+    pull = cc.get("pull_m")
+    if pull:
+        # T20: the cap pulled behind the hairline: coverage (core and drawn strands) fades in over pull_m
+        # from the cap's open edge. The strands projected flat onto the scalp drew a dense fringe ahead
+        # of the hero's hairline, where its few edge strands stand off the skin and stay under 50 %
+        # cover (game-only pixels along the hairline at every head view); the hairline cards and baby
+        # hairs carry the edge
+        bnd = [i for i, v in enumerate(bm.verts) if v.is_boundary]
+        kb = KDTree(len(bnd))
+        for k_, i in enumerate(bnd):
+            kb.insert(Vector(tuple(V[i])), k_)
+        kb.balance()
+        dist_v = np.array([kb.find(Vector(tuple(p)))[2] for p in V])
+        eimg, ehit = _tri_raster(lo, lo, tri_uv, dist_v[tri_v][..., None])
+        eimg, ehit = _dilate_fill(eimg, ehit, 4)
+        eup = hsr.blur(np.repeat(np.repeat(eimg[..., 0], size // lo, 0), size // lo, 1), 2)
+        cov = cov * nsmooth(pull[0], pull[1], eup)
     base = np.median(cols_main, axis=0) * cc["shade"]
     has = r["cov"] > 1e-3
     rgb = np.stack([r["r"], r["g"], r["b"]], -1)
