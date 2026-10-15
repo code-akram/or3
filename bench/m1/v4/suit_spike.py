@@ -3950,6 +3950,9 @@ POSED = {
     # p90 118 mm on the jacket, 798 mm for a cone only one pose drives); 0.03 keeps the training fit
     # under 14 mm and brings the leave-one-out p90 to 24 mm (scan over 1e-4..0.3, c1)
     "lam": 0.03,
+    # the made parts' shapes fitted on their wrap of the drape runtime (which the gate checks): a light
+    # ridge so the engine mesh tracks it (0.7 mm on the shirt shell at 1e-3; 9 mm at the drape's 0.03)
+    "export_lam": 1e-3,
     "cone_masks": False,         # the spatial masks cost the fit 7-10 mm (high ready 20 mm) for little
     # the layer order at runtime: each layer's fit misses by several mm, more than the gaps between
     # layers, so the under-layers' covered vertices (hidden under the next layer out at rest) sink
@@ -3959,7 +3962,9 @@ POSED = {
     "tuck": {"on": False, "reach_m": 0.05, "margin_m": 0.03, "depth_m": {"shirt": 0.012, "waistcoat": 0.007}},
     # T13d: the correctives refitted to keep the layer order and the jacket out of the body (constrain_fit)
     "constrain": {"on": True, "rounds": 8, "trigger_m": 0.0005, "margin_m": 0.0012, "body_margin_m": 0.0015,
-                  "body_depth_max_m": 0.02, "weight": 100.0, "sink_r_m": 0.015, "sink_max_m": 0.012},
+                  "body_depth_max_m": 0.02, "weight": 10.0, "weight_body": 1000.0, "outer_after": 2,
+                  "move_max_m": {"jacket": 0.016, "waistcoat": 0.008, "shirt": 0.008},
+                  "kept_only": True},
     "gain_fit": True,            # refit the skirt bones' follow gains to the simulated skirt
     "dem_bones_diag": True,      # T13b's eight free jacket bones: refit and leave-one-out on this set
     "jacket_bones": 8, "fit_iters": 4, "waist_z": 1.03, "drive_lam": 0.1,
@@ -3993,7 +3998,11 @@ POSED = {
     # grows by on the mesh, the cuff's (the 1.5 cm past the sleeve plus the turn), the jacket's inside
     # (vertices more than inner_off_m inside its drape: lining, facings, turn-ups)
     "cull": {"on": True, "view_zmin": -0.5, "tilts_narrow": [0.0, 35.0, 60.0], "tilts": [0.0, 45.0, 75.0], "k": 8, "eps_m": 0.0015, "reach_m": 0.6, "margin_m": 0.025,
-             "cuff_margin_m": 0.012, "lining_m": 0.0025, "inner_off_m": 0.0015, "lods": {"1": 0.4, "2": 0.15}},
+             "cuff_margin_m": 0.012, "lining_m": 0.0025, "inner_off_m": 0.0015, "lods": {"1": 0.4, "2": 0.15,
+             # the hero level (per part): the rever, the collar and the jacket body dense, the buttons,
+             # the pockets and the cuffs thinned (the character LOD0 budget, T13d)
+             "h": {"body": 0.7, "rever": 0.75, "buttonhole": 1.0, "pockets": 0.45, "buttons": 0.4,
+                   "collar": 0.75, "cuffs": 0.3, "shell": 0.5, "default": 0.6}}},
     # close-ups per pose: name -> (bone whose posed head is the target, offset (m), azimuth, scale)
     "close": {"cuff_l": ["hand_l", [0, 0, 0.03], 60.0, 0.30], "cuff_r": ["hand_r", [0, 0, 0.03], -60.0, 0.30],
               "uarm_l": ["lowerarm_l", [0, 0, 0], 150.0, 0.45], "front": ["pelvis", [0, -0.1, 0.12], 0.0, 0.45],
@@ -4672,7 +4681,7 @@ class Overlap:
 
 
 def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body, tris, stats, res, anc=None,
-                col0=None):
+                col0=None, pre_gate=None):
     """Per pose (the runtime: what ships), the under-layers' points that some ray in a cone about the
     outward normal sees out of (suit_cull.visible): the shirt and waistcoat drapes, the jacket's inside
     (its lining and facings, looking in), the shirt's cuffs and the trousers' shell. The visible sets
@@ -4841,6 +4850,18 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
     tri_a = np.asarray(tris)
     shown_v = sc.grow_dist(body_vis, body_rest_co(body), sc.adjacency(tri_a, len(body_vis)), C.get("body_margin_m", 0.03))
     st["body_shown"] = [int(shown_v.sum()), int(len(shown_v))]
+    if pre_gate is not None:
+        # each anchor's under-layer point on a kept face (as the gate reads it below)
+        kept_anc = {}
+        for (outer, u), an in (anc or {}).items():
+            if u in ("shirt", "waistcoat") and f"spike_{u}_collider" in parts:
+                kv = grown[u][G[u]["Tw"][parts[f"spike_{u}_collider"]["bind"]["fi"]]].any(1)
+                kept_anc[(outer, u)] = kv[an.T[an.fi]].any(1)
+            elif u == "tie" and "spike_tie_shell" in keep:
+                F_t = parts["spike_tie_shell"]["F"]
+                tri_poly = np.repeat(np.arange(len(F_t)), [len(f) - 2 for f in F_t])
+                kept_anc[(outer, u)] = keep["spike_tie_shell"][tri_poly[an.fi]]
+        pre_gate(kept_anc)
     # the runtime penetration against what is kept: jacket drape vertices inside the body or behind a
     # kept under-layer face; and the kept under-layer faces' vertices outside the jacket where it
     # covered them at rest (shown through)
@@ -4876,7 +4897,7 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
             kd_b.insert(v_, i_)
         kd_b.balance()
         ins_shown = [i for i in inb_ if shown_v[kd_b.find(dep[i][1])[1]]]
-        res[pname]["inside_rt_culled"] = {"jacket": len(ins), "jacket_body": inb, "jacket_layers": len(ins) - inb,
+        res.setdefault(pname, {})["inside_rt_culled"] = {"jacket": len(ins), "jacket_body": inb, "jacket_layers": len(ins) - inb,
                                           "jacket_body_shown": len(ins_shown),
                                           "body_depth_mm_max": round(-min([dep[i][0] for i in inb_], default=0.0) * 1000, 1)}
         res[pname]["inside_rt_culled_idx"] = ins[:400]
@@ -4932,7 +4953,9 @@ def cull_hidden(C, poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body
 
 def culled_lods(ratios):
     """Per garment, the exported (culled) rig parts joined and collapse-decimated: cull_spike_<g>_lod<k>
-    (no weights or keys; suit_made.lod_from skins them from the full part at build time)."""
+    (no weights or keys; suit_made.lod_from skins them from the full part at build time). A ratio is a
+    float (the joined garment) or {part suffix: ratio, "default": ratio} (each part on its own, then
+    joined: the "h" hero level keeps the rever and the collar dense and thins the buttons and cuffs)."""
     from character import suit_made as smd
     out = {}
     for g in ("jacket", "shirt", "waistcoat", "trousers", "tie"):
@@ -4940,6 +4963,19 @@ def culled_lods(ratios):
                and "collider" not in o.name]
         if not src:
             continue
+        def decimate(ob, ratio):
+            if ratio >= 0.999:
+                return
+            dec = ob.modifiers.new("dec", "DECIMATE")
+            dec.ratio = float(ratio)
+            dg = bpy.context.evaluated_depsgraph_get()
+            me = bpy.data.meshes.new_from_object(ob.evaluated_get(dg))
+            old = ob.data
+            ob.modifiers.remove(dec)
+            ob.data = me
+            bpy.data.meshes.remove(old)
+            me.name = ob.name
+
         for k_, ratio in sorted(ratios.items()):
             cps = []
             for o in src:
@@ -4951,19 +4987,16 @@ def culled_lods(ratios):
                 c.vertex_groups.clear()
                 for md in list(c.modifiers):
                     c.modifiers.remove(md)
+                if isinstance(ratio, dict):
+                    part = o.name[len(f"rig_spike_{g}_"):]
+                    decimate(c, ratio.get(part, ratio.get("default", 1.0)))
                 cps.append(c)
             ob = smd.join(cps, f"cull_spike_{g}_lod{k_}")
             if ob.data.shape_keys:
                 ob.shape_key_clear()
-            dec = ob.modifiers.new("dec", "DECIMATE")
-            dec.ratio = float(ratio)
-            dg = bpy.context.evaluated_depsgraph_get()
-            me = bpy.data.meshes.new_from_object(ob.evaluated_get(dg))
-            old = ob.data
-            ob.modifiers.remove(dec)
-            ob.data = me
-            bpy.data.meshes.remove(old)
-            me.name = ob.name
+            if not isinstance(ratio, dict):
+                decimate(ob, ratio)
+            me = ob.data
             ob.hide_render = True
             out[f"{g}_lod{k_}"] = sum(len(p.vertices) - 2 for p in me.polygons)
     return out
@@ -5140,38 +5173,29 @@ def bind_under(G, Y, rtj, K, B, pinned):
 
 
 def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tparts, place, cops, tris, C,
-                  tie_nm=None):
-    """T13d: the runtime made to keep the layer order. The corrective fit misses the sim by 5-14 mm
-    RMS over the 35 poses (a ridge over shared cones), more than the 1-7 mm between the layers, so
-    the fitted layers cross wherever the error points inward. Per round every rest-referenced anchor
-    (an outer layer's vertex over the under-layer point it lay over at rest) and every jacket vertex
-    against the posed body is read on the runtime; a pair under the trigger is resolved:
-    - an under-layer (the shirt, the waistcoat under the jacket) sinks at rest along its inward
-      normal by the shortfall (the most any pose asks), feathered over sink_r_m: pose-independent,
-      so it cannot leak into the other poses as a cone shape does, and it is hidden there;
-    - the outer layer goes out (against the skinned trousers, the body, and a rigid cuff or collar
-      row the drape cannot move): its active vertices refitted with the pairs as weighted rows (a
-      vertex's cone shapes are its own unknowns: min |A S - D|^2 + lam |S|^2 + w |n.Y - b|^2); a
-      pair once active stays, pinned where it is while it holds.
-    Changes S, G[key]["X0"] (the sunk rest) and rt_Y in place; returns (stats, {key: sink (n,)})."""
-    from mathutils.kdtree import KDTree
+                  tie_nm=None, kept=None):
+    """T13d: the correctives refitted so the runtime keeps the layer order. The fit misses the sim by
+    5-14 mm RMS over the 35 poses (a ridge over shared cones), more than the 1-7 mm between the
+    layers, so the fitted layers cross wherever the error points inward. Per round every
+    rest-referenced anchor (an outer layer's vertex over the under-layer point it lay over at rest;
+    only those on kept faces when kept is given: {(outer, under): bool per anchor}) and every jacket
+    vertex against the posed body is read on the runtime; a pair under the trigger joins the active
+    set. The under-layer goes in (the drape vertices its collider face rides on), the outer out
+    against the skinned trousers, the body and a rigid row, and both share the push once a pair
+    has been short outer_after rounds. Each layer's active vertices are refitted with their pairs as
+    rows of weight w (a vertex's cone shapes are its own unknowns: min |A S - D|^2 + lam |S|^2 +
+    w |n.Y - b|^2), the change capped at move_max_m in any pose (a push that only a cone shared
+    with other poses can make leaks into them: capped, it is left short rather than spread). A pair
+    once active stays, pinned where it is while it holds. Changes S and rt_Y in place; returns stats."""
     from character import suit_rig as sr
     K = len(Ms)
     trig, mg, mgb = C["trigger_m"], C["margin_m"], C["body_margin_m"]
     w = np.sqrt(C["weight"])
+    wb = np.sqrt(C.get("weight_body", C["weight"]))
     act, act_ix = {}, {}
     hist = []
     Lb = [Layers(cops[k], tris, []) for k in range(K)]
     Cn = Acone.shape[1]
-    X0b = {k_: G[k_]["X0"].copy() for k_ in G}
-    sink = {k_: np.zeros((len(G[k_]["X0"]), 3)) for k_ in G}
-    kd_cache = {}
-    Rinv = {}                   # (key, k) -> per-vertex inverse blended rotations (lazy)
-
-    def rinv(key, k):
-        if (key, k) not in Rinv:
-            Rinv[(key, k)] = np.linalg.inv(sr.blended(G[key]["W"], Ms[k])[:, :3, :3])
-        return Rinv[(key, k)]
 
     def under_pts(u, k):
         if u == "trousers":
@@ -5195,15 +5219,19 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 continue
             src = (outer, u)
             lm = an.lat_max or 9.0
+            kf = kept.get(src) if kept is not None else None
             for k in range(K):
                 Vp, sup, free = under_pts(u, k)
                 P_, n_ = an.frame(Vp)
                 d_ = rt_Y[outer][k][an.idx] - P_
                 s_ = (d_ * n_).sum(1)
                 lat_ = np.linalg.norm(d_ - s_[:, None] * n_, axis=1)
-                sel = set(np.nonzero((s_ < trig) & (lat_ < lm))[0].tolist()) | act_ix.get((src, k), set())
+                ok_ = lat_ < lm
+                if kf is not None:
+                    ok_ &= kf
+                sel = set(np.nonzero((s_ < trig) & ok_)[0].tolist()) | act_ix.get((src, k), set())
                 for a in sel:
-                    if lat_[a] < lm:
+                    if ok_[a]:
                         out[(src, k, int(a))] = (outer, u, an, int(a), n_[a], max(0.0, mg - float(s_[a])), sup, free)
         src = ("body", "jacket")
         for k in range(K):
@@ -5219,6 +5247,7 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                     out[(src, k, i)] = ("jacket", "body", None, i, nor, max(0.0, mgb - s), None, None)
         return out
 
+    S0 = {k_: S[k_].copy() for k_ in G}
     for r in range(C["rounds"] + 1):
         pairs = read()
         short, gate = {}, {}
@@ -5229,74 +5258,34 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                 short[nm_] = short.get(nm_, 0) + 1
             if v[5] > m_ + 0.0005 + 1e-9:
                 gate[nm_] = gate.get(nm_, 0) + 1
-        hist.append({"round": r, "below_trigger": short, "below_-0.5mm": gate, "active": len(act),
-                     "sink_mm_max": {k_: round(float(np.linalg.norm(v_, axis=1).max()) * 1000, 1) for k_, v_ in sink.items()},
-                     "sunk": {k_: int((np.linalg.norm(v_, axis=1) > 1e-4).sum()) for k_, v_ in sink.items()}})
+        hist.append({"round": r, "below_trigger": short, "below_-0.5mm": gate, "active": len(act)})
         print(f"[constrain] round {r}: {hist[-1]}", flush=True)
         if r == C["rounds"] or not short:
             break
-        rows = {k_: {} for k_ in G}          # outer layers: {vertex: [(k, n, b)]}, n . Y_v(k) >= b
-        need = {k_: {} for k_ in G}          # under layers: {vertex: rest-space inward sink wanted}
+        for key_, v in pairs.items():
+            if v[5] > 1e-9 or key_ in act:
+                act[key_] = act.get(key_, 0) + (1 if v[5] > 1e-9 else 0)
+                act_ix.setdefault((key_[0], key_[1]), set()).add(key_[2])
+        rows = {k_: {} for k_ in G}          # {layer: {vertex: [(k, n, b)]}}: n . Y_v(k) >= b
         for key_, (outer, u, an, a, n, defi, sup, free) in pairs.items():
-            if u == "body" or sup is None:
-                if defi > 1e-9 or key_ in act:
-                    act[key_] = act.get(key_, 0) + 1
-                    act_ix.setdefault((key_[0], key_[1]), set()).add(key_[2])
-                    i = a if u == "body" else int(an.idx[a])
-                    rows[outer].setdefault(i, []).append((key_[1], n, float(n @ rt_Y[outer][key_[1]][i]) + defi))
-                continue
-            if defi <= 1e-9:
+            if key_ not in act:
                 continue
             k = key_[1]
+            if u == "body":
+                rows["jacket"].setdefault(a, []).append((k, n, float(n @ rt_Y["jacket"][k][a]) + defi, wb))
+                continue
+            i = int(an.idx[a])
+            if sup is None:                  # the skinned trousers: the outer goes out
+                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + defi, w))
+                continue
             key_u, sup_f = sup
             dv = sorted({int(x) for j in an.T[an.fi[a]] if free[j] for x in sup_f[j]})
-            if not dv:                       # a rigid row: the outer goes out
-                act[key_] = act.get(key_, 0) + 1
-                act_ix.setdefault((key_[0], key_[1]), set()).add(key_[2])
-                i = int(an.idx[a])
-                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + defi))
-                continue
-            Ri = rinv(key_u, k)[dv]
-            dr = np.einsum("nij,j->ni", Ri, -n)                 # the push, in rest space
-            for j, d in enumerate(dv):
-                need[key_u].setdefault(d, []).append((dr[j], defi))
-        # the under layers: each wanting vertex's push (rest space, the largest asked), feathered to
-        # its neighbours over sink_r_m (each takes the largest falloff-scaled push near it), added
-        # to the sink so far (a drape's faces wind either way per panel: no normal is trusted)
-        for key, nd in need.items():
-            if not nd:
-                continue
-            add = np.zeros((len(sink[key]), 3))
-            for v, lst in nd.items():
-                for dr_, defi in lst:
-                    u_ = dr_ / max(np.linalg.norm(dr_), 1e-12) * defi
-                    if np.linalg.norm(u_) > np.linalg.norm(add[v]):
-                        add[v] = u_
-            src_v = np.array(sorted(nd))
-            rr = C["sink_r_m"]
-            sm = add.copy()
-            mag = np.linalg.norm(sm, axis=1)
-            if key not in kd_cache:
-                kd_ = KDTree(len(X0b[key]))
-                for v_, p_ in enumerate(X0b[key]):
-                    kd_.insert(p_, v_)
-                kd_.balance()
-                kd_cache[key] = kd_
-            for v in src_v:
-                for (co_, u_, dd) in kd_cache[key].find_range(X0b[key][v], rr):
-                    t_ = 1.0 - dd / rr
-                    f_ = t_ * t_ * (3 - 2 * t_)
-                    m_ = np.linalg.norm(add[v]) * f_
-                    if m_ > mag[u_]:
-                        sm[u_] = add[v] * f_
-                        mag[u_] = m_
-            sink[key] = sink[key] + sm
-            nrm = np.linalg.norm(sink[key], axis=1)
-            sink[key] *= np.minimum(1.0, C["sink_max_m"] / np.maximum(nrm, 1e-12))[:, None]
-            G[key]["X0"][:] = X0b[key] + sink[key]
-            W = G[key]["W"]
-            rt_Y[key][:] = np.stack([sr.skin(G[key]["X0"] + sr.apply_shapes(S[key], Acone[k]), W, Ms[k]) for k in range(K)])
-        # the outer layers: refit the active vertices with their rows
+            push_outer = not dv or act[key_] >= C["outer_after"]
+            share = 0.5 if (push_outer and dv) else 1.0
+            for d in dv:
+                rows[key_u].setdefault(d, []).append((k, -n, float(-n @ rt_Y[key_u][k][d]) + share * defi, w))
+            if push_outer:
+                rows[outer].setdefault(i, []).append((k, n, float(n @ rt_Y[outer][k][i]) + share * defi, w))
         for key, rv in rows.items():
             if not rv:
                 continue
@@ -5314,23 +5303,25 @@ def constrain_fit(G, S, Dres, masks, Acone, Ms, lam, rt_Y, anc, col0, parts, tpa
                     Ad[i3::3, i3::3] = Am
                 bd = Dres[key][:, v].reshape(-1)
                 cr, cb = [], []
-                for (k, n, b) in rv[v]:
+                for (k, n, b, wr) in rv[v]:
                     R_, t_ = Mv[j, k, :3, :3], Mv[j, k, :3, 3]
                     nr = n @ R_
                     row = np.zeros(Cn * 3)
                     for i3 in range(3):
                         row[i3::3] = nr[i3] * Am[k]
-                    cr.append(w * row)
-                    cb.append(w * (b - float(n @ (R_ @ X0[v] + t_))))
+                    cr.append(wr * row)
+                    cb.append(wr * (b - float(n @ (R_ @ X0[v] + t_))))
                 sol = np.linalg.lstsq(np.vstack([Ad, Ar, np.array(cr)]), np.concatenate([bd, br, np.array(cb)]),
-                                      rcond=None)[0].reshape(Cn, 3)
-                S[key][:, v] = sol * m[:, None]
+                                      rcond=None)[0].reshape(Cn, 3) * m[:, None]
+                dS = sol - S0[key][:, v]              # the change from the plain fit, capped in total
+                dmax = float(np.linalg.norm(np.einsum("kc,ci->ki", Acone, dS), axis=1).max())
+                cap = C["move_max_m"][key] if isinstance(C["move_max_m"], dict) else C["move_max_m"]
+                if dmax > cap:
+                    dS *= cap / dmax
+                S[key][:, v] = S0[key][:, v] + dS
             for k in range(K):
                 rt_Y[key][k][idx] = sr.skin(X0[idx] + sr.apply_shapes(S[key][:, idx], Acone[k]), W[idx], Ms[k])
-    st = {"rounds": hist, "active": len(act),
-          "sink": {k_: {"verts": int((np.linalg.norm(v_, axis=1) > 1e-4).sum()),
-                        "max_mm": round(float(np.linalg.norm(v_, axis=1).max()) * 1000, 1)} for k_, v_ in sink.items()}}
-    return st, {k_: np.linalg.norm(v_, axis=1) for k_, v_ in sink.items() if v_.any()}
+    return {"rounds": hist, "active": len(act)}
 
 
 def body_rest_co(body):
@@ -5879,7 +5870,10 @@ def main_posed(O):
     stats["correctives_s"] = round(time.perf_counter() - t, 1)
     print(f"[spike] correctives: {stats['correctives_s']} s", flush=True)
     CF = O.get("constrain") or {}
-    if CF.get("on"):
+
+    res = {}
+
+    def constrain_hook(kept_anc):
         t = time.perf_counter()
         cops = []
         for k, pname in enumerate(poses):
@@ -5892,7 +5886,7 @@ def main_posed(O):
             import pickle
             pk = {"G": {k_: {"X0": G[k_]["X0"], "W": G[k_]["W"], "Tw": G[k_]["Tw"]} for k_ in G},
                   "S": S, "Dres": Dres, "masks": masks, "Acone": Acone, "Ms": Ms, "lam": O["lam"],
-                  "rt_Y": rt_Y, "Y": Y, "cops": cops, "pinned": pinned, "BU": BU, "W_pre": W_pre, "poses": poses, "tris": tris, "tie_nm": tie_nm, "CF": CF,
+                  "rt_Y": rt_Y, "Y": Y, "cops": cops, "pinned": pinned, "BU": BU, "W_pre": W_pre, "kept": kept_anc, "poses": poses, "tris": tris, "tie_nm": tie_nm, "CF": CF,
                   "anc": {k_: {"idx": a_.idx, "fi": a_.fi, "bc": a_.bc, "T": a_.T, "sign": a_.sign,
                                "lat_max": a_.lat_max, "h0": a_.h0, "gap": a_.gap} for k_, a_ in anc.items()},
                   "col0": col0,
@@ -5901,11 +5895,19 @@ def main_posed(O):
                   "tparts": {n_: {k2: v2 for k2, v2 in p_.items() if k2 in ("V0", "F", "W")} for n_, p_ in tparts.items()}}
             with open(os.path.join(A.out_dir, "constrain_in.pkl"), "wb") as f_:
                 pickle.dump(pk, f_)
-        stats["constrain"], sunk = constrain_fit(G, S, Dres, masks, Acone, Ms, O["lam"], rt_Y, anc, col0, parts,
-                                                 tparts, place, cops, tris, CF, tie_nm=tie_nm)
+        stats["constrain"] = constrain_fit(G, S, Dres, masks, Acone, Ms, O["lam"], rt_Y, anc, col0, parts, tparts,
+                                           place, cops, tris, CF, tie_nm=tie_nm,
+                                           kept=kept_anc if CF.get("kept_only", True) else None)
         stats["constrain"]["s"] = round(time.perf_counter() - t, 1)
+    # --- T13d: the faces the layers over them hide in every pose are culled (budget; what is not
+    # drawn cannot be pierced); the runtime refitted against what is kept (constrain_fit), then the
+    # gate counted on it. Before the runtime metrics, so they read the runtime that ships.
+    keep_faces = {}
+    if O["cull"]["on"]:
+        keep_faces = cull_hidden(O["cull"], poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body, tris,
+                                 stats, res, anc=anc, col0=col0, pre_gate=constrain_hook if CF.get("on") else None)
     fit_Y = {k_: v_ for k_, v_ in rt_Y.items()}      # the fit as fitted (before the tuck)
-    tuckf = dict(sunk) if CF.get("on") else {}        # a sunk layer's export base is its sunk rest drape
+    tuckf = {}
     if O["tuck"]["on"]:
         tuckf, stats["tuck"] = tuck_layers(G, O["tuck"])
         for key in tuckf:
@@ -5918,7 +5920,6 @@ def main_posed(O):
     sh_zone = np.min([np.linalg.norm(Gj["X0"] - s_, axis=1) for s_ in shoulders], 0) < 0.12
     sh_zone &= Gj["X0"][:, 2] > np.mean([s_[2] for s_ in shoulders]) - 0.02
     tri_j = Gj["Tw"]
-    res = {}
     for k, pname in enumerate(poses):
         dp.apply_pose(arm, pose_spec(pname), rig_)
         if rt is not None:
@@ -5974,17 +5975,11 @@ def main_posed(O):
         hr, _ = seam_report(Gj, rt_Y["jacket"][k], O["hinge_deg"])
         r["hinges_sim"], r["hinges_rt"] = hs, {kk: hr[kk] for kk in ("over_20", "p99_deg", "max_deg")}
         r["sim"] = per[pname]
-        res[pname] = r
+        res.setdefault(pname, {}).update(r)
         print(f"[posed-rt] {pname}: fit {r['jacket']['fit_rms_mm']} loo {r['jacket']['loo_rms_mm']} "
               f"inside_rt {r['inside_rt']} collar {r.get('collar_mm_rt')} shoulder {r['shoulder_rise_mm_rt']} "
               f"(lbs {r['shoulder_rise_mm_lbs']}) folds {list(hs['folds'])}", flush=True)
     stats["poses"] = res
-    # --- T13d: the faces the layers over them hide in every pose are culled (budget; what is not
-    # drawn cannot be pierced), then the runtime penetration is counted against what is kept
-    keep_faces = {}
-    if O["cull"]["on"]:
-        keep_faces = cull_hidden(O["cull"], poses, Ms, rt_Y, G, parts, tparts, place, arm, rig_, rt, body, tris,
-                                 stats, res, anc=anc, col0=col0)
     np.savez_compressed(os.path.join(A.out_dir, "rig.npz"), poses=np.array(poses), names=np.array(names_all),
                         Ms=Ms, A=Acone, **{f"W_{k}": G[k]["W"] for k in G}, **{f"S_{k}": S[k].astype(np.float32) for k in G},
                         **{f"X0_{k}": G[k]["X0"] for k in G}, **{f"T_{k}": G[k]["Tw"] for k in G})
@@ -6018,7 +6013,7 @@ def main_posed(O):
         D = np.stack([sr.unskin(Wm, Ms[k], place(nm, Ysrc[key][k], Ms[k]), Vb if CF.get("on") else V0)
                       for k in range(K)])
         Sm = sr.fit_shapes(D, Acone, cone_masks(cones, V0, arm) if O["cone_masks"] else np.ones((len(V0), len(cones))),
-                           lam=O["lam"])
+                           lam=O["export_lam"] if CF.get("on") else O["lam"])
         dev = [float(np.linalg.norm(sr.skin(Vb + sr.apply_shapes(Sm, Acone[k]), Wm, Ms[k])
                                     - place(nm, rt_Y[key][k], Ms[k]), axis=1).max()) for k in range(K)]
         o_ = rig_copy(nm)

@@ -114,13 +114,21 @@ def guards(rec, h, limits=LIMITS):
     posed = rec["runs"].get("posed")
     if posed:
         st = _stats(posed)
-        worst = {}
+        worst, info = {}, {}
         for p, r in st.get("poses", {}).items():
-            for tag in ("inside_sim", "inside_rt"):
+            if "pen_rt" in r:
+                # T13d: the gate is what ships: the runtime jacket against the kept (culled) under-layers
+                # and the body where it is shown. The sim's own counts and the unculled runtime are
+                # reported, not gated (a hidden, culled face cannot be pierced)
+                worst["pen_rt.gate"] = max(worst.get("pen_rt.gate", 0), r["pen_rt"]["gate"])
+                srcs = (("inside_sim", info), ("inside_rt", info))
+            else:
+                srcs = (("inside_sim", worst), ("inside_rt", worst))
+            for tag, dst in srcs:
                 src = r.get("inside_rt_visible", r.get(tag, {})) if tag == "inside_rt" else r.get(tag, {})
                 for k, v in src.items():
-                    worst[f"{tag}.{k}"] = max(worst.get(f"{tag}.{k}", 0), v)
-        rep["posed"] = {"inside_max": worst}
+                    dst[f"{tag}.{k}"] = max(dst.get(f"{tag}.{k}", 0), v)
+        rep["posed"] = {"inside_max": worst, "reported": info}
         if any(v > limits["inside"] for v in worst.values()):
             bad.append(f"posed: inside {worst}")
         twin = rec.get("twins", {}).get("posed")
