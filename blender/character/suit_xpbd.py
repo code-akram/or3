@@ -140,6 +140,9 @@ class Solver:
         self.self_r = 0.0
         self.self_excl = 0.0
         self.self_skip = None
+        # post-collision hooks fn(X, free), each mutating X in place (T13 item 5: the shirt's
+        # tuck under the trousers' band, the tie over the shirt front; the waistcoat's back neck)
+        self.post = []
 
     def set_sew(self, pairs, rest=None):
         self.sew = np.asarray(pairs, int).reshape(-1, 2)
@@ -210,6 +213,8 @@ class Solver:
                 gn = gr[pen]
                 tang = dx - (dx * gn).sum(1)[:, None] * gn
                 X[pen] -= self.o["friction"] * tang
+        for fn in self.post:
+            fn(X, free)
         self.V = (X - P0) / h
         self.V[~free] = 0.0
         self.X = X

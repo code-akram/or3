@@ -22,11 +22,12 @@ import numpy as np
 from . import suit_pattern as sp
 
 DEFAULTS = {
-    # the jacket block (suit_pattern.draft options): close over the shirt, the armhole 5 cm
-    # under the armpit (a jacket's 2.5), the shoulder ending 2.5 cm inside the acromion
+    # the jacket block (suit_pattern.draft options): close over the shirt, the armhole 7 cm
+    # under the armpit (a jacket's 2.5; at 5 the made shirt's underarm caught its lower edge,
+    # ragged in the frames: t13w-b2), the shoulder ending 2.5 cm inside the acromion
     # (no pad), the neck point 1.8 cm out (under the jacket's collar, over the shirt's)
     "block": {"ease": {"chest": 6.0, "waist": 5.0, "seat": 6.0}, "waist_min_frac": 0.75,
-              "scye_below_armpit_cm": 5.0, "scye_rise_cm": 6.0,
+              "scye_below_armpit_cm": 7.0, "scye_rise_cm": 6.0,
               "shoulder_out_cm": -2.5, "pad_cm": 0.0, "shoulder_drop_deg": 0.0,
               "np_out_cm": 1.8, "neck_scale": 1.0, "back_neck_rise_cm": 0.0,
               "length_frac": 0.40, "hem_flare_cm": 0.0, "split_lapel": True,
