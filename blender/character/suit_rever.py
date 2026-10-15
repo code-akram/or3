@@ -42,11 +42,12 @@ DEFAULTS = {
     "dv_cm": 0.4,                # column walk step
     "edge_smooth_cm": 1.5,       # E(s) and its frames: Gaussian along s
     "corner_smooth_cm": 3.0,     # wider round the gorge corner (s_R)
-    "stand_cm": 3.0,             # at the centre back
+    "stand_cm": 2.1,             # at the centre back (3.0 stood up like a band, the shirt collar
+                                 # 4 mm above it; a tailor wants 1-1.5 cm: 2.1 gives 11 mm)
     "stand_np_frac": 0.85,       # the stand starts to fall off at this x the neck-point arc
-    "fall_below_cm": 1.2,        # the collar fall reaches this far below the neckline at CB
+    "fall_below_cm": 1.7,        # the collar fall reaches this far below the neckline at CB
     "end_width_cm": 4.0,         # collar end, perpendicular to the gorge
-    "r_collar_cm": 0.3,
+    "r_collar_cm": 0.45,         # a soft roll over the stand (0.3 read as a fold)
     "r_lapel_top_cm": 0.55,
     "r_break_cm": 0.22,
     "lean_deg": 10.0,            # the stand leans onto the neck by this much off the jacket surface

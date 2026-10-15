@@ -37,7 +37,8 @@ DEFAULTS = {
     "flap": {"thick_mm": 2.6, "lift_mm": 0.6, "corner_r_cm": 1.0, "h_cm": 0.5, "gap_cm": 0.08},
     "jet": {"thick_mm": 1.6, "lift_mm": 0.4},
     "welt": {"thick_mm": 2.8, "lift_mm": 0.5, "h_cm": 0.5},
-    "vent": {"height_cm": 22.0, "sleeve_cm": 10.5, "step_mm": 3.5, "band_cm": 1.2, "fade_cm": 3.0},
+    "vent": {"height_cm": 22.0, "sleeve_cm": 10.5, "step_mm": 3.5, "band_cm": 1.2, "fade_cm": 3.0,
+             "lip_in_cm": 0.15, "lip_mm": 0.8, "lip_w_mm": 2.4},     # the lap's pressed edge (atlas)
     "button": {"front_diam_cm": 2.0, "front_thick_mm": 3.6, "cuff_thick_mm": 3.0, "stand_mm": 1.5,
                "seg": 32, "hole_r_frac": 0.05, "hole_at_frac": 0.12, "hole_depth_mm": 1.2},
     "buttonhole": {"cord_r_mm": 0.9, "eye_r_mm": 1.6, "gap_mm": 0.8,
@@ -623,6 +624,21 @@ def _inset(poly, outline, d):
     return poly + nrm * d
 
 
+def _split_from(poly, end_poly, d):
+    """Split a polyline d (cm, arc length) from the end that meets end_poly: (that part, the rest),
+    both ordered as poly."""
+    from .suit_rever import _dist_polyline
+    poly = np.asarray(poly, float)
+    e = np.asarray(end_poly, float)
+    rev = _dist_polyline(poly[:1], e)[0] > _dist_polyline(poly[-1:], e)[0]
+    P = poly[::-1] if rev else poly
+    s = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(P, axis=0), axis=1))]
+    k = int(np.searchsorted(s, d))
+    cut = P[k - 1] + (P[k] - P[k - 1]) * (d - s[k - 1]) / max(s[k] - s[k - 1], 1e-9) if 0 < k < len(P) else P[min(k, len(P) - 1)]
+    a, b = np.vstack([P[:k], cut]), np.vstack([cut, P[k:]])
+    return (a[::-1], b[::-1]) if rev else (a, b)
+
+
 def shell_uv(C, wm, Tw, pm, stats=None):
     """Per-corner UVs and panel tags of the welded drape's faces: each face's corners at their
     pattern coordinates (the unwelded triangle it came from), so a seam vertex has one UV per
@@ -674,12 +690,24 @@ def shell_marks(C, D, pm, o):
                 sewn.add((D.geom(pn).name, e))
     hidden = {"neck", "gorge", "roll"}
     pk = o["pick"]
+    vo = o["vent"]
+    # the vents' lapping panels: on the vent the seam is the lap's pressed edge (a lip), not a
+    # groove; the under panel keeps its groove there, the shadow line under the lap
+    laps = {"back": ("side", "hem", vo["height_cm"]), "top_sleeve": ("hind", "cuff", vo["sleeve_cm"])}
     out = {}
     for k, name in enumerate(C["names"]):
         P = D.geom(name)
         L = []
         for e, poly in P.edges:
             if (P.name, e) in sewn and e not in hidden:
+                lap = laps.get(P.name)
+                if lap and lap[0] == e and lap[2] > 0:
+                    lo, hi = _split_from(poly, P.edge(lap[1]), lap[2])
+                    L.append(("seam", [tuple(q) for q in pm.uv(name, hi)], {"stitch": False}))
+                    lip = _inset(lo, P.outline(), vo["lip_in_cm"])
+                    L.append(("ridge", [tuple(q) for q in pm.uv(name, lip)],
+                              {"height": vo["lip_mm"] / 1000, "width_m": vo["lip_w_mm"] / 1000}))
+                    continue
                 L.append(("seam", [tuple(q) for q in pm.uv(name, poly)], {"stitch": False}))
         for e, poly in P.inner.items():
             L.append(("seam", [tuple(q) for q in pm.uv(name, poly)], {"stitch": False}))

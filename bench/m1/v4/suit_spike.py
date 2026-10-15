@@ -1590,7 +1590,9 @@ XPBD = {
     "sdf_h": 0.006,
     # self-contact (the elbow crook and the underarm fold onto themselves otherwise): vertices
     # closer than self_r repel unless within self_excl of each other on the placed garment
-    "self_r": 0.010, "self_excl": 0.025,
+    # self_r 0.010 let the right sleeve's inner elbow fold through itself once the fronts were cut
+    # away (run t13c-k1/k2: a 117-120 deg hinge on the fore seam); 0.012 holds it (t13c-k3)
+    "self_r": 0.012, "self_excl": 0.025,
     "kb_sleeve": 6e-5,
 }
 
@@ -2054,6 +2056,13 @@ def main_v2(O):
     Vr, Fr, rinfo = suit_rever.build(X3, Tw, chains, D, [shirt_body], O["rever"], rs_stats)
     stats["rever"] = rs_stats
     stats["rever"]["inside_under"] = inside_count(Vr[:len(rinfo["sheet_X"])], real)
+    if "shirt" in base:
+        # the shirt collar above the jacket collar at the back neck (a tailor wants 1-1.5 cm)
+        sc_ = evaluated(base["shirt"])
+        ms, mr = (np.abs(sc_[:, 0]) < 0.01) & (sc_[:, 1] > 0.0), (np.abs(Vr[:, 0]) < 0.01) & (Vr[:, 1] > 0.0)
+        if ms.any() and mr.any():
+            stats["rever"]["shirt_shows_cb_mm"] = round(float(sc_[ms, 2].max() - Vr[mr, 2].max()) * 1000, 1)
+            stats["rever"]["collar_top_cb_z"] = round(float(Vr[mr, 2].max()), 4)
     if stats["rever"]["inside_under"]:
         cv = rinfo["chart_V"]
         bad = [i for i, p in enumerate(Vr[:len(rinfo["sheet_X"])]) if real.signed(p)[0] < -0.0005]
