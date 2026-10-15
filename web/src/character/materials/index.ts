@@ -3,7 +3,10 @@
 // uniform from the ParamStore. The glTF materials are replaced by name / role (assignMaterials).
 //
 //   skin   wrap-lit diffuse with per-channel wrap + normal blur (curvature-scaled; cheap pre-integrated
-//          SSS stand-in), a terminator scatter tint, dual-lobe GGX specular
+//          SSS stand-in), a terminator scatter tint, dual-lobe GGX specular. T17: pore + micro detail-normal
+//          tiles (skin_detail.json) faded by their on-screen period, the baked cavity (ORM blue) and the
+//          pits as lobe-1 specular occlusion, transmission through thin parts (baked thickness), and with
+//          the screen-space SSS pass (ssss.ts) a Lambert diffuse plus the MRT inputs that pass blurs
 //   hair   dual-lobe Kajiya-Kay (white primary shifted to the root, albedo-tinted secondary to the tip,
 //          shifts jittered per strand ID / card / along-strand wave, exponents scaled by per-strand
 //          roughness), a tinted TT (backlit) lobe and a wrapped multiple-scatter body (T9b), flow / depth /
@@ -19,6 +22,7 @@ import * as TSL from 'three/tsl';
 import type { ParamStore } from './params';
 import { albedo, diffuseRamp } from './style';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
+import { HERO_RADII_MM } from './sss';
 import { temporalFrame } from '../temporal';
 import { rectFormFactor, screenTerm, withSharedLighting } from '../lighting';
 import { clothKind, SuitClothMaterial, type WrinkleSidecar } from '../cloth';
@@ -27,6 +31,8 @@ import { clothKind, SuitClothMaterial, type WrinkleSidecar } from '../cloth';
 const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, cameraWorldMatrix, exp, log, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, varying, vec2, vec3, vec4, vertexColor } = TSL as any;
 // T18 eye: refraction, frames and the emitter-shaped catchlight
 const { asin, atan, cameraViewMatrix, cross, dFdx, dFdy, refract, step, uniform } = TSL as any;
+// T17 skin: the lighting's specular total (LightsNode's 'totalSpecular' property) for the SSS pass MRT
+const { property } = TSL as any;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -169,44 +175,102 @@ interface SkinSSS {
   curvature: N; // encoded curvature at this fragment (skin_tex.curvature)
 }
 
+/** T17: per-fragment inputs of the skin lighting beyond three's. */
+interface SkinExtra {
+  /** specular occlusion of lobe 1 (ORM blue cavity x tile pits), 1 = open; null = none */
+  cavity: N | null;
+  /** thickness (mm) for transmission; null = no transmission */
+  thickMm: N | null;
+  /** the screen-space SSS pass (ssss.ts) scatters: Lambert diffuse on a lightly blurred normal */
+  ssss: boolean;
+}
+
+/** Transmittance of the skin profile (sss.ts: two Gaussians, sigma 0.5 r_c and 1.5 r_c, equal weight)
+ * through a slab of thickness t (mm): the profile at radius t, peak-normalised (Jimenez 2010). */
+function profileT(tMm: N, radii: N): N {
+  const t2 = tMm.mul(tMm);
+  const g = (k: number) => exp(t2.negate().div(radii.mul(k).mul(radii.mul(k)).mul(2).max(1e-6)));
+  return g(0.5).add(g(1.5)).mul(0.5);
+}
+
+/** The light's colour without its shadow, for the transmission through a part that shadows itself.
+ * AnalyticLightNode multiplies the shadow into colorNode and keeps the original as baseColorNode: run
+ * the light node's own setupDirect on the base colour. null = not a punctual light (rects: none). */
+function unshadowedColor(lightNode: unknown, builder: unknown, shadowed: N): N | null {
+  type LN = { baseColorNode?: N; colorNode?: N; setupDirect?: (b: unknown) => { lightColor: N } | undefined; light?: THREE.Light };
+  const ln = lightNode as LN | undefined;
+  const l = ln?.light as (THREE.Light & { isSpotLight?: boolean; isPointLight?: boolean; isDirectionalLight?: boolean }) | undefined;
+  if (!ln || !l || !(l.isSpotLight || l.isPointLight || l.isDirectionalLight) || !ln.setupDirect) return null;
+  if (!ln.baseColorNode) return shadowed; // no shadow on this light
+  const keep = ln.colorNode;
+  ln.colorNode = ln.baseColorNode;
+  try {
+    return ln.setupDirect(builder)?.lightColor ?? null;
+  } finally {
+    ln.colorNode = keep;
+  }
+}
+
 class SkinLightingModel extends THREE.PhysicalLightingModel {
   constructor(
     private readonly P: ParamStore,
     private readonly ao: N | null,
     private readonly sss: SkinSSS | null,
     private readonly screen: N | null = null,
+    private readonly x: SkinExtra = { cavity: null, thickMm: null, ssss: false },
   ) {
     super();
   }
 
-  override direct(input: unknown): void {
+  override direct(input: unknown, builder?: unknown): void {
     const { lightDirection: L, lightColor, reflectedLight, lightNode } = input as DirectInput;
+    const noTrans = (input as { noTransmission?: boolean }).noTransmission === true;
     const P = this.P;
-    const blur = P.u('skin.normalBlur');
+    const blur = P.u(this.x.ssss ? 'skin.ssssNormalBlur' : 'skin.normalBlur');
     const nl = (b: N) => mix(normalView, geometryNormal, b).normalize().dot(L);
     const nl3 = vec3(nl(blur.x), nl(blur.y), nl(blur.z));
-    // screen-space curvature (1/m), normalised so a ~5 cm radius reads 1
-    const curv = fwidth(geometryNormal).length().div(fwidth(positionView).length().max(1e-5)).mul(0.05).clamp(0, 1);
-    const g = P.u('skin.curvatureGain');
-    const wrap = P.u('skin.wrap').mul(mix(float(1).sub(g), float(1).add(g), curv));
-    const diff = diffuseRamp(P, nl3.add(wrap).div(wrap.add(1)).max(0));
-    // terminator scatter band (centred on N.L = 0 of the blurred green normal)
-    const band = smoothstep(P.u('skin.scatterWidth'), float(0), nl3.y.abs()).mul(P.u('skin.scatterStrength'));
-    const tint = vec3(1).add(P.u('skin.scatterColor').mul(band));
     const occ = directOcclusion(P, this.ao, 'skin.directAO', this.screen, lightNode?.light);
-    let d: N = diff.mul(tint);
-    if (this.sss) {
-      // pre-integrated SSS: per channel D(N.L of that channel's blurred normal, curvature)
-      const cv = this.sss.curvature.mul(P.u('skin.sssCurvatureGain')).clamp(0.002, 1);
-      const at = (x: N) => texture(this.sss!.lut, vec2(x.mul(0.5).add(0.5).clamp(0, 1), cv));
-      const pre = vec3(at(nl3.x).r, at(nl3.y).g, at(nl3.z).b);
-      d = mix(d, diffuseRamp(P, pre), P.u('skin.sss'));
+    let d: N;
+    if (this.x.ssss) {
+      // the screen-space pass scatters (ssss.ts): Lambert here, per channel on the lightly blurred normal
+      d = diffuseRamp(P, nl3.max(0));
+    } else {
+      // screen-space curvature (1/m), normalised so a ~5 cm radius reads 1
+      const curv = fwidth(geometryNormal).length().div(fwidth(positionView).length().max(1e-5)).mul(0.05).clamp(0, 1);
+      const g = P.u('skin.curvatureGain');
+      const wrap = P.u('skin.wrap').mul(mix(float(1).sub(g), float(1).add(g), curv));
+      const diff = diffuseRamp(P, nl3.add(wrap).div(wrap.add(1)).max(0));
+      // terminator scatter band (centred on N.L = 0 of the blurred green normal)
+      const band = smoothstep(P.u('skin.scatterWidth'), float(0), nl3.y.abs()).mul(P.u('skin.scatterStrength'));
+      const tint = vec3(1).add(P.u('skin.scatterColor').mul(band));
+      d = diff.mul(tint);
+      if (this.sss) {
+        // pre-integrated SSS: per channel D(N.L of that channel's blurred normal, curvature)
+        const cv = this.sss.curvature.mul(P.u('skin.sssCurvatureGain')).clamp(0.002, 1);
+        const at = (x: N) => texture(this.sss!.lut, vec2(x.mul(0.5).add(0.5).clamp(0, 1), cv));
+        const pre = vec3(at(nl3.x).r, at(nl3.y).g, at(nl3.z).b);
+        d = mix(d, diffuseRamp(P, pre), P.u('skin.sss'));
+      }
     }
-    reflectedLight.directDiffuse.addAssign(lightColor.mul(d).mul(occ).mul(BRDF_Lambert({ diffuseColor: diffuseColor.rgb })));
-    // dual-lobe specular
+    const lambert = BRDF_Lambert({ diffuseColor: diffuseColor.rgb });
+    reflectedLight.directDiffuse.addAssign(lightColor.mul(d).mul(occ).mul(lambert));
+    // T17 transmission: light through the thin parts from behind, unshadowed (the part shadows itself)
+    if (this.x.thickMm && !noTrans && builder) {
+      const lc = unshadowedColor(lightNode, builder, lightColor);
+      if (lc !== null) {
+        const radii = vec3(...HERO_RADII_MM).mul(P.u('skin.ssssWidth'));
+        const T = profileT(this.x.thickMm.mul(P.u('skin.transThickScale')), radii);
+        const w = P.u('skin.transWrap');
+        const back = geometryNormal.negate().dot(L).add(w).div(w.add(1)).max(0);
+        reflectedLight.directDiffuse.addAssign(lc.mul(T).mul(back).mul(P.u('skin.transmission')).mul(lambert));
+      }
+    }
+    // dual-lobe specular; the cavity occludes the sharp lobe only (the broad one stands for the oil
+    // film's sheen across the pits)
     const r = roughness.clamp(0.08, 1);
     const f0 = vec3(P.u('skin.specF0'));
-    const s1 = BRDF_GGX({ lightDirection: L, f0, f90: float(1), roughness: r.mul(P.u('skin.lobe1Roughness')).clamp(0.05, 1) });
+    let s1: N = BRDF_GGX({ lightDirection: L, f0, f90: float(1), roughness: r.mul(P.u('skin.lobe1Roughness')).clamp(0.05, 1) });
+    if (this.x.cavity) s1 = s1.mul(this.x.cavity);
     const s2 = BRDF_GGX({ lightDirection: L, f0, f90: float(1), roughness: r.mul(P.u('skin.lobe2Roughness')).clamp(0.05, 1) });
     const dotNL = normalView.dot(L).clamp();
     reflectedLight.directSpecular.addAssign(lightColor.mul(dotNL).mul(mix(s1, s2, P.u('skin.lobeMix'))).mul(P.u('skin.specGain')));
@@ -220,35 +284,101 @@ class SkinLightingModel extends THREE.PhysicalLightingModel {
     i.reflectedLight.directSpecular.addAssign(spec.mul(this.P.u('skin.specGain')));
     // pre-integrated SSS / wrap diffuse from the point equivalent (its punctual specular dropped)
     const pt = rectAsPoint(i);
-    this.direct({ lightDirection: pt.L, lightColor: pt.color, lightNode: i.lightNode, reflectedLight: { directDiffuse: i.reflectedLight.directDiffuse, directSpecular: vec3(0).toVar() } });
+    this.direct({ lightDirection: pt.L, lightColor: pt.color, lightNode: i.lightNode, noTransmission: true, reflectedLight: { directDiffuse: i.reflectedLight.directDiffuse, directSpecular: vec3(0).toVar() } }, builder);
   }
+}
+
+/** skin_detail.json (blender/character/skin_tex.write_detail_sidecars), as loaded by main.ts. */
+export interface SkinDetail {
+  /** layer 0 the pore tile, layer 1 the micro tile (one binding: the fragment stage's 16 sampled textures) */
+  tiles: THREE.Texture;
+  /** skin material name -> its detail map (R pore weight, G micro weight, B inside AO) and repeats */
+  materials: Record<string, { map: THREE.Texture | null; poreRepeat: number; microRepeat: number }>;
+  poreCells: number;
+  microCells: number;
+  thickDistMm: number;
+  /** ORM blue holds the specular cavity */
+  cavity: boolean;
+  /** mean |n_xy|^2 of each tile (the toksvig term) */
+  slopeVar: { pore: number; micro: number };
+}
+
+export interface SkinOptions {
+  sss?: { lut: THREE.Texture; curvature: THREE.Texture } | null | undefined;
+  screenAO?: THREE.Texture | null | undefined;
+  detail?: SkinDetail | null | undefined;
+  /** the screen-space SSS pass is on: write its MRT inputs, Lambert diffuse */
+  ssss?: boolean;
 }
 
 export class SkinMaterial extends THREE.MeshPhysicalNodeMaterial {
   private aoTex: N | null = null;
   private sss: SkinSSS | null = null;
   private readonly screen: N | null;
+  private readonly extra: SkinExtra = { cavity: null, thickMm: null, ssss: false };
 
-  constructor(src: Std, private readonly P: ParamStore, sss?: { lut: THREE.Texture; curvature: THREE.Texture } | null, screenAO?: THREE.Texture | null) {
+  constructor(src: Std, private readonly P: ParamStore, opts: SkinOptions = {}) {
     super();
     copyStd(this, src);
     const c = mapRGBA(src);
     this.colorNode = vec4(albedo(P, 'skin', c.rgb), 1);
     this.normalNode = normalNode(src, P.u('skin.normalScale'));
-    if (src.roughnessMap) {
-      this.roughnessNode = texture(src.roughnessMap).g.mul(P.u('skin.roughnessScale')).add(P.u('skin.roughnessBias')).clamp(0.05, 1);
+    let rough: N = src.roughnessMap ? texture(src.roughnessMap).g.mul(P.u('skin.roughnessScale')).add(P.u('skin.roughnessBias')) : null;
+    const dt = opts.detail;
+    const dm = dt?.materials[src.name];
+    if (dt && dm?.map && src.normalMap) {
+      // T17 detail tiles: pores and micro relief tiled in the part UV, weighted per region by the detail
+      // map, faded where a tile period shrinks to a few pixels (mips flatten the rest)
+      const det = texture(dm.map);
+      const k = P.u('skin.detail');
+      const fadeOf = (uvT: N, cells: number) => {
+        const px = float(1).div(fwidth(uvT).length().mul(cells).max(1e-6)); // pixels per tile period
+        const f = P.u('skin.detailFadePx');
+        return smoothstep(f.y, f.x, px);
+      };
+      const uvP = uv().mul(dm.poreRepeat);
+      const uvM = uv().mul(dm.microRepeat);
+      const tp = texture(dt.tiles, uvP).depth(0);
+      const tm = texture(dt.tiles, uvM).depth(1);
+      const fP = fadeOf(uvP, dt.poreCells);
+      const fM = fadeOf(uvM, dt.microCells);
+      const wP = det.r.mul(k).mul(P.u('skin.poreNormal'));
+      const wM = det.g.mul(k).mul(P.u('skin.microNormal'));
+      const b = texture(src.normalMap).rgb.mul(2).sub(1);
+      const dxy = tp.rg.mul(2).sub(1).mul(wP.mul(fP)).add(tm.rg.mul(2).sub(1).mul(wM.mul(fM)));
+      const n = vec3(b.xy.add(dxy), b.z).normalize();
+      this.normalNode = normalMap(n.mul(0.5).add(0.5), vec2(src.normalScale.x, src.normalScale.y).mul(P.u('skin.normalScale')));
+      if (rough) {
+        // pits rougher; the slope variance a fade removes goes to roughness (toksvig: r^2 + var)
+        rough = rough.add(tp.b.mul(wP).mul(fP).mul(P.u('skin.poreRough')));
+        const lost = wP.mul(wP).mul(float(1).sub(fP)).mul(dt.slopeVar.pore).add(wM.mul(wM).mul(float(1).sub(fM)).mul(dt.slopeVar.micro));
+        rough = rough.mul(rough).add(lost.mul(P.u('skin.toksvig'))).sqrt();
+      }
+      // lobe-1 cavity: the baked one (ORM blue) and the visible pits
+      const orm = src.metalnessMap ?? src.roughnessMap;
+      let cav: N = float(1).sub(tp.b.mul(wP).mul(fP).mul(P.u('skin.poreCavity'))).clamp(0, 1);
+      if (dt.cavity && orm) cav = cav.mul(mix(float(1), texture(orm).b, P.u('skin.cavitySpec')));
+      this.extra.cavity = cav;
+      // thickness t = D sqrt(inside AO); AO near 1 = thicker than the bake reached: no transmission
+      this.extra.thickMm = det.b.clamp(0, 1).sqrt().mul(dt.thickDistMm).div(float(1).sub(smoothstep(0.85, 0.98, det.b)).max(1e-3));
     }
+    if (rough) this.roughnessNode = rough.clamp(0.05, 1);
     this.metalnessNode = float(0);
     if (src.aoMap) {
       this.aoTex = texture(src.aoMap).r;
       this.aoNode = mix(float(1), this.aoTex, P.u('skin.aoIntensity'));
     }
-    if (sss) this.sss = { lut: sss.lut, curvature: texture(sss.curvature).r };
-    this.screen = screenAONode(screenAO);
+    if (opts.sss) this.sss = { lut: opts.sss.lut, curvature: texture(opts.sss.curvature).r };
+    this.screen = screenAONode(opts.screenAO);
+    if (opts.ssss) {
+      this.extra.ssss = true;
+      // ssss.ts: the specular (kept sharp) and the diffuse albedo (the pre / post scatter split)
+      this.mrtNode = mrt({ skin: vec4(property('vec3', 'totalSpecular'), 1), skinAlbedo: vec4(diffuseColor.rgb, 1) });
+    }
   }
 
   override setupLightingModel(): THREE.PhysicalLightingModel {
-    return new SkinLightingModel(this.P, this.aoTex, this.sss, this.screen);
+    return new SkinLightingModel(this.P, this.aoTex, this.sss, this.screen, this.extra);
   }
 }
 
@@ -363,6 +493,10 @@ export interface Sidecars {
   screenAO?: THREE.Texture | null;
   /** T13: the made suit's pose-blended wrinkle maps (cloth.ts, suit_wrinkle.json) */
   wrinkle?: WrinkleSidecar | null;
+  /** T17: skin_detail.json (pore / micro tiles, detail maps, cavity) */
+  skinDetail?: SkinDetail | null;
+  /** T17: the screen-space SSS pass is installed (ssss.ts): skin writes its MRT inputs */
+  ssss?: boolean;
 }
 
 /**
@@ -1246,7 +1380,12 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
     switch (role) {
       case 'skin': {
         const cm = side.curvature?.[src.name];
-        return new SkinMaterial(src, P, cm && side.sssLUT ? { lut: side.sssLUT, curvature: cm } : null, side.screenAO);
+        return new SkinMaterial(src, P, {
+          sss: cm && side.sssLUT ? { lut: side.sssLUT, curvature: cm } : null,
+          screenAO: side.screenAO,
+          detail: side.skinDetail,
+          ssss: !!side.ssss,
+        });
       }
       case 'hair':
         return new HairMaterial(src, P, { prefix: 'hair', msaa, screenAO: side.screenAO, dirOcc: occ.has(src.name) });

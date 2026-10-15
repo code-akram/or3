@@ -2,7 +2,8 @@
 # Engine frames for one look-dev run (track T5, bench/m1/v4/t5-viewer.md):
 #   1. blender/hero/export_rig.py  -> RUN/engine_stage.json (look-dev + hero cameras, lights, pose)
 #   1b. blender/hero/grade.py --lut  -> RUN/grade_lut.json (T16: the hero grade + AgX view as 3D LUTs)
-#   2. bench/m1/engine_shots.mjs   -> RUN/game_<view>.png + RUN/game_shots.json (headless Chromium)
+#   2. bench/m1/engine_shots.mjs   -> RUN/game_<view>.png + RUN/game_shots.json (headless Chromium;
+#      --tier T / --prefix P name them T_ / P instead)
 #
 #   bench/m1/engine_shots.sh RUN_DIR [--port N] [more engine_shots.mjs options, e.g. --turntable 2]
 #
@@ -55,4 +56,6 @@ command -v taskset > /dev/null && PIN=(taskset -c "${ENGINE_CPUS:-0-3}")
   --backend "${ENGINE_BACKEND:-auto}" --size "${ENGINE_SIZE:-1024}" --portrait "${ENGINE_PORTRAIT:-1920x1080}" \
   --views "${ENGINE_VIEWS:-front,three_quarter,profile,closeup,portrait,closeup:hero}" --port "$PORT" ${PASS[@]+"${PASS[@]}"} >> "$LOG" 2>&1 \
   || { echo "engine shots failed: $LOG" >&2; exit 1; }
-echo "-> $RUN/game_*.png ($(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['backend'])" "$RUN/game_shots.json"))"
+# the newest <prefix>shots.json (game_shots.json, or <tier>_shots.json with --tier / --prefix)
+SHOTS="$(ls -t "$RUN"/*shots.json | head -n 1)"
+echo "-> $SHOTS ($(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))['backend'])" "$SHOTS"))"
