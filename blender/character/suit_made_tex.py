@@ -52,6 +52,34 @@ def set_uv(ob, UV, tag):
     a.data.foreach_set("value", [int(t) for t in tag])
 
 
+def crisp_normals(ob, kind):
+    """Per-loop normals smoothed only within each face kind (0 outside, 1 inside, 2 turned
+    edge): the half-round edge meets the sheets in a crease, as a pressed edge does, instead
+    of shading round over the sheet's first row of faces (6 mm on the rever, 12 mm on the
+    shell). Needs smooth-shaded polygons."""
+    me = ob.data
+    kind = np.asarray(kind, int)
+    nl, npl = len(me.loops), len(me.polygons)
+    lv = np.zeros(nl, np.int32)
+    me.loops.foreach_get("vertex_index", lv)
+    fn = np.zeros(npl * 3, np.float32)
+    me.polygons.foreach_get("normal", fn)
+    ar = np.zeros(npl, np.float32)
+    me.polygons.foreach_get("area", ar)
+    lt = np.zeros(npl, np.int32)
+    me.polygons.foreach_get("loop_total", lt)
+    pol = np.repeat(np.arange(npl), lt)
+    w = (fn.reshape(-1, 3) * ar[:, None])[pol]
+    kl = kind[pol]
+    acc = np.zeros((int(kind.max()) + 1, len(me.vertices), 3))
+    for g in range(acc.shape[0]):
+        m = kl == g
+        np.add.at(acc[g], lv[m], w[m])
+    N = acc[kl, lv]
+    N /= np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+    me.normals_split_custom_set([tuple(n) for n in N])
+
+
 def uv_stats(ob, side=1.0):
     """Texel-density check: UV area (x side^2: metric) / 3D area per face (1 = the panel's own
     size), and the faces whose UVs wind clockwise (the insides, which carry the outside's UVs

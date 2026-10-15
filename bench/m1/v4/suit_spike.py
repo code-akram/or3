@@ -1381,6 +1381,21 @@ def crease_stats(X, T, sedges, thr, ring_ref=True, zone=None):
     return out
 
 
+def garment_covers(bvh, body_bvh, nbody, p, reach=0.05):
+    """Is p under a garment: a ray from p away from the body hits a garment face (index >=
+    nbody in bvh) within reach? The nearest-face sign misreads a point in front of a face that
+    looks inward (a turned edge's inner rim, a lining at an opening): the waistcoat's front
+    edge pushed the cut-away jacket front 2 cm forward in the drape, then push_out sent it
+    back through the other front (t13c-k4)."""
+    loc, nor, fi, d = body_bvh.find_nearest(Vector(p))
+    u = np.asarray(p) - np.array(loc)
+    if float(np.dot(u, np.array(nor))) < 0:
+        return True
+    u = u / max(np.linalg.norm(u), 1e-9)
+    hit, _, hfi, hd = bvh.ray_cast(Vector(np.asarray(p) + u * 1e-4), Vector(u), reach)
+    return hit is not None and hfi >= nbody
+
+
 class Layers:
     """The body and the under-garments as one surface set, read the way the drape's distance
     field reads them: the nearest face decides. The body is closed (behind its face = inside);
@@ -1416,7 +1431,7 @@ class Layers:
         loc, nor, fi, d = self.bvh.find_nearest(Vector(p))
         loc, nor = np.array(loc), np.array(nor)
         s = float(np.dot(np.asarray(p) - loc, nor))
-        inside = s < 0 if fi < self.nbody else s < -0.5 * d
+        inside = s < 0 if fi < self.nbody else (s < -0.5 * d and self.covered(p))
         return (-d if inside else d), loc, nor
 
 
@@ -1518,7 +1533,9 @@ def body_sdf(co, tris, lo, hi, h, band=0.03, shells=()):
     """Signed distance to the body and the under-garments on a grid (negative inside), exact
     within `band` of a surface, coarse elsewhere. One BVH over all of them: the nearest face
     decides. The body is closed: the sign is the nearest face's normal. A garment is an open
-    shell: a point is inside only when it is behind the face (not beside its edge).
+    shell: a point is inside only when it is behind the face (not beside its edge) and under the
+    garment (garment_covers: not in front of a face that looks inward, as a turned edge's inner
+    rim or a lining does).
     shells: [(verts (n, 3), faces)] in world space."""
     from mathutils.bvhtree import BVHTree
     from character.suit_xpbd import Grid
@@ -1530,13 +1547,14 @@ def body_sdf(co, tris, lo, hi, h, band=0.03, shells=()):
         V += [tuple(p) for p in sv]
         F += [tuple(n0 + int(i) for i in f) for f in sf]
     bvh = BVHTree.FromPolygons(V, F)
+    body_bvh = BVHTree.FromPolygons(V[:len(co)], F[:nbody])
 
     def exact(P):
         out = np.empty(len(P))
         for k, p in enumerate(P):
             loc, nor, fi, d = bvh.find_nearest(Vector(p))
             s = np.dot(p - np.array(loc), np.array(nor))
-            inside = s < 0 if fi < nbody else s < -0.5 * d
+            inside = s < 0 if fi < nbody else (s < -0.5 * d and garment_covers(bvh, body_bvh, nbody, p))
             out[k] = -d if inside else d
         return out
     H = 4 * h
@@ -2084,6 +2102,7 @@ def main_v2(O):
     rv = mesh_object("spike_jacket_rever", Vr, Fr)
     from character import suit_made_tex
     suit_made_tex.set_uv(rv, rinfo["uv"], rinfo["tag"])
+    suit_made_tex.crisp_normals(rv, rinfo["kind"])
     set_parts(rv, np.zeros(len(Fr), int))
     det_obs = []
     uv_obs, uv_marks, uv_tags = {"rever": rv}, {"rever": rinfo["marks"]}, {"rever": rinfo["tags"]}
@@ -2093,10 +2112,11 @@ def main_v2(O):
         from character import suit_detail
         dst = {}
         det = suit_detail.build(C, D, wm, X3, Tw, O["details"] if isinstance(O["details"], dict) else None, dst)
-        Vs_, Fs_, ps_, us_, ts_ = det["shell"]
+        Vs_, Fs_, ps_, us_, ts_, ks_ = det["shell"]
         jk = mesh_object("spike_jacket_body", Vs_, Fs_)
         set_parts(jk, ps_)
         suit_made_tex.set_uv(jk, us_, ts_)
+        suit_made_tex.crisp_normals(jk, ks_)
         uv_obs["shell"] = jk
         for k in ("pockets", "buttons", "buttonhole"):
             if det.get(k) is not None:
@@ -2105,6 +2125,8 @@ def main_v2(O):
                 if det[k][3] is not None:
                     suit_made_tex.set_uv(ob_, det[k][3], det[k][4])
                     uv_obs[k] = ob_
+                if det[k][5] is not None:
+                    suit_made_tex.crisp_normals(ob_, det[k][5])
                 det_obs.append(ob_)
         uv_marks.update(det["_uv"]["marks"])
         uv_tags.update(det["_uv"]["tags"])
