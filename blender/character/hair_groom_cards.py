@@ -141,7 +141,10 @@ CARDS = {
     "hairline": {"spacing_m": 0.0065, "radius_m": 0.004, "band_m": 0.009, "length_m": 0.03,
                  "min_strands": 4, "segments": 4, "halfwidth_m": [0.0018, 0.004], "lift_m": 0.0006,
                  "near_m": [0.006, 0.022], "root_dark": 0.05, "widen": 0.35, "cell_px": 0.6,
-                 "root_skip": 1},       # T15: the cards start this many groom points behind the root
+                 "root_skip": 1,        # T15: the cards start this many groom points behind the root
+                 # T20: the cells' coverage x alpha: one hairline card alone stays under half cover, as the
+                 # hero's sparse edge does (the full-cover wedges stood ahead of its hairline at the temples)
+                 "alpha": 0.6},
     # T20 baby hairs: `count` one-strand cards (the fly-away one-strand cells) on single hairline edge
     # strands spread at least `spacing_m` apart, over their first length_m (random in the range), the tip
     # lifted lift_m off the scalp: fine, sparse hairs that break the hairline edge at 0.5 mm/px
@@ -169,7 +172,7 @@ CARDS = {
     # ~5 mm ahead of the hero's 50 % coverage edge at the temples)
     "cap": {"size": 1024, "ss": 2, "data_scale": 2, "strand_px": 0.9, "max_dist_m": 0.03,
             "strands": 24000, "core": [0.55, 0.95], "density_r_m": 0.004, "shade": 0.8,
-            "skin_mm": 0.0, "edge_alpha": [0.0, 0.75], "phys_alpha": True, "pull_m": [0.003, 0.012]},
+            "skin_mm": 0.0, "edge_alpha": [0.0, 0.75], "phys_alpha": True, "pull_m": [0.006, 0.018]},
 }
 
 smoothstep = hair_clumps.smoothstep
@@ -919,6 +922,7 @@ def build(b, frame, ccfg, g):
                                dict(acfg, strand_px=acfg["strand_px"] * hc.get("cell_px", 0.8), tip_fade=0.3,
                                     tip_alpha=0.0),
                                k_end=k3, rough_cfg=cfg["roughness"], sids=sids[gm])
+        res["cov"] = res["cov"] * hc.get("alpha", 1.0)
         put(f"hairline{i}", res, ns, col_hl * cw, i * (Hh // nh))
     # T20 outer cells: representative groups by length, narrow cells in rows
     outer_cells = []         # (name, length_m)
