@@ -76,7 +76,7 @@ export const DEFAULT_PARAMS = {
     scatterSat: 0.4,
     /** TT (T9b): backlit transmission in the scatter tint: gain x the R-like cone (ttExponent) x the
      * forward-scattering azimuth term ((1 - Lp.Vp) / 2)^ttPow. */
-    tt: 1.08,           // T20 fit (fibre tint): 0.36 x 3
+    tt: 1.62,           // T20 fit (fibre tint): 0.36 x 4.5 (x 3 left the T10 rim closeup at 0.69 under TRAA)
     ttPow: 6.0,
     ttExponent: 16,
     /** T9, calibrated on the closeup parity (bench/m1/hair_test.py --parts parity: hair-region mean
