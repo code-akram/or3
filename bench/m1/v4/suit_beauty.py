@@ -66,7 +66,7 @@ CLOSES = {"close_pocket": (20.0, (0.12, -0.12, 1.02), 0.24, 0.15),
           "close_knee": (20.0, (0.15, -0.05, 0.55), 0.40, 0.0),
           "close_seat": (180.0, (0.0, 0.08, 1.02), 0.45, 0.0),
           "close_fly": (10.0, (0.04, -0.10, 1.04), 0.30, 0.0),
-          "close_band": (60.0, (0.16, -0.04, 1.10), 0.28, 0.0)}
+          "close_band": (30.0, (0.10, -0.08, 1.08), 0.26, 0.0)}
 G = {"jacket": {"prefix": "spike_jacket_", "mat": "t13", "lofted": ("suit_jacket", "suit_buttons"),
                 "hide": ("suit_jacket", "suit_buttons"), "target": (0, 0, 1.22), "scale": 1.15},
      "trousers": {"prefix": "spike_trousers_", "mat": "t13t", "lofted": ("suit_trousers",),
@@ -171,6 +171,17 @@ def main():
             o.data.materials.append(mats.get(mn) or bpy.data.materials.get(mn))
         if key not in G["hide"]:
             under.append(o.name)
+    # a jacket run over the made trousers (suit_spike --trousers-from): those, not the lofted
+    made_tr = [o.name for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("spike_trousers_")
+               and "lod" not in o.name]
+    if A.garment == "jacket" and made_tr:
+        under = [n for n in under if "suit_trousers" not in n] + made_tr
+        tm = [bpy.data.materials.get(f"t13t_{s}") for s in ("wool", "lining", "wool", "button")]
+        if all(m is not None for m in tm):
+            from character import suit_hero, suit_made_tex
+            suit_hero.twill(tm[0], suit_hero.DEFAULTS["twill"])
+            # their own slots (the spike's clay renders may have left the clay in them)
+            suit_made_tex.assign([bpy.data.objects[n] for n in made_tr], tm)
     # the pattern jacket
     # the lofted jacket's wool (its weave falls back to the material's own coordinates without
     # UVs); a plain black wool if the base has none

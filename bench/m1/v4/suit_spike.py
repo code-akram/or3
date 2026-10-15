@@ -58,6 +58,8 @@ ap.add_argument("--opts", default="", help="JSON override for the spike options 
 ap.add_argument("--from-run", default="", help="spike 2: reuse this run's drape (drape2.npz); rever + renders only")
 ap.add_argument("--v2", action="store_true", help="spike 2 (T13): two-stage weld, hull collider, modelled rever")
 ap.add_argument("--trousers", action="store_true", help="T13 item 3: the pattern-drafted trousers (main_trousers)")
+ap.add_argument("--trousers-from", default="", help="spike 2: a --trousers run whose made trousers replace the "
+                "lofted ones (collider, hull, renders)")
 A = ap.parse_args(argv)
 os.makedirs(A.out_dir, exist_ok=True)
 T = {}
@@ -1899,11 +1901,34 @@ def render_close(out_dir, tag, show):
                      cam_dz=dz[0] if dz else 0.15)
 
 
+def load_made(run, prefix):
+    """Append a spike run's made garment (its objects named prefix*, not the LODs, with their
+    materials) from RUN/spike.blend."""
+    with bpy.data.libraries.load(os.path.join(run, "spike.blend"), link=False) as (src, dst):
+        dst.objects = [n for n in src.objects if n.startswith(prefix) and "lod" not in n]
+    out = []
+    for o in dst.objects:
+        if o is not None:
+            bpy.context.scene.collection.objects.link(o)
+            out.append(o)
+            for m in o.data.materials:
+                if m is not None:
+                    m.use_fake_user = True      # the clay renders take the slots for a while
+    return out
+
+
 def main_v2(O):
     t = time.perf_counter()
     body, names = capture_body()
     tick("body_capture", t)
     arm, base = append_base(A.base_blend)
+    made_tr = []
+    if A.trousers_from:
+        # the made trousers (T13 item 3) in place of the lofted ones: the jacket drapes over them
+        made_tr = load_made(A.trousers_from, "spike_trousers_")
+        base["trousers"].hide_render = True
+        base["trousers"].hide_viewport = True
+        base["trousers"] = next(o for o in made_tr if o.name == "spike_trousers_shell")
     am = body.modifiers.new("Armature", "ARMATURE")
     am.object = arm
     co, tris, dom, J = body_arrays(body, arm)
@@ -1967,6 +1992,8 @@ def main_v2(O):
     tick("colliders", t)
     sw = np.array(C["sew"])
     stats = {"hull": tube_info, "engine": O["engine"]}
+    if A.trousers_from:
+        stats["trousers_from"] = os.path.basename(A.trousers_from.rstrip("/"))
     Ef = mesh_edges(C["T"])
     lf = np.linalg.norm(C["R"][Ef[:, 0]] - C["R"][Ef[:, 1]], axis=1)
     lp = np.linalg.norm(C["X"][Ef[:, 0]] - C["X"][Ef[:, 1]], axis=1)
@@ -2200,6 +2227,7 @@ def main_v2(O):
     for p in pads:
         p.hide_render = True
     under = [body.name] + [base[k].name for k in ("shirt", "waistcoat", "trousers", "shoes", "tie") if k in base]
+    under += [o_.name for o_ in made_tr if o_.name != base["trousers"].name]
     base["jacket"].hide_viewport = False
     bpy.context.scene.frame_set(1)
     pat = [jk.name, rv.name] + [o_.name for o_ in det_obs]
@@ -2227,6 +2255,9 @@ def main_v2(O):
         suit_made_tex.assign([jk, rv] + det_obs + lod_obs, made_mats)
         side_ = made_mats[0]["suit_atlas_side_m"]
         stats["textures"]["uv_lod"] = {ob_.name: suit_made_tex.uv_stats(ob_, side_) for ob_ in lod_obs}
+    tm = [bpy.data.materials.get(f"t13t_{s}") for s in ("wool", "lining", "wool", "button")]
+    if made_tr and all(m is not None for m in tm):
+        suit_made_tex.assign(made_tr, tm)    # the made trousers' own slots back after the clay
     stage_rig(bpy.context.scene)              # (--no-clay: the beauty frames need the camera and lights)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(A.out_dir, "spike.blend"), compress=True)
     with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
@@ -2242,8 +2273,9 @@ TROUSERS = {
     "min_clear_m": 0.004,
     "colliders": ["shirt"],
     "shoe_hull": True,           # the shoes collide as convex solids (shoe_hulls); False: as shells
-    # the hem is placed above the shoe (squashed toward shoe top + z0) and falls onto it
-    "hem_place": {"z0_above_shoe_m": 0.03, "squash": 0.25},
+    # the hem is placed above the shoe (the lower leg compressed over span_m to end at shoe top
+    # + z0; without span_m the last cm squashed by squash) and falls onto it
+    "hem_place": {"z0_above_shoe_m": 0.03, "squash": 0.25, "span_m": 0.40},
     "draft": {},
     # trouser cloth: one layer of worsted (about 280 g/m2), the band canvassed
     "xpbd": {"density": 0.28, "kb": 1.5e-5, "kb_band": 2.0e-4, "self_r": 0.008, "self_excl": 0.025,
@@ -2426,7 +2458,16 @@ def place_trousers(D, L, BM, O, shoe_top):
     def prof(s):
         return np.array([np.interp(s, arc, P[:, 0]), np.interp(s, arc, P[:, 1])])
 
+    # the lowest hem (the back's), pattern y -> world z
+    zmin = zws - max(float(outl[k][:, 1].max()) for k in outl) / 100.0
+
     def z_place(z):
+        if hp.get("span_m"):
+            # spread over the lower leg (span above z0): the last cm squashed 4:1 buckled into a
+            # fold at the back hem in stage 1 (run t13t-d4, left leg); ~15 % over the shin does not
+            z1 = z0 + hp["span_m"]
+            k = min(1.0, (z1 - z0) / max(z1 - zmin, 1e-6))
+            return z if z >= z1 else z1 - (z1 - z) * k
         return z if z >= z0 else z0 - (z0 - z) * hp["squash"]
 
     fly = D.geom("front").edge("fly")
@@ -2613,7 +2654,7 @@ TROUSER_CLOSE = {
     "close_knee": (20.0, (0.15, -0.05, 0.55), 0.40),
     "close_seat": (180.0, (0.0, 0.08, 1.02), 0.45),
     "close_fly": (10.0, (0.04, -0.10, 1.04), 0.30),
-    "close_band": (60.0, (0.16, -0.04, 1.10), 0.28),
+    "close_band": (30.0, (0.10, -0.08, 1.08), 0.26),
 }
 
 
