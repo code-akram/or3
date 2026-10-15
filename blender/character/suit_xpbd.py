@@ -125,6 +125,7 @@ class Solver:
         self.sew_len = np.zeros(0)
         self.sew_col = []
         self.layers = []
+        self.layer_force = []    # (A, B, gap) pairs held in order at any distance (a button pair)
         self.sdf = None
         self.pinned = np.zeros(n, bool)
         self.hold_idx = np.zeros(0, int)       # soft attachments to target positions
@@ -193,6 +194,8 @@ class Solver:
         # layers: set A stays outside set B along B's outward normal by `gap`
         for A, B, gap in self.layers:
             self._layer(A, B, gap)
+        for A, B, gap in self.layer_force:
+            self._layer_pairs(A, B, gap)
         # self-contact
         if self.self_ref is not None and self.self_r > 0:
             self._self_contact(X, wp)
@@ -237,6 +240,19 @@ class Solver:
         np.add.at(cnt, j, 1.0)
         m = cnt > 0
         X[m] += acc[m] / cnt[m][:, None]
+
+    def _layer_pairs(self, a, b, gap):
+        """a[k] stays outside b[k] (along b's outward normal) by gap, however far through."""
+        X = self.X
+        if self.sdf is None:
+            return
+        _, nb = self.sdf(X[b])
+        s = ((X[a] - X[b]) * nb).sum(1)
+        bad = s < gap
+        if bad.any():
+            corr = (gap - s[bad])[:, None] * nb[bad]
+            X[a[bad]] += 0.5 * corr
+            X[b[bad]] -= 0.5 * corr
 
     def _layer(self, A, B, gap):
         X = self.X
