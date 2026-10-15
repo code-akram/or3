@@ -933,7 +933,7 @@ async function main(): Promise<void> {
     texture_mb_est: +(tex.bytes / 1e6).toFixed(1),
     lights: stage.lightCount(),
     shadow_maps: stage.shadowMapCount(),
-    gtao: sceneAO ? { half_res: true, last_ms: Math.round(sceneAO.lastMs) } : null,
+    gtao: sceneAO ? { half_res: sceneAO.resolution === 0.5, resolution: sceneAO.resolution, last_ms: Math.round(sceneAO.lastMs) } : null,
     hair_shadow: stage.deepHair ? 'deep (hair twins)' : 'binary',
     aa: output.aa === 'msaa' ? { mode: 'msaa', samples: output.samples, hair: 'alpha to coverage' } : { mode: output.aa, scale: output.aa === 'taau' ? output.scale : 1, hair: `hashed (coverage ${P.get('aa.hairCoverage')})`, still_frames: P.get('aa.stillFrames') },
     dof: output.dofOn ? { thin_lens: true, full_res: !!(P.get('dof.fullRes') as number), radius_scale: P.get('dof.radiusScale') } : null,
