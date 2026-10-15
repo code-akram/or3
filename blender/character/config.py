@@ -383,7 +383,7 @@ DEFAULTS = {
                            "lip_gap_m": 0.0012, "lip_tip_fade": 0.65,
                            # T21: every strand fades in from a staggered start (len, jitter: fractions of its
                            # length): a card's root row drew a hard comb line (the moustache top, the cheek line)
-                           "root_fade": {"len": 0.18, "jitter": 0.12},
+                           "root_fade": {"len": 0.12, "jitter": 0.10},
                            # T21: the moustache overhang as a ribbon along the upper lip (hair_beard.lip_ribbon,
                            # beard_bake.lip_ribbon_cards): columns every col_m, rows across; top_m over the
                            # vermilion top to the lowest tips (tip_pct, clamped to min / max_over_m, halved
