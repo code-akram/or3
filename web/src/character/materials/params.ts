@@ -243,6 +243,16 @@ export const DEFAULT_PARAMS = {
   shirt: {
     fuzzStrength: 0.12,
   },
+  /** T13 suit cloth path (cloth.ts): per-kind grazing response, fitted per light on the shader balls
+   * (bench/m1/v4/cloth_balls.py), and the pose-blended wrinkle normals. on = 0: the T6 ClothMaterial. */
+  suitCloth: {
+    on: 1,
+    wrinkleStrength: 1.0,
+    wool: { sheenScale: 0.15, fuzzStrength: 0.15, fuzzPower: 3.0, fuzzWrap: 1.0 },
+    silk: { sheenScale: 0.15, fuzzStrength: 0.15, fuzzPower: 3.0, fuzzWrap: 1.0 },
+    lining: { sheenScale: 0.15, fuzzStrength: 0.08, fuzzPower: 3.0, fuzzWrap: 1.0 },
+    shirt: { sheenScale: 0.15, fuzzStrength: 0.12, fuzzPower: 3.0, fuzzWrap: 1.0 },
+  },
   /** T16 temporal AA (output.ts, temporal.ts; ?aa=traa|taau|msaa at load). */
   aa: {
     /** hashed card coverage: 0 = the alpha-to-coverage step at alphaTest (parity with the MSAA path),

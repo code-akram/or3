@@ -4254,6 +4254,25 @@ def made_parts(prefix):
     return out
 
 
+def rig_copy(nm):
+    """A copy of the loaded made part `nm` (its UVs, material slots, normals and part tags kept) as
+    rig_<nm>, without vertex groups or shape keys; its materials restored from MADE_SLOTS."""
+    src = bpy.data.objects[nm]
+    o = src.copy()
+    o.data = src.data.copy()
+    o.name = o.data.name = f"rig_{nm}"
+    o.vertex_groups.clear()
+    if o.data.shape_keys:
+        o.shape_key_clear()
+    mats = MADE_SLOTS.get(nm)
+    if mats and all(m is not None for m in mats):
+        o.data.materials.clear()
+        for m in mats:
+            o.data.materials.append(m)
+    bpy.context.scene.collection.objects.link(o)
+    return o
+
+
 def main_posed(O):
     """T13 item 6: the made suit (the jacket run A.posed and the layers it was draped over) rigged:
     the shipped weight pipeline on every layer; per pose, the shirt, the waistcoat and the jacket
@@ -4657,6 +4676,48 @@ def main_posed(O):
     with open(os.path.join(A.out_dir, "suit_rules.json"), "w") as f:
         json.dump({"morphs": [{k: v for k, v in c.items() if not k.startswith("_")} for c in cones],
                    "follow_gains": gains}, f, indent=1)
+    # --- export: each made part as a skinned mesh with its corrective shape keys (one per cone,
+    # named as the rule), fitted on the part itself (its wrap of each pose's drape), so the engine's
+    # LBS + morphs reproduce the drape-level runtime; the trousers skinned only
+    t = time.perf_counter()
+    exp = {}
+    for nm, p in parts.items():
+        if nm.endswith("collider"):
+            continue
+        key = p["key"]
+        Gx = G[key]
+        Wm = p["W"] if "W" in p else drig.prune(sr.wrap_weights(p["bind"], Gx["W"], Gx["Tw"]), 4)
+        V0 = p["V0"]
+        D = np.stack([sr.unskin(Wm, Ms[k], sr.wrap_apply(p["bind"], Y[key][k], Gx["Tw"]), V0) for k in range(K)])
+        Sm = sr.fit_shapes(D, Acone, cone_masks(cones, V0, arm), lam=O["lam"])
+        dev = [float(np.linalg.norm(sr.skin(V0 + sr.apply_shapes(Sm, Acone[k]), Wm, Ms[k])
+                                    - sr.wrap_apply(p["bind"], rt_Y[key][k], Gx["Tw"]), axis=1).max()) for k in range(K)]
+        o_ = rig_copy(nm)
+        drig.write(o_, Wm, names_all)
+        o_.shape_key_add(name="Basis")
+        kept_ = 0
+        for c, Sc in zip(cones, Sm):
+            mx = float(np.linalg.norm(Sc, axis=1).max())
+            if mx < 2e-4:
+                continue
+            kb = o_.shape_key_add(name=c["name"], from_mix=False)
+            kb.data.foreach_set("co", (V0 + Sc).astype(np.float32).ravel())
+            kept_ += 1
+        o_.hide_render = True
+        exp[nm] = {"verts": len(V0), "shape_keys": kept_, "max_dev_vs_drape_runtime_mm": round(max(dev) * 1000, 2)}
+    for nm, p in tparts.items():
+        if nm.endswith("collider"):
+            continue
+        o_ = rig_copy(nm)
+        drig.write(o_, p["W"], names_all)
+        o_.hide_render = True
+        exp[nm] = {"verts": len(p["V0"]), "shape_keys": 0}
+    stats["export"] = {"parts": exp, "s": round(time.perf_counter() - t, 1)}
+    print(f"[spike] export: {stats['export']}", flush=True)
+    with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
+        json.dump(stats, f, indent=1, default=float)
+    stage_rig(bpy.context.scene)
+    bpy.ops.wm.save_as_mainfile(filepath=os.path.join(A.out_dir, "spike.blend"), compress=True)
     with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
         json.dump(stats, f, indent=1, default=float)
     if A.no_render:

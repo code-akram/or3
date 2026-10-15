@@ -21,6 +21,7 @@ import { albedo, diffuseRamp } from './style';
 import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTexturesLib.js';
 import { temporalFrame } from '../temporal';
 import { rectFormFactor, screenTerm, withSharedLighting } from '../lighting';
+import { clothKind, SuitClothMaterial, type WrinkleSidecar } from '../cloth';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const { bool, interleavedGradientNoise, mrt, screenCoordinate, BRDF_GGX, BRDF_Lambert, LTC_Evaluate, cameraWorldMatrix, exp, log, LTC_Uv, mat3, diffuseColor, faceDirection, float, fract, fwidth, hash, mix, normalMap, normalView, normalViewGeometry, positionView, positionViewDirection, roughness, screenUV, sin, smoothstep, bitangentView, tangentView, texture, uv, varying, vec2, vec3, vec4, vertexColor } = TSL as any;
@@ -37,14 +38,14 @@ type N = any;
  * stayed lit, and the folded lower lids and alar bases rendered teal (t7b). Every lighting term
  * that uses the geometric normal takes this one. */
 const geometryNormal: N = normalViewGeometry.mul(faceDirection);
-type Std = THREE.MeshStandardMaterial & Partial<THREE.MeshPhysicalMaterial>;
-interface DirectInput {
+export type Std = THREE.MeshStandardMaterial & Partial<THREE.MeshPhysicalMaterial>;
+export interface DirectInput {
   lightDirection: N;
   lightColor: N;
   lightNode?: { light?: THREE.Light };
   reflectedLight: { directDiffuse: N; directSpecular: N };
 }
-interface RectInput {
+export interface RectInput {
   lightNode?: { light?: THREE.Light };
   lightColor: N;
   lightPosition: N;
@@ -62,7 +63,7 @@ interface RectInput {
  * it, pi L |F|, exact for a big emitter close by. (T6 took the centre direction and L A cos / d^2, which
  * is the small-emitter limit: the hero fill (2 m square at 2.5 m) came out 24 % and the wrap 16 % hot.)
  * Zero behind the emitter (it shines along its local -z). The LTC keeps the specular. */
-function rectAsPoint(i: RectInput): { L: N; color: N } {
+export function rectAsPoint(i: RectInput): { L: N; color: N } {
   const c = i.lightPosition;
   const F = rectFormFactor(c, i.halfWidth, i.halfHeight, positionView);
   const toL = c.sub(positionView);
@@ -83,8 +84,8 @@ export function roleOf(name: string): Role {
   if (name.startsWith('eyes')) return 'eye';
   if (name === 'eye_lidshell') return 'eyeshell'; // T18 game parts (eyes_hq.game_parts); not 'eye': the gaze turns 'eye' meshes only
   if (name === 'eye_meniscus') return 'eyewet';
-  if (name === 'suit_shirt') return 'shirt';
-  if (/^suit_(wool|wool_b|vest|silk)$/.test(name)) return 'cloth';
+  if (name === 'suit_shirt' || /^t13s_/.test(name)) return 'shirt';
+  if (/^suit_(wool|wool_b|vest|silk)$/.test(name) || /^t13[a-z]?_(wool|lining|silk)$/.test(name)) return 'cloth';
   return 'generic';
 }
 
@@ -92,12 +93,12 @@ export function roleOf(name: string): Role {
 export function groupOf(name: string): 'hair' | 'cloth' | 'skin' | 'other' {
   if (name === 'hair' || name === 'hair_cards') return 'hair';
   if (name.startsWith('skin_')) return 'skin';
-  if (name.startsWith('suit_') && name !== 'suit_shirt') return 'cloth';
+  if ((name.startsWith('suit_') && name !== 'suit_shirt') || /^t13[a-z]?_/.test(name) && !/^t13s_/.test(name)) return 'cloth';
   return 'other';
 }
 
 /** Copy the glTF (standard / physical) inputs that the node materials keep using. */
-function copyStd(dst: THREE.MeshPhysicalNodeMaterial, src: Std): void {
+export function copyStd(dst: THREE.MeshPhysicalNodeMaterial, src: Std): void {
   dst.name = src.name;
   dst.side = src.side;
   dst.vertexColors = src.vertexColors;
@@ -128,7 +129,7 @@ function copyStd(dst: THREE.MeshPhysicalNodeMaterial, src: Std): void {
   }
 }
 
-function mapRGBA(src: Std): N {
+export function mapRGBA(src: Std): N {
   const c = vec4(src.color.r, src.color.g, src.color.b, 1);
   return src.map ? texture(src.map).mul(c) : c;
 }
@@ -145,7 +146,7 @@ function directAO(ao: N | null, k: N): N {
 }
 
 /** The screen-space AO (ao.ts, GTAO at half resolution) at this fragment, or null when off. */
-function screenAONode(tex: THREE.Texture | null | undefined): N | null {
+export function screenAONode(tex: THREE.Texture | null | undefined): N | null {
   return tex ? texture(tex, screenUV).r : null;
 }
 
@@ -153,7 +154,7 @@ function screenAONode(tex: THREE.Texture | null | undefined): N | null {
  * aoWeight (stage.ts: its size over distance, floored by ao.lightWeightMin) x ao.strength, times a
  * little of the baked AO (ao.bakedMix, the folds GTAO at half res misses). Without it: the T6
  * stand-in, mix(1, baked AO, bakedKey). */
-function directOcclusion(P: ParamStore, baked: N | null, bakedKey: string | null, screen: N | null, light: THREE.Light | undefined): N {
+export function directOcclusion(P: ParamStore, baked: N | null, bakedKey: string | null, screen: N | null, light: THREE.Light | undefined): N {
   if (screen) {
     const w = float((light?.userData?.aoWeight as number | undefined) ?? 1).max(P.u('ao.lightWeightMin')).min(1);
     let o: N = mix(float(1), screen, w.mul(P.u('ao.strength')));
@@ -360,6 +361,8 @@ export interface Sidecars {
   sssLUT?: THREE.Texture | null;
   /** T10: the screen-space AO texture (ao.ts SceneAO.texture); null = the baked direct-AO stand-in */
   screenAO?: THREE.Texture | null;
+  /** T13: the made suit's pose-blended wrinkle maps (cloth.ts, suit_wrinkle.json) */
+  wrinkle?: WrinkleSidecar | null;
 }
 
 /**
@@ -1258,9 +1261,12 @@ export function assignMaterials(root: THREE.Object3D, P: ParamStore, side: Sidec
       case 'eyewet':
         return new EyeWetMaterial(src, P, side.screenAO);
       case 'cloth':
-        return new ClothMaterial(src, P, 'cloth.fuzzStrength', side.weave, side.screenAO);
-      case 'shirt':
-        return new ClothMaterial(src, P, 'shirt.fuzzStrength', side.weave, side.screenAO);
+      case 'shirt': {
+        // T13: the suit cloth path (cloth.ts) unless suitCloth.on = 0
+        const kind = clothKind(src.name);
+        if (kind && (P.get('suitCloth.on') as number) > 0) return new SuitClothMaterial(src, P, kind, side.weave, side.wrinkle, side.screenAO);
+        return new ClothMaterial(src, P, role === 'cloth' ? 'cloth.fuzzStrength' : 'shirt.fuzzStrength', side.weave, side.screenAO);
+      }
       default:
         return new GenericMaterial(src, P, side.screenAO);
     }

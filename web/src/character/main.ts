@@ -20,6 +20,7 @@
 //      &capture=1&upload=1[&views=...&size=1024&portrait=1920x1080&perf=120]: device capture (the Air):
 //      the page renders every view itself and POSTs the frames + timings to the loopback server of
 //      `engine_shots.mjs --serve` (bench/m1/v4/t6-engine-parity.md, "Air capture")
+import { loadWrinkles, setWrinkleSource } from './cloth';
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
@@ -572,6 +573,7 @@ async function main(): Promise<void> {
   model.updateMatrixWorld(true);
 
   const rt = new DeformRuntime(model, rules ?? { version: 1 });
+  setWrinkleSource(() => rt.morphWeights()); // T13: the wrinkle groups follow the suit's cones (cloth.ts)
   const poser = new Poser(rt);
   const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 200);
   // T10: GTAO at half resolution (ao.ts) instead of the baked direct-AO stand-in; ?gtao=0 or ao.gtao 0 = off
@@ -582,6 +584,7 @@ async function main(): Promise<void> {
   const aaview = q.get('aaview');
   if (aaview === 'raw' || aaview === 'velocity' || aaview === 'hair') output.setDebugTemporal(aaview);
   const side: Sidecars = { weave, ...skinSidecars(P, curvHead, curvHands), screenAO: sceneAO?.texture ?? null };
+  side.wrinkle = await loadWrinkles(base, loadTexture); // T13: the made suit's pose-blended wrinkle maps (cloth.ts)
   if (!curvHead) state.warnings.push('no skin_head_curvature.png: wrap-lit skin (pre-T6 build)');
   if (!weave) state.warnings.push('no suit_detail.json: procedural micro-twill (pre-T6 build: weave baked in the atlas)');
   const mats = assignMaterials(model, P, side, aa === 'msaa');
