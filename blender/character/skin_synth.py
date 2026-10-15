@@ -505,7 +505,7 @@ def synth_head(m, c, cl, cr):
     if c["hb_patch"] > 0 or c["mel_patch"] > 0:
         under = np.clip(1.5 * R["under_eye"] + R["orbit"], 0, 1)
         pw = np.clip(R["cheek"] + R["apple"] + R["nose"] + R["nose_tip"] + R["alar"] + 0.8 * R["chin"]
-                     + 0.7 * R["forehead"] + 0.6 * R["temple"] + 0.6 * R["neck"] + R["ears"], 0, 1)
+                     + c["hb_forehead"] * R["forehead"] + 0.6 * R["temple"] + 0.6 * R["neck"] + R["ears"], 0, 1)
         skin_w = (1 - lips) * (1 - 0.7 * under) * (1 - 0.8 * smoothstep(0.3, 0.8, R["beard"])) \
             * (1 - 0.8 * R["scalp"])
         if c["hb_patch"] > 0:
@@ -515,7 +515,8 @@ def synth_head(m, c, cl, cr):
                 # soften below hb_soft_mm, then back to unit std (the 5-12 mm patches keep their swing)
                 zh = zscore(soft(zh, sk, c["hb_soft_mm"] * MM / max(float(np.median(m.tex_m[sk])), 1e-6)))
             zh = np.clip(zh, -2.5, 2.5)
-            wh = (c["hb_patch"] * pw + c["hb_patch_weak"] * (1 - pw)) * skin_w
+            # the forehead reads less chroma through the view transform (brighter): its own boost
+            wh = (c["hb_patch"] * pw + c["hb_patch_weak"] * (1 - pw)) * skin_w * (1 + c["hb_forehead_boost"] * R["forehead"])
             # one-sided in colour: above the mean along the absorption axis (redder), below it paler
             # (G and B up, R barely: blood-poor skin reads lighter and a little yellower, not green)
             up = (np.maximum(zh, 0) * wh)[..., None] * np.array(c["hb_patch_rgb"], np.float32)
@@ -767,7 +768,7 @@ DEFAULT_HEAD = {
     # T17 (checkpoint-3 §2.2): haemoglobin / melanin layers (amount at the strong regions, weak elsewhere;
     # the RGB swing per unit std), roughness structure, lip wetness, the specular cavity (ORM blue)
     "hb_patch": 0.0, "hb_patch_weak": 0.0, "hb_patch_rgb": (0.25, -0.45, -0.40),
-    "hb_pale": 1.0, "hb_pale_rgb": (-0.25, 0.45, 0.40), "hb_soft_mm": 0.0,
+    "hb_pale": 1.0, "hb_pale_rgb": (-0.25, 0.45, 0.40), "hb_soft_mm": 0.0, "hb_forehead": 0.7, "hb_forehead_boost": 0.0,
     "mel_patch": 0.0, "mel_patch_rgb": (-0.45, -0.60, -0.95),
     "rough_density": 0.0, "rough_pore": 0.0, "rough_patch2": 0.0,
     "lip_wet": 0.0, "lip_wet_mm": 1.6, "lip_wet_rough": 0.22, "lip_wet_coat": 0.0,

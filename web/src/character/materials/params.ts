@@ -73,11 +73,12 @@ export const DEFAULT_PARAMS = {
     transWrap: 0.3,
     /** T17 screen-space SSS (ssss.ts, Jimenez 2015 separable; temporal AA modes; ?ssss=0 = the LUT):
      * the profile radii scale, the depth step (mm) over which a neighbour stops counting, and the
-     * share of the albedo applied before the blur (0.5 = sqrt split: keeps pore-scale colour). With it
+     * share of the albedo applied before the blur (0.5 = the sqrt split; 0.2 keeps more of the albedo
+     * mottling, a* band std 1.13 -> 1.22 at the portrait, t17-a3). With it
      * the diffuse is Lambert on a lightly blurred normal (ssssNormalBlur) and the screen blur scatters. */
     ssssWidth: 1.0,
     ssssFalloffMm: 6.0,
-    ssssAlbedoPre: 0.5,
+    ssssAlbedoPre: 0.2,
     ssssNormalBlur: [0.3, 0.12, 0.05],
   },
   hair: {
