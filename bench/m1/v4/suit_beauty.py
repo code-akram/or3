@@ -37,7 +37,7 @@ ap.add_argument("--closes", default="close_pocket,close_button,close_lapel,close
 ap.add_argument("--grain", action="store_true", help="also the pinstripe grain check")
 ap.add_argument("--only-grain", action="store_true")
 ap.add_argument("--lods", default="", help="views of the textured LODs (e.g. front,three_quarter)")
-ap.add_argument("--garment", default="jacket", choices=("jacket", "trousers", "waistcoat"),
+ap.add_argument("--garment", default="jacket", choices=("jacket", "trousers", "waistcoat", "shirt"),
                 help="the run's made garment: spike_jacket_* (t13_* materials) or spike_trousers_* (t13t_*)")
 A = ap.parse_args(argv)
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
@@ -74,7 +74,19 @@ CLOSES = {"close_pocket": (20.0, (0.12, -0.12, 1.02), 0.24, 0.15),
           "close_wwelt": (25.0, (0.10, -0.11, 1.20), 0.22, 0.0),
           "close_breast": (20.0, (0.10, -0.10, 1.38), 0.22, 0.0),
           "close_wback": (180.0, (0.0, 0.08, 1.30), 0.50, 0.0),
-          "close_wside": (90.0, (0.15, 0.0, 1.28), 0.45, 0.0)}
+          "close_wside": (90.0, (0.15, 0.0, 1.28), 0.45, 0.0),
+          # the shirt (T13 item 5): the collar front (under the knot), side and back, the placket,
+          # the yoke, the sleeve head; close_cuff* are placed on the made cuffs (below)
+          "close_collar_f": (8.0, (0.0, -0.06, 1.52), 0.22, 0.0),
+          "close_collar_s": (80.0, (0.04, -0.01, 1.53), 0.22, 0.0),
+          "close_collar_b": (170.0, (0.0, 0.03, 1.54), 0.22, 0.05),
+          "close_placket": (10.0, (0.0, -0.10, 1.30), 0.26, 0.0),
+          "close_yoke": (180.0, (0.0, 0.08, 1.45), 0.42, 0.0),
+          "close_sleevehead": (70.0, (0.21, 0.0, 1.40), 0.32, 0.0),
+          # the full stack (item 5: the jacket over the made shirt and waistcoat): the shirt
+          # collar over the jacket collar at the back, the shirt cuff past the jacket's sleeve
+          "close_stack_neck": (165.0, (0.0, 0.05, 1.56), 0.20, 0.05),
+          "close_stack_neck_s": (95.0, (0.03, 0.0, 1.55), 0.22, 0.05)}
 G = {"jacket": {"prefix": "spike_jacket_", "mat": "t13", "lofted": ("suit_jacket", "suit_buttons"),
                 "hide": ("suit_jacket", "suit_buttons"), "target": (0, 0, 1.22), "scale": 1.15},
      "trousers": {"prefix": "spike_trousers_", "mat": "t13t", "lofted": ("suit_trousers",),
@@ -82,7 +94,30 @@ G = {"jacket": {"prefix": "spike_jacket_", "mat": "t13", "lofted": ("suit_jacket
                   "target": (0, 0, 0.62), "scale": 1.35},
      "waistcoat": {"prefix": "spike_waistcoat_", "mat": "t13w", "lofted": ("suit_waistcoat",),
                    "hide": ("suit_waistcoat", "suit_jacket", "suit_buttons"),
-                   "target": (0, 0, 1.22), "scale": 1.15}}[A.garment]
+                   "target": (0, 0, 1.22), "scale": 1.15},
+     "shirt": {"prefix": "spike_shirt_", "mat": "t13s", "lofted": ("suit_shirt",),
+               "hide": ("suit_shirt", "suit_waistcoat", "suit_jacket", "suit_buttons"),
+               "target": (0, 0, 1.22), "scale": 1.15}}[A.garment]
+
+
+def made_layer(prefix, mp, under, lofted_key):
+    """A run over another run's made garment (suit_spike --trousers-from / --shirt-from /
+    --waistcoat-from): those objects in place of the lofted one, with their own materials."""
+    made = [o.name for o in bpy.data.objects if o.type == "MESH" and o.name.startswith(prefix)
+            and "lod" not in o.name and "collider" not in o.name]
+    if not made:
+        return under
+    under = [n for n in under if lofted_key not in n] + made
+    own = bpy.data.materials.get(f"{mp}_wool") or bpy.data.materials.get(f"{mp}_shirt")
+    lin = bpy.data.materials.get(f"{mp}_lining") or own
+    btn = bpy.data.materials.get(f"{mp}_button")
+    if own is not None and btn is not None:
+        from character import suit_made_tex
+        if own.name.endswith("_wool"):
+            from character import suit_hero
+            suit_hero.twill(own, suit_hero.DEFAULTS["twill"])
+        suit_made_tex.assign([bpy.data.objects[n] for n in made], [own, lin, own, btn])
+    return under
 
 
 def append(path, objects=(), materials=()):
@@ -183,28 +218,27 @@ def main():
         if key not in G["hide"]:
             under.append(o.name)
     # a jacket run over the made trousers (suit_spike --trousers-from): those, not the lofted
-    made_tr = [o.name for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("spike_trousers_")
-               and "lod" not in o.name]
-    if A.garment != "trousers" and made_tr:
-        under = [n for n in under if "suit_trousers" not in n] + made_tr
-        tm = [bpy.data.materials.get(f"t13t_{s}") for s in ("wool", "lining", "wool", "button")]
-        if all(m is not None for m in tm):
-            from character import suit_hero, suit_made_tex
-            suit_hero.twill(tm[0], suit_hero.DEFAULTS["twill"])
-            # their own slots (the spike's clay renders may have left the clay in them)
-            suit_made_tex.assign([bpy.data.objects[n] for n in made_tr], tm)
+    if A.garment != "trousers":
+        under = made_layer("spike_trousers_", "t13t", under, "suit_trousers")
+    if A.garment != "shirt":
+        under = made_layer("spike_shirt_", "t13s", under, "suit_shirt")
+    if A.garment not in ("waistcoat", "shirt", "trousers"):
+        under = made_layer("spike_waistcoat_", "t13w", under, "suit_waistcoat")
     # the pattern jacket
     # the lofted jacket's wool (its weave falls back to the material's own coordinates without
     # UVs); a plain black wool if the base has none
     mp = G["mat"]
-    own = bpy.data.materials.get(f"{mp}_wool")
+    own = bpy.data.materials.get(f"{mp}_wool") or bpy.data.materials.get(f"{mp}_shirt")
     if own is not None:
         # the run's own pattern-UV materials (T13 item 2)
         from character import suit_hero, suit_textures
-        suit_hero.twill(own, suit_hero.DEFAULTS["twill"])
+        if own.name.endswith("_wool"):
+            suit_hero.twill(own, suit_hero.DEFAULTS["twill"])
         print("[beauty] cycles weave:", suit_textures.cycles_weave(), flush=True)
-        wool, lining, btn = own, bpy.data.materials[f"{mp}_lining"], bpy.data.materials[f"{mp}_button"]
-        for nm in (f"{mp}_wool_normal", f"suit_{mp}_wool_albedo", f"suit_{mp}_wool_orm"):
+        wool, btn = own, bpy.data.materials[f"{mp}_button"]
+        lining = bpy.data.materials.get(f"{mp}_lining") or own
+        for nm in (f"{mp}_wool_normal", f"suit_{mp}_wool_albedo", f"suit_{mp}_wool_orm",
+                   f"suit_{mp}_shirt_albedo", f"suit_{mp}_shirt_orm"):
             im = bpy.data.images.get(nm)
             if im is not None:      # the atlas, for the gate sheet
                 w_, h_ = im.size
@@ -310,6 +344,13 @@ def main():
     for v in [x for x in A.views.split(",") if x]:
         shoot(f"lofted_{v}", base_show + lofted, VIEWS[v], TG, SC, 0.15)
         shoot(f"pattern_{v}", base_show + pattern, VIEWS[v], TG, SC, 0.15)
+    cuffs = bpy.data.objects.get("spike_shirt_cuffs")
+    if cuffs is not None:
+        P = np.array([tuple(v.co) for v in cuffs.data.vertices])
+        c_ = P[P[:, 0] > 0].mean(0)
+        CLOSES["close_cuff"] = (60.0, tuple(c_), 0.20, 0.0)
+        CLOSES["close_cuff_b"] = (150.0, tuple(c_), 0.20, 0.0)
+        CLOSES["close_stack_cuff"] = (100.0, tuple(c_ + np.array([0.0, 0.0, 0.02])), 0.22, 0.0)
     for c in [x for x in A.closes.split(",") if x]:
         az, tgt, scale, dz = CLOSES[c]
         shoot(f"pattern_{c}", base_show + pattern, az, tgt, scale, dz)
