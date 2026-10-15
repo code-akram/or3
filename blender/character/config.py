@@ -8,6 +8,7 @@ section. Override example (look-dev candidate):
 
 import copy
 import json
+import os
 
 DEFAULTS = {
     "assets": {
@@ -556,9 +557,21 @@ def merge(base, over):
     return out
 
 
+def read(path):
+    """A config file, with "$extends" (a path relative to the file, or a list of them) merged under
+    it first: a variant can add to the direction it builds on (the made-suit A/B builds on
+    direction.json, the body its cache record was draped on)."""
+    with open(path) as f:
+        spec = json.load(f)
+    ext = spec.pop("$extends", None)
+    out = {}
+    for e in ([ext] if isinstance(ext, str) else ext or []):
+        out = merge(out, read(os.path.join(os.path.dirname(os.path.abspath(path)), e)))
+    return merge(out, spec)
+
+
 def load(path=None, overrides=None):
     cfg = DEFAULTS
     if path:
-        with open(path) as f:
-            cfg = merge(cfg, json.load(f))
+        cfg = merge(cfg, read(path))
     return merge(cfg, overrides)

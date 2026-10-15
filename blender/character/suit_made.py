@@ -30,20 +30,31 @@ import numpy as np
 GARMENTS = {"jacket": ("body", "rever", "pockets", "buttons", "buttonhole"),
             "shirt": ("shell", "collar", "cuffs", "buttons"),
             "waistcoat": ("shell", "pockets", "buttons"),
-            "trousers": ("shell", "pockets", "buttons")}
+            "trousers": ("shell", "pockets", "buttons"),
+            "tie": ("shell",)}            # T13d: the modelled four-in-hand (suit_tie)
 LIMITS = {"seam_gap_p95_mm": 3.0, "strain_p99": 0.25, "inside": 0}
 
 
-def body_hash(co):
-    """sha256 of the rest body's vertex positions (metres, rounded to 0.01 mm), first 12 hex."""
+def body_hash(co, zmax=None):
+    """sha256 of the rest body's vertex positions (metres, rounded to 0.01 mm), first 12 hex. With
+    zmax, only the vertices below it count: the head (above the head bone's joint) carries no
+    garment, so a head-only edit keeps the made suit's cache record."""
     a = np.round(np.asarray(co, np.float64).reshape(-1, 3), 5)
+    if zmax is not None:
+        a = a[a[:, 2] < zmax]
     return hashlib.sha256(np.ascontiguousarray(a).tobytes()).hexdigest()[:12]
 
 
-def mesh_hash(me):
+def suit_zmax(arm):
+    """The top of what the suit binds to: the head bone's joint (rest, world z)."""
+    b = arm.data.bones.get("head")
+    return None if b is None else float((arm.matrix_world @ b.head_local).z)
+
+
+def mesh_hash(me, zmax=None):
     co = np.empty(len(me.vertices) * 3)
     me.vertices.foreach_get("co", co)
-    return body_hash(co)
+    return body_hash(co, zmax)
 
 
 def data_root():
@@ -160,10 +171,19 @@ def join(objs, name):
     return ob
 
 
-def load_lod(run, garment, k):
-    """The garment run's collapse-decimated LOD k (spike_<garment>_lod<k>), or None."""
+def load_lod(run, garment, k, posed=None):
+    """The collapse-decimated LOD k: the posed run's, cut from the culled parts (cull_spike_<garment>_lod<k>,
+    T13d) when it has one, else the garment run's (spike_<garment>_lod<k>); or None."""
     import bpy
-    nm = f"spike_{garment}_lod{k}"
+    if posed:
+        with bpy.data.libraries.load(os.path.join(posed, "spike.blend"), link=False) as (src, dst):
+            have = f"cull_spike_{garment}_lod{k}" in src.objects
+        if have:
+            run, nm = posed, f"cull_spike_{garment}_lod{k}"
+        else:
+            nm = f"spike_{garment}_lod{k}"
+    else:
+        nm = f"spike_{garment}_lod{k}"
     with bpy.data.libraries.load(os.path.join(run, "spike.blend"), link=False) as (src, dst):
         dst.objects = [n for n in src.objects if n == nm]
     o = dst.objects[0] if dst.objects else None
@@ -263,6 +283,12 @@ def swap(b, part_fmt, lofted, rec, arm, lods=None):
             o.parent = None
         like = lofted.get(g)
         ob = join(objs, part_fmt.format(g) + "_made")
+        if g == "tie" and like is not None and like.data.materials:
+            # the made tie wears the build's own silk (the appended copy would be suit_silk.001,
+            # which the engine's cloth path does not recognise)
+            ob.data.materials.clear()
+            for m in like.data.materials:
+                ob.data.materials.append(m)
         if like is not None:
             ob.parent = like.parent
             ob.matrix_parent_inverse = like.matrix_parent_inverse.copy()
@@ -273,7 +299,7 @@ def swap(b, part_fmt, lofted, rec, arm, lods=None):
                 bpy.context.scene.collection.objects.unlink(ob)
         k = (lods or {}).get(g, 0)
         if k:
-            lo = load_lod(rec["runs"][g], g, k)
+            lo = load_lod(rec["runs"][g], g, k, rec["runs"]["posed"])
             if lo is not None:
                 info[g] = {"lod": k, **lod_from(ob, lo)}
                 lo.parent = ob.parent

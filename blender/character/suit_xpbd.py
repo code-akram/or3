@@ -20,6 +20,10 @@ before it is sewn), and bending runs across welded seams like anywhere else.
     collision a signed distance callable sdf(P) -> (d, grad) (grids built in Blender);
               push-out to a thickness, Coulomb-like friction on the substep displacement
     layers    vertex sets that must stay outside other sets (the left front over the right)
+    fold      (optional, T13d) a fold limit per interior edge: the two vertices opposite the edge
+              keep at least the distance they have when the hinge is folded fold_max_deg, so no
+              single edge folds flat onto itself (a thick cloth's fold has a radius; at 1.6 cm mesh
+              spacing a 180 deg fold in one edge reads as a hinge, T13c: armpit seams 163-179 deg)
 
 numpy only, float64, fixed operation order: bit-identical reruns.
 """
@@ -140,9 +144,29 @@ class Solver:
         self.self_r = 0.0
         self.self_excl = 0.0
         self.self_skip = None
+        self.fold_d = None                     # per stencil: the least x2-x3 distance (set_fold)
         # post-collision hooks fn(X, free), each mutating X in place (T13 item 5: the shirt's
         # tuck under the trousers' band, the tie over the shirt front; the waistcoat's back neck)
         self.post = []
+
+    def set_fold(self, max_deg, rest_len_of=None):
+        """Limit every interior edge's fold to max_deg (0 = flat): x2-x3 >= its length at that fold,
+        from the rest triangle heights."""
+        if not len(self.S):
+            return
+        lut = {(int(a), int(b)): l for (a, b), l in zip(self.E, self.L0)}
+
+        def rl(i, j):
+            return np.array([lut[(min(a, b), max(a, b))] for a, b in zip(i, j)])
+        x0, x1, x2, x3 = self.S.T
+        L01, L02, L12, L03, L13 = rl(x0, x1), rl(x0, x2), rl(x1, x2), rl(x0, x3), rl(x1, x3)
+
+        def height(a, b, c):                  # of the vertex opposite side a (Heron)
+            s = 0.5 * (a + b + c)
+            return 2.0 * np.sqrt(np.maximum(s * (s - a) * (s - b) * (s - c), 1e-16)) / a
+        h2, h3 = height(L01, L02, L12), height(L01, L03, L13)
+        phi = math.radians(180.0 - max_deg)
+        self.fold_d = np.sqrt(np.maximum(h2 * h2 + h3 * h3 - 2 * h2 * h3 * math.cos(phi), 0.0))
 
     def set_sew(self, pairs, rest=None):
         self.sew = np.asarray(pairs, int).reshape(-1, 2)
@@ -189,6 +213,23 @@ class Solver:
             den = s * s * (ws * K * K).sum(1) + 1.0 / (self.kb[c] * h2)
             dl = -C / den[:, None]
             X[S] += (ws * K * s[:, None])[:, :, None] * dl[:, None, :]
+        # fold limit (inequality, hard)
+        if self.fold_d is not None:
+            for c in self.scol:
+                i, j = self.S[c, 2], self.S[c, 3]
+                d = X[i] - X[j]
+                L = np.sqrt((d * d).sum(1))
+                bad = L < self.fold_d[c]
+                if not bad.any():
+                    continue
+                i, j, d, L = i[bad], j[bad], d[bad], L[bad]
+                n = d / np.maximum(L, 1e-12)[:, None]
+                ws = wp[i] + wp[j]
+                ok = ws > 0
+                i, j, n, ws = i[ok], j[ok], n[ok], ws[ok]
+                C = (self.fold_d[c][bad][ok] - L[ok]) / ws
+                X[i] += (wp[i] * C)[:, None] * n
+                X[j] -= (wp[j] * C)[:, None] * n
         # holds
         if len(self.hold_idx) and self.hold_k > 0:
             i = self.hold_idx

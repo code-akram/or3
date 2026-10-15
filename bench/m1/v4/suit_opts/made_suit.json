@@ -1,1 +1,1 @@
-{"suit": {"made": {"enabled": true}}}
+{"$extends": "../../variants/direction.json", "suit": {"made": {"enabled": true}}}

@@ -321,6 +321,9 @@ def add(b):
         b.mpfb.add_mhclo(b.basemesh, "clothes", fname, "Clothes")
     if opts(b)["tailor"]:
         b.suit_src = capture_body(b.basemesh)
+        # the top of what the suit binds to, at capture time (the made suit's cache key, suit_made)
+        arm_ = next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)
+        b.suit_zmax = suit_made.suit_zmax(arm_) if arm_ is not None else None
         # the shell's delete mask was cut for the stock collar and cuffs (it
         # removed the neck up to the stock collar's top, a see-through sliver
         # above our shirt band from the side); the built garments decide what
@@ -361,7 +364,7 @@ def post(b):
     shoes = next((x for x in b.meshes() if "shoes" in x.name), None)
     src_me, src_names = b.suit_src
     m = {"options": o}
-    body_h = suit_made.mesh_hash(src_me)
+    body_h = suit_made.mesh_hash(src_me, getattr(b, "suit_zmax", None))
     m["body_hash"] = body_h
 
     body = sb.Body(src_me, src_names, arm)
@@ -491,8 +494,10 @@ def post(b):
     if (o.get("made") or {}).get("enabled"):
         # the made suit (T13): swapped in for the lofted garments when its cache record's guards pass
         swapped, m["made"] = made_suit(b, o["made"], arm, body_h, {
-            "jacket": jacket, "shirt": shirt, "waistcoat": vest, "trousers": trousers, "buttons": buttons})
+            "jacket": jacket, "shirt": shirt, "waistcoat": vest, "trousers": trousers, "buttons": buttons,
+            "tie": tie})
         jacket = swapped.get("jacket", jacket)
+        tie = swapped.get("tie", tie)
         shirt = swapped.get("shirt", shirt)
         vest = swapped.get("waistcoat", vest)
         trousers = swapped.get("trousers", trousers)
