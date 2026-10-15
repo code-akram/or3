@@ -10,7 +10,9 @@
 // hairline) and the T20 outer layer stay and are shortened in segments instead. The cells come from the
 // build's character.stats.json (hair.atlas.cells, next to IN by default). Unreferenced vertices are
 // compacted out of every attribute and morph target. Textures pass through untouched, so a KTX2 input
-// (character.ktx2.glb) gives a KTX2 LOD1 (character.lod1.ktx2.glb), the gate asset.
+// (character.ktx2.glb) gives a KTX2 LOD1 (character.lod1.ktx2.glb), the gate asset. Since G1 the export
+// (blender/character/export.py lod1()) runs this on the PNG GLB, then web/tools/texlod.mjs (textures cut to
+// the 3-8 m camera's texel density), then ktx2.mjs, so the gameplay tier's textures are reduced too.
 // Prints one JSON line: per primitive before / after, the total, and whether it is within --budget.
 // The suit targets stand in until T13b's own suit LODs are in the build (then they are taken as exported).
 import { readFile, writeFile } from 'node:fs/promises';
