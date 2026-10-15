@@ -169,3 +169,5 @@ The metric scripts are scratch scripts and are not in the repo:
 - `gate2.py`: the pictures.
 
 The definitions are above.
+
+_Orchestrator, after review: ArcFace on `…-t17-a8` is -0.011 (engine hero closeup) and 0.030 (Cycles portrait), ≤ 0.25 ✓. Visual check at 100 %: blotches gone, colour reads in broad zones; the forehead glitter and the slightly flat cheeks are noted for T21/T26._
