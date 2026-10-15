@@ -2,8 +2,9 @@
 //
 // HYBRID LTC. Every studio / hero light is an LTC rect of its Blender size (stage.ts): the specular is the
 // area-shaped LTC lobe (a strip highlight from the rims on skin and the wet eyes) and the diffuse is the
-// rect's exact irradiance (three's LTC form factor; the custom diffuse models take the rect's vector form
-// factor as a point-equivalent, materials/index.ts rectAsPoint). three's rect lights cast no shadow, so
+// rect's exact irradiance (three's LTC form factor rescaled to the exact horizon clip, below; the custom
+// diffuse models take the rect's vector form factor as a point-equivalent, materials/index.ts rectAsPoint,
+// and the eye's direct() through rectPoint). three's rect lights cast no shadow, so
 // each light carries the shadow of an invisible SPOT PROXY at the same place: a spot-frustum depth map
 // aimed at the view's subject, multiplied into the rect's colour (rect.shadow.shadowNode). The spot path
 // (?ltc=0 / light.ltc 0) uses the same proxies.
