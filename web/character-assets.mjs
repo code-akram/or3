@@ -61,6 +61,28 @@ export function characterAssets(here, headers) {
           })
           .catch(() => fail(500));
       });
+      // T24: the KTX2 transcoder for ?ktx2=1 (two files from three's examples, as engine_shots.mjs serves them)
+      const basisDir = join(here, 'node_modules', 'three', 'examples', 'jsm', 'libs', 'basis');
+      server.middlewares.use('/basis', (req, res, next) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+        const name = (req.url ?? '/').split('?')[0].replace(/^\/+/, '');
+        if (!/^basis_transcoder\.(js|wasm)$/.test(name)) {
+          res.statusCode = 404;
+          return res.end('not found');
+        }
+        const file = join(basisDir, name);
+        let size = 0;
+        try {
+          size = statSync(file).size;
+        } catch {
+          res.statusCode = 404;
+          return res.end('not found');
+        }
+        const type = name.endsWith('.wasm') ? 'application/wasm' : 'text/javascript; charset=utf-8';
+        res.writeHead(200, { ...headers, 'content-type': type, 'content-length': size, 'cache-control': 'no-store' });
+        if (req.method === 'HEAD') return res.end();
+        createReadStream(file).pipe(res);
+      });
       server.middlewares.use('/asset', (req, res, next) => {
         if (req.method !== 'GET' && req.method !== 'HEAD') return next();
         let file;
