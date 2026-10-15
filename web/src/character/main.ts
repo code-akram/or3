@@ -25,7 +25,7 @@ import { DeformRuntime, type RigRules } from './deform';
 import { Poser, PRESETS, applyPreset } from './poses';
 import { ParamStore } from './materials/params';
 import { addHairDepthPrepass, assignMaterials, type Sidecars, type SkinDetail, type WeaveSidecar } from './materials';
-import { installSSSS, type SSSSHandle } from './ssss';
+import { SSSS_MRT_BYTES, installSSSS, type SSSSHandle } from './ssss';
 import { skinLUT } from './materials/sss';
 import { Output, type AAMode } from './output';
 import { bounceTexture, type BounceJson } from './bounce';
@@ -145,6 +145,17 @@ async function loadSkinDetail(base: string): Promise<SkinDetail | null> {
     // pre-T17b builds lack the variance: ~ the first build's tiles
     slopeVar: j.tile_slope_var ?? { pore: 0.02, micro: 0.01 },
   };
+}
+
+/** The adapter's maxColorAttachmentBytesPerSample (32 = the WebGPU default, also when unknown). */
+async function adapterAttachmentBytes(): Promise<number> {
+  try {
+    const gpu = (navigator as unknown as { gpu?: { requestAdapter(o: object): Promise<{ limits: { maxColorAttachmentBytesPerSample?: number } } | null> } }).gpu;
+    const a = gpu ? await gpu.requestAdapter({ powerPreference: 'high-performance' }) : null;
+    return a?.limits.maxColorAttachmentBytesPerSample ?? 32;
+  } catch {
+    return 32;
+  }
 }
 
 async function loadTexture(url: string): Promise<THREE.Texture | null> {
@@ -497,10 +508,17 @@ async function main(): Promise<void> {
   const base = assetBase();
   const forceWebGL = q.get('gl') === '1';
   const upload = q.get('capture') === '1' && q.get('upload') === '1';
-  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload });
+  // T17: the screen-space SSS adds two RGBA16F attachments to the temporal MRT (5 x 8 = 40 bytes per
+  // sample; WebGPU's default limit is 32): ask for the adapter's limit (64 max), or run without it (the LUT)
+  const wantSSSS = q.get('ssss') !== '0' && aaMode() !== 'msaa' && !forceWebGL;
+  const mrtBytes = wantSSSS ? await adapterAttachmentBytes() : 32;
+  const requiredLimits = mrtBytes >= SSSS_MRT_BYTES ? { maxColorAttachmentBytesPerSample: Math.min(mrtBytes, 64) } : undefined;
+  const renderer = new THREE.WebGPURenderer({ canvas, antialias: true, forceWebGL, powerPreference: 'high-performance', trackTimestamp: upload, ...(requiredLimits ? { requiredLimits } : {}) });
   await renderer.init();
   const isWebGPU = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend === true;
   state.backend = isWebGPU ? 'webgpu' : 'webgl2';
+  const ssssOK = wantSSSS && isWebGPU && !!requiredLimits;
+  if (wantSSSS && !ssssOK) state.warnings.push(`screen-space SSS off (${isWebGPU ? `adapter colour attachment bytes ${mrtBytes} < ${SSSS_MRT_BYTES}` : 'WebGL2'}): the pre-integrated LUT`);
   renderer.outputColorSpace = THREE.LinearSRGBColorSpace; // Output encodes sRGB itself
   renderer.toneMapping = THREE.NoToneMapping;
   renderer.shadowMap.enabled = true;
@@ -555,7 +573,7 @@ async function main(): Promise<void> {
   output.dofDebug = q.get('dofview') ?? '';
   if (q.get('passcheck') === '1') installPassCheck(output); // self-test of the pass hook (passcheck.ts)
   // T17: separable screen-space SSS (ssss.ts) on the temporal paths; ?ssss=0 (or msaa) = the LUT
-  const ssss: SSSSHandle | null = q.get('ssss') === '0' ? null : installSSSS(output, P);
+  const ssss: SSSSHandle | null = ssssOK ? installSSSS(output, P) : null;
   if (!rules) state.warnings.push('no character.rig.json: helpers and correctives stay at bind');
   if (!stageData) state.warnings.push('no engine_stage.json: approximate cameras and lights (run blender/hero/export_rig.py)');
 

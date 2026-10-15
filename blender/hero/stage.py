@@ -92,13 +92,14 @@ def render_crop(ch, name, spec, cam, out_dir, size=0.5):
 # erased the skin detail T12 added. Every hero shot now uses a 1.0 px Blackman-Harris filter (Blender's
 # default is 1.5 px) and, on the skin only, OIDN without its guide prefilter: 'Accurate' denoises the
 # albedo and normal guides first, which takes the pore / furrow bump out of the normal guide and so out
-# of the image. Cycles renders without its own denoiser but with the denoising data passes; the skin
-# materials carry pass index SKIN_DENOISE["index"] (IndexMA); skin_denoise() then runs OIDN twice in the
-# compositor (the scene's 'Accurate' everywhere, the skin prefilter on the skin mask, anti-aliased) and
-# writes the result back into the EXR's Combined. Env HERO_SKIN_DENOISE=0 restores Cycles' own denoise,
-# HERO_FILTER_PX overrides the filter (T17's A/B).
+# of the image. Cycles keeps its own denoise (rig.cycles: 'Accurate') and also stores the denoising data
+# passes and the noisy image; the skin materials carry pass index SKIN_DENOISE["index"] (Material Index);
+# skin_denoise() runs OIDN on the noisy image in the compositor with the skin prefilter and puts it into
+# Combined on the skin mask (anti-aliased). (The compositor Denoise node with prefilter 'Accurate' and
+# guides crashes Blender 5.2.2, free(): invalid size, so the scene part stays Cycles' own.) Env
+# HERO_SKIN_DENOISE=0 turns it off, HERO_FILTER_PX overrides the filter (T17's A/B).
 HERO_FILTER_PX = 1.0
-SKIN_DENOISE = {"prefilter": "Accurate", "skin_prefilter": "None", "quality": "High", "index": 7}
+SKIN_DENOISE = {"skin_prefilter": "None", "quality": "High", "index": 7}
 
 
 def skin_denoise_on():
@@ -118,9 +119,9 @@ def mark_skin(ch):
 
 
 def skin_denoise(path, cfg=SKIN_DENOISE):
-    """OIDN in the compositor on a Cycles EXR rendered without denoising (with its denoising data
-    passes): cfg['prefilter'] everywhere, cfg['skin_prefilter'] on the skin (IndexMA == cfg['index']);
-    Combined is replaced in place. Returns seconds, or None when the passes are missing."""
+    """OIDN in the compositor on the noisy image of a Cycles EXR (denoising data passes stored) with
+    cfg['skin_prefilter'], into Combined on the skin (Material Index == cfg['index']), in place.
+    Returns seconds, or None when the passes are missing."""
     import numpy as np
     import OpenImageIO as oiio
     from hero import grade
@@ -142,26 +143,24 @@ def skin_denoise(path, cfg=SKIN_DENOISE):
     src = nt.nodes.new("CompositorNodeImage")
     src.image = img
     o = {x.name: x for x in src.outputs}
-    need = ("Combined", "Denoising Albedo", "Denoising Normal", "IndexMA")
+    need = ("Combined", "Noisy Image", "Denoising Albedo", "Denoising Normal", "Material Index")
     if any(k not in o for k in need):
         print(f"[stage] skin denoise: {os.path.basename(path)} lacks {[k for k in need if k not in o]}", flush=True)
         bpy.data.node_groups.remove(nt)
         bpy.data.images.remove(img)
         return None
 
-    def dn(pref):
-        d = nt.nodes.new("CompositorNodeDenoise")
-        nt.links.new(o["Combined"], d.inputs["Image"])
-        nt.links.new(o["Denoising Albedo"], d.inputs["Albedo"])
-        nt.links.new(o["Denoising Normal"], d.inputs["Normal"])
-        d.inputs["Prefilter"].default_value = pref
-        d.inputs["Quality"].default_value = cfg["quality"]
-        return d.outputs[0]
+    d = nt.nodes.new("CompositorNodeDenoise")
+    nt.links.new(o["Noisy Image"], d.inputs["Image"])
+    nt.links.new(o["Denoising Albedo"], d.inputs["Albedo"])
+    nt.links.new(o["Denoising Normal"], d.inputs["Normal"])
+    d.inputs["Prefilter"].default_value = cfg["skin_prefilter"]
+    d.inputs["Quality"].default_value = cfg["quality"]
     idm = nt.nodes.new("CompositorNodeIDMask")
-    nt.links.new(o["IndexMA"], idm.inputs["ID value"])
+    nt.links.new(o["Material Index"], idm.inputs["ID value"])
     idm.inputs["Index"].default_value = cfg["index"]
     idm.inputs["Anti-Alias"].default_value = True
-    mix = grade._mix(nt, "MIX", dn(cfg["prefilter"]), dn(cfg["skin_prefilter"]), idm.outputs[0])
+    mix = grade._mix(nt, "MIX", o["Combined"], d.outputs[0], idm.outputs[0])
     nt.links.new(mix, nt.nodes.new("NodeGroupOutput").inputs[0])
     st = sc.render.image_settings
     st.file_format = "OPEN_EXR"
@@ -176,26 +175,29 @@ def skin_denoise(path, cfg=SKIN_DENOISE):
     bpy.data.images.remove(img)
     den = grade._oiio_read(tmp)[..., :3]
     os.remove(tmp)
+    # the shot EXR is multi-part (one part per pass): Combined gets the skin-denoised RGB, the noisy
+    # image and the denoising data parts are dropped (the parts it had before T17 stay)
+    parts = []
     inp = oiio.ImageInput.open(path)
-    spec = inp.spec()
-    names = list(spec.channelnames)
-    a = np.asarray(inp.read_image(format="float"), dtype=np.float32).copy()
+    k = 0
+    while inp.seek_subimage(k, 0):
+        sp = oiio.ImageSpec(inp.spec())
+        name = str(sp.getattribute("name") or "")
+        if "Denoising" not in name and "Noisy" not in name:
+            a = np.asarray(inp.read_image(format="float"), dtype=np.float32).copy()
+            if name.endswith("Combined"):
+                a[..., :3] = den
+            parts.append((sp, a))
+        k += 1
     inp.close()
-    for k, ch in enumerate("RGB"):
-        hit = [i for i, n in enumerate(names) if n.endswith("Combined." + ch)]
-        for i in hit:
-            a[..., i] = den[..., k]
-    out = oiio.ImageSpec(spec.width, spec.height, spec.nchannels, "half")
-    out.channelnames = tuple(names)
-    out.attribute("compression", "zip")
-    for att in spec.extra_attribs:
-        if att.name.startswith("blender") or att.name in ("Note",):
-            out.attribute(att.name, att.value)
-    ok = oiio.ImageOutput.create(path)
-    if not ok or not ok.open(path, out):
+    out = oiio.ImageOutput.create(path)
+    if not out or not out.open(path, [sp for sp, _ in parts]):
         raise RuntimeError(f"cannot rewrite {path}")
-    ok.write_image(a)
-    ok.close()
+    for j, (sp, a) in enumerate(parts):
+        if j and not out.open(path, sp, "AppendSubimage"):
+            raise RuntimeError(f"cannot append part {j} to {path}")
+        out.write_image(a)
+    out.close()
     secs = round(time.perf_counter() - t, 1)
     print(f"[stage] skin denoise {os.path.basename(path)}: {secs} s", flush=True)
     return secs
@@ -230,7 +232,6 @@ def render_shot(ch, name, spec, quality, out_dir, set_kind, crop=False, parity=F
     settings["filter_px"] = fpx
     skin_dn = skin_denoise_on()
     if skin_dn:
-        sc_.cycles.use_denoising = False
         vl_ = bpy.context.view_layer
         vl_.cycles.denoising_store_passes = True
         vl_.use_pass_material_index = True

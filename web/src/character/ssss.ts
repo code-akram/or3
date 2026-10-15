@@ -16,8 +16,9 @@
 // contributes the centre value instead (Jimenez's "follow surface"). N_TAPS taps per direction, placed
 // densest near the centre (offset ~ t^2), weights = the profile integrated over each tap's bin.
 //
-// The temporal AA modes only (the MRT needs the single-sample scene target); ?aa=msaa and ?ssss=0 keep
-// the pre-integrated LUT (materials/sss.ts) as the low tier.
+// The temporal AA modes on WebGPU only (the MRT needs the single-sample scene target, and its five RGBA16F
+// attachments need maxColorAttachmentBytesPerSample >= 40, above the default 32: main.ts asks the adapter);
+// ?aa=msaa, ?ssss=0, WebGL2 or a 32-byte adapter keep the pre-integrated LUT (materials/sss.ts), the low tier.
 import * as THREE from 'three/webgpu';
 import * as TSL from 'three/tsl';
 import type { FrameContext, Output } from './output';
@@ -31,6 +32,9 @@ const { Fn, If, abs, float, max, mix, perspectiveDepthToViewZ, pow, step, textur
 type N = any;
 
 export const N_TAPS = 13;
+/** Colour bytes per sample of the temporal MRT with the two skin attachments: output, velocity, hair,
+ * skin, skinAlbedo, RGBA16F each. Above WebGPU's default limit (32): main.ts requests the adapter's. */
+export const SSSS_MRT_BYTES = 40;
 
 /** erf (Abramowitz and Stegun 7.1.26, |error| < 1.5e-7) */
 function erf(x: number): number {
