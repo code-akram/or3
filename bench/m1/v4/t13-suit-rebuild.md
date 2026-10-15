@@ -778,7 +778,7 @@ Gate sheets, in `data/build/t13/gate/phaseB/item6c/`:
   - The skirt bones' leave-one-out is close to their whole range (front 18–19° of 25–28°).
   - The skirt keeps the follow bones, with fitted gains; skirt RMS went from 48.2 to 44.6 mm.
   - The chest and side are left to the correctives. No bones were added to the armature.
-- **Determinism:** c1's posed hashes are shirt `dc4d2b86`, waistcoat `ed9d8562`, jacket `203a6b81`.
+- **Determinism:** the twin c1det, simulated from scratch, matches c1 bit for bit: shirt `dc4d2b86`, waistcoat `ed9d8562`, jacket `203a6b81`. The cache record carries it (`--twin posed=…c1det`); the determinism guard passes.
 - **Export deviation** (made-part shapes vs the drape runtime, worst pose):
   - jacket body 5.3 mm, waistcoat 2.5 mm, shirt shell 20 mm;
   - shirt collar 71 mm and cuffs 115 mm. This is the wrap of a thick ring through a bent wrist.
@@ -894,7 +894,7 @@ Gate sheets, in `data/build/t13/gate/phaseB/item6c/`:
    - Find which step changes the body. Then either drape the made suit on the build's body, or make the hash ignore what the suit never touches. Then rebuild the A/B and take its engine frame (port 8795).
 6. **Keep the default lofted until the guards pass.**
    - The skirt keeps the follow bones with fitted gains; the chest and side are left to the correctives. This is accepted.
-   - Twin determinism: compare c1det's `hash` with c1's (`dc4d2b86` / `ed9d8562` / `203a6b81`). Add `--twin posed=<run>` to `suit_made_cache.py`.
+   - Twin determinism: done (c1det matches c1; in the cache record).
 7. **Item 8 extras:**
    - four-in-hand tie;
    - collar-fall tabs;
