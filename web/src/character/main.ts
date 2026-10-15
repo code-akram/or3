@@ -5,7 +5,8 @@
 // URL: character.html?asset=<dir under /asset/>&view=front|three_quarter|profile|closeup|portrait
 //      &rig=neutral|hero&turntable=1&pose=rest|stand|arms_up|...&amount=0..1&gl=1&dpr=1&params=<json>
 //      &area=none|rims|all&post=0&gaze=0&scene=balls&view_transform=standard
-//      &hairshadow=0 (T9b binary shadow on the hair) &fillshadow=0 (unshadowed fill / wrap) &gtao=0 (the
+//      &hairshadow=0 (T9b binary shadow on the hair) &fillshadow=0 (unshadowed fill / wrap) &noshadow=rim,kicker
+//      (T19 A/B: those lights unshadowed) &gtao=0 (the
 //      baked direct-AO stand-in instead of GTAO) &aoview=1 (show the AO) &lights=key,rim (debug)
 //      &aa=traa|taau|msaa (T16: temporal AA with hashed hair cards, default; TAAU at &scale=0.75; msaa = the
 //      4x MSAA + alpha-to-coverage parity path) &dof=0 (no thin-lens DoF on the beauty; dof=only: the DoF
@@ -392,6 +393,7 @@ async function mainBalls(): Promise<void> {
   stage.deepHair = false;
   stage.areaMode = areaMode('all');
   if (q.get('lights')) stage.only = q.get('lights')!.split(',');
+  stage.noShadow = (q.get('noshadow') ?? '').split(',').filter(Boolean);
   stage.setup('front', 'neutral');
   output.setGrade(false, balls!.exposure);
   output.viewAgX.value = balls!.view_transform === 'AgX' ? 1 : 0;
@@ -451,6 +453,7 @@ async function mainChart(): Promise<void> {
   const stage = new Stage(stageData!, scene, mats.byName, P);
   stage.areaMode = lightAreaMode(P);
   stage.shadowFill = q.get('fillshadow') !== '0';
+  stage.noShadow = (q.get('noshadow') ?? '').split(',').filter(Boolean);
   if (q.get('lights')) stage.only = q.get('lights')!.split(',');
   const vs = stage.setup('portrait', 'hero');
   output.setGrade(true, vs.exposure, stageData!.hero.grade);
@@ -603,6 +606,7 @@ async function main(): Promise<void> {
   // T10: hair self-shadowing (hairshadow.ts) and the shadowed fill; ?hairshadow=0 / ?fillshadow=0 = T9b
   stage.deepHair = q.get('hairshadow') !== '0' && !!(P.get('hair.deepShadow') as number);
   stage.shadowFill = q.get('fillshadow') !== '0';
+  stage.noShadow = (q.get('noshadow') ?? '').split(',').filter(Boolean);
   if (q.get('lights')) stage.only = q.get('lights')!.split(','); // debug: per-light parity (hair_test --parity-lights)
   const gaze = new EyeGaze(model, (m) => {
     const mm = Array.isArray(m.material) ? m.material[0] : m.material;

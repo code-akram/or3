@@ -223,6 +223,8 @@ export class Stage {
   deepHair = true;
   /** T10: the fill (and the hero wrap) cast shadows too; false (?fillshadow=0) = T5-T9b: key, rims, kickers. */
   shadowFill = true;
+  /** T19 A/B (?noshadow=rim,kicker): lights (by parent name) that cast no shadow. */
+  noShadow: string[] = [];
   private static ltcReady = false;
 
   constructor(
@@ -332,7 +334,8 @@ export class Stage {
       if (hairTwin) tn.filterNode = deepHairFilter(this.P!);
       else if (pcss) tn.filterNode = pcssFilter(this.P!, disc);
       else ts.radius = Math.min(12, 1 + (Math.max(size, s.size[1] ?? size) / Math.max(v3(s.position).distanceTo(v3(s.target)), 1e-3)) * 6);
-      tn.shadowNode = new LinkedShadowNode(parent.proxy, ts, parent.proxy.shadow);
+      // the grazing normal offset on the surface twins only (a card normal says nothing about the strands)
+      tn.shadowNode = new LinkedShadowNode(parent.proxy, ts, parent.proxy.shadow, hairTwin ? null : (this.P ?? null));
       L.shadow = ts;
       L.castShadow = true;
       return hairTwin ? `deep (${base} map)` : `${pcss ? 'pcss' : 'pcf'} (${base} map)`;
@@ -364,7 +367,7 @@ export class Stage {
       else sh.radius = Math.min(12, 1 + (Math.max(size, s.size[1] ?? size) / Math.max(v3(s.position).distanceTo(v3(s.target)), 1e-3)) * 6);
       label = `${pcss ? 'pcss' : 'pcf'} ${ms}`;
     }
-    const own = new OwnedShadowNode(proxy);
+    const own = new OwnedShadowNode(proxy, this.P ?? null);
     const contact = s.name === 'key' && this.contactNode ? this.contactNode : null;
     sn.shadowNode = contact ? (own as unknown as { mul(x: unknown): unknown }).mul(contact) : own;
     if (contact) label += ' + contact';
@@ -450,7 +453,8 @@ export class Stage {
   }
 
   private castsShadow(s: StageLight): boolean {
-    return (s.use_shadow ?? true) && s.name !== 'eye' && this.shadowRe().test(s.name);
+    const base = s.name.replace(/_(hair|cloth|skin|props|beard)$/, '');
+    return (s.use_shadow ?? true) && s.name !== 'eye' && !this.noShadow.includes(base) && this.shadowRe().test(s.name);
   }
 
   /** Does a light with these receivers reach the hair group? */

@@ -288,15 +288,21 @@ export const DEFAULT_PARAMS = {
     pcssTaps: 16,
     pcssBlockerTaps: 12,
     /** Emitter size scale, how far above a receiver the blocker search reaches (m), filter radius clamp
-     * (texels), depth bias (m) and the bias per metre of filter radius (receiver-plane stand-in). */
+     * (texels), depth bias (m), and the receiver-plane bias: slopeBias x tan(N, L) (clamped to
+     * slopeMin..slopeMax) per metre of filter radius, the whole bias capped at biasMax (m). */
     pcssScale: 1,
     pcssSearch: 0.15,
     pcssMinTexels: 1,
     pcssMaxTexels: 40,
     shadowBias: 0.0015,
-    slopeBias: 0.6,
-    /** (setup) normal offset of the receiver in the parent maps (m; T10 0.004). */
+    slopeBias: 1,
+    slopeMin: 0.6,
+    slopeMax: 6,
+    biasMax: 0.02,
+    /** (setup) normal offset of the receiver in the parent maps (m; T10 0.004), plus normalOffset shadow-map
+     * texels x tan(N, L) (lighting.ts grazingOffset). */
     normalBias: 0.003,
+    normalOffset: 2,
     /** Specular occlusion from the GTAO term (Lagarde): strength on the direct (x the light's AO weight)
      * and indirect specular; (setup) 0 also skips the wrap. */
     specOcclusion: 1,

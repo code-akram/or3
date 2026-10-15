@@ -45,7 +45,7 @@ import { temporalFrame } from './temporal';
 // TSL's TypeScript types are too narrow for shader-graph code; the graph is checked at build.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const T = TSL as any;
-const { Fn, float, ivec2, vec2, vec3, reference, renderGroup, perspectiveDepthToViewZ, viewZToPerspectiveDepth, interleavedGradientNoise, vogelDiskSample, screenCoordinate, texture, uniform, normalView, positionView, positionViewDirection, roughness, mix, screenUV } = T;
+const { Fn, float, ivec2, vec2, vec3, reference, renderGroup, perspectiveDepthToViewZ, viewZToPerspectiveDepth, interleavedGradientNoise, vogelDiskSample, screenCoordinate, texture, uniform, normalView, normalWorld, positionWorld, positionView, positionViewDirection, roughness, mix, screenUV } = T;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type N = any;
@@ -79,10 +79,36 @@ function sharedTarget(owner: THREE.LightShadow, make: () => MapPair): MapPair {
   return p;
 }
 
+/** GRAZING NORMAL OFFSET: the receiver's shadow lookup moves out along its normal by
+ * light.normalOffset texels x tan(N, L) (capped at light.slopeMax): a lit surface turning away from
+ * the light (a cheek or a sphere's crescent under a grazing rim) otherwise reads its own bulk in the
+ * map through the PCSS kernel and darkens what the form factor already fades. Added to the shadow
+ * position three computes (its constant normalBias stays). */
+function grazingOffset(node: any, P: ParamStore | null, builder: unknown, sp: N, base: (b: unknown, p: N) => N): N {
+  if (!P) return base(builder, sp);
+  const shadow = node.shadow as THREE.LightShadow;
+  const cam = shadow.camera as THREE.PerspectiveCamera;
+  const M = reference('matrix', 'mat4', shadow).setGroup(renderGroup);
+  const mapSize = reference('mapSize', 'vec2', shadow).setGroup(renderGroup);
+  const fov = reference('fov', 'float', cam).setGroup(renderGroup);
+  const lp = uniform(new THREE.Vector3()).onRenderUpdate(() => lp.value.setFromMatrixPosition(cam.matrixWorld));
+  const cosT = normalWorld.dot(lp.sub(positionWorld).normalize()).clamp(0.02, 1);
+  const tanT = cosT.mul(cosT).oneMinus().sqrt().div(cosT).min(P.u('light.slopeMax'));
+  const texel = sp.w.mul(fov.mul(Math.PI / 360).tan()).mul(2).div(mapSize.x);
+  const extra = texel.mul(P.u('light.normalOffset')).mul(tanT);
+  return base(builder, sp.add(M.mul(T.vec4(normalWorld.mul(extra), 0))));
+}
+
 /** The parent's shadow node: three's ShadowNode on the proxy spot, its render target registered for twins. */
 export class OwnedShadowNode extends (THREE as any).ShadowNode {
-  constructor(proxy: THREE.SpotLight) {
+  constructor(
+    proxy: THREE.SpotLight,
+    private readonly P: ParamStore | null = null,
+  ) {
     super(proxy, proxy.shadow);
+  }
+  setupShadowCoord(builder: unknown, sp: N): N {
+    return grazingOffset(this, this.P, builder, sp, (b, p) => super.setupShadowCoord(b, p));
   }
   setupRenderTarget(shadow: THREE.LightShadow, builder: unknown): MapPair {
     return sharedTarget(shadow, () => super.setupRenderTarget(shadow, builder));
@@ -100,8 +126,12 @@ export class LinkedShadowNode extends (THREE as any).ShadowNode {
     proxy: THREE.SpotLight,
     twinShadow: THREE.LightShadow,
     private readonly owner: THREE.LightShadow,
+    private readonly P: ParamStore | null = null,
   ) {
     super(proxy, twinShadow);
+  }
+  setupShadowCoord(builder: unknown, sp: N): N {
+    return grazingOffset(this, this.P, builder, sp, (b, p) => super.setupShadowCoord(b, p));
   }
   setupRenderTarget(_shadow: THREE.LightShadow, builder: unknown): MapPair {
     // the parent's (the base method sizes it from the shadow it is given)
@@ -163,13 +193,20 @@ export function pcssFilter(P: ParamStore, size: number): N {
     // world size of a texel at the receiver's depth
     const texel = zr.mul(tanHalf).mul(2).div(mapSize.x).toVar();
     const b0 = P.u('light.shadowBias');
-    const slope = P.u('light.slopeBias');
+    // receiver-plane bias: over a filter radius of r texels a receiver tilted by theta from the light
+    // direction spans r texel tan(theta) in depth; less and a convex terminator (a sphere's lit crescent
+    // under a grazing rim) shadows itself through the PCF / PCSS kernel
+    const lp = uniform(new THREE.Vector3()).onRenderUpdate(() => lp.value.setFromMatrixPosition(cam.matrixWorld));
+    const cosT = normalWorld.dot(lp.sub(positionWorld).normalize()).clamp(0.02, 1);
+    const tanT = cosT.mul(cosT).oneMinus().sqrt().div(cosT).min(P.u('light.slopeMax'));
+    const slope = P.u('light.slopeBias').mul(tanT.max(P.u('light.slopeMin')));
+    const capB = P.u('light.biasMax');
     const phi = interleavedGradientNoise(screenCoordinate.xy.add(temporalFrame.mod(64).mul(5.588238))).mul(6.28318530718).toVar();
     const hi = ivec2(mapSize.sub(1));
     // 1. blocker search: blockers up to `search` above the receiver, seen through the emitter
     const search = P.u('light.pcssSearch');
     const rs = size.mul(0.5).mul(search).div(zr.sub(search).max(0.05)).div(texel).clamp(1.5, P.u('light.pcssMaxTexels')).toVar();
-    const bTest = b0.add(slope.mul(rs).mul(texel));
+    const bTest = b0.add(slope.mul(rs).mul(texel)).min(capB);
     let sum: N = float(0);
     let cnt: N = float(0);
     for (let i = 0; i < blockerTaps; i++) {
@@ -185,7 +222,7 @@ export function pcssFilter(P: ParamStore, size: number): N {
     const wp = size.mul(zr.sub(zb).max(0)).div(zb.max(0.01));
     const r = wp.mul(0.5).div(texel).clamp(P.u('light.pcssMinTexels'), P.u('light.pcssMaxTexels')).toVar();
     // 3. percentage-closer filter of that radius (hardware compare against the biased receiver depth)
-    const zc = zr.sub(b0.add(slope.mul(r).mul(texel)));
+    const zc = zr.sub(b0.add(slope.mul(r).mul(texel)).min(capB));
     const ref = viewZToPerspectiveDepth(zc.negate(), near, far);
     const texelUV = vec2(1).div(mapSize);
     let acc: N = float(0);

@@ -105,6 +105,9 @@ def parse_args():
     ap.add_argument("--ball-lights", default="",
                     help="shader balls under these studio lights only (e.g. key or key,fill; T19 per-light "
                          "parity): the others are hidden and the frame is cycles_balls_<names>.png")
+    ap.add_argument("--ball-direct", action="store_true",
+                    help="shader balls without diffuse / glossy bounces (direct light, the engine's model: no "
+                         "floor bounce or floor reflection), written as cycles_balls[_<names>]_direct.png")
     return ap.parse_args(argv)
 
 
@@ -457,7 +460,7 @@ def _ball_colors(ob, mat, meshes):
     return filled
 
 
-def shader_balls(out, meshes, floor_z, head, lights=(), only=()):
+def shader_balls(out, meshes, floor_z, head, lights=(), only=(), direct=False):
     """cycles_balls.png + shader_balls.glb + shader_balls.json (see BALLS). `only`: the studio
     lights to keep (the others hidden), written as cycles_balls_<names>.png."""
     from bpy_extras.object_utils import world_to_camera_view
@@ -551,13 +554,16 @@ def shader_balls(out, meshes, floor_z, head, lights=(), only=()):
             if "Subsurface IOR" in p.inputs:
                 p.inputs["Subsurface IOR"].default_value = BALL_SKIN_SSS["ior"]
             sss = BALL_SKIN_SSS
-    frame = "cycles_balls.png" if not only else f"cycles_balls_{'_'.join(only)}.png"
+    frame = "cycles_balls" + (f"_{'_'.join(only)}" if only else "") + ("_direct" if direct else "") + ".png"
+    if direct:
+        c.diffuse_bounces = 0
+        c.glossy_bounces = 0
     secs = render(os.path.join(out, frame))
 
     def gl(v):
         return [round(float(v[0]), 6), round(float(v[2]), 6), round(float(-v[1]), 6)]
-    if only:   # the GLB and the ball records are the same; only this frame's lights differ
-        print(f"[lookdev] shader balls ({','.join(only)} only): {secs} s -> {out}/{frame}", flush=True)
+    if only or direct:   # the GLB and the ball records are the same; only this frame's lights / bounces differ
+        print(f"[lookdev] shader balls ({','.join(only) or 'all'}{', direct' if direct else ''}): {secs} s -> {out}/{frame}", flush=True)
         return None
     j = {"version": 1, "script": "blender/lookdev_render.py --shader-balls",
          "res": list(BALL_RES), "exposure": BALL_EXPOSURE, "view_transform": "Standard",
@@ -1061,7 +1067,7 @@ def main():
     floor, lights = build_studio(floor_z)
     if ARGS.shader_balls:
         shader_balls(os.path.abspath(ARGS.out_dir), meshes, floor_z, head, lights,
-                     tuple(x for x in ARGS.ball_lights.split(",") if x))
+                     tuple(x for x in ARGS.ball_lights.split(",") if x), ARGS.ball_direct)
         return
     metrics["cycles_weave"] = cycles_weave()
     if ARGS.calibrate:
