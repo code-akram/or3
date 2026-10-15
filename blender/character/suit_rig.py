@@ -224,3 +224,157 @@ def correctives(X0, Ys, W, Mall):
         R = Mv[:, :3, :3]
         out.append(np.einsum("nij,nj->ni", np.linalg.inv(R), Ys[i] - Yh))
     return np.stack(out)
+
+
+# --- T13c: the made layers' weights as the shipped pipeline makes them ---------------------------
+
+def remap(W, co, arm, names, sigma=None, arm_free=True, skirt=False, body=False):
+    """deform_rig.remap_mesh on arrays: W (n, len(names)) over the armature's deform bones
+    (helpers included), co (n, 3) rest positions in armature space. A garment (sigma set) gets
+    the spatial smoothing, the neck keep, the arm-free chest core and shoulder cap (the cap rides
+    the clavicle: a point above the shoulder pivot skinned to the arm swings up through the outer
+    layer when the arm comes down, the ridge of t13r-a2's arms-down LBS), the half-joint
+    remaps onto the deltoid / hip helpers, the twist splits, and (the jacket) the skirt bones.
+    body: the shoulder cap only, plus the finger falloff. Returns W, top 4, rows sum 1."""
+    from . import deform_rig as drig
+    cfg = drig.DEFAULTS
+    W = np.array(W, float)
+    G = drig.Geo(arm, names)
+    sides = drig._sides(arm)
+    if sigma:
+        W0 = W.copy()
+        W = drig.spatial_smooth(W, co, sigma)
+        kz = cfg["keep_neck_m"]
+        if G.col("neck_01") is not None and kz:
+            r = drig._dist_to_segment(co, G.head("neck_01"), G.tail("neck_01"))
+            f = drig.smoothstep(kz[0], kz[1], r)[:, None]
+            W = W0 * (1 - f) + W * f
+        if arm_free:
+            drig.arm_free_core(W, co, G, sides, *cfg["arm_free"]["x_ramp"])
+    if body:
+        drig.arm_free_core(W, co, G, sides, *cfg["arm_free"]["x_ramp"], core=False)
+    for s in sides:
+        drig.half_joint(W, co, G, [f"clavicle_{s}", "spine_03", "spine_02"], f"upperarm_{s}",
+                        f"deltoid_helper_{s}", cfg["deltoid"]["radius_m"])
+        drig.half_joint(W, co, G, ["pelvis", "spine_01"], f"thigh_{s}", f"hip_helper_{s}", cfg["hip"]["radius_m"])
+        drig.twist_split(W, co, G, f"upperarm_{s}", f"upperarm_twist_01_{s}",
+                         lambda t: 1 - drig.smoothstep(0.1, 0.8, t))
+        drig.twist_split(W, co, G, f"lowerarm_{s}", f"lowerarm_twist_01_{s}",
+                         lambda t: drig.smoothstep(0.05, 0.65, t))
+        drig.twist_split(W, co, G, f"thigh_{s}", f"thigh_twist_01_{s}",
+                         lambda t: 1 - drig.smoothstep(0.1, 0.8, t))
+        if body:
+            drig.finger_falloff(W, co, G, s, cfg["fingers"]["band"])
+    if skirt:
+        drig.skirt_weights(W, co, G, cfg["skirt"], sides)
+    return drig.prune(W, cfg["max_influences"])
+
+
+def widen(W, cols, names):
+    """(n, len(cols)) weights over bone names `cols` -> (n, len(names)) columns in `names` order."""
+    out = np.zeros((len(W), len(names)))
+    idx = {n: i for i, n in enumerate(names)}
+    for j, c in enumerate(cols):
+        if c in idx:
+            out[:, idx[c]] += W[:, j]
+    return out
+
+
+# --- a made part riding on its drape (wrap deformer) -----------------------------------------------
+
+def vertex_normals(X, T):
+    fn = np.cross(X[T[:, 1]] - X[T[:, 0]], X[T[:, 2]] - X[T[:, 0]])
+    N = np.zeros_like(X)
+    for k in range(3):
+        np.add.at(N, T[:, k], fn)
+    return N / np.maximum(np.linalg.norm(N, axis=1, keepdims=True), 1e-12)
+
+
+def _frames(X, T, fi, bc):
+    """Per bound point: the drape point (barycentric), and an orthonormal frame (e1 along the
+    face's first edge, e2, n the interpolated vertex normal)."""
+    N = vertex_normals(X, T)
+    tri = T[fi]
+    base = np.einsum("nk,nki->ni", bc, X[tri])
+    n = np.einsum("nk,nki->ni", bc, N[tri])
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-12)
+    e = X[tri[:, 1]] - X[tri[:, 0]]
+    e1 = e - n * np.sum(e * n, 1, keepdims=True)
+    e1 /= np.maximum(np.linalg.norm(e1, axis=1, keepdims=True), 1e-12)
+    e2 = np.cross(n, e1)
+    return base, np.stack([e1, e2, n], 1)          # (m, 3), (m, 3 axes, 3)
+
+
+def wrap_bind(X, T, P, fi, bc):
+    """Bind points P to the drape (X, T): fi, bc their nearest face and barycentrics there.
+    The offset from the drape point is kept in the face's frame, so a shell's outside, a rim, a
+    rever or a button keeps its height and lean as the cloth turns."""
+    base, F = _frames(X, T, fi, bc)
+    off = np.einsum("nai,ni->na", F, P - base)
+    return {"fi": np.asarray(fi), "bc": np.asarray(bc), "off": off}
+
+
+def wrap_apply(bind, Y, T):
+    base, F = _frames(Y, T, bind["fi"], bind["bc"])
+    return base + np.einsum("nai,na->ni", F, bind["off"])
+
+
+def wrap_weights(bind, W, T):
+    """A bound part's weights: its face's barycentric mix of the drape's."""
+    return np.einsum("nk,nkb->nb", bind["bc"], W[T[bind["fi"]]])
+
+
+# --- correctives over cone activations (pose-space, least squares) ---------------------------------
+
+def fit_shapes(D, A, mask, lam=1e-4, chunk=4000):
+    """D (K, n, 3) rest-space residuals per pose; A (K, C) the cone weights per pose; mask (n, C)
+    in [0, 1] (a shape acts only near its joint). Per vertex: min sum_k |sum_c A_kc m_vc S_vc -
+    D_kv|^2 + lam |S_v|^2. Returns S (C, n, 3), the shapes as stored (masks folded in)."""
+    K, n, _ = D.shape
+    C = A.shape[1]
+    G0 = A.T @ A                                            # (C, C)
+    S = np.zeros((n, C, 3))
+    for a in range(0, n, chunk):
+        b = min(n, a + chunk)
+        m = mask[a:b]                                       # (c, C)
+        G = G0[None] * m[:, :, None] * m[:, None, :] + lam * np.eye(C)[None]
+        R = np.einsum("kc,kvi->vci", A, D[:, a:b]) * m[:, :, None]
+        S[a:b] = np.linalg.solve(G, R) * m[:, :, None]
+    return S.transpose(1, 0, 2)
+
+
+def apply_shapes(S, a):
+    """Sum of shapes S (C, n, 3) at activations a (C,)."""
+    return np.einsum("c,cni->ni", a, S)
+
+
+def unskin(W, M, Y, X0):
+    """Rest-space delta d with skin(X0 + d, W, M) = Y (the blended 3x3 inverted)."""
+    Mv = blended(W, M)
+    return np.einsum("nij,nj->ni", np.linalg.inv(Mv[:, :3, :3]), Y - skin(X0, W, M))
+
+
+# --- the skirt bones' follow rule (deform_runtime 'follow') in numpy ------------------------------
+
+def rotvec_mat(v):
+    a = np.linalg.norm(v)
+    if a < 1e-12:
+        return np.eye(3)
+    k = v / a
+    Kx = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + np.sin(a) * Kx + (1 - np.cos(a)) * Kx @ Kx
+
+
+def follow_mat(gain, fl, ab, L, N, Rp, Mp, head):
+    """Skinning matrix of a follow bone whose parent and frame are the pelvis: R_K = R_pelvis *
+    rotvec(g(fl) fl L + g(ab) ab N), about the bone's head carried by the pelvis. fl, ab: the
+    thigh's swing components (deform_runtime.Runtime.helper_rotation); Rp the pelvis's world
+    delta rotation (3x3), Mp its skinning matrix (4x4); head the bone's rest head."""
+    gf = gain["flex+"] if fl >= 0 else gain["flex-"]
+    ga = gain["abd+"] if ab >= 0 else gain["abd-"]
+    R = Rp @ rotvec_mat(L * (gf * fl) + N * (ga * ab))
+    hp = Mp[:3, :3] @ head + Mp[:3, 3]
+    M = np.eye(4)
+    M[:3, :3] = R
+    M[:3, 3] = hp - R @ head
+    return M

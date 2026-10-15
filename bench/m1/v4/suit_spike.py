@@ -68,6 +68,8 @@ ap.add_argument("--trousers-from", default="", help="spike 2: a --trousers run w
                 "lofted ones (collider, hull, renders)")
 ap.add_argument("--posed", default="", help="item 6: a --v2 jacket run (over the made layers) to rig and pose")
 ap.add_argument("--poses", default="", help="item 6: the pose set (comma list; default POSED['poses'])")
+ap.add_argument("--posed-cache", default="", help="item 6: a --posed run whose per-pose drapes (posed.npz) are "
+                "reused (no simulation; the fits, checks and frames are redone)")
 A = ap.parse_args(argv)
 os.makedirs(A.out_dir, exist_ok=True)
 T = {}
@@ -3895,20 +3897,199 @@ def _cli_opts():
     return json.loads(A.opts)
 
 
-# --- T13 item 6: the made jacket rigged (weights from the body, Dem Bones on the posed drapes) ---
+# --- T13 item 6: the made suit rigged (T13b: weights from the body, Dem Bones; T13c: the shipped
+# weight pipeline, every layer simulated per pose, the skirt bones' follow gains and pose-space
+# correctives fitted over a ~35-pose set) -----------------------------------------------------------
 
 POSED = {
-    # the simulated pose set: the deform_poses library plus a fist (the cuff check)
-    "poses": ["rest", "relaxed", "arm_raise", "knee_up", "walk", "high_ready", "twist", "fist"],
-    "frames": 40,                # settle frames per pose (from the skinned rest drape)
-    "jacket_bones": 8,           # the bone plan's jacket bones (main_posed: jnames)
-    "fit_iters": 4,
-    "rules": True,               # the lookdev rig's helper rules (twist, deltoid, hip) when posing
-    "renders": ["arm_raise", "knee_up", "walk", "fist"],
+    # the simulated pose set: the deform_poses library, a fist, and ramps (posed_specs)
+    "poses": ["rest", "relaxed", "arm_raise", "knee_up", "walk", "high_ready", "twist", "fist",
+              "abd30", "abd60", "abd90", "abd120", "flex30", "flex60", "flex90", "flex120",
+              "elbow45", "elbow90", "elbow120",
+              "thigh30", "thigh60", "thigh90", "thighb30", "thighb60", "thighb90", "thighext",
+              "turn20", "turn40", "turnr20", "turnr40", "bend20", "bend40", "back15", "tilt20", "tiltr20"],
+    "frames": 40,                # settle frames per pose for the jacket (from the skinned rest drape)
+    "frames_under": 30,          # the shirt and the waistcoat
+    "rules": True,               # the lookdev rig's helper rules (twist, deltoid, hip, skirt) when posing
     "push": {"clear_m": 0.0015, "smooth_iters": 3},
-    "waist_z": 1.03,             # the skirt bones below this, the chest and side ones above
-    "drive_lam": 0.1,
+    "push_under": {"clear_m": 0.001, "smooth_iters": 2},
+    "self_contact": True,
+    # the weight smoothing per layer (deform_rig.DEFAULTS["garments"])
+    "sigma": {"jacket": 0.025, "shirt": 0.015, "waistcoat": 0.015, "trousers": 0.02},
+    # holds per pose: the shirt's neckline inside the collar band and its sleeve ends inside the
+    # cuffs (both modelled, skinned), the tuck below the trousers' band (pulled to its skinned
+    # place a share per substep); the waistcoat's shoulder seams
+    "hold": {"shirt_k": 40.0, "tuck_pull": 0.2, "waistcoat_k": 20.0, "jacket_neck_k": None},
+    "lam": 1e-4,                 # ridge of the corrective fit
+    "gain_fit": True,            # refit the skirt bones' follow gains to the simulated skirt
+    "dem_bones_diag": True,      # T13b's eight free jacket bones: refit and leave-one-out on this set
+    "jacket_bones": 8, "fit_iters": 4, "waist_z": 1.03, "drive_lam": 0.1,
+    "render_res": 420,
+    "lbs_renders": ["relaxed", "arm_raise", "knee_up", "walk", "fist"],
+    "hinge_deg": 150.0,
 }
+
+
+from character import deform_poses as dp  # noqa: E402
+
+
+def posed_specs():
+    """name -> deform_poses spec. Ramps: the arms abducted / flexed 30..120 deg from hanging (the
+    left one way, the right the other, so both sides are sampled in each), the elbows, the
+    thighs (one flexed, the other abducted), the spine turned, bent, extended and tilted; the
+    arms down (ARMS_DOWN) where they are not the subject."""
+    out = {}
+    AD = dp.sym({**dp.ARMS_DOWN, **dp.RELAXED_HAND})
+
+    def aim_abd(a):
+        r = math.radians(a)
+        return [math.sin(r), 0.0, -math.cos(r)]
+
+    def aim_flex(a):
+        r = math.radians(a)
+        return [0.12, -math.sin(r), -math.cos(r)]
+    for a in (30, 60, 90, 120):
+        cl = [["abduct", {30: 0, 60: 4, 90: 10, 120: 18}[a]]]
+        out[f"abd{a}"] = {"bones": {**dp.sym(dp.RELAXED_HAND), "clavicle_l": cl, "clavicle_r": cl,
+                                    "upperarm_l": [["aim", aim_abd(a)]], "upperarm_r": [["aim", aim_flex(a)]]}}
+        out[f"flex{a}"] = {"bones": {**dp.sym(dp.RELAXED_HAND), "clavicle_l": cl, "clavicle_r": cl,
+                                     "upperarm_l": [["aim", aim_flex(a)]], "upperarm_r": [["aim", aim_abd(a)]]}}
+    for a in (45, 90, 120):
+        b = dict(AD)
+        b["upperarm_l"] = b["upperarm_r"] = [["abduct", -36], ["flex", 12], ["twist", 5]]
+        b["lowerarm_l"] = b["lowerarm_r"] = [["flex", a - 22]]
+        out[f"elbow{a}"] = {"bones": b}
+    for a, ab in ((30, 10), (60, 20), (90, 30)):
+        for tag, s1, s2 in (("thigh", "l", "r"), ("thighb", "r", "l")):
+            b = dict(AD)
+            b[f"thigh_{s1}"] = [["flex", a]]
+            b[f"calf_{s1}"] = [["flex", a]]
+            b[f"thigh_{s2}"] = [["abduct", ab]]
+            out[f"{tag}{a}"] = {"bones": b}
+    b = dict(AD)
+    b["thigh_l"] = b["thigh_r"] = [["flex", -22]]
+    b["calf_l"] = b["calf_r"] = [["flex", 25]]
+    out["thighext"] = {"bones": b}
+    for tag, op, vals in (("turn", "turn", (20, 40)), ("turnr", "turn", (-20, -40)), ("bend", "flex", (20, 40)),
+                          ("back", "flex", (-15,)), ("tilt", "tilt", (20,)), ("tiltr", "tilt", (-20,))):
+        for v in vals:
+            b = dict(AD)
+            for n_, k_ in (("spine_01", 0.3), ("spine_02", 0.35), ("spine_03", 0.35)):
+                b[n_] = [[op, v * k_]]
+            out[f"{tag}{abs(v)}"] = {"bones": b}
+    out["fist"] = {"bones": dp.sym({**dp.ARMS_DOWN, **dp.FIST})}
+    return out
+
+
+def pose_spec(name):
+    return posed_specs().get(name, name)
+
+
+# the suit's corrective cones (deform_runtime 'cone' rules): (name, bone, ref, d0, target spec
+# (left names; mirrored for _r), start, mask kind). d0 'dir' is the bone's rest direction; 'fwd' the
+# character's front (a turn leaves the spine's direction where it is). A '_h' twin with start 0.5
+# makes the response piecewise linear in angle (a knot half way to the target).
+SUIT_CONES = [
+    ("arm_down", "upperarm", "spine_03", "dir", {"upperarm_l": [["abduct", -36], ["flex", 4]]}, 0.0, "arm"),
+    ("arm_abd90", "upperarm", "spine_03", "dir", {"upperarm_l": [["aim", [1.0, 0.0, 0.0]]]}, 0.0, "arm"),
+    ("arm_abd90_h", "upperarm", "spine_03", "dir", {"upperarm_l": [["aim", [1.0, 0.0, 0.0]]]}, 0.5, "arm"),
+    ("arm_abd135", "upperarm", "spine_03", "dir", {"upperarm_l": [["aim", [0.707, 0.0, 0.707]]]}, 0.0, "arm"),
+    ("arm_flex90", "upperarm", "spine_03", "dir", {"upperarm_l": [["aim", [0.12, -1.0, 0.0]]]}, 0.0, "arm"),
+    ("arm_flex90_h", "upperarm", "spine_03", "dir", {"upperarm_l": [["aim", [0.12, -1.0, 0.0]]]}, 0.5, "arm"),
+    ("arm_flex135", "upperarm", "spine_03", "dir", {"upperarm_l": [["aim", [0.1, -0.707, 0.707]]]}, 0.0, "arm"),
+    ("arm_back", "upperarm", "spine_03", "dir", {"upperarm_l": [["aim", [0.2, 0.55, -0.81]]]}, 0.0, "arm"),
+    ("elbow90", "lowerarm", "upperarm", "dir", {"lowerarm_l": [["flex", 70]]}, 0.0, "elbow"),
+    ("elbow90_h", "lowerarm", "upperarm", "dir", {"lowerarm_l": [["flex", 70]]}, 0.5, "elbow"),
+    ("thigh_flex90", "thigh", "pelvis", "dir", {"thigh_l": [["flex", 90]]}, 0.0, "thigh"),
+    ("thigh_flex90_h", "thigh", "pelvis", "dir", {"thigh_l": [["flex", 90]]}, 0.5, "thigh"),
+    ("thigh_abd40", "thigh", "pelvis", "dir", {"thigh_l": [["abduct", 40]]}, 0.0, "thigh"),
+    ("thigh_ext30", "thigh", "pelvis", "dir", {"thigh_l": [["flex", -30]]}, 0.0, "thigh"),
+]
+SUIT_SPINE_CONES = [
+    ("spine_flex40", "dir", {"spine_01": [["flex", 12]], "spine_02": [["flex", 14]], "spine_03": [["flex", 14]]}),
+    ("spine_ext20", "dir", {"spine_01": [["flex", -6]], "spine_02": [["flex", -7]], "spine_03": [["flex", -7]]}),
+    ("spine_tilt25_l", "dir", {"spine_01": [["tilt", 8]], "spine_02": [["tilt", 8.5]], "spine_03": [["tilt", 8.5]]}),
+    ("spine_tilt25_r", "dir", {"spine_01": [["tilt", -8]], "spine_02": [["tilt", -8.5]], "spine_03": [["tilt", -8.5]]}),
+    ("spine_turn40_l", "fwd", {"spine_01": [["turn", 12]], "spine_02": [["turn", 14]], "spine_03": [["turn", 14]]}),
+    ("spine_turn40_r", "fwd", {"spine_01": [["turn", -12]], "spine_02": [["turn", -14]], "spine_03": [["turn", -14]]}),
+]
+
+
+def suit_cones(arm, rig_):
+    """The cone rules (glTF space, deform_runtime) with each one's mask kind and side: targets are
+    read off the armature posed to each target spec."""
+    from character import deform_runtime as drt
+    rt0 = drt.Runtime(arm, [], {})
+    B = arm.data.bones
+
+    def bdir(n):
+        return (B[n].tail_local - B[n].head_local).normalized()
+    out = []
+    jobs = []
+    for nm, bone, ref, d0k, spec, start, kind in SUIT_CONES:
+        for s in ("l", "r"):
+            sp_ = dp.side(spec, s) if s == "r" else spec
+            jobs.append((f"suit_{nm}_{s}", f"{bone}_{s}", ref if ref in ("spine_03", "pelvis") else f"{ref}_{s}",
+                         d0k, sp_, start, kind, s))
+    for nm, d0k, spec in SUIT_SPINE_CONES:
+        jobs.append((f"suit_{nm}", "spine_03", "pelvis", d0k, spec, 0.0, "spine", ""))
+    for name, bone, ref, d0k, spec, start, kind, s in jobs:
+        d0 = bdir(bone) if d0k == "dir" else Vector((0.0, -1.0, 0.0))
+        dp.apply_pose(arm, {"bones": spec}, rig_)
+        q = rt0.R(ref).inverted() @ rt0.R(bone)
+        t = q @ d0
+        out.append({"name": name, "bone": bone, "ref": ref, "rest_dir": drt.bl_to_gl(d0), "target_dir": drt.bl_to_gl(t),
+                    "power": 1.0, "start": start, "_kind": kind, "_side": s,
+                    "_deg": round(math.degrees(d0.angle(t)), 1)})
+    dp.reset(arm)
+    return out
+
+
+def cone_masks(cones, X0, arm):
+    """(n, C) where each shape may act: an arm's on its own side of the body and a few cm over the
+    centre line (an arm raised pulls the whole front up), an elbow's within ~30 cm of the joint, a
+    thigh's on its side below the waist, the spine's everywhere."""
+    from character.deform_rig import smoothstep as ss
+    B = arm.data.bones
+    hip_z = float(np.mean([B[f"thigh_{s}"].head_local.z for s in ("l", "r")]))
+    m = np.zeros((len(X0), len(cones)))
+    for j, c in enumerate(cones):
+        s = c["_side"]
+        sx = (1.0 if B["upperarm_l"].head_local.x > 0 else -1.0) * (1.0 if s == "l" else -1.0)
+        x = X0[:, 0] * sx
+        if c["_kind"] == "arm":
+            m[:, j] = ss(-0.10, 0.04, x)
+        elif c["_kind"] == "elbow":
+            e = np.array(B[f"lowerarm_{s}"].head_local)
+            m[:, j] = 1.0 - ss(0.22, 0.34, np.linalg.norm(X0 - e, axis=1))
+        elif c["_kind"] == "thigh":
+            m[:, j] = ss(-0.08, 0.03, x) * (1.0 - ss(hip_z + 0.20, hip_z + 0.32, X0[:, 2]))
+        else:
+            m[:, j] = 1.0
+    return m
+
+
+def bind_fn(X, T):
+    """Nearest face and barycentrics on (X, T) for points P (the wrap binding)."""
+    from mathutils.bvhtree import BVHTree
+    bvh = BVHTree.FromPolygons([tuple(p) for p in X], [tuple(int(i) for i in t) for t in T])
+
+    def f(P):
+        fi = np.zeros(len(P), int)
+        bc = np.zeros((len(P), 3))
+        for k, p in enumerate(P):
+            loc, _, fidx, _ = bvh.find_nearest(Vector(p))
+            a, b, c = X[T[fidx]]
+            v0, v1, v2 = b - a, c - a, np.array(loc) - a
+            d00, d01, d11 = v0 @ v0, v0 @ v1, v1 @ v1
+            d20, d21 = v2 @ v0, v2 @ v1
+            den = max(d00 * d11 - d01 * d01, 1e-18)
+            v = (d11 * d20 - d01 * d21) / den
+            w = (d00 * d21 - d01 * d20) / den
+            u = np.clip(np.array([1 - v - w, v, w]), 0, 1)
+            fi[k], bc[k] = fidx, u / u.sum()
+        return fi, bc
+    return f
 
 
 def body_weights(body, arm):
@@ -3962,56 +4143,30 @@ def nearest_fn(co, tris):
     return f
 
 
-def main_posed(O):
-    """T13 item 6: the made jacket (a --v2 run over the made layers, A.posed) rigged:
-    weights transferred from the body; each pose of the set simulated (XPBD from the skinned rest
-    drape, the posed body and the skinned under-layers as colliders); a Dem Bones fit of the
-    jacket's bones; their drive from the skeleton; the correctives left; the posed seam hinges,
-    the collar in the arm raise and the cuffs in the fist checked; frames."""
-    from character import deform_poses as dp
-    from character import suit_rig as sr
+def tris_of(F):
+    """Triangles of polygons (fan)."""
+    return np.array([(f[0], f[i], f[i + 1]) for f in F for i in range(1, len(f) - 1)], int)
+
+
+def garment_drape(run, key, X0=None):
+    """A layer's drape for the per-pose solver: rest positions (kept X3), welded triangles, rest
+    lengths from the flat pattern, mass, bending, the panel of each welded vertex, the solver opts."""
     from character import suit_xpbd as xp
-    run = A.posed
-    st0 = json.load(open(os.path.join(run, "spike_stats.json")))
-    for k_, v_ in (("trousers_from", "trousers_from"), ("shirt_from", "shirt_from"), ("waistcoat_from", "waistcoat_from")):
-        if st0.get(k_):
-            setattr(A, v_, os.path.join(os.path.dirname(run.rstrip("/")), st0[k_]))
-    body, names = capture_body()
-    arm, base = append_base(A.base_blend)
-    made = use_layers(base, body, skip=())
-    am = body.modifiers.new("Armature", "ARMATURE")
-    am.object = arm
-    co, tris, dom, J = body_arrays(body, arm)
-    Wb, bones = body_weights(body, arm)
+    st = json.load(open(os.path.join(run, "spike_stats.json")))
     d = np.load(os.path.join(run, "drape2.npz"))
     k = np.load(os.path.join(run, "kept.npz"))
-    X0, Tw, wm = k["X3"], k["Tw"], d["wm"]
+    X3, Tw, wm = (k["X3"] if X0 is None else X0), k["Tw"], d["wm"]
     T0_, R0, pid, pnames = d["T"], d["R"], d["pid"], [str(n) for n in d["names"]]
-    nw = len(X0)
-    stats = {"run": os.path.basename(run.rstrip("/")), "bones": len(bones), "verts": nw}
-    nearest = nearest_fn(co, tris)
-    t = time.perf_counter()
-    Wj = sr.transfer(X0, Tw, Wb, nearest)
-    # the under-layers' colliders (outer faces), skinned the same way
-    under = []
-    for key in ("shirt", "waistcoat", "trousers"):
-        if key in base and base[key].name in COLLIDER_ONLY:
-            P = evaluated(base[key])
-            Fa = [tuple(p.vertices) for p in base[key].data.polygons]
-            tri = np.array([f_ for f_ in Fa if len(f_) == 3] + [(f_[0], f_[i], f_[i + 1]) for f_ in Fa if len(f_) > 3
-                                                                for i in range(1, len(f_) - 1)])
-            under.append((key, P, Fa, sr.transfer(P, tri, Wb, nearest, smooth_iters=4)))
-    tick("weights", t)
-    stats["weights_s"] = round(time.perf_counter() - t, 1)
-    # the solver's material (the run's own XPBD options; the canvas taken as the fronts)
-    P_ = st0["xpbd"]["opts"]
-    n0 = len(R0)
-    front = np.isin(np.asarray(pnames)[pid], ["front", "front_r"])
-    sleeve = np.isin(np.asarray(pnames)[pid], ["top_sleeve", "top_sleeve_r", "under_sleeve", "under_sleeve_r"])
-    rho = np.where(front, P_["density_canvas"], P_["density"])
+    P_ = dict(XPBD)
+    P_.update(st["xpbd"]["opts"])
+    nw, n0 = len(X3), len(R0)
+    pk = np.asarray(pnames)[pid]
+    front = np.isin(pk, ["front", "front_r"])
+    sleeve = np.isin(pk, ["top_sleeve", "top_sleeve_r", "under_sleeve", "under_sleeve_r", "sleeve", "sleeve_r"])
+    rho = np.where(front, P_.get("density_canvas", P_["density"]), P_["density"])
     mass = xp.mass_from_flat(T0_, R0, n0, rho)
-    kb = np.where(front, P_["kb_canvas"], P_["kb"])
-    kb = np.where(sleeve, np.maximum(kb, P_["kb_sleeve"]), kb)
+    kb = np.where(front, P_.get("kb_canvas", P_["kb"]), P_["kb"])
+    kb = np.where(sleeve, np.maximum(kb, P_.get("kb_sleeve", P_["kb"])), kb)
     E0 = xp.edges_of(T0_)
     L0 = np.linalg.norm(R0[E0[:, 0]] - R0[E0[:, 1]], axis=1)
     Lw = {}
@@ -4021,214 +4176,530 @@ def main_posed(O):
             Lw.setdefault(e, []).append(l)
     Lw = {e: float(np.mean(v)) for e, v in Lw.items()}
     for a, b in xp.edges_of(Tw):
-        Lw.setdefault((int(a), int(b)), float(np.linalg.norm(X0[a] - X0[b])))
+        Lw.setdefault((int(a), int(b)), float(np.linalg.norm(X3[a] - X3[b])))
     mw = np.zeros(nw)
     np.add.at(mw, wm, mass)
     kbw = np.zeros(nw)
     np.maximum.at(kbw, wm, kb)
+    kind_w = np.full(nw, "", dtype=object)
+    kind_w[wm] = pk
+    panels = [set() for _ in range(nw)]
+    for i, p in zip(wm, pk):
+        panels[i].add(str(p))
+    return {"key": key, "run": run, "X0": X3, "Tw": Tw, "wm": wm, "Lw": Lw, "mw": mw, "kbw": kbw, "P": P_,
+            "kind": kind_w, "panels": panels, "st": st}
+
+
+def seam_report(G, Y, thr):
+    """Seam hinges over thr deg at Y: count, and per panel pair the count and z range."""
+    from character import suit_xpbd as xp
+    Ew = xp.edges_of(G["Tw"])
+    seam_v = np.array([len(p) > 1 for p in G["panels"]])
+    sm = seam_v[Ew[:, 0]] & seam_v[Ew[:, 1]]
+    Es = Ew[sm]
+    dd_ = dihedrals(Y, G["Tw"], [(int(min(a, b)), int(max(a, b))) for a, b in Es])
+    dih = np.array([dd_.get((int(min(a, b)), int(max(a, b))), 0.0) for a, b in Es])
+    out = {"over_20": int((dih > 20).sum()), "p99_deg": round(float(np.percentile(dih, 99)), 1) if len(dih) else 0.0,
+           "max_deg": round(float(dih.max()), 1) if len(dih) else 0.0, "folds": {}}
+    for (a, b), v in zip(Es, dih):
+        if v <= thr:
+            continue
+        pp = sorted(G["panels"][a] & G["panels"][b]) or sorted(G["panels"][a] | G["panels"][b])
+        lab = "/".join(pp)
+        r = out["folds"].setdefault(lab, {"n": 0, "max_deg": 0.0, "z": [9.0, -9.0], "x": [9.0, -9.0]})
+        r["n"] += 1
+        r["max_deg"] = round(max(r["max_deg"], float(v)), 1)
+        p = 0.5 * (Y[a] + Y[b])
+        r["z"] = [round(min(r["z"][0], float(p[2])), 3), round(max(r["z"][1], float(p[2])), 3)]
+        r["x"] = [round(min(r["x"][0], float(p[0])), 3), round(max(r["x"][1], float(p[0])), 3)]
+    return out, dih
+
+
+def pose_solve(G, Y0, sdf, frames, holds=(), pull=None, pairs=(), self_contact=True):
+    """The layer's drape from its skinned rest state Y0 in the posed field: rest lengths from the
+    flat pattern, holds (idx, pos, k) as soft attachments (the strongest k wins), pull (idx,
+    pos, share) a share of the way per substep."""
+    from character import suit_xpbd as xp
+    P_ = G["P"]
     o = {kk: P_[kk] for kk in ("k_stretch", "k_comp", "damping", "friction", "thickness", "stretch_iters")}
-    # the button (the closest left/right front pair at the centre front, waist height) and the
-    # neckline (the rever chains' top: back neck and gorge) held to their skinned places
-    fl = np.unique(wm[np.isin(np.asarray(pnames)[pid], ["front"])])
-    fr_ = np.unique(wm[np.isin(np.asarray(pnames)[pid], ["front_r"])])
-    zc = (X0[:, 2] > 0.95) & (X0[:, 2] < 1.15) & (np.abs(X0[:, 0]) < 0.03) & (X0[:, 1] < 0)
-    fl_, fr2 = fl[zc[fl]], fr_[zc[fr_]]
-    dd = np.linalg.norm(X0[fl_][:, None] - X0[fr2][None], axis=2)
-    ia, ib = np.unravel_index(np.argmin(dd), dd.shape)
-    btn = (int(fl_[ia]), int(fr2[ib]))
-    ch = np.load(os.path.join(run, "chains.npz"))
-    nk = np.unique(np.concatenate([ch["l_ids"], ch["r_ids"]]))
-    nk = nk[X0[nk, 2] > X0[nk, 2].max() - 0.06]
-    stats["button_pair"], stats["neck_hold_n"] = list(btn), int(len(nk))
-    seam_v = np.bincount(wm, minlength=nw) > 1
-    Ew = xp.edges_of(Tw)
+    S = xp.Solver(G["X0"], G["Tw"], G["Lw"], G["mw"], G["kbw"], o)
+    S.X = Y0.copy()
+    S.sdf = sdf
+    if self_contact and P_.get("self_r", 0) > 0:
+        S.self_ref, S.self_r, S.self_excl = G["X0"], P_["self_r"], P_["self_excl"]
+    if pairs:
+        S.set_sew([p for p, _ in pairs], [g for _, g in pairs])
+        S.layer_force = [(np.array([p[0] for p, _ in pairs]), np.array([p[1] for p, _ in pairs]),
+                          float(np.mean([g for _, g in pairs])))]
+    if holds:
+        idx = np.concatenate([h[0] for h in holds])
+        pos = np.concatenate([h[1] for h in holds])
+        S.hold_idx, S.hold_pos, S.hold_k = idx, pos, max(h[2] for h in holds)
+    if pull is not None:
+        pi_, pp_, sh_ = pull
+
+        def fac(X, free, pi_=pi_, pp_=pp_, sh_=sh_):
+            X[pi_] += sh_ * (pp_ - X[pi_])
+        S.post = [fac]
+    S.run(frames, P_["fps"], P_["substeps"], g_of=lambda f: 9.81, ksew_of=lambda f: 5000.0)
+    return S.X.copy()
+
+
+def made_parts(prefix):
+    """The loaded made garment's parts (objects named prefix*, not the collider): name -> (V, F)."""
+    out = {}
+    for o in bpy.data.objects:
+        if o.type == "MESH" and o.name.startswith(prefix) and "lod" not in o.name:
+            out[o.name] = (evaluated(o), [tuple(p.vertices) for p in o.data.polygons])
+    return out
+
+
+def main_posed(O):
+    """T13 item 6: the made suit (the jacket run A.posed and the layers it was draped over) rigged:
+    the shipped weight pipeline on every layer; per pose, the shirt, the waistcoat and the jacket
+    simulated in turn over the posed body and the layers under them; the skirt bones' follow
+    gains fitted; Dem Bones for T13b's free jacket bones (a diagnostic); pose-space correctives
+    over the suit's cones fitted per layer, with leave-one-out; the runtime (LBS + skirt bones +
+    correctives) checked per pose for fit, penetration, the collar, the shoulder line and the seam
+    hinges; frames (sim | runtime, front and 3/4, every pose)."""
+    from character import deform_runtime as drt
+    from character import suit_rig as sr
+    run = A.posed
+    st0 = json.load(open(os.path.join(run, "spike_stats.json")))
+    runs = {"jacket": run}
+    for k_ in ("trousers_from", "shirt_from", "waistcoat_from"):
+        if st0.get(k_):
+            runs[k_.split("_")[0]] = os.path.join(os.path.dirname(run.rstrip("/")), st0[k_])
+    # the drapes: the shirt's and the waistcoat's own runs (the waistcoat run names the shirt's)
+    stw = json.load(open(os.path.join(runs["waistcoat"], "spike_stats.json")))
+    if stw.get("shirt_from"):
+        runs["shirt"] = os.path.join(os.path.dirname(run.rstrip("/")), stw["shirt_from"])
+    stats = {"run": os.path.basename(run.rstrip("/")), "runs": {k: os.path.basename(v.rstrip("/")) for k, v in runs.items()}}
+    body, names = capture_body()
+    arm, base = append_base(A.base_blend)
+    assert np.allclose(np.array(arm.matrix_world), np.eye(4)), "armature must sit at the origin"
+    # the made layers as the jacket left them (pressed under it): all from the jacket run's blend
+    made = []
+    for pre in ("spike_trousers_", "spike_shirt_", "spike_waistcoat_", "spike_jacket_"):
+        made += load_made(run, pre)
+    # the layers' colliders (outer faces of the made parts, as the drapes saw them)
+    with bpy.data.libraries.load(os.path.join(run, "spike.blend"), link=False) as (src, dst):
+        dst.objects = [n for n in src.objects if n.startswith("spike_") and n.endswith("_collider")]
+    for o in dst.objects:
+        if o is not None:
+            bpy.context.scene.collection.objects.link(o)
+            made.append(o)
+    for key in ("trousers", "shirt", "waistcoat", "jacket", "buttons"):
+        if key in base:
+            base[key].hide_render = True
+            base[key].hide_viewport = True
+    for o in made:
+        if o.name.endswith("collider"):
+            COLLIDER_ONLY.add(o.name)
+    am = body.modifiers.new("Armature", "ARMATURE")
+    am.object = arm
+    co, tris, dom, J = body_arrays(body, arm)
+    names_all = [b.name for b in arm.data.bones if b.use_deform]
+    Wb0, used = body_weights(body, arm)
+    t = time.perf_counter()
+    # the body as the shipped build skins it (shoulder cap, half joints onto the helpers, twist
+    # splits); the garments take the raw body weights and get the garment remap themselves
+    Wraw = sr.widen(Wb0, used, names_all)
+    Wb = sr.remap(Wraw, co, arm, names_all, body=True)
+    from character import deform_rig as drig
+    drig.write(body, Wb, names_all)
+    nearest = nearest_fn(co, tris)
+
+    def garment_w(P, T, key, skirt=False):
+        Wt = sr.transfer(P, T, Wraw, nearest, smooth_iters=0, k=len(names_all))
+        return sr.remap(Wt, P, arm, names_all, sigma=O["sigma"][key], skirt=skirt,
+                        arm_free=key != "trousers")
+    G = {}
+    for key in ("shirt", "waistcoat", "jacket"):
+        G[key] = garment_drape(runs[key], key)
+        G[key]["W"] = garment_w(G[key]["X0"], G[key]["Tw"], key, skirt=key == "jacket")
+    # the made parts ride on their drape (wrap); the trousers are skinned (not simulated per pose)
+    parts = {}
+    for key, pre in (("shirt", "spike_shirt_"), ("waistcoat", "spike_waistcoat_"), ("jacket", "spike_jacket_")):
+        bf = bind_fn(G[key]["X0"], G[key]["Tw"])
+        for nm, (V, F) in made_parts(pre).items():
+            fi, bc = bf(V)
+            parts[nm] = {"key": key, "F": F, "V0": V, "bind": sr.wrap_bind(G[key]["X0"], G[key]["Tw"], V, fi, bc)}
+    tparts = {}
+    for nm, (V, F) in made_parts("spike_trousers_").items():
+        tparts[nm] = {"F": F, "V0": V, "W": garment_w(V, tris_of(F), "trousers")}
+    # the rever: its own weights, the drape's under it smoothed along the roll (it followed its
+    # nearest drape vertex in t13r-a2, and its roll edge read ragged)
+    rv = parts.get("spike_jacket_rever")
+    if rv is not None:
+        Wr = sr.wrap_weights(rv["bind"], G["jacket"]["W"], G["jacket"]["Tw"])
+        rv["W"] = drig.prune(drig.spatial_smooth(Wr, rv["V0"], 0.03, iters=3), 4)
+    stats["weights_s"] = round(time.perf_counter() - t, 1)
+    print(f"[spike] weights: {stats['weights_s']} s", flush=True)
     rig_ = dp.Rig(arm)
     rt = None
     rp = os.path.join(os.path.dirname(A.base_blend), "character.rig.json")
-    if O["rules"] and os.path.exists(rp):
-        from character import deform_runtime as drt
-        rt = drt.Runtime(arm, [body], json.load(open(rp)))
+    rules0 = json.load(open(rp)) if os.path.exists(rp) else {"helpers": [], "morphs": []}
+    if O["rules"]:
+        rt = drt.Runtime(arm, [], rules0)
+    cones = suit_cones(arm, rig_)
+    stats["cones"] = [{k: v for k, v in c.items() if k in ("name", "bone", "ref", "start", "_deg")} for c in cones]
+    rtc = drt.Runtime(arm, [], {"morphs": cones})
     poses = [p for p in (A.poses.split(",") if A.poses else O["poses"]) if p]
-    Ys, Ms, Ls, feats, per = [], [], [], [], {}
-    drivers = ["pelvis", "spine_01", "spine_02", "spine_03", "thigh_l", "thigh_r", "upperarm_l", "upperarm_r",
-               "clavicle_l", "clavicle_r"]
-    Vr = k["Vr"]
-    Fr = [tuple(int(i) for i in f if i >= 0) for f in k["Fr"]]
-    # the rever follows its nearest jacket vertex's weights
-    from mathutils.kdtree import KDTree
-    kd = KDTree(nw)
-    for i, p in enumerate(X0):
-        kd.insert(Vector(p), i)
-    kd.balance()
-    near_r = np.array([kd.find(Vector(p))[1] for p in Vr])
-    posed_obs = {}
-    for pname in poses:
+    K = len(poses)
+    # holds and pairs per layer
+    Gs, Gw, Gj = G["shirt"], G["waistcoat"], G["jacket"]
+    bt = float(Gs["st"].get("band_top_z") or 1.15)
+    nb = np.array(arm.data.bones["neck_01"].head_local)
+    bnd_s = boundary_verts(Gs["Tw"], len(Gs["X0"]))
+    hands = [np.array(arm.data.bones[f"hand_{s}"].head_local) for s in ("l", "r")]
+    s_neck = np.nonzero(bnd_s & (np.linalg.norm(Gs["X0"] - nb, axis=1) < 0.12) & (Gs["X0"][:, 2] > 1.35))[0]
+    s_cuff = np.nonzero(bnd_s & (np.min([np.linalg.norm(Gs["X0"] - h, axis=1) for h in hands], 0) < 0.12))[0]
+    s_tuck = np.nonzero(Gs["X0"][:, 2] < bt - 0.01)[0]
+    w_sh = np.nonzero(np.array([bool({"front", "front_r"} & p) and bool({"back", "back_r"} & p) for p in Gw["panels"]])
+                      & (Gw["X0"][:, 2] > 1.35))[0]
+
+    def lr_pairs(Gx, zlo, zhi, step):
+        fl = np.nonzero(np.array(["front" in p for p in Gx["panels"]]) & (np.abs(Gx["X0"][:, 0]) < 0.012)
+                        & (Gx["X0"][:, 2] > zlo) & (Gx["X0"][:, 2] < zhi) & (Gx["X0"][:, 1] < 0))[0]
+        fr = np.nonzero(np.array(["front_r" in p for p in Gx["panels"]]))[0]
+        out, last = [], -9.0
+        for i in fl[np.argsort(Gx["X0"][fl, 2])]:
+            d_ = np.linalg.norm(Gx["X0"][fr] - Gx["X0"][i], axis=1)
+            j = int(np.argmin(d_))
+            if d_[j] < 0.008 and Gx["X0"][i, 2] - last > step:
+                out.append(((int(i), int(fr[j])), float(max(d_[j], 0.001))))
+                last = Gx["X0"][i, 2]
+        return out
+    w_pairs = lr_pairs(Gw, 1.05, 1.36, 0.03)
+    j_pairs = lr_pairs(Gj, 0.95, 1.15, 0.5)[:1]
+    ch = np.load(os.path.join(run, "chains.npz"))
+    j_neck = np.unique(np.concatenate([ch["l_ids"], ch["r_ids"]]))
+    j_neck = j_neck[Gj["X0"][j_neck, 2] > Gj["X0"][j_neck, 2].max() - 0.06]
+    stats["holds"] = {"shirt_neck": len(s_neck), "shirt_cuff": len(s_cuff), "shirt_tuck": len(s_tuck),
+                      "waistcoat_shoulder": len(w_sh), "waistcoat_pairs": len(w_pairs), "jacket_pairs": len(j_pairs),
+                      "jacket_neck": len(j_neck)}
+    cache = None
+    if A.posed_cache:
+        cache = np.load(os.path.join(A.posed_cache, "posed.npz"))
+        assert [str(p) for p in cache["poses"]] == poses, "posed cache: another pose set"
+    Y = {k: [] for k in G}
+    Ms, Acone, foll, per = [], [], [], {}
+    hsk = [h for h in rules0.get("helpers", []) if h["type"] == "follow"]
+    for ip, pname in enumerate(poses):
         t = time.perf_counter()
-        spec = {"bones": dp.sym({**dp.ARMS_DOWN, **dp.FIST})} if pname == "fist" else pname
-        dp.apply_pose(arm, spec, rig_)
+        dp.apply_pose(arm, pose_spec(pname), rig_)
         if rt is not None:
             rt.apply(rig_, morphs=False)
         bpy.context.view_layer.update()
         cop = evaluated(body)
-        M = skin_mats(arm, bones)
-        Y0 = sr.skin(X0, Wj, M)
-        shells = [(sr.skin(P, Wu, M), Fa) for _, P, Fa, Wu in under]
-        lo, hi = Y0.min(0) - 0.08, Y0.max(0) + 0.08
-        g_, _ = body_sdf(cop, tris, lo, hi, XPBD["sdf_h"], shells=shells)
-        S = xp.Solver(X0, Tw, Lw, mw, kbw, o)
-        S.X = Y0.copy()
-        S.sdf = g_
-        S.set_sew([btn], [P_["button_gap_m"]])
-        S.layer_force = [(np.array([btn[0]]), np.array([btn[1]]), P_["button_gap_m"])]
-        S.hold_idx, S.hold_pos, S.hold_k = nk, Y0[nk].copy(), P_["neck_hold_k2"]
-        if pname != "rest":
-            S.run(O["frames"], P_["fps"], P_["substeps"], g_of=lambda f: 9.81, ksew_of=lambda f: 5000.0)
-        real = Layers(cop, tris, shells)
-        Y, moved = push_out(S.X.copy(), Tw, real, O["push"]["clear_m"], O["push"]["smooth_iters"])
-        if pname == "rest":
-            Y = X0.copy()
-        Ys.append(Y)
+        M = skin_mats(arm, names_all)
         Ms.append(M)
-        feats.append(np.concatenate([local_rot(arm, n_) for n_ in drivers if n_ in arm.pose.bones]))
-        # checks: inside, the seam hinges, the strain, the collar (shirt above jacket at the
-        # CB), the cuffs (inside the posed hand / wrist)
-        dd_ = dihedrals(Y, Tw, [(int(min(a, b)), int(max(a, b))) for a, b in Ew])
-        dih = np.array([dd_.get((int(min(a, b)), int(max(a, b))), 0.0) for a, b in Ew])
-        sm = seam_v[Ew[:, 0]] & seam_v[Ew[:, 1]]
-        lw_ = np.array([Lw.get((int(min(a, b)), int(max(a, b))), np.nan) for a, b in Ew])
-        sY = np.linalg.norm(Y[Ew[:, 0]] - Y[Ew[:, 1]], axis=1) / lw_ - 1
-        Vrp = Vr + (Y - X0)[near_r] if pname == "rest" else sr.skin(Vr, Wj[near_r], M) + \
-            (Y - sr.skin(X0, Wj, M))[near_r]
-        rec = {"inside": inside_count(Y, real), "pushed": moved,
-               "hinges_over_20": int((dih[sm] > 20).sum()), "hinge_p99_deg": round(float(np.percentile(dih[sm], 99)), 1),
-               "strain_p99": round(float(np.nanpercentile(np.abs(sY), 99)), 4),
-               "lbs_vs_sim_mm": {"rms": round(float(np.sqrt((np.linalg.norm(Y - Y0, axis=1) ** 2).mean())) * 1000, 1),
-                                 "p99": round(float(np.percentile(np.linalg.norm(Y - Y0, axis=1), 99)) * 1000, 1)},
-               "rever_inside_body": int(sum(1 for p in Vrp[::4] if real.body_bvh.find_nearest(Vector(p))[0] is not None
-                                            and np.dot(p - np.array(real.body_bvh.find_nearest(Vector(p))[0]),
-                                                       np.array(real.body_bvh.find_nearest(Vector(p))[1])) < 0))}
-        sh = [s_ for s_ in under if s_[0] == "shirt"]
-        if sh:
-            # in the neck's frame (the high_ready's turned torso moved the CB out of |x| < 1 cm)
-            Mn = np.linalg.inv(M[bones.index("neck_01")] if "neck_01" in bones else np.eye(4))
-            Psh = shells[[s_[0] for s_ in under].index("shirt")][0] @ Mn[:3, :3].T + Mn[:3, 3]
-            Vrp_n = Vrp @ Mn[:3, :3].T + Mn[:3, 3]
-            ms = (np.abs(Psh[:, 0]) < 0.01) & (Psh[:, 1] > 0.0) & (Psh[:, 2] > 1.5)
-            mr = (np.abs(Vrp_n[:, 0]) < 0.01) & (Vrp_n[:, 1] > 0.0)
-            if ms.any() and mr.any():
-                rec["shirt_shows_cb_mm"] = round(float(Psh[ms, 2].max() - Vrp_n[mr, 2].max()) * 1000, 1)
-        # the made cuffs and collar (rendered objects, skinned): inside the posed body
-        for o_ in made:
-            if o_.name.startswith("spike_shirt_") and o_.name.endswith(("cuffs", "collar")):
-                P = evaluated(o_)
-                Wc = sr.transfer(P, np.array([[0, 0, 0]]), Wb, nearest, smooth_iters=0)
-                Pp = sr.skin(P, Wc, M)
-                bl = Layers(cop, tris, [])
-                rec[o_.name.removeprefix("spike_shirt_") + "_inside_body"] = inside_count(Pp[::2], bl)
-                if pname in O["renders"]:
-                    posed_obs.setdefault(pname, []).append((o_.name + "_p", Pp, [tuple(p.vertices) for p in o_.data.polygons]))
+        Acone.append([rtc.morph_weights()[c["name"]] for c in cones])
+        # the follow rules' inputs (the thigh's swing about the pelvis) for the gain fit
+        fr_ = {}
+        for h in hsk:
+            q = rt.D(h["source"], h.get("source_frame")) if rt else None
+            if q is None:
+                continue
+            d0 = drt.gl_to_bl(h["rest_dir"]).normalized()
+            sw = d0.rotation_difference(q @ d0)
+            ax, ang = sw.to_axis_angle()
+            v = ax * ang
+            L_ = drt.gl_to_bl(h["flex_axis"]).normalized()
+            N_ = drt.gl_to_bl(h["abd_axis"]).normalized()
+            fr_[h["bone"]] = (float(v.dot(L_)), float(v.dot(N_)), np.array(L_), np.array(N_))
+        foll.append(fr_)
+        Mt = {nm: sr.skin(p["V0"], p["W"], M) for nm, p in tparts.items()}
+        tcol = [(Mt[nm], tris_of(p["F"])) for nm, p in tparts.items() if nm.endswith("collider")]
+        rec = {}
+
+        def collider_of(key, Yd):
+            o_ = bpy.data.objects.get(f"spike_{key}_collider")
+            if o_ is None:
+                return None
+            p_ = parts.get(o_.name)
+            return (sr.wrap_apply(p_["bind"], Yd, G[key]["Tw"]), tris_of(p_["F"]))
+        for key in ("shirt", "waistcoat", "jacket"):
+            Gx = G[key]
+            Y0 = sr.skin(Gx["X0"], Gx["W"], M)
+            if cache is not None:
+                Yk = cache[f"Y_{key}"][ip]
+            elif pname == "rest":
+                Yk = Gx["X0"].copy()
+            else:
+                shells = list(tcol)
+                if key in ("waistcoat", "jacket"):
+                    shells.append(collider_of("shirt", Y["shirt"][ip]))
+                if key == "jacket":
+                    shells.append(collider_of("waistcoat", Y["waistcoat"][ip]))
+                shells = [s_ for s_ in shells if s_ is not None]
+                if key == "shirt":
+                    shells = []                     # the shirt is the first layer (tucked inside the trousers)
+                g_, _ = body_sdf(cop, tris, Y0.min(0) - 0.08, Y0.max(0) + 0.08, XPBD["sdf_h"], shells=shells)
+                if key == "shirt":
+                    Yk = pose_solve(Gx, Y0, g_, O["frames_under"],
+                                    holds=[(s_neck, Y0[s_neck], O["hold"]["shirt_k"]), (s_cuff, Y0[s_cuff], O["hold"]["shirt_k"])],
+                                    pull=(s_tuck, Y0[s_tuck], O["hold"]["tuck_pull"]), self_contact=O["self_contact"])
+                elif key == "waistcoat":
+                    Yk = pose_solve(Gx, Y0, g_, O["frames_under"], holds=[(w_sh, Y0[w_sh], O["hold"]["waistcoat_k"])],
+                                    pairs=w_pairs, self_contact=O["self_contact"])
+                else:
+                    Yk = pose_solve(Gx, Y0, g_, O["frames"], holds=[(j_neck, Y0[j_neck], Gx["P"]["neck_hold_k2"])],
+                                    pairs=[(p, Gx["P"]["button_gap_m"]) for p, _ in j_pairs], self_contact=O["self_contact"])
+                real = Layers(cop, tris, shells)
+                pu = O["push"] if key == "jacket" else O["push_under"]
+                Yk, moved = push_out(Yk, Gx["Tw"], real, pu["clear_m"], pu["smooth_iters"])
+                rec[f"{key}_pushed"] = moved
+                rec[f"{key}_inside"] = inside_count(Yk, real)
+            Y[key].append(Yk)
         rec["s"] = round(time.perf_counter() - t, 1)
         per[pname] = rec
         print(f"[posed] {pname}: {rec}", flush=True)
-        if pname in O["renders"]:
-            posed_obs.setdefault(pname, []).extend([("jacket_sim", Y, Tw), ("jacket_lbs", Y0, Tw), ("body_p", cop, tris),
-                                                    ("jacket_rever", Vrp, Fr)] +
-                                                   [(f"{kk}_p", sh_[0], sh_[1]) for (kk, _, _, _), sh_ in zip(under, shells)])
-    stats["poses"] = per
-    # Dem Bones: the jacket's bones over the pose set
+    Ms, Acone = np.array(Ms), np.array(Acone)
+    for k_ in Y:
+        Y[k_] = np.array(Y[k_])
+    stats["sim_s"] = round(sum(r["s"] for r in per.values()), 1)
+    if cache is None:
+        np.savez_compressed(os.path.join(A.out_dir, "posed.npz"), poses=np.array(poses),
+                            **{f"Y_{k}": v.astype(np.float64) for k, v in Y.items()})
+    import hashlib
+    stats["hash"] = {k: hashlib.sha256(np.ascontiguousarray(v).tobytes()).hexdigest()[:8] for k, v in Y.items()}
+
+    # --- the skirt bones' follow gains, fitted to the simulated skirt
+    jn = names_all
+    skirt_b = [h["bone"] for h in hsk if h["bone"] in jn]
+    gains = {h["bone"]: dict(h["gain"]) for h in hsk}
+    Bd = arm.data.bones
+
+    def skirt_M(Mk, k, gn):
+        Mk = Mk.copy()
+        Mp = Mk[jn.index("pelvis")]
+        Rp = Mp[:3, :3]
+        for b in skirt_b:
+            fl, ab, L_, N_ = foll[k][b]
+            Mk[jn.index(b)] = sr.follow_mat(gn[b], fl, ab, L_, N_, Rp, Mp, np.array(Bd[b].head_local))
+        return Mk
+    Wj = Gj["W"]
+    sk_cols = [jn.index(b) for b in skirt_b]
+    sv = np.nonzero(Wj[:, sk_cols].sum(1) > 0.05)[0]
+    if O["gain_fit"] and skirt_b:
+        Xs = Gj["X0"][sv]
+        Wns = Wj[sv].copy()
+        Wns[:, sk_cols] = 0.0
+        base_k = [sr.skin(Xs, Wns, Ms[k]) - Y["jacket"][k][sv] for k in range(K)]
+        Xsh = np.concatenate([Xs, np.ones((len(Xs), 1))], 1)
+
+        def err(gn):
+            e = 0.0
+            for k in range(K):
+                Mk = skirt_M(Ms[k], k, gn)
+                r_ = base_k[k].copy()
+                for b, c in zip(skirt_b, sk_cols):
+                    r_ += Wj[sv, c][:, None] * (Xsh @ Mk[c][:3, :].T)
+                e += float((r_ ** 2).sum())
+            return e
+        e0 = err(gains)
+        grid = np.linspace(-0.2, 1.6, 19)
+        for sweep in range(3):
+            for b in skirt_b:
+                for key_g in ("flex+", "flex-", "abd+", "abd-"):
+                    best = (err(gains), gains[b][key_g])
+                    for v in grid:
+                        gains[b][key_g] = float(v)
+                        e = err(gains)
+                        if e < best[0]:
+                            best = (e, float(v))
+                    gains[b][key_g] = best[1]
+            grid = np.linspace(-0.2, 1.6, 37)
+        stats["skirt_gain_fit"] = {"rms_mm_before": round(float(np.sqrt(e0 / (K * max(len(sv), 1)))) * 1000, 2),
+                                   "rms_mm_after": round(float(np.sqrt(err(gains) / (K * max(len(sv), 1)))) * 1000, 2),
+                                   "verts": int(len(sv)), "gains": gains,
+                                   "lofted": {h["bone"]: h["gain"] for h in hsk}}
+        for k in range(K):
+            Ms[k] = skirt_M(Ms[k], k, gains)
+
+    # --- T13b's free jacket bones (Dem Bones), refit on this set: are they drivable?
+    if O["dem_bones_diag"]:
+        t = time.perf_counter()
+        X0j = Gj["X0"]
+        kind_w = Gj["kind"]
+        zw = float(O["waist_z"])
+        lab = np.full(len(X0j), -1)
+        xl = X0j[:, 0] >= 0
+        isf = np.isin(kind_w, ["front", "front_r"])
+        iss = np.isin(kind_w, ["side", "side_r"])
+        isb = np.isin(kind_w, ["back", "back_r"])
+        low = X0j[:, 2] < zw
+        for j, m in enumerate([low & (isf | (iss & (X0j[:, 1] < 0))) & xl, low & (isf | (iss & (X0j[:, 1] < 0))) & ~xl,
+                               low & (isb | (iss & (X0j[:, 1] >= 0))) & xl, low & (isb | (iss & (X0j[:, 1] >= 0))) & ~xl,
+                               ~low & isf & xl, ~low & isf & ~xl, ~low & iss & xl, ~low & iss & ~xl]):
+            lab[m] = j
+        jnames = ["skirt_front_l", "skirt_front_r", "skirt_back_l", "skirt_back_r", "front_l", "front_r", "side_l", "side_r"]
+        allow = ~np.isin(kind_w, ["top_sleeve", "top_sleeve_r", "under_sleeve", "under_sleeve_r"])
+        fit = sr.fit_bones(X0j, Y["jacket"], Wj, Ms, nj=O["jacket_bones"], iters=O["fit_iters"], groups=lab, allow=allow)
+        drivers = ["pelvis", "spine_01", "spine_02", "spine_03", "thigh_l", "thigh_r", "upperarm_l", "upperarm_r",
+                   "clavicle_l", "clavicle_r"]
+        feats = []
+        for pname in poses:
+            dp.apply_pose(arm, pose_spec(pname), rig_)
+            feats.append(np.concatenate([local_rot(arm, n_) for n_ in drivers]))
+        feats = np.array(feats)
+        dcols = {n_: [3 * i_ + c for c in range(3)] for i_, n_ in enumerate(drivers)}
+        drv = {}
+        for j, jn_ in enumerate(jnames):
+            sd = jn_[-1]
+            par = "pelvis" if jn_.startswith("skirt") else "spine_03"
+            src = {"skirt": [f"thigh_{sd}", "pelvis"], "front": [f"upperarm_{sd}", f"clavicle_{sd}", "spine_03"],
+                   "side": [f"upperarm_{sd}", f"clavicle_{sd}"]}[jn_.split("_")[0]]
+            fc = feats[:, sum((dcols[n_] for n_ in src), [])]
+            pi = jn.index(par)
+            cj = fit["centres"][j]
+            coef, rel, pred = sr.drive(fit["T"][:, j], Ms[:, pi], fc, lam=O["drive_lam"], centre=cj)
+            loo = []
+            for i in range(K):
+                m = np.arange(K) != i
+                c_, _, _ = sr.drive(fit["T"][m, j], Ms[m, pi], fc[m], lam=O["drive_lam"], centre=cj)
+                loo.append(np.concatenate([fc[i], [1.0]]) @ c_ - rel[i])
+            loo = np.abs(np.array(loo))
+            drv[jn_] = {"loo_rot_deg_p90": round(float(np.degrees(np.percentile(loo[:, :3].max(1), 90))), 1),
+                        "loo_move_mm_p90": round(float(np.percentile(loo[:, 3:].max(1), 90)) * 1000, 1),
+                        "range_rot_deg_p90": round(float(np.degrees(np.percentile(np.abs(rel[:, :3]).max(1), 90))), 1),
+                        "range_move_mm_p90": round(float(np.percentile(np.abs(rel[:, 3:]).max(1), 90)) * 1000, 1)}
+            drv[jn_]["drivable"] = bool(drv[jn_]["loo_rot_deg_p90"] < 0.5 * max(drv[jn_]["range_rot_deg_p90"], 1e-6))
+        stats["dem_bones_diag"] = {"err": fit["err"], "drive": drv, "s": round(time.perf_counter() - t, 1)}
+        dp.reset(arm)
+    # --- pose-space correctives per layer, over the suit's cones
     t = time.perf_counter()
-    Ys, Ms, feats = np.array(Ys), np.array(Ms), np.array(feats)
-    # the bone plan's eight, by design (drivable from the skeleton): the skirt front and back and
-    # the chest front each side, and the side body under each arm; the sleeves stay on the arm's
-    # bones (twist and helpers) and their correctives. Data-placed (k-means on the worst
-    # vertices) they went to the sleeves, six of eight, undrivable (t13r-a1)
-    pk = np.asarray(pnames)[pid]
-    kind_w = np.full(nw, "", dtype=object)
-    kind_w[wm] = pk
-    zw = float(O["waist_z"])
-    lab = np.full(nw, -1)
-    xl = X0[:, 0] >= 0
-    isf = np.isin(kind_w, ["front", "front_r"])
-    iss = np.isin(kind_w, ["side", "side_r"])
-    isb = np.isin(kind_w, ["back", "back_r"])
-    low = X0[:, 2] < zw
-    for j, m in enumerate([low & (isf | (iss & (X0[:, 1] < 0))) & xl, low & (isf | (iss & (X0[:, 1] < 0))) & ~xl,
-                           low & (isb | (iss & (X0[:, 1] >= 0))) & xl, low & (isb | (iss & (X0[:, 1] >= 0))) & ~xl,
-                           ~low & isf & xl, ~low & isf & ~xl, ~low & iss & xl, ~low & iss & ~xl]):
-        lab[m] = j
-    jnames = ["skirt_front_l", "skirt_front_r", "skirt_back_l", "skirt_back_r", "front_l", "front_r", "side_l", "side_r"]
-    allow = ~np.isin(kind_w, ["top_sleeve", "top_sleeve_r", "under_sleeve", "under_sleeve_r"])
-    fit = sr.fit_bones(X0, Ys, Wj, Ms, nj=O["jacket_bones"], iters=O["fit_iters"], groups=lab, allow=allow)
-    tick("dem_bones", t)
-    stats["dem_bones"] = {"err": fit["err"], "s": round(time.perf_counter() - t, 1),
-                          "centres": [[round(float(c), 3) for c in c_] for c_ in fit["centres"]],
-                          "verts_on_jacket_bones": int((fit["W"][:, len(bones):].sum(1) > 0.05).sum())}
-    # the drive: each jacket bone relative to its parent (pelvis below the waist, spine_03 above)
-    drv = {}
-    dcols = {n_: [3 * i_ + c for c in range(3)] for i_, n_ in enumerate([n_ for n_ in drivers if n_ in arm.pose.bones])}
-    for j in range(O["jacket_bones"]):
-        jn = jnames[j]
-        sd = jn[-1]
-        par = "pelvis" if jn.startswith("skirt") else "spine_03"
-        src = {"skirt": [f"thigh_{sd}", "pelvis"], "front": [f"upperarm_{sd}", f"clavicle_{sd}", "spine_03"],
-               "side": [f"upperarm_{sd}", f"clavicle_{sd}"]}[jn.split("_")[0]]
-        fc = feats[:, sum((dcols[n_] for n_ in src if n_ in dcols), [])]
-        pi = bones.index(par) if par in bones else 0
-        cj = fit["centres"][j]
-        coef, rel, pred = sr.drive(fit["T"][:, j], Ms[:, pi], fc, lam=O["drive_lam"], centre=cj)
-        loo = []
-        for i in range(len(Ys)):
-            m = np.arange(len(Ys)) != i
-            c_, _, _ = sr.drive(fit["T"][m, j], Ms[m, pi], fc[m], lam=O["drive_lam"], centre=cj)
-            loo.append(np.concatenate([fc[i], [1.0]]) @ c_ - rel[i])
-        drv[jn] = {"parent": par, "drivers": src, "coef": np.round(coef, 5).tolist(), "fit_rot_deg": round(float(np.degrees(np.abs(pred - rel)[:, :3].max())), 2),
-                              "fit_move_mm": round(float(np.abs(pred - rel)[:, 3:].max()) * 1000, 2),
-                              "loo_rot_deg": round(float(np.degrees(np.abs(np.array(loo))[:, :3].max())), 1),
-                              "loo_move_mm": round(float(np.abs(np.array(loo))[:, 3:].max()) * 1000, 1),
-                              "range_rot_deg": round(float(np.degrees(np.abs(rel[:, :3]).max())), 1)}
-    stats["drive"] = drv
-    # correctives: what the fit leaves, rest space
-    Mall = np.concatenate([Ms, fit["T"]], 1)
-    Dc = sr.correctives(X0, Ys, fit["W"], Mall)
-    stats["correctives_mm"] = {p_: {"max": round(float(np.linalg.norm(Dc[i], axis=1).max()) * 1000, 1),
-                                    "p95": round(float(np.percentile(np.linalg.norm(Dc[i], axis=1), 95)) * 1000, 1),
-                                    "verts_over_1mm": int((np.linalg.norm(Dc[i], axis=1) > 0.001).sum())}
-                               for i, p_ in enumerate(poses)}
-    np.savez_compressed(os.path.join(A.out_dir, "rig.npz"), X0=X0, Tw=Tw, W_body=Wj, W=fit["W"], T=fit["T"],
-                        bones=np.array(bones), poses=np.array(poses), Ys=Ys, Ms=Ms, feats=feats,
-                        correctives=Dc.astype(np.float32), centres=fit["centres"], labels=fit["labels"])
-    with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
-        json.dump(stats, f, indent=1, default=float)
-    print(json.dumps({"dem_bones": stats["dem_bones"]["err"], "drive": drv}, indent=1), flush=True)
-    if A.no_render:
-        return
-    # frames: per pose, the simulated drape and plain skinning, and the Dem Bones fit
-    for i, pname in enumerate(poses):
-        if pname not in posed_obs:
-            continue
-        spec = {"bones": dp.sym({**dp.ARMS_DOWN, **dp.FIST})} if pname == "fist" else pname
-        dp.apply_pose(arm, spec, rig_)
+    S, Dres, rt_Y, loo_rms = {}, {}, {}, {}
+    for key in ("shirt", "waistcoat", "jacket"):
+        Gx = G[key]
+        X0 = Gx["X0"]
+        D = np.stack([sr.unskin(Gx["W"], Ms[k], Y[key][k], X0) for k in range(K)])
+        mask = cone_masks(cones, X0, arm)
+        S[key] = sr.fit_shapes(D, Acone, mask, lam=O["lam"])
+        Dres[key] = D
+        rt_Y[key] = np.stack([sr.skin(X0 + sr.apply_shapes(S[key], Acone[k]), Gx["W"], Ms[k]) for k in range(K)])
+        # leave-one-out: each pose predicted from the shapes fitted without it
+        lo_ = []
+        for k in range(K):
+            if poses[k] == "rest":
+                lo_.append(0.0)
+                continue
+            m = np.arange(K) != k
+            Sk = sr.fit_shapes(D[m], Acone[m], mask, lam=O["lam"])
+            Yl = sr.skin(X0 + sr.apply_shapes(Sk, Acone[k]), Gx["W"], Ms[k])
+            lo_.append(float(np.sqrt((np.linalg.norm(Yl - Y[key][k], axis=1) ** 2).mean())) * 1000)
+        loo_rms[key] = lo_
+    stats["correctives_s"] = round(time.perf_counter() - t, 1)
+    print(f"[spike] correctives: {stats['correctives_s']} s", flush=True)
+    # --- the runtime per pose: fit, penetration, collar, shoulder line, hinges
+    Bn = arm.data.bones
+    shoulders = [np.array(Bn[f"upperarm_{s}"].head_local) for s in ("l", "r")]
+    sh_zone = np.min([np.linalg.norm(Gj["X0"] - s_, axis=1) for s_ in shoulders], 0) < 0.12
+    sh_zone &= Gj["X0"][:, 2] > np.mean([s_[2] for s_ in shoulders]) - 0.02
+    tri_j = Gj["Tw"]
+    res = {}
+    for k, pname in enumerate(poses):
+        dp.apply_pose(arm, pose_spec(pname), rig_)
         if rt is not None:
             rt.apply(rig_, morphs=False)
         bpy.context.view_layer.update()
-        obs_ = {nm: mesh_object(f"p_{pname}_{nm}", V_, F_) for nm, V_, F_ in posed_obs[pname]}
-        fo = mesh_object(f"p_{pname}_jacket_fit", fit["fit"][i], Tw)
-        for n_, o_ in obs_.items():
-            if n_.endswith("_p") and n_ != "body_p":
-                MADE_SLOTS[o_.name] = []          # the under-layers in the cool clay
-        und = [obs_["body_p"].name] + [o_.name for n_, o_ in obs_.items() if n_.endswith("_p") and n_ != "body_p"
-                                       and n_ != "rever_p"]
-        az = dp.POSES.get(pname, {}).get("view", 25) if pname != "fist" else 25
-        rv_l = sr.skin(Vr, Wj[near_r], Ms[i])
-        for tag, jk, rvv in (("sim", obs_["jacket_sim"], obs_["jacket_rever"]),
-                             ("lbs", obs_["jacket_lbs"], mesh_object(f"p_{pname}_jacket_rever_lbs", rv_l, Fr)),
-                             ("fit", fo, mesh_object(f"p_{pname}_jacket_rever_fit",
-                                                     rv_l + (fit["fit"][i] - fit["lbs"][i])[near_r], Fr))):
-            show = und + [jk.name, rvv.name]
-            render_views(A.out_dir, f"{pname}_{tag}", show, ["front", "three_quarter"])
-            rvv.hide_render = True
-        for o_ in list(obs_.values()) + [fo]:
+        cop = evaluated(body)
+        Mt = {nm: sr.skin(p["V0"], p["W"], Ms[k]) for nm, p in tparts.items()}
+        tcol = [(Mt[nm], tris_of(p["F"])) for nm, p in tparts.items() if nm.endswith("collider")]
+        r = {}
+        for key in ("shirt", "waistcoat", "jacket"):
+            e = np.linalg.norm(rt_Y[key][k] - Y[key][k], axis=1)
+            lbs = np.linalg.norm(sr.skin(G[key]["X0"], G[key]["W"], Ms[k]) - Y[key][k], axis=1)
+            r[key] = {"lbs_rms_mm": round(float(np.sqrt((lbs ** 2).mean())) * 1000, 1),
+                      "fit_rms_mm": round(float(np.sqrt((e ** 2).mean())) * 1000, 1),
+                      "fit_p99_mm": round(float(np.percentile(e, 99)) * 1000, 1),
+                      "loo_rms_mm": round(loo_rms[key][k], 1)}
+
+        def coll(key, Yd):
+            p_ = parts.get(f"spike_{key}_collider")
+            return (sr.wrap_apply(p_["bind"], Yd, G[key]["Tw"]), tris_of(p_["F"]))
+        for tag, src in (("sim", Y), ("rt", rt_Y)):
+            sh_c, wc_c = coll("shirt", src["shirt"][k]), coll("waistcoat", src["waistcoat"][k])
+            Lj = Layers(cop, tris, tcol + [sh_c, wc_c])
+            Lw_ = Layers(cop, tris, tcol + [sh_c])
+            r[f"inside_{tag}"] = {"jacket": inside_count(src["jacket"][k], Lj),
+                                  "waistcoat": inside_count(src["waistcoat"][k], Lw_)}
+            # the collar: the shirt collar's top above the rever's at the CB, in the neck's frame
+            Mn = np.linalg.inv(Ms[k][jn.index("neck_01")])
+            pc = parts.get("spike_shirt_collar")
+            prv = parts.get("spike_jacket_rever")
+            if pc is not None and prv is not None:
+                Pc = sr.wrap_apply(pc["bind"], src["shirt"][k], G["shirt"]["Tw"]) @ Mn[:3, :3].T + Mn[:3, 3]
+                Pr = sr.wrap_apply(prv["bind"], src["jacket"][k], tri_j) @ Mn[:3, :3].T + Mn[:3, 3]
+                ms = (np.abs(Pc[:, 0]) < 0.01) & (Pc[:, 1] > 0.0)
+                mr = (np.abs(Pr[:, 0]) < 0.01) & (Pr[:, 1] > 0.0)
+                if ms.any() and mr.any():
+                    r[f"collar_mm_{tag}"] = round(float(Pc[ms, 2].max() - Pr[mr, 2].max()) * 1000, 1)
+            # the shoulder line: how far the jacket's shoulder stands above the simulated one
+            dz = (src["jacket"][k][sh_zone] - Y["jacket"][k][sh_zone]) @ np.array([0, 0, 1.0])
+            r[f"shoulder_rise_mm_{tag}"] = round(float(dz.max()) * 1000, 1)
+        lb = sr.skin(Gj["X0"], Wj, Ms[k])
+        r["shoulder_rise_mm_lbs"] = round(float(((lb[sh_zone] - Y["jacket"][k][sh_zone])[:, 2]).max()) * 1000, 1)
+        hs, _ = seam_report(Gj, Y["jacket"][k], O["hinge_deg"])
+        hr, _ = seam_report(Gj, rt_Y["jacket"][k], O["hinge_deg"])
+        r["hinges_sim"], r["hinges_rt"] = hs, {kk: hr[kk] for kk in ("over_20", "p99_deg", "max_deg")}
+        r["sim"] = per[pname]
+        res[pname] = r
+        print(f"[posed-rt] {pname}: fit {r['jacket']['fit_rms_mm']} loo {r['jacket']['loo_rms_mm']} "
+              f"inside_rt {r['inside_rt']} collar {r.get('collar_mm_rt')} shoulder {r['shoulder_rise_mm_rt']} "
+              f"(lbs {r['shoulder_rise_mm_lbs']}) folds {list(hs['folds'])}", flush=True)
+    stats["poses"] = res
+    np.savez_compressed(os.path.join(A.out_dir, "rig.npz"), poses=np.array(poses), names=np.array(names_all),
+                        Ms=Ms, A=Acone, **{f"W_{k}": G[k]["W"] for k in G}, **{f"S_{k}": S[k].astype(np.float32) for k in G},
+                        **{f"X0_{k}": G[k]["X0"] for k in G}, **{f"T_{k}": G[k]["Tw"] for k in G})
+    with open(os.path.join(A.out_dir, "suit_rules.json"), "w") as f:
+        json.dump({"morphs": [{k: v for k, v in c.items() if not k.startswith("_")} for c in cones],
+                   "follow_gains": gains}, f, indent=1)
+    with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
+        json.dump(stats, f, indent=1, default=float)
+    if A.no_render:
+        return
+    # --- frames: per pose the simulated suit and the runtime (made parts wrapped on the drapes)
+    t = time.perf_counter()
+    for nm in list(parts) + list(tparts):
+        o_ = bpy.data.objects.get(nm)
+        if o_ is not None:
             o_.hide_render = True
+    lbs_set = set(O["lbs_renders"])
+    for k, pname in enumerate(poses):
+        dp.apply_pose(arm, pose_spec(pname), rig_)
+        if rt is not None:
+            rt.apply(rig_, morphs=False)
+        bpy.context.view_layer.update()
+        cop = evaluated(body)
+        bo = mesh_object(f"p_{pname}_body", cop, tris)
+        tos = [mesh_object(f"p_{pname}_{nm}", sr.skin(p["V0"], p["W"], Ms[k]), p["F"]) for nm, p in tparts.items()
+               if not nm.endswith("collider")]
+        extra = [base[x].name for x in ("shoes", "tie") if x in base]
+        tags = [("sim", Y), ("rt", rt_Y)]
+        if pname in lbs_set:
+            tags.append(("lbs", {key: {k: sr.skin(G[key]["X0"], G[key]["W"], Ms[k])} for key in G}))
+        for tag, src in tags:
+            obs_ = []
+            for nm, p in parts.items():
+                if nm.endswith("collider"):
+                    continue
+                obs_.append(mesh_object(f"p_{pname}_{tag}_{nm}", sr.wrap_apply(p["bind"], src[p["key"]][k], G[p["key"]]["Tw"]),
+                                        p["F"]))
+            for o_ in obs_ + tos:
+                if "jacket" not in o_.name:
+                    MADE_SLOTS[o_.name] = []
+            show = [bo.name] + [o_.name for o_ in obs_ + tos] + extra
+            render_views(A.out_dir, f"{pname}_{tag}", show, ["front", "three_quarter"], res=O["render_res"])
+            for o_ in obs_:
+                bpy.data.objects.remove(o_, do_unlink=True)
+        for o_ in [bo] + tos:
+            bpy.data.objects.remove(o_, do_unlink=True)
+    stats["render_s"] = round(time.perf_counter() - t, 1)
+    with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
+        json.dump(stats, f, indent=1, default=float)
 
 
 def main():
