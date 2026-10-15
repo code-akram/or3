@@ -174,7 +174,10 @@ class SuitClothLightingModel extends THREE.PhysicalLightingModel {
     const nv = ng.dot(positionViewDirection).clamp();
     const rim = float(1).sub(nv).pow(this.P.u(`${k}.fuzzPower`));
     const wr = this.P.u(`${k}.fuzzWrap`);
-    const wrapNL = ng.dot(L).add(wr).div(float(1).add(wr)).clamp();
+    const nl = ng.dot(L);
+    const t = this.P.u('suitCloth.fuzzTerminator');
+    // the wrap's tail past the terminator is self-shadowed in Cycles; here only acne holes lit it
+    const wrapNL = nl.add(wr).div(float(1).add(wr)).clamp().mul(smoothstep(t.negate(), t, nl));
     return color.mul(this.P.u('cloth.fuzzColor')).mul(rim).mul(wrapNL).mul(this.P.u(`${k}.fuzzStrength`)).mul(1 / Math.PI);
   }
 

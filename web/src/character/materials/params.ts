@@ -282,6 +282,10 @@ export const DEFAULT_PARAMS = {
   suitCloth: {
     on: 1,
     wrinkleStrength: 1.0,
+    /** T13d: the fuzz fades to 0 across the geometric terminator (smoothstep(-t, t, N.L)). The fitted
+     * wrap (1.0) lit the fuzz on to N.L = -1, which Cycles' self-shadow never shows and the engine shows
+     * only where shadow-map acne leaves a hole: the 4-8 bright terminator specks on the wool ball. */
+    fuzzTerminator: 0.05,
     wool: { specGraze: 0.08, specGrazePower: 3.0, sheenScale: 0.01, fuzzStrength: 0.37, fuzzPower: 3.0, fuzzWrap: 1.0 },
     silk: { specGraze: 0.8, specGrazePower: 1.5, sheenScale: 0.16, fuzzStrength: 0.0, fuzzPower: 3.0, fuzzWrap: 1.0 },
     lining: { specGraze: 0.0, specGrazePower: 3.0, sheenScale: 0.15, fuzzStrength: 0.08, fuzzPower: 3.0, fuzzWrap: 1.0 },
