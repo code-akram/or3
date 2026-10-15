@@ -311,7 +311,7 @@ class Height:
         self.line(pts, self.ridge(height, lip_m * 2), lip_m * 2, offset_m=inside_sign * lip_m * 0.5)
         self.stitch(pts, pitch_m=0.006, offset_m=inside_sign * stitch_in_m, height=0.00035)
 
-    def pick(self, pts, pitch_m=0.006, r_m=0.0011, depth=0.00022):
+    def pick(self, pts, pitch_m=0.006, r_m=0.0014, depth=0.0004):
         """Pick stitching (hand, through the edge): a small dimple where each stitch pulls the
         cloth in, one every pitch_m along the line."""
         P = np.asarray(pts, float)

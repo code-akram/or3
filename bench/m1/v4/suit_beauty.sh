@@ -45,12 +45,12 @@ if command -v magick >/dev/null && [[ -f "$RUN/beauty_pattern_front.png" ]]; the
   [[ ${#rows[@]} -gt 0 ]] && magick "${rows[@]}" -append -resize 50% "$RUN/beauty_sheet.png"
   rm -f "$RUN"/_bl_*.png "$RUN"/_bp_*.png "$RUN"/_b_*.png
 fi
-if command -v magick >/dev/null && [[ -f "$RUN/grain_front.png" ]]; then
+if command -v magick >/dev/null && [[ -f "$RUN/beauty_grain_front.png" ]]; then
   FONT=/usr/share/fonts/noto/NotoSans-Bold.ttf
   [[ -f "$FONT" ]] || FONT=""
   cols=()
   for v in front three_quarter back; do
-    magick "$RUN/grain_$v.png" ${FONT:+-font "$FONT"} -gravity NorthWest -fill white -pointsize 34 \
+    magick "$RUN/beauty_grain_$v.png" ${FONT:+-font "$FONT"} -gravity NorthWest -fill white -pointsize 34 \
       -annotate +18+12 "grain | $v" "$RUN/_g_$v.png"; cols+=("$RUN/_g_$v.png")
   done
   magick "${cols[@]}" +append -resize 50% "$RUN/grain_sheet.png"

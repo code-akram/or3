@@ -52,6 +52,7 @@ ap.add_argument("--base-blend", required=True)
 ap.add_argument("--out-dir", required=True)
 ap.add_argument("--measure-only", action="store_true")
 ap.add_argument("--no-render", action="store_true")
+ap.add_argument("--no-clay", action="store_true", help="spike 2: no clay renders (textures and spike.blend still made)")
 ap.add_argument("--place-only", action="store_true", help="stop after placing the panels (render them)")
 ap.add_argument("--opts", default="", help="JSON override for the spike options (or @file.json)")
 ap.add_argument("--from-run", default="", help="spike 2: reuse this run's drape (drape2.npz); rever + renders only")
@@ -974,6 +975,23 @@ def keep_geometry(C, X, name, weld=True, smooth=0):
 VIEWS = {"front": (0.0, -1), "three_quarter": (35.0, -1), "profile": (90.0, -1), "back": (180.0, -1)}
 
 
+def stage_rig(sc):
+    """The render camera and the three area lights (az, el about the camera, energy, size)."""
+    cam = bpy.data.objects.get("spike_cam")
+    if cam is None:
+        cam = bpy.data.objects.new("spike_cam", bpy.data.cameras.new("spike_cam"))
+        sc.collection.objects.link(cam)
+        for nm, (az, el, en, sz) in {"key": (-40, 35, 90, 1.2), "fill": (55, 10, 25, 2.0),
+                                      "rim": (160, 30, 50, 1.0)}.items():
+            L = bpy.data.objects.new(f"spike_{nm}", bpy.data.lights.new(f"spike_{nm}", "AREA"))
+            L.data.energy, L.data.size = en, sz
+            if hasattr(L.data, "shadow_maximum_resolution"):
+                L.data.shadow_maximum_resolution = 0.0002   # finer shadow maps: the rim shadows alias
+            sc.collection.objects.link(L)
+            L["az"], L["el"] = az, el
+    return cam
+
+
 def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=1.15, az_override=None,
                  cam_dz=0.15):
     sc = bpy.context.scene
@@ -1008,18 +1026,7 @@ def render_views(out_dir, tag, show, views, res=800, target=(0, 0, 1.22), scale=
     sc.world.use_nodes = True
     sc.world.node_tree.nodes["Background"].inputs[0].default_value = (0.05, 0.05, 0.055, 1)
     sc.world.node_tree.nodes["Background"].inputs[1].default_value = 1.0
-    cam = bpy.data.objects.get("spike_cam")
-    if cam is None:
-        cam = bpy.data.objects.new("spike_cam", bpy.data.cameras.new("spike_cam"))
-        sc.collection.objects.link(cam)
-        for nm, (az, el, en, sz) in {"key": (-40, 35, 90, 1.2), "fill": (55, 10, 25, 2.0),
-                                      "rim": (160, 30, 50, 1.0)}.items():
-            L = bpy.data.objects.new(f"spike_{nm}", bpy.data.lights.new(f"spike_{nm}", "AREA"))
-            L.data.energy, L.data.size = en, sz
-            if hasattr(L.data, "shadow_maximum_resolution"):
-                L.data.shadow_maximum_resolution = 0.0002   # finer shadow maps: the rim shadows alias
-            sc.collection.objects.link(L)
-            L["az"], L["el"] = az, el
+    cam = stage_rig(sc)
     cam.data.type = "ORTHO"
     cam.data.ortho_scale = scale
     sc.camera = cam
@@ -1075,7 +1082,7 @@ SPIKE = {
 SPIKE2 = {
     "details": True,             # the made jacket (blender/character/suit_detail.py); a dict overrides
     "lods": [0.4, 0.15],         # LOD1, LOD2 decimate ratios of the made jacket
-    "textures": True,            # UVs from the pattern + the wool atlas (character/suit_made_tex.py)
+    "textures": True,            # UVs from the pattern + the wool atlas (character/suit_made_tex.py); a dict overrides
     "v2": True,
     "h_cm": 1.2,                      # finer than spike 1: a fold at the elbow crook needs it
     # the draft for the XPBD drape: the neckline at the neck's own length (spike 1's 1.15
@@ -2121,6 +2128,14 @@ def main_v2(O):
     print(json.dumps({k: stats[k] for k in ("stage1_gap_mm", "inside_after_push", "kept_tris")}, indent=1), flush=True)
     for nm, v in stats["crease_final"].items():
         print(f"[spike] crease {nm}: {v}", flush=True)
+    made_mats = None
+    if O.get("textures"):
+        # the wool atlas and the materials: before the LODs (their copies carry the atlas UVs);
+        # assigned after the clay renders, which take the slots
+        t = time.perf_counter()
+        made_mats, stats["textures"] = suit_made_tex.bake(uv_obs, uv_marks, uv_tags, suit.DEFAULTS,
+                                                          O["textures"] if isinstance(O["textures"], dict) else None)
+        tick("textures", t)
     if A.no_render:
         return
     t = time.perf_counter()
@@ -2130,30 +2145,32 @@ def main_v2(O):
     under = [body.name] + [base[k].name for k in ("shirt", "waistcoat", "trousers", "shoes", "tie") if k in base]
     base["jacket"].hide_viewport = False
     bpy.context.scene.frame_set(1)
-    render_views(A.out_dir, "lofted", under + [base["jacket"].name], list(VIEWS))
     pat = [jk.name, rv.name] + [o_.name for o_ in det_obs]
-    render_views(A.out_dir, "pattern", under + pat, list(VIEWS))
-    render_close(A.out_dir, "lofted", under + [base["jacket"].name])
-    render_close(A.out_dir, "pattern", under + pat)
-    if det_obs:
-        render_detail_close(A.out_dir, "pattern", under + pat)
+    if not A.no_clay:
+        render_views(A.out_dir, "lofted", under + [base["jacket"].name], list(VIEWS))
+        render_views(A.out_dir, "pattern", under + pat, list(VIEWS))
+        render_close(A.out_dir, "lofted", under + [base["jacket"].name])
+        render_close(A.out_dir, "pattern", under + pat)
+        if det_obs:
+            render_detail_close(A.out_dir, "pattern", under + pat)
     if O.get("lods"):
         lods = make_lods([jk, rv] + det_obs, O["lods"])
         stats["lod_tris"] = {k: v[1] for k, v in lods.items()}
         for k, (ob_, _) in lods.items():
-            render_views(A.out_dir, f"lod{k}", under + [ob_.name], ["front", "three_quarter"])
+            if not A.no_clay:
+                render_views(A.out_dir, f"lod{k}", under + [ob_.name], ["front", "three_quarter"])
     if O.get("debug_rever"):
         render_close(A.out_dir, "rever", [body.name, rv.name])
         render_close(A.out_dir, "jbody", [body.name, jk.name])
         render_views(A.out_dir, "rever", [body.name, rv.name], ["front", "back"], target=(0, 0, 1.4), scale=0.7)
     tick("render", t)
-    if O.get("textures"):
-        # after the clay renders (they replace the materials): the wool atlas and the
-        # materials, kept in spike.blend for the beauty frames (suit_beauty.py)
-        t = time.perf_counter()
-        btn = [o_ for o_ in det_obs if o_.name.endswith("buttons")]
-        stats["textures"] = suit_made_tex.apply(uv_obs, uv_marks, uv_tags, btn, suit.DEFAULTS)
-        tick("textures", t)
+    if made_mats is not None:
+        # kept in spike.blend for the beauty frames (suit_beauty.py), the LODs too
+        lod_obs = [ob_ for k, (ob_, _) in sorted(lods.items())] if O.get("lods") else []
+        suit_made_tex.assign([jk, rv] + det_obs + lod_obs, made_mats)
+        side_ = made_mats[0]["suit_atlas_side_m"]
+        stats["textures"]["uv_lod"] = {ob_.name: suit_made_tex.uv_stats(ob_, side_) for ob_ in lod_obs}
+    stage_rig(bpy.context.scene)              # (--no-clay: the beauty frames need the camera and lights)
     bpy.ops.wm.save_as_mainfile(filepath=os.path.join(A.out_dir, "spike.blend"), compress=True)
     with open(os.path.join(A.out_dir, "spike_stats.json"), "w") as f:
         stats["timings_s"] = T

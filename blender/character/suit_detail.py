@@ -43,7 +43,7 @@ DEFAULTS = {
     "buttonhole": {"cord_r_mm": 0.9, "eye_r_mm": 1.6, "gap_mm": 0.8,
                    # the cord's UVs are scaled up (more texels for the purl; the wool twill
                    # detail is finer than the eye there, as on a silk-twist cord)
-                   "uv_scale": 4.0, "purl_pitch_mm": 0.6, "purl_h_mm": 0.12},
+                   "uv_scale": 4.0, "purl_pitch_mm": 0.6, "purl_h_mm": 0.3},
     "pick": {"in_cm": 0.6, "pitch_cm": 0.6},   # pick stitching in from the fronts' edge
 }
 

@@ -25,7 +25,10 @@ import numpy as np
 from . import suit_textures as st
 
 DEFAULTS = {
-    "px": 2048,                  # the wool atlas (suit.DEFAULTS textures.wool_px)
+    # the wool normal atlas (albedo and ORM at half). The lofted suit bakes 2048 (0.76 mm/px
+    # here): the pick stitches and the buttonhole purl blur to 2-3 px blobs at it; 4096
+    # (0.38 mm/px) draws them as stitches (item 2 gate, runs u3 / u4k)
+    "px": 4096,
     "seed": 3,
     "slope": 1.0,
     # a viscose twill lining: black, smoother and glossier than the wool
@@ -60,8 +63,13 @@ def uv_stats(ob, side=1.0):
     co = np.zeros(len(me.vertices) * 3, np.float32)
     me.vertices.foreach_get("co", co)
     co = co.reshape(-1, 3)
+    part = np.zeros(len(me.polygons), np.int32)
+    if me.attributes.get("part") is not None:
+        me.attributes["part"].data.foreach_get("value", part)
     a3, a2 = [], []
     for p in me.polygons:
+        if part[p.index] == 3:                # buttons: no UVs
+            continue
         li = list(p.loop_indices)
         vi = list(p.vertices)
         for k in range(1, len(li) - 1):
@@ -77,11 +85,11 @@ def uv_stats(ob, side=1.0):
             "area_ratio_p95": round(float(np.percentile(r, 95)), 3), "uv_cw_frac": round(float((a2 < 0).mean()), 4)}
 
 
-def apply(objs, marks, tags, buttons, suit_o, opts=None):
-    """objs: {key: object} with UVs and panel tags (set_uv); marks: {key: {tag: [marks]}} in each
-    tag's UV metres; tags: {key: {tag: label}}; buttons: objects with only the button
-    material; suit_o: suit.DEFAULTS (materials, surface). Materials by the face attribute
-    "part" (0 wool, 1 lining, 2 edge (wool), 3 button). Returns stats."""
+def bake(objs, marks, tags, suit_o, opts=None):
+    """Pack the atlas (rewrites the objects' UVs) and make the materials. objs: {key: object}
+    with UVs and panel tags (set_uv); marks: {key: {tag: [marks]}} in each tag's UV metres;
+    tags: {key: {tag: label}}; suit_o: suit.DEFAULTS (materials, surface). Copies made after
+    this (LODs) carry the atlas UVs. Returns (materials (wool, lining, edge, button), stats)."""
     o = dict(DEFAULTS, **(opts or {}))
     obs = list(objs.values())
     side, layout = st.pack_group(obs, o["px"])
@@ -106,18 +114,32 @@ def apply(objs, marks, tags, buttons, suit_o, opts=None):
     st.attach_surface(wool, ai, oi)
     lining = st.material("t13_lining", **o["lining"])
     button = st.material("t13_button", **suit_o["materials"]["button"])
+    for m in (wool, lining, button):
+        m.use_fake_user = True                # the clay renders take the slots for a while
     _, gmax = st.twill_tile(slope=o["slope"])
-    for ob in obs + list(buttons):
+    return (wool, lining, wool, button), {
+        "px": o["px"], "atlas_side_m": round(side, 4), "mm_per_px": round(1000 * side / o["px"], 3),
+        "rects": len(layout), "marks": sum(len(v) for v in flat.values()), "surface": surf,
+        "weave_detail": detail, "tile_max_slope": round(gmax, 4),
+        "uv": {k: uv_stats(ob, side) for k, ob in objs.items()}}
+
+
+def assign(obs, mats):
+    """Material slots (wool, lining, edge, button) and each face's slot from its "part"."""
+    for ob in obs:
         me = ob.data
         me.materials.clear()
-        for m in (wool, lining, wool, button):
+        for m in mats:
             me.materials.append(m)
         a = me.attributes.get("part")
         vals = np.zeros(len(me.polygons), np.int32)
         if a is not None:
             a.data.foreach_get("value", vals)
         me.polygons.foreach_set("material_index", vals)
-    return {"px": o["px"], "atlas_side_m": round(side, 4), "mm_per_px": round(1000 * side / o["px"], 3),
-            "rects": len(layout), "marks": sum(len(v) for v in flat.values()), "surface": surf,
-            "weave_detail": detail, "tile_max_slope": round(gmax, 4),
-            "uv": {k: uv_stats(ob, side) for k, ob in objs.items()}}
+
+
+def apply(objs, marks, tags, buttons, suit_o, opts=None):
+    """bake + assign (objs and the buttons). Returns stats."""
+    mats, stats = bake(objs, marks, tags, suit_o, opts)
+    assign(list(objs.values()) + list(buttons), mats)
+    return stats

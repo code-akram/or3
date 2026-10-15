@@ -36,6 +36,7 @@ ap.add_argument("--views", default="front,three_quarter,profile,back")
 ap.add_argument("--closes", default="close_pocket,close_button,close_lapel,close_collar_back,close_cuff_btn,close_34")
 ap.add_argument("--grain", action="store_true", help="also the pinstripe grain check")
 ap.add_argument("--only-grain", action="store_true")
+ap.add_argument("--lods", default="", help="views of the textured LODs (e.g. front,three_quarter)")
 A = ap.parse_args(argv)
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "blender"))
@@ -263,6 +264,9 @@ def main():
     for c in [x for x in A.closes.split(",") if x]:
         az, tgt, scale, dz = CLOSES[c]
         shoot(f"pattern_{c}", base_show + pattern, az, tgt, scale, dz)
+    for ob in sorted((o for o in bpy.data.objects if o.name.startswith("spike_jacket_lod")), key=lambda o: o.name):
+        for v in [x for x in A.lods.split(",") if x]:
+            shoot(f"{ob.name.removeprefix('spike_jacket_')}_{v}", base_show + [ob.name], VIEWS[v], (0, 0, 1.22), 1.15, 0.15)
 
 
 main()
